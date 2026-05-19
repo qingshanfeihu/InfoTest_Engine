@@ -1,20 +1,25 @@
-"""TUI ↔ LangGraph 桥接：在后台线程跑 ``stream_and_collect``，UI 线程只消费事件。
+"""TUI ↔ LangGraph 桥接：在后台线程跑 ``astream_to_bus``，UI 线程只消费事件。
 
 设计要点：
-- ``stream_and_collect`` 是同步 API（内部包了 asyncio.run），所以直接放后台线程
-- TuiSink 在该后台线程被回调，必须用 ``post`` 回调跨线程投递到 UI
+- ``astream_to_bus`` 是 async；bridge 自己起 asyncio loop 跑在后台线程。
+- 这样能拿到 task 句柄，cancel 能走 ``loop.call_soon_threadsafe(task.cancel)``——
+  避免老版用 ``asyncio.run`` 时 ctrl+c 只能等 graph 自己结束（结果就是
+  daemon 线程在主进程 shutdown 后还在 submit 新 future，触发
+  ``cannot schedule new futures after shutdown``）。
+- TuiSink 在该后台线程被回调，必须用 ``post`` 回调跨线程投递到 UI。
 - HIL 续跑：UI 收到 hil_request 后让用户决策，把 decision 通过
-  ``resume_with(decision)`` 传回，bridge 用 ``Command(resume=decision)`` 续跑
+  ``resume_with(decision)`` 传回，bridge 用 ``Command(resume=decision)`` 续跑。
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 from typing import Any, Callable
 
 from main.qa_agent.events import EventBus
-from main.qa_agent.streaming import stream_and_collect
+from main.qa_agent.streaming import astream_to_bus
 from main.qa_agent.tui.sink import IstUiEvent, TuiSink
 
 logger = logging.getLogger(__name__)
@@ -47,6 +52,9 @@ class GraphBridge:
         self._extra_sinks = list(extra_sinks or [])
         self._sink = TuiSink(post=post)
         self._worker: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._task: asyncio.Task | None = None
+        self._cancelled = False
         self._pending_resume: Any = None  # 存放 HIL 决策，由 resume_with 写入
 
     @property
@@ -63,24 +71,94 @@ class GraphBridge:
             logger.warning("GraphBridge already running; ignored start()")
             return
         self._sink.reset()
+        self._cancelled = False
         self._worker = threading.Thread(
             target=self._run_in_thread,
-            args=(initial_state,),
+            args=(initial_state, False),
             name=f"ist-bridge-{self._thread_id}",
             daemon=True,
         )
         self._worker.start()
 
-    def _run_in_thread(self, initial_state: dict[str, Any]) -> None:
+    def cancel(self) -> None:
+        """请求取消运行中的 graph。线程安全——可在 UI 线程 / 信号处理里调。"""
+        self._cancelled = True
+        loop = self._loop
+        task = self._task
+        if loop is None or task is None or task.done():
+            return
+        try:
+            loop.call_soon_threadsafe(task.cancel)
+        except RuntimeError:
+            # loop 已经关了——忽略
+            pass
+
+    def join(self, timeout: float | None = None) -> None:
+        """等 worker 线程结束。给 app shutdown 用，避免 daemon 线程在
+        interpreter 关闭后继续 submit future。"""
+        worker = self._worker
+        if worker is None:
+            return
+        worker.join(timeout=timeout)
+
+    def _run_in_thread(self, payload: Any, is_resume: bool) -> None:
+        loop = asyncio.new_event_loop()
+        self._loop = loop
+        asyncio.set_event_loop(loop)
         try:
             graph = self._graph_factory()
             config = {"configurable": {"thread_id": self._thread_id}}
             sinks: list[Callable] = [self._sink, *self._extra_sinks]
-            final_state = stream_and_collect(graph, initial_state, config=config, sinks=sinks)
-            self._post(IstUiEvent(kind="run_done", extra={"final_state": final_state, "thread_id": self._thread_id}))
+            from main.qa_agent.events import reset_default_bus
+            import uuid as _uuid
+            bus = reset_default_bus(run_id=_uuid.uuid4().hex[:12])
+            for sink in sinks:
+                bus.subscribe(sink)
+
+            coro = astream_to_bus(graph, payload, config=config, bus=bus)
+            self._task = loop.create_task(coro)
+            try:
+                final_state = loop.run_until_complete(self._task)
+            except asyncio.CancelledError:
+                final_state = {}
+                self._post(IstUiEvent(kind="run_done", extra={
+                    "final_state": final_state,
+                    "thread_id": self._thread_id,
+                    "cancelled": True,
+                }))
+                return
+            self._post(IstUiEvent(kind="run_done", extra={
+                "final_state": final_state,
+                "thread_id": self._thread_id,
+            }))
         except Exception as exc:  # noqa: BLE001
-            logger.exception("GraphBridge worker crashed")
-            self._post(IstUiEvent(kind="run_error", extra={"error": str(exc)}))
+            if self._cancelled:
+                # 取消触发的级联异常不当作错误
+                self._post(IstUiEvent(kind="run_done", extra={
+                    "final_state": {},
+                    "thread_id": self._thread_id,
+                    "cancelled": True,
+                }))
+            else:
+                logger.exception("GraphBridge worker crashed")
+                self._post(IstUiEvent(kind="run_error", extra={"error": str(exc)}))
+        finally:
+            try:
+                # 清理悬挂任务，避免 "Task was destroyed but it is pending"
+                pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                loop.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._loop = None
+            self._task = None
 
     def resume_with(self, decision: dict[str, Any]) -> None:
         """HIL 续跑入口。
@@ -98,23 +176,11 @@ class GraphBridge:
             self._post(IstUiEvent(kind="run_error", extra={"error": "langgraph.types.Command not available"}))
             return
 
-        graph = self._graph_factory()
-        config = {"configurable": {"thread_id": self._thread_id}}
-        # 续跑用 stream_and_collect 同接口，输入是 Command(resume=...)
+        self._cancelled = False
         self._worker = threading.Thread(
-            target=self._resume_in_thread,
-            args=(Command(resume=decision), config),
+            target=self._run_in_thread,
+            args=(Command(resume=decision), True),
             name=f"ist-bridge-resume-{self._thread_id}",
             daemon=True,
         )
         self._worker.start()
-
-    def _resume_in_thread(self, command: Any, config: dict[str, Any]) -> None:
-        try:
-            graph = self._graph_factory()
-            sinks: list[Callable] = [self._sink, *self._extra_sinks]
-            final_state = stream_and_collect(graph, command, config=config, sinks=sinks)
-            self._post(IstUiEvent(kind="run_done", extra={"final_state": final_state, "thread_id": self._thread_id}))
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("GraphBridge resume worker crashed")
-            self._post(IstUiEvent(kind="run_error", extra={"error": str(exc)}))

@@ -101,6 +101,10 @@ class IstInkApp:
         self._input_history = InputHistory()
         self._history_idx = -1
 
+        # TUI 全局可变状态 —— slash commands (/model /cost /compact) 通过 app.tui_state 读写
+        from main.qa_agent.tui.state import TuiState
+        self.tui_state = TuiState(thread_id=self._thread_id or "")
+
     def run(self) -> None:
         """Start the TUI (blocking)."""
         import warnings
@@ -123,6 +127,14 @@ class IstInkApp:
         except KeyboardInterrupt:
             pass
         finally:
+            # 退出前先取消并等 bridge 后台 worker 结束，避免主进程
+            # shutdown 时还有 daemon 线程在 submit 新 future
+            try:
+                if self._bridge is not None:
+                    self._bridge.cancel()
+                    self._bridge.join(timeout=2.0)
+            except Exception:  # noqa: BLE001
+                pass
             sys.stderr = old_stderr
             devnull.close()
             self._app.stop()
@@ -159,11 +171,16 @@ class IstInkApp:
 
     def _handle_input(self, event: InputEvent) -> None:
         """Dispatch input events to appropriate handlers."""
-        if isinstance(event, KeyPress):
-            self._handle_key(event)
-        elif isinstance(event, PasteEvent):
-            self._prompt.handle_paste(event.text)
-            self._app.render()
+        # 输入读取在 ink-input 后台线程触发；DOM 修改必须和 bridge worker
+        # 投来的 update_ai_token / append / tool_done 等事件互斥，否则
+        # children 列表 / TextNode.value 会出现部分写入交织（典型表现：
+        # AI 流式 token 和工具行字符互相穿插）
+        with self._app.lock:
+            if isinstance(event, KeyPress):
+                self._handle_key(event)
+            elif isinstance(event, PasteEvent):
+                self._prompt.handle_paste(event.text)
+                self._app.render()
 
     def _handle_key(self, kp: KeyPress) -> None:
         """Handle keyboard events."""
@@ -176,6 +193,14 @@ class IstInkApp:
                 self._cancel_query()
                 self._last_ctrl_c = now
             elif now - getattr(self, '_last_ctrl_c', 0) < 1.5:
+                # 退出前先把 bridge worker 收尾，避免 daemon 线程在
+                # interpreter shutdown 阶段还在 submit 新 future
+                if self._bridge is not None:
+                    try:
+                        self._bridge.cancel()
+                        self._bridge.join(timeout=1.5)
+                    except Exception:  # noqa: BLE001
+                        pass
                 self._app._running = False
             else:
                 self._last_ctrl_c = now
@@ -183,6 +208,12 @@ class IstInkApp:
                 self._app.render()
             return
         if kp.key == "ctrl+d":
+            if self._bridge is not None:
+                try:
+                    self._bridge.cancel()
+                    self._bridge.join(timeout=1.5)
+                except Exception:  # noqa: BLE001
+                    pass
             self._app._running = False
             return
         if kp.key == "escape":
@@ -285,6 +316,13 @@ class IstInkApp:
 
     def _on_ui_event(self, event: Any) -> None:
         """Handle UI events from TuiSink (called from bridge thread)."""
+        # bridge worker 是后台线程；DOM 修改必须和 ink-input 线程的按键
+        # 处理串行化，否则会和 _handle_input 同时改 children / TextNode，
+        # 导致一行内 AI 输出和工具输出字符穿插。
+        with self._app.lock:
+            self._on_ui_event_locked(event)
+
+    def _on_ui_event_locked(self, event: Any) -> None:
         kind = event.kind
 
         if kind == "update_ai_token":
@@ -605,8 +643,9 @@ class IstInkApp:
     def _cancel_query(self) -> None:
         """Cancel the running query and stop the bridge thread."""
         if self._bridge and self._bridge.is_running:
-            # Bridge thread is daemon, can't force-kill but we signal it
-            self._bridge._cancelled = True
+            # 真正 cancel asyncio task —— bridge 内部走 loop.call_soon_threadsafe(task.cancel)，
+            # graph.astream_events 会抛 CancelledError 中止
+            self._bridge.cancel()
         self._is_loading = False
         self._streaming_buf.clear()
         self._transcript.append_message(" \x1b[2m[interrupted]\x1b[0m")

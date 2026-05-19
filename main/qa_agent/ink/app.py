@@ -56,8 +56,12 @@ class InkApp:
         self._alt_screen = alt_screen
         self._mouse = mouse
 
-        # Thread safety for render
-        self._render_lock = threading.Lock()
+        # Thread safety for render + DOM mutation.
+        # RLock so the same thread can re-enter (e.g. timer thread → _do_render
+        # → _do_render_inner). Exposed as ``self.lock`` so high-level UI code
+        # (IstInkApp) can serialize DOM mutations against the render pass.
+        self._render_lock = threading.RLock()
+        self.lock = self._render_lock
         self._last_render_time = 0.0
 
         # Pools (shared across frames)

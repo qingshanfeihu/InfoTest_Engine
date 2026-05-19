@@ -201,55 +201,6 @@ def _cmd_continue(args: str, app: "IstApp") -> SlashCommandResult:
     return InfoResult(text=f"continuing thread {tid}")
 
 
-def _cmd_tier(args: str, app: "IstApp") -> SlashCommandResult:
-    """List or switch model tier (3-tier).
-
-    - /tier        -- list 3 tiers and each configured model
-    - /tier <name> -- set default tier for next turn (opus / sonnet / haiku)
-    """
-    name = (args or "").strip().lower()
-    try:
-        from main.qa_agent.agents._llm import (
-            TIER_ENV_VARS,
-            qa_agent_default_model,
-            qa_agent_tier_model,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return ErrorResult(text=f"failed to load tier helpers: {exc}")
-
-    current = app.tui_state.__dict__.get("active_tier") or "sonnet"
-
-    if not name:
-        lines = ["Model tiers (3-tier):", ""]
-        for tier_name in ("opus", "sonnet", "haiku"):
-            model = qa_agent_tier_model(tier_name)
-            mark = "● " if tier_name == current else "  "
-            label = (
-                f"{tier_name:6}  -> {model}"
-                + ("  (current)" if tier_name == current else "")
-            )
-            lines.append(f"  {mark}{label}")
-        lines.append("")
-        lines.append("Usage: /tier <opus|sonnet|haiku>  — switch default tier for next turn")
-        lines.append("")
-        lines.append(
-            "Configure each tier via env: "
-            "QA_AGENT_OPUS_MODEL / QA_AGENT_SONNET_MODEL / QA_AGENT_HAIKU_MODEL"
-        )
-        return TextResult(text="\n".join(lines))
-
-    if name not in TIER_ENV_VARS:
-        return ErrorResult(text=(
-            f"unknown tier {name!r}; valid: opus / sonnet / haiku"
-        ))
-    model = qa_agent_tier_model(name)
-    app.tui_state.__dict__["active_tier"] = name
-    app.tui_state.__dict__["override_model"] = model
-    return InfoResult(text=(
-        f"tier switched to {name} -> {model} (applies to next turn)"
-    ))
-
-
 def _cmd_model(args: str, app: "IstApp") -> SlashCommandResult:
     """List available models or switch to one. 
 
@@ -271,7 +222,6 @@ def _cmd_model(args: str, app: "IstApp") -> SlashCommandResult:
     current = app.tui_state.__dict__.get("override_model") or default
 
     if not name:
-        # 列出可用模型
         lines = ["Available models:", ""]
         for m in allowed:
             mark = "● " if m == current else "  "
@@ -280,6 +230,16 @@ def _cmd_model(args: str, app: "IstApp") -> SlashCommandResult:
             lines.append(f"  {mark}{label}")
         lines.append("")
         lines.append("Usage: /model <name>  — switch model for next turn")
+        # Tier info
+        try:
+            from main.qa_agent.agents._llm import qa_agent_tier_model
+            lines.append("")
+            lines.append("Model tiers:")
+            for tier_name in ("opus", "sonnet", "haiku"):
+                tier_model = qa_agent_tier_model(tier_name)
+                lines.append(f"  {tier_name:6} -> {tier_model}")
+        except Exception:  # noqa: BLE001
+            pass
         if not allowed or len(allowed) == 1:
             lines.append("")
             lines.append(
@@ -347,7 +307,6 @@ BUILTIN_COMMANDS: list[SlashCommand] = [
     SlashCommand("resume",   "Resume specific thread (usage: /resume <tid>)", _cmd_resume),
     SlashCommand("continue", "Resume the most recent thread",                _cmd_continue),
     SlashCommand("model",    "Override LLM model for next turn",             _cmd_model),
-    SlashCommand("tier",     "Show / switch 3-tier model (opus/sonnet/haiku)", _cmd_tier),
     SlashCommand("cost",     "Show token usage and call counts",             _cmd_cost),
     SlashCommand("compact",  "Reset token counter (clears transcript)",      _cmd_compact),
     SlashCommand("plan",     "Toggle plan-only mode for next query",         _cmd_plan),

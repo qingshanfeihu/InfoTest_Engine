@@ -69,11 +69,11 @@ def test_parse_just_a_slash_returns_none():
 # ---------------------------------------------------------------------------
 
 
-def test_registry_has_13_builtin_commands():
-    assert len(BUILTIN_COMMANDS) == 13
+def test_registry_has_12_builtin_commands():
+    assert len(BUILTIN_COMMANDS) == 12
     names = {cmd.name for cmd in BUILTIN_COMMANDS}
     expected = {
-        "help", "clear", "threads", "resume", "continue", "model", "tier",
+        "help", "clear", "threads", "resume", "continue", "model",
         "cost", "compact", "plan", "init", "version", "exit",
     }
     assert names == expected

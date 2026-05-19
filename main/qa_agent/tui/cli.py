@@ -149,16 +149,15 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return _run_print_mode(initial_query, task_type=task_type, thread_id=thread_id)
 
-    # 默认：启动 Textual TUI
-    from main.qa_agent.tui.app import IstApp
-
+    # 默认：启动 TUI（Ink 渲染器）
     initial_text = None
     if isinstance(initial_query, str):
         initial_text = initial_query
     elif isinstance(initial_query, dict):
         initial_text = json.dumps(initial_query, ensure_ascii=False)
 
-    app = IstApp(
+    from main.qa_agent.ink.components.ist_app import IstInkApp
+    app = IstInkApp(
         thread_id=thread_id,
         initial_query=initial_text,
         task_type=task_type,

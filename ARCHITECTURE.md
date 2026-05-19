@@ -503,6 +503,13 @@ flowchart LR
 
 ### 12.2 IST-Core 历史工具面（`main/qa_agent/tools/`）
 
+> 现状说明（2026-05-19）：当前 `main_agent` runtime 默认只挂载通用工具
+> `qa_deepagent_ls` / `qa_deepagent_glob` / `qa_deepagent_grep` /
+> `qa_deepagent_read_file` / `python_exec` / `bash_exec`。
+> `tools/_shared/metadata.py` 只维护这 6 个当前 runtime 工具的 metadata。
+> 下表保留为 v1.6 历史工具面记录；旧 `qa_search_*`、`defect_*`、
+> `qa_invoke_reviewer*` 等名称不再是当前 runtime metadata 注册项。
+
 **知识检索 8 个**（任何对话轮次都可按需调用）：
 
 | Tool | 数据源 / 行为 |
@@ -950,7 +957,7 @@ architecture sidecar schema v2 只对 root feature 生成，字段包含 `subsys
 - `qa_search_by_cli_anchor`
 - `qa_get_sibling_features`
 
-这些工具已在 `tools/__init__.py`、`tools/_shared/metadata.py`、`sub_agents._TOOL_LOADERS`、`sub_agent_definitions/*._vector_tools` 四处注册。
+这些工具属于历史 R0.7 设计记录。当前 IST-Core runtime metadata 已收敛为 README 所列 6 个通用工具；如后续恢复索引检索能力，应以新的通用 evidence retrieval/tooling 设计重新注册，而不是沿用旧 metadata 项。
 
 ### A.12.5 验证入口
 

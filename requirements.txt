@@ -1,0 +1,63 @@
+# Create root "environment" from environment.example before run, or export vars
+requests>=2.28.0,<3
+python-dotenv>=1.0.0,<2
+httpx>=0.27,<1                         # §15 VPN 探测
+# LangChain 1.x + 百炼 ChatTongyi（main/langchain_qwen.py、main/langchain_smoke.py）
+# deepagents>=0.5.3,<0.6（实装 0.5.7；与 0.5.3 API 不兼容）要求 langchain>=1.2.15 / langchain-core>=1.2.27
+langchain>=1.2.15,<2
+langchain-core>=1.2.27,<2
+langchain-community>=0.3.20,<1
+langchain-openai>=1.0,<2              # QA Agent openai:qwen-plus DashScope 兼容路径
+# R0.5 P0：百炼 Qwen Anthropic 兼容端点（让 deepagents 0.5.7 全部 Anthropic-first
+# middleware 激活）— main/qa_agent/agents/_llm.py _build_anthropic_compat
+langchain-anthropic>=1.4,<2
+# R0.5 P0：修 LLM 输出裸 JSON 含未转义嵌套引号（main/qa_agent/graph.py
+# _parse_review_result strict json.loads 失败后兜底） — 实测能从破损 D2.summary
+# 还原完整 D1-D10 findings
+json-repair>=0.30
+langsmith>=0.3.0,<1
+dashscope>=1.14.0
+# Qdrant 向量库（本地 podman 部署，main/langchain_qdrant.py）
+langchain-qdrant>=0.2
+qdrant-client>=1.12
+# LangGraph（解锁 astream_events v2 + SqliteSaver）
+langgraph>=1.1,<2
+# langgraph-api 0.8+ 需要 langgraph-checkpoint 4+（新增 allowed_json_modules kwarg）
+langgraph-checkpoint>=4,<5
+langgraph-checkpoint-sqlite>=3,<4
+# Deep Agents：主 Agent / Reviewer Agent 内核（要求 Python >= 3.11）
+deepagents>=0.5.3,<0.6
+# Product testing platform runtime state store + LangGraph Postgres checkpointer.
+# langgraph-checkpoint-postgres requires psycopg3; pool extra keeps the official
+# PostgresSaver dependency available when constructing pooled savers later.
+psycopg[binary,pool]>=3.1,<4
+langgraph-checkpoint-postgres>=3,<4
+# Optional future vector-store backend; current Qdrant indexes remain primary.
+langchain-postgres>=0.0.14,<1
+# Schema / Prompt / 索引
+pydantic>=2.6,<3
+jinja2>=3,<4
+pyyaml>=6,<7
+# xlsx 解析（file_tools._read_spreadsheet + python_exec 沙箱白名单 import）
+openpyxl>=3.1,<4
+# §15 HTML 抓取管线（缺陷库 v1.5.1 真实 WebVPN 对接）
+playwright>=1.46,<2
+beautifulsoup4>=4.12,<5
+lxml>=5,<7
+# 验证码 OCR（scripts/*_capture.py + _capture_session.py 使用；未安装时自动退化到手动输入）
+ddddocr>=1.4,<2
+pillow>=10,<12
+# CLI 渲染
+rich>=13,<15
+# Textual TUI (infotest 命令入口)
+textual>=0.85,<1
+# qa_search_knowledge_ref 的 web fallback（langchain_community DuckDuckGo wrapper）
+# 两个包都需要：duckduckgo-search 是历史名，ddgs 是 langchain_community 当前依赖名
+duckduckgo-search>=6.0.0
+ddgs>=2.0.0
+
+# Tests（main/tests, tests/qa_agent, tests/ingest）
+pytest>=8,<10
+pytest-asyncio>=0.23,<1
+# Textual snapshot tests (Stage 5)
+pytest-textual-snapshot>=0.4,<2

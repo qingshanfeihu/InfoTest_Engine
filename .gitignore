@@ -1,0 +1,53 @@
+# IST-Core v1 .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment / secrets
+environment
+.env
+*.env
+
+# Backup (local only, not in git)
+backup/
+
+# Logs / temp
+logs/
+tmp/
+*.log
+
+# Data stores (dev containers)
+postgres_storage/
+qdrant_storage/
+.langgraph_data/
+.langgraph_api/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large files
+large_tool_results/
+conversation_history/
+memory/
+knowledge/
+
+# Claude
+.claude/

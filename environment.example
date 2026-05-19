@@ -1,0 +1,161 @@
+# =============================================================================
+# 本地密钥：复制本文件为项目根目录的「environment」（无扩展名），再填写下方取值。
+#   Windows: copy environment.example environment
+#   macOS/Linux: cp environment.example environment
+# 「environment」已在 .gitignore，勿提交到 Git。
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# MinerU（https://mineru.net/）
+# 用于：main/mineru_batch_export.py、main/mineru_merged_pre_data.py 等
+# 也可通过环境变量 MINERU_API_TOKEN 提供（二选一）
+# -----------------------------------------------------------------------------
+MINERU_TOKEN=
+
+# -----------------------------------------------------------------------------
+# 阿里云百炼 / DashScope
+# 用于：main/mineru_pre_data_clean.py（语义去重 embeddings，OpenAI 兼容 embeddings API）
+# 控制台创建的 API-Key；缺失或调用失败时 mineru_pre_data_clean 非零退出。
+# -----------------------------------------------------------------------------
+DASHSCOPE_API_KEY=
+
+# 与上一项二选一：百炼控制台发放的 Key 与 DashScope 相同；未设置 DASHSCOPE_API_KEY 时会自动采用。
+# BAILIAN_API_KEY=
+
+# 可选：国际区或自定义 compatible 基址（一般留空即可）
+# DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# 可选：embedding 模型名（预清洗）
+# DASHSCOPE_EMBEDDING_MODEL=text-embedding-v4
+# DASHSCOPE_EMBEDDING_DIMENSIONS=1024
+
+# -----------------------------------------------------------------------------
+# Qdrant 向量库（本地 podman 部署，见 main/langchain_qdrant.py）
+# 启动容器:
+#   podman machine start
+#   podman run -d --name qdrant_ultra -p 6333:6333 -p 6334:6334 \
+#     -v ./qdrant_storage:/qdrant/storage:Z docker.m.daocloud.io/qdrant/qdrant:latest
+# -----------------------------------------------------------------------------
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+# 可选：集合名（未设置时默认 ultra_agent_vectors / ultra_agent_qa）
+# QDRANT_COLLECTION_NAME=ultra_agent_vectors
+# QDRANT_QA_COLLECTION=ultra_agent_qa
+
+# -----------------------------------------------------------------------------
+# RAG hybrid retrieval / rerank
+# dense + Qdrant text query 召回后，默认用百炼 DashScope rerank 重排；失败自动降级。
+# -----------------------------------------------------------------------------
+RAG_RERANK_ENABLED=true
+RAG_RERANK_PROVIDER=dashscope
+RAG_RERANK_MODEL=qwen3-vl-rerank
+RAG_RERANK_MAX_INPUT_CHARS=120000
+RAG_RERANK_RPM=600
+RAG_RERANK_TPM=9000000
+
+# -----------------------------------------------------------------------------
+# LangSmith 观测（main/qa_agent/sinks/langsmith_sink.py + §12 评估）
+# -----------------------------------------------------------------------------
+LANGSMITH_TRACING=false
+LANGSMITH_API_KEY=
+LANGSMITH_PROJECT=ultra_agent_qa
+
+# -----------------------------------------------------------------------------
+# 测试 Agent 运行时（main/qa_agent/）
+# QA_AGENT_MODEL：主 LLM（默认 qwen-plus）
+# QA_AGENT_REVIEW_MODEL：测试评审默认模型；为空时继承 QA_AGENT_MODEL
+# QA_AGENT_ALLOWED_MODELS：平台允许用户显式切换的模型白名单，逗号分隔
+# QA_AGENT_FALLBACK_MODEL：空=强制 ChatTongyi；填 "openai:gpt-4o-mini" 等
+#   则在 ChatTongyi 与 deepagents task 工具不兼容时回落到此模型。
+# QA_AGENT_REVIEW_DEPTH：quick|standard|deep（Skill 读取）
+# QA_AGENT_SQLITE_PATH：本地 Checkpointer 数据库
+# -----------------------------------------------------------------------------
+QA_AGENT_MODEL=qwen-plus
+QA_AGENT_REVIEW_MODEL=qwen-plus
+QA_AGENT_ALLOWED_MODELS=qwen-plus,qwen3.6-plus
+QA_AGENT_FALLBACK_MODEL=
+QA_AGENT_REVIEW_DEPTH=standard
+QA_AGENT_SQLITE_PATH=./qa_agent.sqlite
+
+# -----------------------------------------------------------------------------
+# 产品测试平台 PostgreSQL（Podman，本地任务状态 / trace / 可选 LangGraph checkpoint）
+# -----------------------------------------------------------------------------
+# 推荐用 pgvector/pgvector:pg16，兼容 LangChain Postgres / PGVectorStore 的 pgvector 要求。
+# 启动:
+#   bash scripts/maintenance/postgres_runtime.sh start
+# 初始化业务 schema:
+#   python -m main.qa_agent.runtime.postgres_admin --init --check
+QA_PLATFORM_POSTGRES_HOST=localhost
+QA_PLATFORM_POSTGRES_PORT=6543
+QA_PLATFORM_POSTGRES_DB=ultra_agent
+QA_PLATFORM_POSTGRES_USER=ultra_agent
+QA_PLATFORM_POSTGRES_PASSWORD=ultra_agent
+QA_PLATFORM_POSTGRES_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
+# LangChain langchain-postgres / PGVectorStore 使用 SQLAlchemy driver URL：
+QA_PLATFORM_POSTGRES_VECTOR_DSN=postgresql+psycopg://ultra_agent:ultra_agent@localhost:6543/ultra_agent
+# 可选：启用 LangGraph Postgres checkpoint；不设时仍使用 QA_AGENT_SQLITE_PATH / MemorySaver。
+# QA_AGENT_POSTGRES_CHECKPOINT_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
+QA_AGENT_POSTGRES_CHECKPOINT_SETUP=1
+
+# -----------------------------------------------------------------------------
+# 缺陷库 HTML 抓取（main/ingest/defect_fetch.py + v1.5.1 真实 WebVPN 对接）
+# -----------------------------------------------------------------------------
+# DEFECT_BACKEND 控制批量索引入口（main.indexing.defect_index）的数据来源：
+#   - fixtures：读 knowledge/fixtures/bugs_*.json（无 VPN 可用，CI 默认）
+#   - live    ：读 knowledge/defect_cleaned/{backend}/*.json（defect_fetch + defect_parse 的产物）
+# 注意：Agent 的按需抓取（defect_fetch_on_demand Tool）独立于此变量，由 DEFECT_ON_DEMAND_ENABLED 控制
+DEFECT_BACKEND=fixtures
+
+# Reviewer / defect_miner 在 RAG 未命中 + 可识别 bug_id 时是否触发 Playwright on-demand 抓取
+DEFECT_ON_DEMAND_ENABLED=true
+DEFECT_CACHE_TTL_HOURS=24
+# 缓存文件位置（默认 knowledge/defect_cache.json）
+# DEFECT_CACHE_PATH=knowledge/defect_cache.json
+
+# ---- Bugzilla → 禅道 迁移期 fallback chain ----
+# BUG-12345 / 纯数字 这类前缀模糊的 id 在 backend="auto" 时按下表顺序逐个 backend 试，
+# 首个返回有效详情页（is_valid_detail=True）的即落库。明确前缀（BZ-/ZT-/STORY-）不走 chain。
+# 默认 zentao,bugzilla（迁移后新 bug 都在禅道，命中率更高；Bugzilla 历史库兜底）
+DEFECT_FETCH_AUTO_CHAIN=zentao,bugzilla
+
+# ---- Playwright 显示模式 ----
+# 默认 headless；调试 / Reviewer 演示时设 DEFECT_FETCH_DISPLAY=1 临时强制 headful
+# （让用户实时看到 Chrome 自动登录、翻页过程）
+# DEFECT_FETCH_DISPLAY=1
+
+# ---- WebVPN 门户登录（抓取 Bugzilla / 禅道 必需）----
+# 统一账号：PORTAL_LOGIN_USER / PORTAL_LOGIN_PASS
+# 分别覆盖：BUGZILLA_LOGIN_USER / BUGZILLA_LOGIN_PASS / ZENDAO_LOGIN_USER / ZENDAO_LOGIN_PASS
+PORTAL_LOGIN_USER=
+PORTAL_LOGIN_PASS=
+# BUGZILLA_LOGIN_USER=
+# BUGZILLA_LOGIN_PASS=
+# ZENDAO_LOGIN_USER=
+# ZENDAO_LOGIN_PASS=
+
+# 门户登录入口（默认够用；企业内网 IP 变更时才覆盖）
+# PORTAL_LOGIN_URL=https://portal.infosec.com.cn/prx/000/http/localh/login/menhu/WebVPN/login/index.html
+
+# 真实 Bugzilla / 禅道 直连地址（WebVPN 代理失败时作 fallback）
+BUGZILLA_BASE_URL=http://bugzilla.arraynetworks.com.cn/bugzilla
+ZENTAO_BASE_URL=https://plm.infosec.com.cn
+# PLM_BASE_URL 为 ZENTAO_BASE_URL 的旧别名（不建议使用）
+# PLM_BASE_URL=
+
+# 已知 WebVPN 代理 URL（一般无需改）
+# BUGZILLA_PROXY_URL=https://portal.infosec.com.cn/prx/000/http/bugzilla.arraynetworks.com.cn:80/bugzilla
+# PLM_PROXY_URL=https://portal.infosec.com.cn/prx/000/https/plm.infosec.com.cn/index.php?m=my&f=index
+
+# Playwright 参数
+PLAYWRIGHT_HEADLESS=1
+PLAYWRIGHT_STATE_DIR=knowledge/defect_raw/_state
+
+# 验证码 OCR（ddddocr）调优；不设即使用默认值
+# CAPTCHA_LEN_MIN=4
+# CAPTCHA_LEN_MAX=6
+# CAPTCHA_OCR_RETRY=4
+# LOGIN_RETRY=5
+
+# 首次使用：
+#   python -m main.ingest.defect_fetch --backend bugzilla --refresh-login
+#   python -m main.ingest.defect_fetch --backend zentao   --refresh-login
+# 然后后续 headless 运行都会复用 storage_state

@@ -1,0 +1,81 @@
+/* IST-Core TUI v3 styles â FullscreenLayout ç­ä»·
+   (FullscreenLayout.tsx:361 ScrollBox + 414 bottom slot)ã */
+
+Screen {
+    layout: vertical;
+}
+
+#root {
+    height: 1fr;
+    layout: vertical;
+}
+
+/* ä¸»æ¶æ¯æµï¼å æ»¡å©ä½ç©ºé´ï¼èªå¨æ»å°ææ°ï¼stickyScroll ç­ä»·ï¼*/
+#transcript {
+    height: 1fr;
+    padding: 0 1;
+}
+
+/* bottom slot: åºå®é«åº¦ï¼å
+ prompt / completion / footer */
+#bottom-slot {
+    height: auto;
+    layout: vertical;
+}
+
+/* PromptInput: âè£¸ ``> `` + åç½å
+æ ï¼æ  box / æ æ¨ªçº¿ã
+   PromptInput èªå·± DEFAULT_CSS å·²è®¾ height=1 + transparent èæ¯ï¼è¿éä¸éè¦åå è§åã */
+
+/* ç¨æ·è¾å
+¥æ¶æ¯ï¼ backgroundColor='userMessageBackground'ï¼ï¼
+   å
+¨å®½ä¸å±èæ¯è²ï¼åºå user vs assistant æ¶æ¯ */
+InlineMessage.ist-human-input {
+    width: 1fr;
+    background: $surface-darken-1;
+    color: $text;
+    padding: 0 1;
+    margin: 1 0;
+}
+
+/* Slash è¡¥å
+¨åéæ¡ï¼é»è®¤ height=0ï¼è¾å
+¥ / æ¶åå° 1ï¼*/
+#slash-completion {
+    height: 0;
+    background: $boost;
+    color: $accent;
+    padding: 0 1;
+}
+#slash-completion.visible {
+    height: 1;
+}
+
+/* 2 è¡ footerï¼status + hintï¼ï¼PromptInputFooter ç­ä»· */
+#footer {
+    height: 2;
+}
+
+/* Inline message æ¸²æï¼Messages flat list é£æ ¼ï¼*/
+InlineMessage {
+    height: auto;
+    width: 1fr;
+}
+
+ToolOutputBlock {
+    height: auto;
+    width: 1fr;
+    margin-bottom: 1;
+}
+
+CompletionLine {
+    height: 1;
+    width: 1fr;
+}
+
+StreamingMarkdown {
+    height: auto;
+    width: 1fr;
+    margin: 0 0 1 0;
+}

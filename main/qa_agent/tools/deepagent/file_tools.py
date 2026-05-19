@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import html
 import re
 import zipfile
@@ -10,6 +9,9 @@ from pathlib import Path
 from typing import Iterable
 
 from langchain_core.tools import tool
+
+from main.qa_agent.tools.deepagent._range_reader import read_text_range
+from main.qa_agent.tools.deepagent._rg import RipgrepResult, run_ripgrep
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -50,6 +52,28 @@ _TEXT_SUFFIXES = {
 }
 _SPREADSHEET_SUFFIXES = {".xlsx", ".xlsm"}
 _DOCX_SUFFIXES = {".docx"}
+_VCS_DIRECTORIES_TO_EXCLUDE = {".git", ".svn", ".hg", ".bzr", ".jj", ".sl"}
+_RG_MAX_COLUMNS = 500
+_TYPE_SUFFIXES = {
+    "css": {".css"},
+    "go": {".go"},
+    "html": {".html", ".htm"},
+    "java": {".java"},
+    "js": {".js", ".jsx", ".mjs", ".cjs"},
+    "json": {".json", ".jsonc"},
+    "md": {".md", ".markdown"},
+    "py": {".py"},
+    "python": {".py"},
+    "rs": {".rs"},
+    "rust": {".rs"},
+    "sh": {".sh", ".bash", ".zsh"},
+    "toml": {".toml"},
+    "ts": {".ts", ".tsx"},
+    "tsx": {".tsx"},
+    "txt": {".txt", ".text"},
+    "yaml": {".yaml", ".yml"},
+    "yml": {".yaml", ".yml"},
+}
 
 
 def _project_rel(path: Path) -> str:
@@ -82,6 +106,14 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
     return resolved
 
 
+def _coerce_limit(value: int | None, default: int, *, upper: int = 1000) -> int:
+    return max(1, min(int(value or default), upper))
+
+
+def _coerce_offset(value: int | None) -> int:
+    return max(0, int(value or 0))
+
+
 def _normalise_pattern(pattern: str, base: Path) -> str:
     pattern = (pattern or "*").strip() or "*"
     pattern_path = Path(pattern)
@@ -93,6 +125,16 @@ def _normalise_pattern(pattern: str, base: Path) -> str:
     return pattern
 
 
+def _expand_brace_patterns(pattern: str) -> list[str]:
+    match = re.search(r"\{([^{}]+)\}", pattern)
+    if not match:
+        return [pattern]
+    out: list[str] = []
+    for part in match.group(1).split(","):
+        out.extend(_expand_brace_patterns(pattern[: match.start()] + part + pattern[match.end() :]))
+    return out
+
+
 def _is_probably_binary(path: Path) -> bool:
     try:
         chunk = path.read_bytes()[:2048]
@@ -101,20 +143,121 @@ def _is_probably_binary(path: Path) -> bool:
     return b"\x00" in chunk
 
 
+def _rg_target(path: Path) -> str:
+    rel = _project_rel(path)
+    return rel or "."
+
+
+def _rg_exclusion_args() -> list[str]:
+    args: list[str] = []
+    for name in sorted(_DENIED_TOP_LEVEL | _VCS_DIRECTORIES_TO_EXCLUDE):
+        args.extend(["--glob", f"!{name}"])
+        args.extend(["--glob", f"!{name}/**"])
+    for prefix in _DENIED_PREFIXES:
+        args.extend(["--glob", f"!{prefix}"])
+        args.extend(["--glob", f"!{prefix}/**"])
+    return args
+
+
+def _resolve_rg_path(raw_path: str) -> Path | None:
+    text = raw_path.strip()
+    if not text:
+        return None
+    path = Path(text)
+    if not path.is_absolute():
+        path = _PROJECT_ROOT / path
+    try:
+        return _resolve_inside_root(path.as_posix(), must_exist=True)
+    except Exception:
+        return None
+
+
+_CONTENT_PATH_RE = re.compile(r"^(?P<path>.*?)(?::(?P<line>\d+):|-(?P<context_line>\d+)-)")
+
+
+def _content_line_path(raw_line: str) -> str | None:
+    match = _CONTENT_PATH_RE.match(raw_line)
+    if not match:
+        return None
+    return match.group("path")
+
+
+def _filter_rg_file_lines(lines: list[str], *, output_mode: str) -> list[str]:
+    out: list[str] = []
+    for line in lines:
+        if output_mode == "count":
+            path_text, sep, count_text = line.rpartition(":")
+            if not sep:
+                continue
+            resolved = _resolve_rg_path(path_text)
+            if resolved is not None:
+                out.append(f"{_project_rel(resolved)}:{count_text}")
+            continue
+        resolved = _resolve_rg_path(line)
+        if resolved is not None:
+            out.append(_project_rel(resolved))
+    return out
+
+
+def _filter_rg_content_lines(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    for line in lines:
+        if line == "--":
+            if out and out[-1] != "--":
+                out.append(line)
+            continue
+        path_text = _content_line_path(line)
+        if path_text is None:
+            out.append(line)
+            continue
+        resolved = _resolve_rg_path(path_text)
+        if resolved is None:
+            continue
+        out.append(_project_rel(resolved) + line[len(path_text) :])
+    return out
+
+
+def _apply_window(lines: list[str], *, offset: int, head_limit: int | None) -> tuple[list[str], bool]:
+    offset = _coerce_offset(offset)
+    if head_limit == 0:
+        return lines[offset:], False
+    limit = _coerce_limit(head_limit, 250, upper=10000)
+    end = offset + limit
+    return lines[offset:end], len(lines) > end
+
+
+def _rg_warning(result: RipgrepResult) -> str | None:
+    if result.timed_out:
+        return "... rg timed out; partial results shown. Narrow path/glob or reduce the query."
+    if result.truncated:
+        return "... rg output exceeded 20MB; partial results shown. Narrow path/glob or reduce the query."
+    return None
+
+
+def _format_page_from_range(lines: list[str], *, total: int, offset: int, limit: int) -> str:
+    header = f"total_lines={total}, offset={offset}, returned={len(lines)}"
+    if offset + limit < total:
+        header += f", next_offset={offset + limit}"
+    return header + "\n" + "\n".join(lines)
+
+
 def _iter_candidate_files(base: Path, glob_pattern: str, *, max_files: int = 5000) -> Iterable[Path]:
     pattern = _normalise_pattern(glob_pattern, base)
     count = 0
-    for path in base.glob(pattern):
-        try:
-            resolved = _resolve_inside_root(path.as_posix(), must_exist=True)
-        except Exception:
-            continue
-        if not resolved.is_file():
-            continue
-        count += 1
-        if count > max_files:
-            break
-        yield resolved
+    seen: set[Path] = set()
+    for expanded_pattern in _expand_brace_patterns(pattern):
+        for path in base.glob(expanded_pattern):
+            try:
+                resolved = _resolve_inside_root(path.as_posix(), must_exist=True)
+            except Exception:
+                continue
+            if not resolved.is_file() or resolved in seen:
+                continue
+            seen.add(resolved)
+            count += 1
+            if count > max_files:
+                return
+            yield resolved
 
 
 def _format_page(lines: list[str], *, offset: int, limit: int) -> str:
@@ -129,10 +272,8 @@ def _format_page(lines: list[str], *, offset: int, limit: int) -> str:
 
 
 def _read_text_file(path: Path, *, offset: int, limit: int) -> str:
-    text = path.read_text(encoding="utf-8", errors="replace")
-    lines = text.splitlines()
-    numbered = [f"{i + 1}: {line}" for i, line in enumerate(lines)]
-    return _format_page(numbered, offset=offset, limit=limit)
+    page = read_text_range(path, offset=offset, limit=limit)
+    return _format_page_from_range(page.lines, total=page.total_lines, offset=page.offset, limit=page.limit)
 
 
 def _clean_xml_text(raw: str) -> str:
@@ -248,8 +389,50 @@ def qa_deepagent_ls(path: str = ".", max_entries: int = 200) -> str:
         return f"error: {exc}"
 
 
+def _python_glob(base: Path, pattern: str, *, max_results: int, offset: int) -> tuple[list[str], bool]:
+    matches: list[Path] = []
+    seen: set[Path] = set()
+    for expanded_pattern in _expand_brace_patterns(pattern):
+        for match in base.glob(expanded_pattern):
+            try:
+                resolved = _resolve_inside_root(match.as_posix(), must_exist=True)
+            except Exception:
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            matches.append(resolved)
+    matches.sort(key=lambda p: p.name.lower())
+    window = matches[offset : offset + max_results]
+    return [_project_rel(p) + ("/" if p.is_dir() else "") for p in window], len(matches) > offset + max_results
+
+
+def _rg_glob(base: Path, pattern: str, *, max_results: int, offset: int) -> tuple[list[str], bool] | None:
+    args = [
+        "--files",
+        "--glob",
+        pattern,
+        "--sort=modified",
+        "--no-ignore",
+        "--hidden",
+        *_rg_exclusion_args(),
+    ]
+    result = run_ripgrep(args, _rg_target(base), cwd=_PROJECT_ROOT)
+    if result.unavailable:
+        return None
+    if result.timed_out and not result.lines:
+        return None
+    if not result.ok and not result.lines:
+        return None
+
+    paths = _filter_rg_file_lines(result.lines, output_mode="files_with_matches")
+    window = paths[offset : offset + max_results]
+    truncated = len(paths) > offset + max_results or result.timed_out or result.truncated
+    return window, truncated
+
+
 @tool(parse_docstring=True)
-def qa_deepagent_glob(pattern: str, path: str = ".", max_results: int = 200) -> str:
+def qa_deepagent_glob(pattern: str, path: str = ".", max_results: int = 200, offset: int = 0) -> str:
     """Find files by glob pattern under the project root.
 
     This is a generic DeepAgents-style ``glob`` tool for locating candidate
@@ -266,6 +449,7 @@ def qa_deepagent_glob(pattern: str, path: str = ".", max_results: int = 200) -> 
             ``**/*Cookie*.md``.
         path: Optional base directory inside the project.
         max_results: Maximum paths returned.
+        offset: Number of matches to skip before returning results.
 
     Returns:
         Matching project-relative paths, one per line.
@@ -275,19 +459,178 @@ def qa_deepagent_glob(pattern: str, path: str = ".", max_results: int = 200) -> 
         if base.is_file():
             base = base.parent
         pattern = _normalise_pattern(pattern, base)
-        max_results = max(1, min(int(max_results or 200), 1000))
-        matches: list[str] = []
-        for match in base.glob(pattern):
-            try:
-                resolved = _resolve_inside_root(match.as_posix(), must_exist=True)
-            except Exception:
-                continue
-            matches.append(_project_rel(resolved) + ("/" if resolved.is_dir() else ""))
-            if len(matches) >= max_results:
-                break
-        return "\n".join(matches) if matches else "(no matches)"
+        max_results = _coerce_limit(max_results, 200)
+        offset = _coerce_offset(offset)
+        rg_result = _rg_glob(base, pattern, max_results=max_results, offset=offset)
+        if rg_result is None:
+            matches, truncated = _python_glob(base, pattern, max_results=max_results, offset=offset)
+        else:
+            matches, truncated = rg_result
+        if not matches:
+            return "(no matches)"
+        if truncated:
+            matches.append("... truncated; increase max_results/offset or narrow path/pattern")
+        return "\n".join(matches)
     except Exception as exc:  # noqa: BLE001
         return f"error: {exc}"
+
+
+def _normalise_output_mode(output_mode: str | None) -> str:
+    mode = (output_mode or "content").strip().lower()
+    if mode not in {"content", "files_with_matches", "count"}:
+        raise ValueError("output_mode must be one of: content, files_with_matches, count")
+    return mode
+
+
+def _effective_head_limit(head_limit: int | None, max_results: int) -> int:
+    if head_limit is None:
+        return _coerce_limit(max_results, 100)
+    return max(0, min(int(head_limit), 10000))
+
+
+def _type_suffixes(type_name: str | None) -> set[str] | None:
+    if not type_name:
+        return None
+    key = type_name.strip().lower()
+    return _TYPE_SUFFIXES.get(key, {f".{key}"})
+
+
+def _python_grep(
+    *,
+    pattern: str,
+    base: Path,
+    glob_pattern: str,
+    case_sensitive: bool,
+    max_results: int,
+    output_mode: str,
+    offset: int,
+    type_name: str | None,
+    context: int | None,
+) -> tuple[list[str], bool]:
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        rx = re.compile(pattern, flags)
+    except re.error:
+        rx = re.compile(re.escape(pattern), flags)
+
+    files = [base] if base.is_file() else list(_iter_candidate_files(base, glob_pattern, max_files=20000))
+    suffixes = _type_suffixes(type_name)
+    matched_files: list[str] = []
+    count_lines: list[str] = []
+    content_lines: list[str] = []
+
+    for file_path in files:
+        if suffixes is not None and file_path.suffix.lower() not in suffixes:
+            continue
+        if file_path.suffix.lower() not in _TEXT_SUFFIXES and _is_probably_binary(file_path):
+            continue
+        try:
+            lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            continue
+
+        match_indexes = [idx for idx, line in enumerate(lines) if rx.search(line)]
+        if not match_indexes:
+            continue
+        rel_path = _project_rel(file_path)
+        if output_mode == "files_with_matches":
+            matched_files.append(rel_path)
+            continue
+        if output_mode == "count":
+            count_lines.append(f"{rel_path}:{len(match_indexes)}")
+            continue
+
+        selected_indexes: set[int] = set()
+        context_size = max(0, int(context or 0))
+        for idx in match_indexes:
+            start = max(0, idx - context_size)
+            end = min(len(lines), idx + context_size + 1)
+            selected_indexes.update(range(start, end))
+        for idx in sorted(selected_indexes):
+            snippet = lines[idx].strip()
+            if len(snippet) > 500:
+                snippet = snippet[:497] + "..."
+            content_lines.append(f"{rel_path}:{idx + 1}: {snippet}")
+
+    if output_mode == "files_with_matches":
+        matched_files.sort()
+        return _apply_window(matched_files, offset=offset, head_limit=max_results)
+    if output_mode == "count":
+        count_lines.sort()
+        return _apply_window(count_lines, offset=offset, head_limit=max_results)
+    return _apply_window(content_lines, offset=offset, head_limit=max_results)
+
+
+def _rg_grep(
+    *,
+    pattern: str,
+    base: Path,
+    glob_pattern: str,
+    case_sensitive: bool,
+    output_mode: str,
+    offset: int,
+    head_limit: int,
+    type_name: str | None,
+    context: int | None,
+) -> tuple[list[str], bool, str | None] | None:
+    args = [
+        "--hidden",
+        "--color=never",
+        "--with-filename",
+        "--max-columns",
+        str(_RG_MAX_COLUMNS),
+        *_rg_exclusion_args(),
+    ]
+    if glob_pattern and base.is_dir():
+        args.extend(["--glob", glob_pattern])
+    if not case_sensitive:
+        args.append("-i")
+    if type_name:
+        args.extend(["--type", type_name])
+    if output_mode == "files_with_matches":
+        args.append("-l")
+    elif output_mode == "count":
+        args.append("-c")
+    else:
+        args.extend(["--line-number", "--no-heading"])
+        if context is not None:
+            args.extend(["-C", str(max(0, int(context)))])
+
+    try:
+        re.compile(pattern)
+        fixed_string = False
+    except re.error:
+        fixed_string = True
+    if fixed_string:
+        args.append("-F")
+    if pattern.startswith("-"):
+        args.extend(["-e", pattern])
+    else:
+        args.append(pattern)
+
+    result = run_ripgrep(args, _rg_target(base), cwd=_PROJECT_ROOT)
+    if result.unavailable:
+        return None
+    if result.timed_out and not result.lines:
+        return [], False, "error: rg timed out before returning matches; narrow path/glob or reduce the query"
+    if not result.ok and not result.lines:
+        return None
+
+    if output_mode == "content":
+        lines = _filter_rg_content_lines(result.lines)
+    else:
+        lines = _filter_rg_file_lines(result.lines, output_mode=output_mode)
+        if output_mode == "files_with_matches":
+            resolved = [_resolve_rg_path(p) for p in lines]
+            paths = [p for p in resolved if p is not None]
+            paths.sort(key=lambda p: (p.stat().st_mtime, _project_rel(p)), reverse=True)
+            lines = [_project_rel(p) for p in paths]
+    window, truncated_by_window = _apply_window(lines, offset=offset, head_limit=head_limit)
+    warning = _rg_warning(result)
+    truncated = truncated_by_window or warning is not None
+    if warning:
+        window.append(warning)
+    return window, truncated, None
 
 
 @tool(parse_docstring=True)
@@ -297,6 +640,11 @@ def qa_deepagent_grep(
     glob: str = "**/*",
     case_sensitive: bool = False,
     max_results: int = 100,
+    output_mode: str = "content",
+    head_limit: int | None = None,
+    offset: int = 0,
+    type: str | None = None,
+    context: int | None = None,
 ) -> str:
     """Search text patterns across project files.
 
@@ -316,38 +664,53 @@ def qa_deepagent_grep(
         path: Project-relative directory or file to search.
         glob: Glob filter under path, for example ``**/*.md``.
         case_sensitive: Whether matching is case-sensitive.
-        max_results: Maximum matching lines returned.
+        max_results: Backward-compatible maximum matching lines returned.
+        output_mode: One of ``content``, ``files_with_matches``, or ``count``.
+        head_limit: Maximum returned lines or entries. ``0`` means unlimited.
+        offset: Number of result lines or entries to skip.
+        type: Optional ripgrep file type filter, for example ``py`` or ``ts``.
+        context: Optional number of context lines around content matches.
 
     Returns:
-        ``path:line:text`` matches with truncation notice when applicable.
+        Matches formatted as ``path:line:text``, paths, or ``path:count``.
     """
     try:
         base = _resolve_inside_root(path, must_exist=True)
-        flags = 0 if case_sensitive else re.IGNORECASE
-        try:
-            rx = re.compile(pattern, flags)
-        except re.error:
-            rx = re.compile(re.escape(pattern), flags)
-        files = [base] if base.is_file() else list(_iter_candidate_files(base, glob))
-        max_results = max(1, min(int(max_results or 100), 1000))
-        out: list[str] = []
-        for file_path in files:
-            if file_path.suffix.lower() not in _TEXT_SUFFIXES and _is_probably_binary(file_path):
-                continue
-            try:
-                lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
-            except Exception:
-                continue
-            for line_no, line in enumerate(lines, start=1):
-                if rx.search(line):
-                    snippet = line.strip()
-                    if len(snippet) > 400:
-                        snippet = snippet[:397] + "..."
-                    out.append(f"{_project_rel(file_path)}:{line_no}: {snippet}")
-                    if len(out) >= max_results:
-                        out.append("... truncated; narrow path/glob or increase max_results")
-                        return "\n".join(out)
-        return "\n".join(out) if out else "(no matches)"
+        mode = _normalise_output_mode(output_mode)
+        offset = _coerce_offset(offset)
+        effective_head_limit = _effective_head_limit(head_limit, max_results)
+        rg_result = _rg_grep(
+            pattern=pattern,
+            base=base,
+            glob_pattern=glob,
+            case_sensitive=case_sensitive,
+            output_mode=mode,
+            offset=offset,
+            head_limit=effective_head_limit,
+            type_name=type,
+            context=context,
+        )
+        if rg_result is None:
+            out, truncated = _python_grep(
+                pattern=pattern,
+                base=base,
+                glob_pattern=glob,
+                case_sensitive=case_sensitive,
+                max_results=effective_head_limit,
+                output_mode=mode,
+                offset=offset,
+                type_name=type,
+                context=context,
+            )
+        else:
+            out, truncated, error = rg_result
+            if error:
+                return error
+        if not out:
+            return "(no matches)"
+        if truncated and (not out[-1].startswith("... rg ")):
+            out.append("... truncated; increase head_limit/offset or narrow path/glob")
+        return "\n".join(out)
     except Exception as exc:  # noqa: BLE001
         return f"error: {exc}"
 

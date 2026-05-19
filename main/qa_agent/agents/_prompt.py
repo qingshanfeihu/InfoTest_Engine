@@ -60,12 +60,12 @@ Available tools: {tool_list}
 
 Guidelines:
 - Use `qa_deepagent_ls` to inspect directory structure before narrowing scope.
-- Use `qa_deepagent_glob` for broad file pattern matching.
-- Use `qa_deepagent_grep` to search text with regex or literal fallbacks.
+- Use `qa_deepagent_glob` for broad file pattern matching; it is optimized for large repositories and may return truncated results, so narrow path/pattern or use offsets when needed.
+- Use `qa_deepagent_grep` to search text with regex or literal fallbacks. For broad searches, prefer `output_mode="files_with_matches"` or `output_mode="count"` first, then switch to `output_mode="content"` with a narrow path/glob/context for evidence lines.
 - Use `qa_deepagent_read_file` for specific files, including spreadsheets and word-processing documents.
 - Use `python_exec` to run short Python snippets (≤30s) for structured analysis: parse xlsx with openpyxl, count rows/categories with collections.Counter, compute null-rate for fields, summarise JSON. The interpreter runs in an isolated sandbox; only standard library + openpyxl/pandas/numpy/yaml/toml/json/csv are available. Read-only by convention — never write files or fetch network resources.
 - Use `bash_exec` for read-only shell inspections (ls / cat / head / tail / wc / find / grep / awk / sed). No pipes, redirects, or destructive commands.
-- Use pagination offsets when a result says more content is available.
+- Use pagination offsets when a result says more content is available. For large files, read narrow ranges instead of the full file.
 - Communicate the final analysis directly in chat."""
 
 

@@ -22,10 +22,20 @@ infotest -p "项目里有哪些测试用例？"
 ## 功能
 
 - Textual 终端 UI，支持多轮对话
-- 通用原子工具：ls / glob / grep / read_file / python_exec / bash_exec
+- 通用原子工具：ls / rg-backed glob / rg-backed grep / range read_file / python_exec / bash_exec
+- 大仓库文件搜索：优先使用 ripgrep，支持按文件列表 / 命中内容 / 计数搜索，支持结果分页和大文件按行范围读取；ripgrep 不可用时自动回退到 Python 只读实现
 - 3 tier 模型分级（opus / sonnet / haiku）按任务复杂度自动选模型
 - Thinking block 渲染（qwen3 / Claude 系列 thinking 输出折叠展开）
 - 13 个 slash 命令
+
+## 文件搜索能力
+
+Core 的 `qa_deepagent_glob` / `qa_deepagent_grep` / `qa_deepagent_read_file` 是只读工具，限制在项目根目录内，并继续拒绝访问 `.git`、虚拟环境、本地向量库和运行日志等目录。
+
+- `qa_deepagent_glob` 优先使用 `rg --files --glob` 定位候选文件，支持 `max_results` 和 `offset`。
+- `qa_deepagent_grep` 优先使用 ripgrep regex 搜索，支持 `output_mode="files_with_matches" | "content" | "count"`、`head_limit`、`offset`、`type` 和 `context`。
+- `qa_deepagent_read_file` 对文本文件使用行范围读取；小文件走快路径，大文件流式扫描并只保留请求的行段。
+- 搜索超时或输出过大时会返回可用的部分结果和提示；没有部分结果时会明确报错，不把超时误报为无匹配。
 
 ## Slash 命令
 

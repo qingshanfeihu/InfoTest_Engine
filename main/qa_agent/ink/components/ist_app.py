@@ -471,6 +471,18 @@ class IstInkApp:
         if cls_name == "AIThinkingMessage":
             pass  # No separate indicator; footer timer shows activity
 
+        elif cls_name == "ThinkingMessage":
+            # Qwen3.6 + enable_thinking 输出的 reasoning_content；DashScope OpenAI
+            # 兼容端点把它放在 additional_kwargs.reasoning_content。渲染成 dim 灰
+            # ✶ 前缀 + 整段保留换行，工具调用之间能看到模型的思考过程
+            thinking = getattr(msg, "thinking", "") or ""
+            if thinking.strip():
+                self._ai_stream_idx = -1
+                # 整段拼成单条多行消息（transcript 已按 \n 算视觉行高）
+                self._transcript.append_message(
+                    f" \x1b[2m✶ {thinking.strip()}\x1b[0m"
+                )
+
         elif cls_name == "AIFinalMessage":
             content = getattr(msg, "content", "") or ""
             if content:

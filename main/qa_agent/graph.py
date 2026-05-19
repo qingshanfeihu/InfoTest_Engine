@@ -154,6 +154,13 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
                     tc = getattr(msg, "tool_calls", None) or []
                     add = getattr(msg, "additional_kwargs", None) or {}
                     has_tool_calls = bool(tc) or bool(add.get("tool_calls"))
+                    # OpenAI 兼容端点（DashScope qwen3.6 + enable_thinking=True）
+                    # 把 reasoning 放在 additional_kwargs['reasoning_content']，
+                    # 不在 content list 里。这里兜底一次。
+                    if not thinking_text:
+                        rc = add.get("reasoning_content") or add.get("reasoning")
+                        if isinstance(rc, str) and rc.strip():
+                            thinking_text = rc
                     # LangChain BaseMessage.usage_metadata: {input_tokens, output_tokens, total_tokens}
                     um = getattr(msg, "usage_metadata", None) or {}
                     if isinstance(um, dict):

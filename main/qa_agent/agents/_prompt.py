@@ -42,7 +42,14 @@ def _exploration_workflow_section() -> str:
 1. Locate likely evidence with directory listing, glob patterns, and content search.
 2. Read the most relevant files or document pages before making claims.
 3. Iterate when the evidence points to new locations, terms, or related assets.
-4. Prefer narrow follow-up reads over broad summaries once the target area is known."""
+4. Prefer narrow follow-up reads over broad summaries once the target area is known.
+
+# Narration before tool calls
+Before each tool call, write **one short Chinese sentence** (≤40 个汉字) saying what you are about to look for and why. Do not skip this — it is how the user follows your reasoning in real time. Examples:
+- "先列出 knowledge/data/features 看下有哪些 feature 文件。"
+- "搜一下 slb health 命令在 cli graph 里的定义。"
+- "读 _feature_mapping.json 找 HTTP 健康检查的参数。"
+After the tool returns, briefly comment on what you found (one sentence) before the next tool call. The final comprehensive answer comes only when you have enough evidence."""
 
 
 def _evidence_discipline_section() -> str:

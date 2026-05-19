@@ -137,6 +137,13 @@ def _build_openai_compat(model_name: str, **kwargs: Any):
     kwargs.setdefault("temperature", 0.0)
     kwargs.setdefault("top_p", 0.5)
     kwargs.setdefault("streaming", True)
+    # Qwen3.6 在 tool-calling 模式下默认不输出陪伴 content；开启 thinking
+    # 后模型会把推理过程放进 ``message.reasoning_content`` / 流式
+    # ``delta.reasoning_content``，TUI 可以渲染成"思考"通道。
+    # 参考：阿里云百炼 OpenAI 兼容端点文档（extra_body.enable_thinking）。
+    extra_body = dict(kwargs.pop("extra_body", None) or {})
+    extra_body.setdefault("enable_thinking", True)
+    kwargs["extra_body"] = extra_body
     return ChatOpenAI(
         model=model_name,
         base_url=base_url,

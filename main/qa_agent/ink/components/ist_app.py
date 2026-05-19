@@ -95,6 +95,10 @@ class IstInkApp:
         self._run_start_time: float = 0.0
         self._tool_outputs_expanded: bool = False
         self._tool_output_blocks: list[dict] = []
+        # 当前 AI 流式消息行号；任何非 token 事件（tool_start / append / finalize_ai）
+        # 必须 reset 它，否则下一个 llm_token 会用 update_last_message 把刚 append
+        # 的工具行内容覆盖掉——表现就是"AI 独白消失，只剩工具行"
+        self._ai_stream_idx: int = -1
 
         # Persistent history (reuse old TUI's InputHistory)
         from main.qa_agent.tui.input_history import InputHistory
@@ -331,8 +335,16 @@ class IstInkApp:
             self._streaming_buf.append(chunk)
             partial = "".join(self._streaming_buf)
             rendered = self._render_markdown(partial)
-            # White ⏺ appears with AI text
-            self._transcript.update_last_message(f" ⏺ {rendered}")
+            # 第一次 token：append 一个新行作为这段 AI 独白的锚点；
+            # 后续 token 用 update_message_at 改这一行——不能用 update_last_message，
+            # 否则中间穿插的 tool_start 会被覆盖
+            if self._ai_stream_idx < 0:
+                self._ai_stream_idx = self._transcript.message_count()
+                self._transcript.append_message(f" ⏺ {rendered}")
+            else:
+                self._transcript.update_message_at(
+                    self._ai_stream_idx, f" ⏺ {rendered}"
+                )
             self._app.render()
 
         elif kind == "finalize_ai":
@@ -340,8 +352,14 @@ class IstInkApp:
             final = "".join(self._streaming_buf)
             if final:
                 rendered = self._render_markdown(final)
-                self._transcript.update_last_message(f" {rendered}")
+                if self._ai_stream_idx >= 0:
+                    self._transcript.update_message_at(
+                        self._ai_stream_idx, f" ⏺ {rendered}"
+                    )
+                else:
+                    self._transcript.append_message(f" ⏺ {rendered}")
             self._streaming_buf.clear()
+            self._ai_stream_idx = -1  # 下一段 AI 独白要新建一行
             # Accumulate tokens
             usage = (event.extra or {}).get("usage") or {}
             tokens = usage.get("total_tokens", 0) or usage.get("prompt_tokens", 0)
@@ -352,6 +370,7 @@ class IstInkApp:
 
         elif kind == "run_done":
             self._flush_pending_tools()
+            self._ai_stream_idx = -1
             self._is_loading = False
             # Show completion line: ⏱ elapsed · tokens
             import time as _time
@@ -367,6 +386,7 @@ class IstInkApp:
             self._app.render()
 
         elif kind == "run_error":
+            self._ai_stream_idx = -1
             self._is_loading = False
             err = (event.extra or {}).get("error", "unknown error")
             self._transcript.append_message(f"[error] {err}")
@@ -375,10 +395,12 @@ class IstInkApp:
 
         elif kind == "append":
             if event.message:
+                self._ai_stream_idx = -1
                 self._format_and_append(event.message)
                 self._app.render()
 
         elif kind == "tool_start":
+            self._ai_stream_idx = -1
             tool_name = (event.extra or {}).get("tool_name", "tool")
             # Blinking yellow ⏺ = running
             idx = self._transcript.message_count()
@@ -390,6 +412,7 @@ class IstInkApp:
             self._app.render()
 
         elif kind == "tool_done":
+            self._ai_stream_idx = -1
             extra = event.extra or {}
             tool_name = extra.get("tool_name", "")
             result = extra.get("result", "")

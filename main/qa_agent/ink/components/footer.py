@@ -113,7 +113,9 @@ class FooterPane:
                 self._thinking_cb(thinking_text)
         else:
             parts = [self.status]
-            parts.append(f"{self.tokens_used:,} / {self.tokens_budget:,} tokens")
+            # 累计消耗（多轮 LLM call 求和），不是上下文窗口占用——
+            # 不展示 budget 比例，避免和模型上下文上限混淆
+            parts.append(f"{self.tokens_used:,} tokens")
             if self.model:
                 parts.append(self.model)
             status_text = " · ".join(parts)

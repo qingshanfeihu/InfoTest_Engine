@@ -46,9 +46,9 @@ def _exploration_workflow_section() -> str:
 
 # Narration before tool calls
 Before each tool call, write **one short Chinese sentence** (≤40 个汉字) saying what you are about to look for and why. Do not skip this — it is how the user follows your reasoning in real time. Examples:
-- "先列出 knowledge/data/features 看下有哪些 feature 文件。"
-- "搜一下 slb health 命令在 cli graph 里的定义。"
-- "读 _feature_mapping.json 找 HTTP 健康检查的参数。"
+- "先列出 knowledge/data/markdown/product 看下有哪些产品文档。"
+- "在 knowledge/data/markdown/qa 里搜 cookie 加密相关的测试用例。"
+- "读 SLB_HTTP_COOKIE_SAMESITE_spec.md 找 SameSite 字段定义。"
 After the tool returns, briefly comment on what you found (one sentence) before the next tool call. The final comprehensive answer comes only when you have enough evidence."""
 
 

@@ -56,3 +56,20 @@ DISABLE_MOUSE_TRACKING = (
     + decreset(DEC.MOUSE_BUTTON)
     + decreset(DEC.MOUSE_NORMAL)
 )
+
+# Wheel-only tracking: 1000 reports button press / release / wheel only,
+# 1006 switches to SGR encoding. We deliberately skip 1002 (button-motion
+# drag) and 1003 (any-motion). When 1002/1003 are active, terminals like
+# macOS Terminal.app and tmux stop forwarding drag-selection to their own
+# native text-selection engine — copy-on-select / drag-to-select stops
+# working without forcing the user to hold a modifier key. With only
+# 1000+1006 enabled, the terminal still emits wheel events to the app
+# but lets click-drag fall through to native selection on most terminals.
+ENABLE_WHEEL_ONLY_TRACKING = (
+    decset(DEC.MOUSE_NORMAL)
+    + decset(DEC.MOUSE_SGR)
+)
+DISABLE_WHEEL_ONLY_TRACKING = (
+    decreset(DEC.MOUSE_SGR)
+    + decreset(DEC.MOUSE_NORMAL)
+)

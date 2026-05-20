@@ -78,6 +78,13 @@ class InputParser:
         events: list[InputEvent] = []
         for token in tokens:
             self._process_token(token, events)
+        # Stage 1: merge stray escape+enter into shift+enter.
+        events = _coalesce_alt_enter(events)
+        # Stage 2: rescue pastes that arrived without bracketed-paste
+        # markers — without this, a multi-line paste in a terminal /
+        # multiplexer that strips ESC[200~ floods the prompt with
+        # individual ↵ markers and bypasses the placeholder folding.
+        events = coalesce_paste_runs(events)
         return events
 
     def _process_token(self, token: Token, events: list[InputEvent]) -> None:
@@ -101,6 +108,104 @@ class InputParser:
             ev = _parse_sequence(token.value)
             if ev is not None:
                 events.append(ev)
+
+
+def _coalesce_alt_enter(events: list[InputEvent]) -> list[InputEvent]:
+    """Merge a stray ``escape`` + ``enter`` pair into a single ``shift+enter``.
+
+    The tokenizer treats ``\\x1b\\r`` as ``ESC`` (terminating an empty escape
+    sequence) followed by a literal ``CR``, so users pressing Shift+Enter (or
+    Option+Enter on macOS terminals that emit ESC+CR) would otherwise see the
+    escape clear the prompt and the enter immediately submit. Collapsing them
+    here keeps the alt-enter / shift-enter equivalence working with whatever
+    the terminal happens to send, without touching the lower-level tokenizer.
+    """
+    if len(events) < 2:
+        return events
+    out: list[InputEvent] = []
+    i = 0
+    while i < len(events):
+        ev = events[i]
+        nxt = events[i + 1] if i + 1 < len(events) else None
+        if (
+            isinstance(ev, KeyPress)
+            and ev.key == "escape"
+            and isinstance(nxt, KeyPress)
+            and nxt.key == "enter"
+        ):
+            out.append(KeyPress(key="shift+enter", shift=True))
+            i += 2
+            continue
+        out.append(ev)
+        i += 1
+    return out
+
+
+def coalesce_paste_runs(events: list[InputEvent]) -> list[InputEvent]:
+    """Synthesize a ``PasteEvent`` from a run of printable / LF KeyPress
+    events that arrived in a single input batch.
+
+    Bracketed paste mode (``\\x1b[?2004h``) is supposed to wrap pasted
+    content in ``ESC [ 200 ~`` ... ``ESC [ 201 ~`` so the parser emits one
+    ``PasteEvent``. Some terminals / multiplexers / SSH paths drop the
+    markers, leaving a raw stream of characters where ``LF`` (0x0A) is
+    parsed as ``ctrl+j``. Without this coalescer, those pastes flood the
+    prompt with individual ``↵`` markers (visible single-line overflow)
+    and bypass the ``[Pasted text #N +K lines]`` placeholder folding.
+
+    Heuristic: a contiguous run of (printable char | ctrl+j) ≥ 4 chars
+    that contains at least one ctrl+j newline is treated as a paste.
+    A pure-text run without newlines must be ≥ 64 chars to qualify —
+    real typing rarely fills 64 chars in a single ``os.read`` while a
+    paste comfortably does.
+
+    A bare single ``ctrl+j`` (Shift+Enter / Ctrl+J for in-input newline)
+    falls below both thresholds and stays a normal KeyPress.
+    """
+    if not events:
+        return events
+    out: list[InputEvent] = []
+    i = 0
+    n = len(events)
+    while i < n:
+        ev = events[i]
+        if not isinstance(ev, KeyPress) or not _is_paste_run_char(ev):
+            out.append(ev)
+            i += 1
+            continue
+        # Collect contiguous printable / ctrl+j run
+        chars: list[str] = []
+        has_newline = False
+        j = i
+        while j < n:
+            ev_j = events[j]
+            if not isinstance(ev_j, KeyPress) or not _is_paste_run_char(ev_j):
+                break
+            if ev_j.key == "ctrl+j":
+                chars.append("\n")
+                has_newline = True
+            else:
+                # ev_j.char already validated by _is_paste_run_char
+                chars.append(ev_j.char)
+            j += 1
+        # Run length / newline heuristic
+        run_len = j - i
+        looks_like_paste = (has_newline and run_len >= 4) or run_len >= 64
+        if looks_like_paste:
+            out.append(PasteEvent(text="".join(chars)))
+            i = j
+        else:
+            out.append(events[i])
+            i += 1
+    return out
+
+
+def _is_paste_run_char(kp: KeyPress) -> bool:
+    """Return True if this KeyPress could plausibly be part of a pasted
+    text run (printable single character or LF-as-ctrl+j)."""
+    if kp.key == "ctrl+j":
+        return True
+    return bool(kp.char) and len(kp.char) == 1 and kp.char.isprintable()
 
 
 def _parse_char(ch: str) -> KeyPress:
@@ -144,6 +249,13 @@ def _parse_sequence(seq: str) -> InputEvent | None:
             return KeyPress(key=key)
         return None
 
+    # Alt+Enter (ESC + CR) — used by iTerm2/xterm to send a "shift+enter"
+    # equivalent. The tokenizer typically splits this into two events, which
+    # are coalesced in _coalesce_alt_enter; this branch covers the rare case
+    # where the sequence arrives in one chunk.
+    if rest in ("\r", "\n"):
+        return KeyPress(key="shift+enter", shift=True)
+
     # Alt+char: ESC + char
     if len(rest) == 1:
         ch = rest[0]
@@ -160,6 +272,20 @@ def _parse_csi(body: str) -> InputEvent | None:
     # SGR mouse: < btn;col;row M/m
     if body.startswith("<"):
         return _parse_sgr_mouse(body[1:])
+
+    # kitty keyboard protocol CSI u: codepoint;modifiers u
+    # Only handle shift+enter (13;2u) — the one case we actually need.
+    if body.endswith("u") and ";" in body:
+        try:
+            cp_str, mod_str = body[:-1].split(";", 1)
+            cp = int(cp_str)
+            mod = int(mod_str)
+        except ValueError:
+            cp = 0
+            mod = 0
+        # mod-1 bitfield: 1=shift, 2=alt, 4=ctrl
+        if cp == 13 and (mod - 1) & 1:
+            return KeyPress(key="shift+enter", shift=True)
 
     # Function keys with modifiers: e.g. 1;5A = Ctrl+Up
     if ";" in body and body[-1:].isalpha():

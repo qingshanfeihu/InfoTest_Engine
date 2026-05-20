@@ -2,7 +2,10 @@
 
 Replaces the Textual-based IstApp. Uses Python Ink renderer for:
 - Real terminal cursor positioning (IME follows cursor)
-- No mouse capture (terminal native text selection works)
+- Full mouse capture (DEC 1000+1002+1003+1006) with a self-implemented
+  selection engine (selection.py) — drag-to-select, double-click word,
+  triple-click line, release-copy via OSC 52 + pbcopy/xclip, Ctrl+C
+  re-copy when a selection is active. Same UX as cc-haha.
 - Efficient incremental screen updates
 """
 
@@ -40,8 +43,10 @@ class IstInkApp:
         self._initial_query = initial_query
         self._task_type = task_type
 
-        # Ink app (no mouse capture)
-        self._app = InkApp(alt_screen=True, mouse=False)
+        # Ink app — full mouse capture so the self-implemented selection
+        # engine (selection.py) can do drag-to-select / multi-click /
+        # release-copy without relying on terminal-native selection.
+        self._app = InkApp(alt_screen=True, mouse=True)
 
         # Components
         self._transcript = Transcript()
@@ -182,6 +187,8 @@ class IstInkApp:
         with self._app.lock:
             if isinstance(event, KeyPress):
                 self._handle_key(event)
+            elif isinstance(event, MouseEvent):
+                self._handle_mouse(event)
             elif isinstance(event, PasteEvent):
                 self._prompt.handle_paste(event.text)
                 self._app.render()
@@ -189,6 +196,25 @@ class IstInkApp:
     def _handle_key(self, kp: KeyPress) -> None:
         """Handle keyboard events."""
         import time as _time
+
+        # Reverse-i-search mode swallows most input until exited
+        if self._input_history.in_search_mode:
+            if self._handle_search_key(kp):
+                return
+
+        # Selection-active shortcuts: Ctrl+C re-copies, Esc clears.
+        # Both checks must run BEFORE the global Ctrl+C abort branch so
+        # users can copy a highlighted result without aborting a query.
+        from main.qa_agent.ink.selection import clear_selection, has_selection
+        if has_selection(self._app.selection):
+            if kp.key == "ctrl+c":
+                self._copy_selection(clear_after=False)
+                return
+            if kp.key == "escape":
+                clear_selection(self._app.selection)
+                self._app.notify_selection_change()
+                self._app.render()
+                return
 
         # Global keys
         if kp.key == "ctrl+c":
@@ -225,13 +251,29 @@ class IstInkApp:
                 self._cancel_query()
             else:
                 self._prompt.clear()
-                self._app.render()
+                # Force a full redraw — when a long paste expanded inline
+                # past the prompt's single-line viewport, the terminal's
+                # auto-wrap left visible content on the lines below the
+                # input box. Those rows are NOT in the ink screen buffer,
+                # so a normal diff render won't erase them. Clearing the
+                # prev frame makes the next render write every cell from
+                # scratch, which paints over the leftover wrap.
+                self._app._force_full_render()
             return
         if kp.key == "ctrl+o":
             self._toggle_expand()
             return
         if kp.key == "ctrl+l":
             self._app._force_full_render()
+            return
+        if kp.key == "pageup":
+            self._scroll_transcript(-self._half_viewport())
+            return
+        if kp.key == "pagedown":
+            self._scroll_transcript(self._half_viewport())
+            return
+        if kp.key == "ctrl+r":
+            self._enter_or_advance_search()
             return
         if kp.key == "up":
             self._history_up()
@@ -250,23 +292,259 @@ class IstInkApp:
         if consumed:
             self._app.render()
 
+    def _handle_mouse(self, me: "MouseEvent") -> None:
+        """Handle mouse events: wheel scrolls transcript; left button does
+        the cc-haha-style selection (single drag = char, double-click =
+        word, triple-click = line, release auto-copies)."""
+        # Translate screen y to a transcript-content row by accounting for
+        # the transcript widget's vertical position and current scroll.
+        col, row = self._mouse_to_screen_coords(me.x, me.y)
+
+        if me.type == "wheel":
+            # button=0 wheel-up, button=1 wheel-down (parse_keypress).
+            if me.button == 0:
+                self._scroll_transcript(-3)
+            elif me.button == 1:
+                self._scroll_transcript(3)
+            return
+
+        # We only care about the left button (button=0) for selection.
+        if me.button != 0:
+            return
+
+        if me.type == "press":
+            self._handle_left_press(col, row, alt=me.alt)
+            return
+
+        if me.type == "move":
+            # Drag motion. Ink emits "move" events while a button is held
+            # (1002 button-motion mode). Only act if the selection is
+            # actively dragging — bare hover should not extend selection.
+            sel = self._app.selection
+            if not sel.is_dragging:
+                return
+            if sel.anchor_span is not None:
+                from main.qa_agent.ink.selection import extend_selection
+                extend_selection(sel, self._app._curr_screen, col, row)
+            else:
+                from main.qa_agent.ink.selection import update_selection
+                update_selection(sel, col, row)
+            self._app.notify_selection_change()
+            self._app.render()
+            return
+
+        if me.type == "release":
+            from main.qa_agent.ink.selection import (
+                finish_selection,
+                has_selection,
+            )
+            sel = self._app.selection
+            was_dragging = sel.is_dragging
+            finish_selection(sel)
+            # Auto-copy on release if a real selection exists. cc-haha
+            # clears after copy, but we keep the highlight so a second
+            # Ctrl+C can re-copy without re-dragging.
+            if was_dragging and has_selection(sel):
+                self._copy_selection(clear_after=False)
+            self._app.notify_selection_change()
+            self._app.render()
+            return
+
+    def _handle_left_press(self, col: int, row: int, *, alt: bool) -> None:
+        """Single / double / triple-click dispatch. cc-haha uses a 300 ms
+        same-cell window to escalate click count.
+        """
+        import time as _time
+        now = _time.monotonic()
+        last = getattr(self, "_last_click_meta", None)
+        click_count = 1
+        if (
+            last is not None
+            and now - last[0] < 0.3
+            and last[1] == col
+            and last[2] == row
+        ):
+            click_count = last[3] + 1
+        # Cap at 3 — further clicks repeat line selection (cc-haha
+        # behavior).
+        if click_count > 3:
+            click_count = 3
+
+        from main.qa_agent.ink.selection import (
+            select_line_at,
+            select_word_at,
+            start_selection,
+        )
+
+        sel = self._app.selection
+        # Any new mouse-down resets prior highlight in the natural way.
+        sel.scrolled_off_above = []
+        sel.scrolled_off_below = []
+        sel.scrolled_off_above_sw = []
+        sel.scrolled_off_below_sw = []
+
+        screen = self._app._curr_screen
+        if click_count == 1:
+            start_selection(sel, col, row, alt=alt)
+        elif click_count == 2:
+            select_word_at(sel, screen, col, row)
+        else:
+            select_line_at(sel, screen, row)
+
+        self._last_click_meta = (now, col, row, click_count)
+        self._app.notify_selection_change()
+        self._app.render()
+
+    def _mouse_to_screen_coords(self, x: int, y: int) -> tuple[int, int]:
+        """SGR mouse coords are already 0-indexed screen cells (see
+        _parse_sgr_mouse). cc-haha's selection state operates in the same
+        coordinate space, so we pass the raw values through. Clamp to the
+        current screen bounds to avoid out-of-range indexing during
+        edge-of-viewport drags."""
+        screen = self._app._curr_screen
+        clamped_x = max(0, min(x, max(0, screen.width - 1)))
+        clamped_y = max(0, min(y, max(0, screen.height - 1)))
+        return clamped_x, clamped_y
+
+    def _copy_selection(self, *, clear_after: bool) -> None:
+        """Copy the current selection to the clipboard.
+
+        clear_after=True drops the highlight after copying (cc-haha
+        copySelection); False keeps it visible so subsequent Ctrl+C can
+        re-copy the same range.
+        """
+        from main.qa_agent.ink.selection import (
+            clear_selection,
+            get_selected_text,
+            has_selection,
+        )
+        from main.qa_agent.ink.termio.osc import set_clipboard
+
+        sel = self._app.selection
+        if not has_selection(sel):
+            return
+        text = get_selected_text(sel, self._app._curr_screen)
+        if not text:
+            return
+        seq = set_clipboard(text)
+        if seq:
+            self._app._terminal.write(seq)
+        # Show a brief toast on the footer.
+        self._footer.set_toast(f"Copied {len(text)} chars", ttl_seconds=1.2)
+        if clear_after:
+            clear_selection(sel)
+            self._app.notify_selection_change()
+        self._app.render()
+
+    def _half_viewport(self) -> int:
+        return max(1, self._transcript.viewport_height() // 2)
+
+    def _scroll_transcript(self, delta: int) -> None:
+        if delta == 0:
+            return
+        self._transcript.scroll_by(delta)
+        self._app.render()
+
+    # -- Reverse-i-search ---------------------------------------------------
+
+    def _enter_or_advance_search(self) -> None:
+        if self._input_history.in_search_mode:
+            result = self._input_history.search_next()
+            self._update_search_ui(result)
+        else:
+            initial = self._prompt.value
+            result = self._input_history.start_search(initial)
+            self._update_search_ui(result)
+
+    def _update_search_ui(self, match: str | None) -> None:
+        query = self._input_history.search_query
+        if match is not None:
+            self._prompt.set_value(match)
+        self._footer.set_search_state(query=query, match=match if match else "")
+        self._app.render()
+
+    def _handle_search_key(self, kp: KeyPress) -> bool:
+        """Search-mode keystroke dispatcher. Returns True if event consumed."""
+        key = kp.key
+        # Ctrl+R cycles to next match — handled by the global branch below;
+        # let it fall through.
+        if key == "ctrl+r":
+            return False
+        if key == "escape":
+            draft = self._input_history.exit_search(restore=True)
+            self._prompt.set_value(draft)
+            self._footer.set_search_state(query=None, match=None)
+            self._app.render()
+            return True
+        if key == "enter":
+            self._input_history.exit_search(restore=False)
+            self._footer.set_search_state(query=None, match=None)
+            text = self._prompt.value
+            if text:
+                self._prompt.clear()
+                self._submit(text)
+            else:
+                self._app.render()
+            return True
+        if key == "backspace":
+            new_q = self._input_history.search_query[:-1]
+            result = self._input_history.update_search_query(new_q)
+            self._update_search_ui(result)
+            return True
+        if key == "ctrl+c":
+            # Cancel search instead of aborting query
+            draft = self._input_history.exit_search(restore=True)
+            self._prompt.set_value(draft)
+            self._footer.set_search_state(query=None, match=None)
+            self._app.render()
+            return True
+        # Printable char -> extend query
+        if kp.char and len(kp.char) == 1 and kp.char.isprintable():
+            new_q = self._input_history.search_query + kp.char
+            result = self._input_history.update_search_query(new_q)
+            self._update_search_ui(result)
+            return True
+        # Any other special key (up/down/tab/page*/etc.) — exit search keeping
+        # the current match visible, then fall through to normal handling.
+        self._input_history.exit_search(restore=False)
+        self._footer.set_search_state(query=None, match=None)
+        return False
+
     def _on_submit(self, text: str) -> None:
         """Called when user presses Enter in prompt."""
         self._submit(text)
 
-    def _submit(self, text: str) -> None:
-        """Submit user input to the agent."""
+    def _submit(self, text: str, *, pre_expanded: str | None = None) -> None:
+        """Submit user input to the agent.
+
+        ``pre_expanded`` is the original multi-line content when the caller
+        already knows it (e.g. repeat-paste auto-submit). When set, the
+        placeholder-expansion step is skipped and the LLM receives this
+        text verbatim. ``text`` is still used for history / slash routing.
+        """
         text = text.strip()
-        if not text:
+        if not text and not pre_expanded:
             return
 
-        # Save to history (persistent)
-        self._input_history.add(text)
+        if text:
+            # Save the placeholder form to history so the persistent log
+            # stays compact (long pastes show as [Pasted text #N +K lines]).
+            self._input_history.add(text)
 
-        # Slash command?
-        if text.startswith("/"):
-            self._handle_slash(text)
-            return
+            # Slash command? Slash commands operate on the typed text and
+            # never carry pasted bodies, so don't expand placeholders here.
+            if text.startswith("/"):
+                self._handle_slash(text)
+                return
+
+        if pre_expanded is not None:
+            expanded = pre_expanded
+        else:
+            # Expand any [Pasted text #N +K lines] placeholders back into
+            # their original multi-line content before showing + sending to
+            # the LLM. Also unwrap the ↵ visual newline marker we use for
+            # short pastes / Shift+Enter.
+            expanded = self._prompt.consume_pasted_refs(text).replace("↵", "\n")
 
         # Clear welcome box on first submit
         if self._welcome_shown:
@@ -274,7 +552,8 @@ class IstInkApp:
             self._welcome_shown = False
 
         # Show user message (indented, no "> " prefix — matches old TUI)
-        self._transcript.append_message(f"  {text}")
+        for line in expanded.split("\n"):
+            self._transcript.append_message(f"  {line}")
         self._transcript.append_message("")
         # Placeholder for streaming AI response (will be updated by update_ai_token/append)
         self._transcript.append_message("")
@@ -283,8 +562,24 @@ class IstInkApp:
         self._run_start_time = __import__('time').time()
         self._app.render()
 
-        # Run query via GraphBridge (same pattern as Textual app)
-        self._run_via_bridge(text)
+        # Run query via GraphBridge (same pattern as Textual app).
+        # Use the placeholder-expanded form so the LLM sees the full
+        # pasted content instead of the [Pasted text #N] short form.
+        self._run_via_bridge(expanded)
+
+    def _submit_expanded(self, expanded: str) -> None:
+        """Submit raw multi-line content directly, bypassing the prompt
+        editor. Used by repeat-paste auto-submit."""
+        # Show a one-line summary in history so the persistent log stays
+        # compact (we never round-tripped this through the prompt).
+        num_lines = expanded.count("\n")
+        history_label = (
+            f"[Pasted text +{num_lines} lines]" if num_lines else expanded
+        )
+        self._input_history.add(history_label)
+        # Reset prompt's paste store — the expansion consumed it.
+        self._prompt.clear_pasted_refs()
+        self._submit("", pre_expanded=expanded)
 
     def _run_via_bridge(self, text: str) -> None:
         """Run query through GraphBridge in background thread."""

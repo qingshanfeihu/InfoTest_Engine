@@ -55,12 +55,33 @@ class Transcript:
         self._node.clear_children()
         self._messages.clear()
         self._node.scroll_top = 0
+        self._node.sticky_scroll = True
+
+    def scroll_by(self, delta: int) -> None:
+        """Scroll by ``delta`` rows (negative=up, positive=down).
+
+        Once the user scrolls away from the bottom, sticky-scroll is paused so
+        new messages don't yank the viewport back. Sticky resumes automatically
+        once the viewport reaches the bottom again.
+        """
+        if delta == 0:
+            return
+        viewport_h = self._node.rect.height if self._node.rect.height > 0 else 20
+        content_h = self._content_height_rows()
+        max_top = max(0, content_h - viewport_h)
+        new_top = max(0, min(max_top, self._node.scroll_top + delta))
+        self._node.scroll_top = new_top
+        self._node.sticky_scroll = new_top >= max_top
 
     def scroll_up(self, lines: int = 3) -> None:
-        self._node.scroll_top = max(0, self._node.scroll_top - lines)
+        self.scroll_by(-abs(lines))
 
     def scroll_down(self, lines: int = 3) -> None:
-        self._node.scroll_top += lines
+        self.scroll_by(abs(lines))
+
+    def viewport_height(self) -> int:
+        h = self._node.rect.height
+        return h if h > 0 else 20
 
     def update_message_at(self, idx: int, text: str) -> None:
         """Update a specific message by index."""

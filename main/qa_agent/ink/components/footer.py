@@ -50,6 +50,10 @@ class FooterPane:
         self._verb: str = ""
         self._timer: threading.Timer | None = None
         self._timer_running = False
+        self._search_query: str | None = None
+        self._search_match: str | None = None
+        self._toast_text: str | None = None
+        self._toast_timer: threading.Timer | None = None
         self._refresh()
 
     @property
@@ -78,6 +82,38 @@ class FooterPane:
             self.model = model
         self._refresh()
 
+    def set_search_state(self, query: str | None, match: str | None) -> None:
+        """Show / hide reverse-i-search status (overrides thinking + status row)."""
+        self._search_query = query
+        self._search_match = match
+        self._refresh()
+
+    def set_toast(self, text: str | None, ttl_seconds: float = 1.2) -> None:
+        """Briefly flash text on the status row (e.g. "Copied 12 chars").
+
+        Priority order in _refresh: search > toast > thinking > default
+        status. Pass text=None to clear immediately.
+        """
+        if self._toast_timer is not None:
+            self._toast_timer.cancel()
+            self._toast_timer = None
+        self._toast_text = text
+        self._refresh()
+        if self._render_cb:
+            self._render_cb()
+        if text and ttl_seconds > 0:
+            t = threading.Timer(ttl_seconds, self._clear_toast)
+            t.daemon = True
+            self._toast_timer = t
+            t.start()
+
+    def _clear_toast(self) -> None:
+        self._toast_text = None
+        self._toast_timer = None
+        self._refresh()
+        if self._render_cb:
+            self._render_cb()
+
     def _start_timer(self) -> None:
         if self._timer_running:
             return
@@ -103,6 +139,25 @@ class FooterPane:
         self._timer.start()
 
     def _refresh(self) -> None:
+        if self._search_query is not None:
+            match_disp = self._search_match if self._search_match else ""
+            status_text = f"(reverse-i-search) '{self._search_query}': {match_disp}"
+            if self._thinking_cb:
+                self._thinking_cb(None)
+            self._status_line.set_value(status_text)
+            self._hint_line.set_value(
+                "ctrl+r next · enter accept · esc cancel"
+            )
+            return
+        if self._toast_text is not None:
+            if self._thinking_cb:
+                self._thinking_cb(None)
+            self._status_line.set_value(self._toast_text)
+            # Keep the regular hint to avoid flicker.
+            self._hint_line.set_value(
+                "ctrl+c abort · ctrl+d exit · / commands · ↑↓ history"
+            )
+            return
         if self._timer_running and self._busy_since:
             elapsed = time.time() - self._busy_since
             elapsed_str = _format_elapsed(elapsed)

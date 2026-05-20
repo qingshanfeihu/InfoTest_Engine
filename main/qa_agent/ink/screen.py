@@ -61,6 +61,10 @@ class StylePool:
         self._styles: list[list[str]] = []
         self._transition_cache: dict[int, str] = {}
         self.none: int = self.intern([])
+        # Selection overlay (cc-haha withSelectionBg). Cleared on
+        # set_selection_bg() so a theme switch invalidates stale entries.
+        self._selection_bg_codes: list[str] = ["\x1b[48;5;238m"]
+        self._selection_bg_cache: dict[int, int] = {}
 
     def intern(self, codes: list[str]) -> int:
         key = "\0".join(codes) if codes else ""
@@ -92,6 +96,85 @@ class StylePool:
         result = _diff_sgr(from_codes, to_codes)
         self._transition_cache[cache_key] = result
         return result
+
+    # ------------------------------------------------------------------
+    # Selection overlay — cc-haha withSelectionBg port
+    # ------------------------------------------------------------------
+
+    def set_selection_bg(self, codes: list[str] | None) -> None:
+        """Configure the selection-highlight background SGR codes.
+
+        Pass an empty list / None to fall back to inverse-style behavior
+        (the cache is cleared either way so a theme change invalidates
+        old entries).
+        """
+        new_codes = list(codes) if codes else []
+        if new_codes == self._selection_bg_codes:
+            return
+        self._selection_bg_codes = new_codes
+        self._selection_bg_cache.clear()
+
+    def with_selection_bg(self, base_id: int) -> int:
+        """Return a style id that REPLACES base_id's bg with the selection
+        bg while preserving fg / bold / italic / dim / underline / etc.
+
+        Matches cc-haha's withSelectionBg: filter out any existing bg
+        codes (\\x1b[49m reset, \\x1b[48;... explicit bg) and any inverse
+        (\\x1b[27m reset, \\x1b[7m set), then append the selection bg.
+        Cache by base_id so on drag the only work per cell is a dict
+        lookup + style_id write.
+        """
+        cached = self._selection_bg_cache.get(base_id)
+        if cached is not None:
+            return cached
+        sel_bg = self._selection_bg_codes
+        if not sel_bg:
+            # No theme bg configured — fall back to inverse so the overlay
+            # still renders (cc-haha withInverse path).
+            kept = [c for c in self.get(base_id) if c != "\x1b[7m" and c != "\x1b[27m"]
+            kept.append("\x1b[7m")
+            new_id = self.intern(kept)
+            self._selection_bg_cache[base_id] = new_id
+            return new_id
+        kept = [
+            c for c in self.get(base_id)
+            if not _is_bg_or_inverse_code(c)
+        ]
+        kept.extend(sel_bg)
+        new_id = self.intern(kept)
+        self._selection_bg_cache[base_id] = new_id
+        return new_id
+
+    def clear_selection_bg_cache(self) -> None:
+        self._selection_bg_cache.clear()
+
+
+def _is_bg_or_inverse_code(code: str) -> bool:
+    """Return True for SGR codes that set/reset background or inverse.
+
+    We want with_selection_bg to drop these so the selection bg wins.
+    Includes:
+      - \\x1b[49m  (default bg reset)
+      - \\x1b[48;...m (explicit bg, 256-color or RGB)
+      - \\x1b[40m..\\x1b[47m (8-color bg)
+      - \\x1b[100m..\\x1b[107m (bright bg)
+      - \\x1b[7m / \\x1b[27m  (inverse on/off)
+    """
+    if code in ("\x1b[49m", "\x1b[7m", "\x1b[27m"):
+        return True
+    if code.startswith("\x1b[48;"):
+        return True
+    if code.startswith("\x1b[4") and code.endswith("m") and len(code) == 5:
+        # \x1b[40m .. \x1b[47m
+        digit = code[3]
+        if digit.isdigit() and "0" <= digit <= "7":
+            return True
+    if code.startswith("\x1b[10") and code.endswith("m") and len(code) == 6:
+        # \x1b[100m .. \x1b[107m
+        digit = code[4]
+        if digit.isdigit() and "0" <= digit <= "7":
+            return True
+    return False
 
 
 def _is_visible_on_space(code: str) -> bool:
@@ -150,6 +233,18 @@ class Screen:
             for _ in range(height)
         ]
         self._soft_wrap_flags: list[bool] = [False] * height
+        # Per-cell noSelect bitmap (True = exclude from selection copy +
+        # highlight). Marked by gutter / sigil widgets via mark_no_select.
+        self.no_select: list[list[bool]] = [
+            [False] * width for _ in range(height)
+        ]
+        # Per-row soft-wrap continuation marker (cc-haha screen.softWrap).
+        # softWrap[r] = N > 0 means row r is a wrap continuation of row r-1
+        # AND row r-1's written content ends at absolute col N (exclusive).
+        # 0 means row r starts a new logical line. Read by selection's
+        # extractRowText/getSelectedText to join wrapped rows back into
+        # logical lines and to know where padding starts on the prior row.
+        self.soft_wrap_starts_at: list[int] = [0] * height
 
     def reset(self) -> None:
         """Clear all cells to space with no style."""
@@ -163,6 +258,10 @@ class Screen:
                 cell.soft_wrap = False
         for i in range(self.height):
             self._soft_wrap_flags[i] = False
+            self.soft_wrap_starts_at[i] = 0
+        for row in self.no_select:
+            for x in range(len(row)):
+                row[x] = False
 
     def set_cell(self, x: int, y: int, char_id: int, style_id: int, hyperlink_id: int = 0, width: int = CELL_NORMAL) -> None:
         """Set a single cell. Out-of-bounds writes are silently ignored."""
@@ -187,6 +286,31 @@ class Screen:
             return self._soft_wrap_flags[y]
         return False
 
+    def set_soft_wrap_continuation(self, y: int, content_end_col: int) -> None:
+        """Mark row y as a soft-wrap continuation; content_end_col is the
+        EXCLUSIVE column where the previous row's written content ends
+        (cc-haha softWrap[y] semantics). Pass 0 to clear."""
+        if 0 <= y < self.height:
+            self.soft_wrap_starts_at[y] = max(0, content_end_col)
+
+    def mark_no_select(self, x0: int, y0: int, x1: int, y1: int) -> None:
+        """Mark a rectangular region [x0..x1] × [y0..y1] (inclusive) as
+        noSelect — those cells are skipped by selection copy + highlight.
+        Out-of-bounds is silently clamped."""
+        x_lo = max(0, min(x0, x1))
+        x_hi = min(self.width - 1, max(x0, x1))
+        y_lo = max(0, min(y0, y1))
+        y_hi = min(self.height - 1, max(y0, y1))
+        for y in range(y_lo, y_hi + 1):
+            row = self.no_select[y]
+            for x in range(x_lo, x_hi + 1):
+                row[x] = True
+
+    def is_no_select(self, x: int, y: int) -> bool:
+        if 0 <= x < self.width and 0 <= y < self.height:
+            return self.no_select[y][x]
+        return False
+
     def resize(self, width: int, height: int) -> None:
         """Resize the screen, preserving content where possible."""
         none = self.style_pool.none
@@ -201,11 +325,31 @@ class Screen:
             new_cells.append(row)
         self._cells = new_cells
         new_wrap = [False] * height
+        new_starts = [0] * height
+        new_no_sel: list[list[bool]] = [[False] * width for _ in range(height)]
         for y in range(min(height, self.height)):
             new_wrap[y] = self._soft_wrap_flags[y]
+            new_starts[y] = self.soft_wrap_starts_at[y]
+            old_row = self.no_select[y]
+            new_row = new_no_sel[y]
+            for x in range(min(width, self.width)):
+                new_row[x] = old_row[x]
         self._soft_wrap_flags = new_wrap
+        self.soft_wrap_starts_at = new_starts
+        self.no_select = new_no_sel
         self.width = width
         self.height = height
+
+
+def set_cell_style_id(screen: Screen, x: int, y: int, style_id: int) -> None:
+    """Replace the style_id of cell (x, y) without touching char/hyperlink/width.
+
+    Port of cc-haha setCellStyleId. Used by apply_selection_overlay to swap
+    in the selection-bg style; the diff engine will pick up the change as
+    a normal cell update.
+    """
+    if 0 <= x < screen.width and 0 <= y < screen.height:
+        screen._cells[y][x].style_id = style_id
 
 
 # ---------------------------------------------------------------------------

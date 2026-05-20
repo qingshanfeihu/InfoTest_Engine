@@ -98,21 +98,14 @@ def _format_overall_status() -> str:
     lines.append("")
     lines.append("== knowledge/data/ (out of scope: not from orgin) ==")
     lines.append(
-        f"  {'defects (bugzilla/plm)':30} {_count(kp.KNOWLEDGE_DEFECTS, '*.json', recurse=True):>4}  "
+        f"  {'defects (bugzilla/plm cache)':30} {_count(kp.KNOWLEDGE_DEFECTS, '*.json', recurse=True):>4}  "
         f"{kp.KNOWLEDGE_DEFECTS.relative_to(rel)}"
-    )
-    lines.append(
-        f"  {'baselines (hand-curated)':30} {_count(kp.KNOWLEDGE_BASELINES, '*.json', recurse=True):>4}  "
-        f"{kp.KNOWLEDGE_BASELINES.relative_to(rel)}"
     )
 
     lines.append("")
     lines.append("== knowledge/.intermediate/ (agent hidden) ==")
     int_rows = [
-        ("mineru parsed",  kp.KNOWLEDGE_MINERU),
-        ("data cleaned",   kp.KNOWLEDGE_DATA),
-        ("merged trunks",  kp.KNOWLEDGE_MERGED),
-        ("cli_graph",      kp.KNOWLEDGE_CLI_GRAPH),
+        ("mineru parsed", kp.KNOWLEDGE_MINERU),
     ]
     for label, path in int_rows:
         n = sum(1 for _ in path.rglob("*") if _.is_file()) if path.exists() else 0

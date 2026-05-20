@@ -1,25 +1,17 @@
-"""项目 knowledge 目录约定（v2，2026-05-19 重组）。
+"""项目 knowledge 目录约定（v3，2026-05-20 KMS 简化收口）。
 
-新分层（agent runtime 视野只看 ``data/``，``.intermediate/`` 被 file_tools denylist 拦截）::
+新分层（agent runtime 视野只看 ``data/``，``.intermediate/`` 与 ``backup/``
+被 file_tools denylist 拦截）::
 
     knowledge/
     ├── data/                     ← agent 可见
-    │   ├── orgin/                ← 源文档（管线默认从此读取）
-    │   ├── features/             ← 最终 *.feature.json
-    │   ├── scenarios/            ← scenario sidecar
-    │   ├── architecture/         ← architecture sidecar
-    │   ├── defects/              ← bugzilla / zentao 清洗结果
-    │   └── baselines/            ← 测试基线规则
+    │   ├── orgin/                ← 源文档（KMS 命令的输入）
+    │   ├── markdown/             ← KMS 直出的 markdown（agent 直读）
+    │   │   ├── product/          ← /kms product update 的产物
+    │   │   └── qa/               ← /kms qa update 的产物
+    │   └── defects/              ← bugzilla / zentao 抓取 cache（运行时按需重建）
     └── .intermediate/            ← agent 不可见（由 /kms 命令维护）
-        ├── mineru/               ← MinerU 解析输出
-        ├── data/                 ← preset / *.input_data.json 清洗中间态
-        ├── merged/               ← *.trunk.json 装箱中间态
-        ├── cli_graph/
-        ├── qa_raw/ qa_data/ qa_merged/
-        └── .cache.json
-
-历史 ``main_legacy`` 的 ``KNOWLEDGE_MINERU/DATA/MERGED`` 都重定向到
-``knowledge/.intermediate/``；``KNOWLEDGE_FEATURES`` 重定向到 ``knowledge/data/features``。
+        └── mineru/               ← MinerU 解析输出 + zip 缓存
 
 本模块还注册 **源文档权威度**（L5）：CLI 手册 > 应用手册 > 方案规格 > 设计文档。
 """
@@ -36,13 +28,9 @@ KNOWLEDGE_ROOT = PROJECT_ROOT / "knowledge"
 KNOWLEDGE_DATA_ROOT = KNOWLEDGE_ROOT / "data"
 KNOWLEDGE_INTERMEDIATE = KNOWLEDGE_ROOT / ".intermediate"
 
-# Agent 可见区（最终产物 + 源文档）
+# Agent 可见区
 KNOWLEDGE_ORGIN = KNOWLEDGE_DATA_ROOT / "orgin"
-KNOWLEDGE_FEATURES = KNOWLEDGE_DATA_ROOT / "features"
-KNOWLEDGE_SCENARIOS = KNOWLEDGE_DATA_ROOT / "scenarios"
-KNOWLEDGE_ARCHITECTURE = KNOWLEDGE_DATA_ROOT / "architecture"
 KNOWLEDGE_DEFECTS = KNOWLEDGE_DATA_ROOT / "defects"
-KNOWLEDGE_BASELINES = KNOWLEDGE_DATA_ROOT / "baselines"
 
 # Agent 直读的 markdown 输出（KMS 简化管线产物）
 KNOWLEDGE_MARKDOWN = KNOWLEDGE_DATA_ROOT / "markdown"
@@ -51,15 +39,7 @@ KNOWLEDGE_MARKDOWN_QA = KNOWLEDGE_MARKDOWN / "qa"
 
 # Agent 不可见区（由 /kms 命令维护的中间产物）
 KNOWLEDGE_MINERU = KNOWLEDGE_INTERMEDIATE / "mineru"
-KNOWLEDGE_DATA = KNOWLEDGE_INTERMEDIATE / "data"
-KNOWLEDGE_MERGED = KNOWLEDGE_INTERMEDIATE / "merged"
-KNOWLEDGE_CLI_GRAPH = KNOWLEDGE_INTERMEDIATE / "cli_graph"
 
-KNOWLEDGE_QA_RAW = KNOWLEDGE_INTERMEDIATE / "qa_raw"
-KNOWLEDGE_QA_DATA = KNOWLEDGE_INTERMEDIATE / "qa_data"
-KNOWLEDGE_QA_MERGED = KNOWLEDGE_INTERMEDIATE / "qa_merged"
-
-PRESET_INPUT_DATA = KNOWLEDGE_DATA / "preset_input_data.json"
 CACHE_JSON = KNOWLEDGE_INTERMEDIATE / ".cache.json"
 
 # ---------------------------------------------------------------------------
@@ -106,12 +86,6 @@ def ensure_intermediate_dirs() -> None:
     for d in (
         KNOWLEDGE_INTERMEDIATE,
         KNOWLEDGE_MINERU,
-        KNOWLEDGE_DATA,
-        KNOWLEDGE_MERGED,
-        KNOWLEDGE_CLI_GRAPH,
-        KNOWLEDGE_QA_RAW,
-        KNOWLEDGE_QA_DATA,
-        KNOWLEDGE_QA_MERGED,
     ):
         d.mkdir(parents=True, exist_ok=True)
 
@@ -121,11 +95,7 @@ def ensure_data_dirs() -> None:
     for d in (
         KNOWLEDGE_DATA_ROOT,
         KNOWLEDGE_ORGIN,
-        KNOWLEDGE_FEATURES,
-        KNOWLEDGE_SCENARIOS,
-        KNOWLEDGE_ARCHITECTURE,
         KNOWLEDGE_DEFECTS,
-        KNOWLEDGE_BASELINES,
         KNOWLEDGE_MARKDOWN,
         KNOWLEDGE_MARKDOWN_PRODUCT,
         KNOWLEDGE_MARKDOWN_QA,

@@ -141,12 +141,19 @@ class IstInkApp:
             try:
                 if self._bridge is not None:
                     self._bridge.cancel()
-                    self._bridge.join(timeout=2.0)
+                    self._bridge.join(timeout=3.0)
             except Exception:  # noqa: BLE001
                 pass
             sys.stderr = old_stderr
             devnull.close()
             self._app.stop()
+            # 如果 bridge worker 仍然活着（langgraph finalize 超时），
+            # 用 os._exit 强制退出，跳过 threading._shutdown / _python_exit。
+            # 否则 Python atexit 会设全局 _shutdown=True，daemon 线程里
+            # 的 executor.submit() 会 raise RuntimeError 并打印大段堆栈。
+            if self._bridge is not None and self._bridge.is_running:
+                import os as _os
+                _os._exit(0)
 
     def _wait_for_exit(self) -> None:
         """Block until the app is stopped."""
@@ -223,14 +230,7 @@ class IstInkApp:
                 self._cancel_query()
                 self._last_ctrl_c = now
             elif now - getattr(self, '_last_ctrl_c', 0) < 1.5:
-                # 退出前先把 bridge worker 收尾，避免 daemon 线程在
-                # interpreter shutdown 阶段还在 submit 新 future
-                if self._bridge is not None:
-                    try:
-                        self._bridge.cancel()
-                        self._bridge.join(timeout=1.5)
-                    except Exception:  # noqa: BLE001
-                        pass
+                # 双 ctrl+c 退出 —— 让 _wait_for_exit 跳出回 run() finally 统一处理 cleanup。
                 self._app._running = False
             else:
                 self._last_ctrl_c = now
@@ -238,12 +238,6 @@ class IstInkApp:
                 self._app.render()
             return
         if kp.key == "ctrl+d":
-            if self._bridge is not None:
-                try:
-                    self._bridge.cancel()
-                    self._bridge.join(timeout=1.5)
-                except Exception:  # noqa: BLE001
-                    pass
             self._app._running = False
             return
         if kp.key == "escape":

@@ -65,16 +65,16 @@ def test_parse_just_a_slash_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# Built-in command registry (12 commands required)
+# Built-in command registry (13 commands required)
 # ---------------------------------------------------------------------------
 
 
-def test_registry_has_12_builtin_commands():
-    assert len(BUILTIN_COMMANDS) == 12
+def test_registry_has_13_builtin_commands():
+    assert len(BUILTIN_COMMANDS) == 13
     names = {cmd.name for cmd in BUILTIN_COMMANDS}
     expected = {
         "help", "clear", "threads", "resume", "continue", "model",
-        "cost", "compact", "plan", "init", "version", "exit",
+        "cost", "compact", "plan", "init", "kms", "version", "exit",
     }
     assert names == expected
 

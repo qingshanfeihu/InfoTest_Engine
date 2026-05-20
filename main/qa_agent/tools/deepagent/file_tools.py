@@ -15,17 +15,63 @@ from main.qa_agent.tools.deepagent._rg import RipgrepResult, run_ripgrep
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
-_DENIED_TOP_LEVEL = {
-    ".env",
-    ".git",
-    ".langgraph_data",
+# ⚠ 安全边界：IST-Core agent 的文件视野白名单根。
+# 与 CLAUDE.md "agent 视野：agent 只看 knowledge/data/" 对齐。
+# 修改此值即修改 agent 沙箱范围，需经安全评审。
+_AGENT_ROOT = (_PROJECT_ROOT / "knowledge" / "data").resolve()
+
+# Defense-in-depth：仓库根下平台自身资产；即使白名单失守也必须挡。
+_PLATFORM_DENIED_TOP_LEVEL = {
+    # 平台代码
+    "main",
+    "tests",
+    "scripts",
+    "agent-chat-ui",
+    # 虚拟环境与三方包源码
     ".venv",
     ".venv311",
-    "environment",
+    # VCS / 运行时状态 / 缓存
+    ".git",
+    ".langgraph_api",
+    ".langgraph_data",
+    ".pytest_cache",
+    "memory",
+    # 历史归档（沿用旧黑名单语义）
+    "backup",
+    "conversation_history",
+    "large_tool_results",
     "postgres_storage",
     "qdrant_storage",
+    # 凭据
+    ".env",
+    "environment",
+    # IDE / 工程元
+    ".claude",
+    ".github",
+    ".vscode",
+    ".idea",
 }
-_DENIED_PREFIXES = (
+# 仓库根下"平台元信息"文件（用户确认这些也算平台东西，不暴露给 agent）。
+_PLATFORM_DENIED_FILES = {
+    "CLAUDE.md",
+    "todolist.md",
+    "ARCHITECTURE.md",
+    "README.md",
+    "README_zh.md",
+    "requirements.txt",
+    "pyproject.toml",
+    "package.json",
+    "package-lock.json",
+    "environment.example",
+}
+# rg defense-in-depth：即便 rg 被锁在 knowledge/data/ 子树下，也额外排除内部产物路径。
+_RG_DEFENSE_PREFIXES = (
+    "knowledge/.intermediate",
+    "knowledge/.cache",
+    "knowledge/.cache.json",
+    "knowledge/.index_cache.json",
+    "knowledge/.schema_gaps.jsonl",
+    "knowledge/_ingest_quality_report.json",
     "logs/reviewer_evidence",
     "logs/reviewer_jobs",
 )
@@ -84,23 +130,67 @@ def _project_rel(path: Path) -> str:
 
 
 def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> Path:
-    path_text = (raw_path or ".").strip() or "."
-    path = Path(path_text)
-    if not path.is_absolute():
-        path = _PROJECT_ROOT / path
-    resolved = path.resolve()
+    """Resolve a user-supplied path against the agent sandbox.
+
+    Three gates (defense-in-depth):
+      1. Traversal: reject ``..`` and ``~`` components outright.
+      2. Platform deny-list: reject any repo-root subpath that lives in
+         ``_PLATFORM_DENIED_TOP_LEVEL`` or is a ``_PLATFORM_DENIED_FILES`` entry.
+      3. Sandbox white-list: resolved path must live under ``_AGENT_ROOT``
+         (i.e. ``knowledge/data/``).
+    """
+    text = (raw_path or ".").strip() or "."
+
+    # Gate 1: refuse traversal tokens explicitly so the agent gets a clear error.
+    parts = Path(text).parts
+    if ".." in parts or text.startswith("~") or "~" in parts:
+        raise PermissionError(
+            "path traversal not allowed; agent sandbox is rooted at knowledge/data/"
+        )
+
+    path = Path(text)
+    if path.is_absolute():
+        resolved = path.resolve()
+    else:
+        # Accept two relative-path forms:
+        #   - "markdown/product/x.md"            → resolved under _AGENT_ROOT (preferred)
+        #   - "knowledge/data/markdown/product/x.md" → resolved under _PROJECT_ROOT
+        #     (legacy form used by historical review_inputs/*.json tool_calls)
+        agent_candidate = (_AGENT_ROOT / path).resolve()
+        if agent_candidate.exists():
+            resolved = agent_candidate
+        else:
+            resolved = (_PROJECT_ROOT / path).resolve()
+
+    # Gate 2: platform deny-list. Tripped before the white-list so we always emit
+    # a "platform-denied" error for repo-root paths instead of a generic
+    # "outside agent sandbox" message — clearer signal to the agent.
     try:
-        rel = resolved.relative_to(_PROJECT_ROOT)
+        rel_to_project = resolved.relative_to(_PROJECT_ROOT)
+    except ValueError:
+        rel_to_project = None
+    if rel_to_project is not None:
+        rel_parts = rel_to_project.parts
+        if rel_parts:
+            top = rel_parts[0]
+            if top in _PLATFORM_DENIED_TOP_LEVEL:
+                raise PermissionError(
+                    f"path is in platform-denied directory: {top}/"
+                )
+            if len(rel_parts) == 1 and top in _PLATFORM_DENIED_FILES:
+                raise PermissionError(
+                    f"path is a platform metadata file: {top}"
+                )
+
+    # Gate 3: white-list. Must live under _AGENT_ROOT.
+    try:
+        resolved.relative_to(_AGENT_ROOT)
     except ValueError as exc:
-        raise ValueError(f"path escapes project root: {raw_path}") from exc
-    rel_parts = rel.parts
-    if rel_parts:
-        first = rel_parts[0]
-        if first in _DENIED_TOP_LEVEL:
-            raise PermissionError(f"path is denied for generic read-only tools: {first}")
-        rel_posix = rel.as_posix()
-        if any(rel_posix == p or rel_posix.startswith(p + "/") for p in _DENIED_PREFIXES):
-            raise PermissionError(f"path is denied for generic read-only tools: {rel_posix}")
+        raise PermissionError(
+            "path outside agent sandbox; agent can only read paths under "
+            f"knowledge/data/. requested: {raw_path}"
+        ) from exc
+
     if must_exist and not resolved.exists():
         raise FileNotFoundError(f"path not found: {raw_path}")
     return resolved
@@ -116,6 +206,10 @@ def _coerce_offset(value: int | None) -> int:
 
 def _normalise_pattern(pattern: str, base: Path) -> str:
     pattern = (pattern or "*").strip() or "*"
+    if ".." in Path(pattern).parts or pattern.startswith("~"):
+        raise PermissionError(
+            "path traversal not allowed; agent sandbox is rooted at knowledge/data/"
+        )
     pattern_path = Path(pattern)
     if pattern_path.is_absolute():
         try:
@@ -150,10 +244,12 @@ def _rg_target(path: Path) -> str:
 
 def _rg_exclusion_args() -> list[str]:
     args: list[str] = []
-    for name in sorted(_DENIED_TOP_LEVEL | _VCS_DIRECTORIES_TO_EXCLUDE):
+    # VCS dirs are universal noise — keep them excluded even though _AGENT_ROOT
+    # is already below knowledge/data/ and shouldn't contain them in practice.
+    for name in sorted(_VCS_DIRECTORIES_TO_EXCLUDE):
         args.extend(["--glob", f"!{name}"])
         args.extend(["--glob", f"!{name}/**"])
-    for prefix in _DENIED_PREFIXES:
+    for prefix in _RG_DEFENSE_PREFIXES:
         args.extend(["--glob", f"!{prefix}"])
         args.extend(["--glob", f"!{prefix}/**"])
     return args

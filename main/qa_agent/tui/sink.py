@@ -344,8 +344,8 @@ _TOOL_PRIMARY_KEY = {
     "qa_deepagent_grep": "pattern",
     "qa_deepagent_ls": "path",
     "qa_deepagent_glob": "pattern",
-    "python_exec": "code",
-    "bash_exec": "command",
+    "qa_exec": "code",
+    "qa_bash": "command",
 }
 
 

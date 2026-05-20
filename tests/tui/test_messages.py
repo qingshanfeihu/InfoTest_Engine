@@ -18,7 +18,7 @@ def test_all_message_subclasses_inherit_base():
 
 def test_dispatch_table_keys_are_known_tools():
     """Dispatch 表只包含我们声明过的通用工具名前缀。"""
-    expected_prefixes = ("qa_", "python_exec", "bash_exec")
+    expected_prefixes = ("qa_",)
     for name in TOOL_NAME_TO_MESSAGE.keys():
         assert any(name.startswith(p) or name == p for p in expected_prefixes), name
 

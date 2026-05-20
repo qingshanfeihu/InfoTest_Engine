@@ -14,7 +14,8 @@ from main.qa_agent.tools.deepagent import (
     qa_deepagent_ls,
     qa_deepagent_read_file,
 )
-from main.qa_agent.tools.deepagent.exec_tools import bash_exec, python_exec
+from main.qa_agent.tools.deepagent.exec_tools import qa_bash, qa_exec
+from main.qa_agent.tools.knowledge.web_bug_search import web_bug_search
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +27,10 @@ def _default_generic_tools() -> list[Any]:
         qa_deepagent_grep,
         qa_deepagent_read_file,
         # Stage 4: cluade.md 验收依赖的统计/解析能力（受白名单沙箱保护）
-        python_exec,
-        bash_exec,
+        qa_exec,
+        qa_bash,
+        # web_bug_search：按 ticket id 查 bug/story 详情（本地优先，远端 Playwright 兜底）
+        web_bug_search,
     ]
 
 

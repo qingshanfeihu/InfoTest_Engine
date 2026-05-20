@@ -54,17 +54,25 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": "qa_deepagent_grep",
         "intent": "read",
     },
-    "python_exec": {
+    "qa_exec": {
         "read_only": True,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
     },
-    "bash_exec": {
+    "qa_bash": {
         "read_only": True,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
+    },
+    # web_bug_search: 本地优先 + 远端 Playwright 抓取兜底；
+    # 远端模式 30-60s 阻塞，concurrency_safe=False 防多 agent 并发抢 cookie/storage_state
+    "web_bug_search": {
+        "read_only": False,         # 落盘 cleaned ticket → knowledge/data/defects/{backend}/
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "search",
     },
 }
 

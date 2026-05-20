@@ -78,8 +78,8 @@ def test_tool_call_dispatches_to_specialized_message(sink, captured):
         ("qa_platform_run_task", PlatformTaskMessage),
         ("qa_deepagent_grep", GrepHitsMessage),
         ("qa_deepagent_ls", LsTreeMessage),
-        ("python_exec", PythonExecMessage),
-        ("bash_exec", BashExecMessage),
+        ("qa_exec", PythonExecMessage),
+        ("qa_bash", BashExecMessage),
     ]
     for tool_name, expected_cls in cases:
         local: List[IstUiEvent] = []

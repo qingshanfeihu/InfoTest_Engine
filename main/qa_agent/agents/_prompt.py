@@ -39,6 +39,9 @@ def _readonly_boundary_section() -> str:
 
 def _exploration_workflow_section() -> str:
     return """# Exploration Workflow
+
+**Step 0 — Reuse existing material first.** Before any new tool call, scan the current conversation for relevant prior tool results. If the user is asking a follow-up like "检查 cli" / "verify these commands" / "找到对应字段" / "再核对一下"，且上一轮已经产出了 cli 命令、文件内容或行号，直接基于已有材料回答，不要再 ls / grep / read_file。只有当现有材料确实覆盖不了新问题时才发起新工具调用。
+
 1. Locate likely evidence with directory listing, glob patterns, and content search.
 2. Read the most relevant files or document pages before making claims.
 3. Iterate when the evidence points to new locations, terms, or related assets.
@@ -49,7 +52,9 @@ Before each tool call, write **one short Chinese sentence** (≤40 个汉字) sa
 - "先列出 knowledge/data/markdown/product 看下有哪些产品文档。"
 - "在 knowledge/data/markdown/qa 里搜 cookie 加密相关的测试用例。"
 - "读 SLB_HTTP_COOKIE_SAMESITE_spec.md 找 SameSite 字段定义。"
-After the tool returns, briefly comment on what you found (one sentence) before the next tool call. The final comprehensive answer comes only when you have enough evidence."""
+After the tool returns, briefly comment on what you found (one sentence) before the next tool call. The final comprehensive answer comes only when you have enough evidence.
+
+**Skip narration when no new tool call is needed** — if you are answering directly from prior conversation material (Step 0), go straight to the answer."""
 
 
 def _evidence_discipline_section() -> str:
@@ -70,8 +75,8 @@ Guidelines:
 - Use `qa_deepagent_glob` for broad file pattern matching; it is optimized for large repositories and may return truncated results, so narrow path/pattern or use offsets when needed.
 - Use `qa_deepagent_grep` to search text with regex or literal fallbacks. For broad searches, prefer `output_mode="files_with_matches"` or `output_mode="count"` first, then switch to `output_mode="content"` with a narrow path/glob/context for evidence lines.
 - Use `qa_deepagent_read_file` for specific files, including spreadsheets and word-processing documents.
-- Use `python_exec` to run short Python snippets (≤30s) for structured analysis: parse xlsx with openpyxl, count rows/categories with collections.Counter, compute null-rate for fields, summarise JSON. The interpreter runs in an isolated sandbox; only standard library + openpyxl/pandas/numpy/yaml/toml/json/csv are available. Read-only by convention — never write files or fetch network resources.
-- Use `bash_exec` for read-only shell inspections (ls / cat / head / tail / wc / find / grep / awk / sed). No pipes, redirects, or destructive commands.
+- Use `qa_exec` to run short Python snippets (≤30s) for **structured analysis only**: parse xlsx with openpyxl, count rows/categories with collections.Counter, compute null-rate for fields, summarise JSON. The interpreter runs in an isolated sandbox; cwd is locked to `knowledge/data/`; `import main.*` is unavailable. **Do not use `qa_exec` to read arbitrary files** — use `qa_deepagent_read_file` instead.
+- Use `qa_bash` for read-only shell inspections (ls / cat / head / tail / wc / find / grep / awk / sed). cwd is locked to `knowledge/data/`; path arguments outside the sandbox are rejected. No pipes, redirects, or destructive commands.
 - Use pagination offsets when a result says more content is available. For large files, read narrow ranges instead of the full file.
 - Communicate the final analysis directly in chat."""
 

@@ -159,7 +159,7 @@ class LsTreeMessage(IstMessage):
 
 @dataclass
 class PythonExecMessage(IstMessage):
-    """``python_exec`` 执行结果。命令头 + stdout(syntax) + stderr(red) + 返回码 + 耗时。
+    """``qa_exec`` 执行结果。命令头 + stdout(syntax) + stderr(red) + 返回码 + 耗时。
 
     See main/qa_agent/tools/deepagent/exec_tools.py (Stage 4 新建).
     
@@ -176,7 +176,7 @@ class PythonExecMessage(IstMessage):
 
 @dataclass
 class BashExecMessage(IstMessage):
-    """``bash_exec`` 执行结果。
+    """``qa_bash`` 执行结果.
 
     
     """
@@ -337,6 +337,6 @@ TOOL_NAME_TO_MESSAGE: dict[str, type[IstMessage]] = {
     "qa_deepagent_grep": GrepHitsMessage,
     "qa_deepagent_ls": LsTreeMessage,
     "qa_deepagent_glob": LsTreeMessage,
-    "python_exec": PythonExecMessage,
-    "bash_exec": BashExecMessage,
+    "qa_exec": PythonExecMessage,
+    "qa_bash": BashExecMessage,
 }

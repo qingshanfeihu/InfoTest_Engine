@@ -140,71 +140,65 @@ def build_main_agent(**kwargs: Any):
         except Exception as exc:  # noqa: BLE001
             logger.info("PerTurnSkillReminderMiddleware 不可用: %s", exc)
 
-        # 三层记忆子系统：CompositeBackend 替换 FilesystemBackend +
-        # MemoryInjectionMiddleware（L1/L2 user-role reminder）+
-        # MemoryWriteMiddleware（after_model L1 hot path + fork agent distill 触发）
-        #
-        # L3 (memory/AGENTS.md) 由 deepagents 内置 MemoryMiddleware 处理（通过
-        # create_deep_agent(memory=...) 触发，挂在 deepagent middleware tail）。
-        #
-        # 失败兜底：任何异常都不阻塞 agent 构建——原 FilesystemBackend 仍然生效。
+        # 三层记忆子系统（通用回调架构 + 评审场景适配）：
+        # - MemoryInjectionMiddleware: 按 query_extractor / key_resolvers 检索注入
+        # - MemoryWriteMiddleware: 按 finalizer 检测任务结束后蒸馏写入
+        # - AGENTS.md 仍由 deepagents 内置 MemoryMiddleware 处理
         memory_extras: dict[str, Any] = {}
         try:
             from main.qa_agent import memory as _memory
 
             if _memory.is_enabled():
-                # 用 factory 模式：deepagents 在每次 graph 调用时把 ToolRuntime 传进来，
-                # 让 namespace 能按运行时 user.identity 变化（多用户部署）。
-                # factory 内部缓存单例，不会重复构造 backend。
                 _mem_backend_factory = _memory.make_memory_backend_factory()
-                # 同时构造一个静态 backend 给 fork extractor agent / store 用
-                # （这两条不进 ToolRuntime 流程，需要直接拿到 backend 实例）
                 _mem_backend = _memory.build_memory_backend()
-                # 主 agent 注入 factory（让 deepagents 决定何时调用）
                 backend_kwarg["backend"] = _mem_backend_factory
                 _store = _memory.MemoryStore(_mem_backend, _memory.get_default_root())
-                # 把磁盘 AGENTS.md 同步到 backend，让 MemoryMiddleware 能读到
-                # 注意：sync 调用走 backend.write/edit，路由到 StoreBackend；
-                # StoreBackend 需要 graph 上下文才能用 get_store()，所以这里
-                # 必须显式传 store。我们已经在 backend.py 的 StoreBackend 用
-                # store= 显式注入，可以在 graph 之外调。
                 try:
                     _store.sync_agents_md_to_backend()
                 except Exception as sync_exc:
                     logger.debug("sync AGENTS.md to backend 失败: %s", sync_exc)
 
-                # 让 deepagents 的 MemoryMiddleware 在 system prompt 注入 AGENTS.md
                 memory_extras["memory"] = _memory.get_memory_sources()
-                # 共享 store 单例
                 memory_extras["store"] = _memory.get_default_store()
 
-                _extractor = _memory.build_extractor_agent(backend=_mem_backend)
-                middleware.append(_memory.MemoryInjectionMiddleware(_store))
-                _distill_n = int(os.environ.get("QA_AGENT_MEMORY_DISTILL_EVERY_N", "30"))
+                # 评审场景：挂评审 adapter 回调
+                _query_ext = None
+                _key_res = None
+                _finalizer = None
+                try:
+                    import importlib.util as _ilu
+                    _adapter_path = os.path.join(
+                        os.path.dirname(__file__), "..", "skills",
+                        "test-case-review", "memory_adapter.py"
+                    )
+                    _spec = _ilu.spec_from_file_location("_review_adapter", _adapter_path)
+                    if _spec and _spec.loader:
+                        _mod = _ilu.module_from_spec(_spec)
+                        _spec.loader.exec_module(_mod)
+                        _query_ext = _mod.review_query_extractor
+                        _key_res = _mod.review_key_resolvers
+                        _finalizer = _mod.review_finalizer
+                except Exception as adapter_exc:
+                    logger.debug("评审 memory_adapter 加载失败: %s", adapter_exc)
+
                 middleware.append(
-                    _memory.MemoryWriteMiddleware(
-                        _store, _extractor, distill_every_n=_distill_n
+                    _memory.MemoryInjectionMiddleware(
+                        _store, _query_ext, _key_res, max_items=5
                     )
                 )
-                logger.info("memory subsystem 启用: root=%s extractor=%s",
-                            _memory.get_default_root(),
-                            "ok" if _extractor is not None else "disabled")
+                middleware.append(
+                    _memory.MemoryWriteMiddleware(_store, _finalizer)
+                )
+                logger.info("memory subsystem 启用 (通用回调架构): root=%s",
+                            _memory.get_default_root())
         except Exception as exc:  # noqa: BLE001
             logger.info("memory subsystem 不可用，沿用原 FilesystemBackend: %s", exc)
 
     except ImportError as exc:
         logger.info("deepagents filesystem/exclusion middleware 不可用，使用显式 qa_deepagent_* 工具: %s", exc)
 
-    # Phase 5 P5-3：注册语义自检 sub-agent（仿 doc-coauthoring Stage 3 Reader Testing）
-    # deepagents 自动给 task 工具注册 subagents，主 agent 调
-    # task(subagent_type='semantic-self-check', description=..., prompt=...) spawn
+    # sub-agent 注册（当前无活跃 sub-agent，保留扩展点）
     semantic_subagents: list[Any] = []
-    try:
-        from main.qa_agent.agents.semantic_check_agent import build_semantic_check_subagent
-
-        semantic_subagents.append(build_semantic_check_subagent())
-    except Exception as exc:  # noqa: BLE001
-        logger.info("semantic_check_agent 不可用: %s", exc)
 
     subagents_kwarg: dict[str, Any] = {"subagents": semantic_subagents} if semantic_subagents else {}
 

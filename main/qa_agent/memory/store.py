@@ -38,6 +38,8 @@ _ALLOWED_WRITE_PREFIXES = (
     "/memories/preferences",
     "/memories/review_conclusions/",
     "/memories/feedback/",
+    "/memories/reviews/",
+    "/memories/reference/",
     "/working/",
 )
 
@@ -262,6 +264,22 @@ class MemoryStore:
         check_path = "/memories/" + normalized[len("long_term/"):] if normalized.startswith("long_term/") else "/memories/" + normalized
         self._resolve_virtual_path(check_path, for_write=True)
         return self._root / normalized
+
+    def read_long_term_by_path(self, rel_path: str) -> str:
+        """按精确路径读取 long_term/ 下的文件内容。
+
+        通用方法——key_resolvers 回调用此直接读指定文件。
+        返回文件内容字符串，不存在时返回空字符串。
+        """
+        try:
+            normalized = self._normalize_to_long_term(rel_path)
+            path = self._root / normalized
+            if not path.exists():
+                return ""
+            return path.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.debug("read_long_term_by_path %s 失败: %s", rel_path, exc)
+            return ""
 
     def read_long_term(
         self, query: str, *, top_k: int = 3

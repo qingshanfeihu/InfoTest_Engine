@@ -127,6 +127,11 @@ def build_memory_backend(*, store=None):
     - /working/   → StateBackend（thread 内，checkpointer 持久化）
     - /memories/  → StoreBackend（跨 thread，namespace 隔离）
     - 其他路径    → StateBackend（deepagents 内置 todos / scratch 等）
+
+    artifacts_root="/tmp"：让 deepagents FilesystemMiddleware 把 large_tool_results
+    与 conversation_history 落到 tmp/ 下而不是项目根（避免污染仓库目录树；
+    tmp/ 已在 .gitignore）。FilesystemMiddleware 默认 artifacts_root="/"
+    会把这两个目录写到项目根，触发 git status 噪声。
     """
     from deepagents.backends import CompositeBackend, StateBackend, StoreBackend
 
@@ -140,6 +145,7 @@ def build_memory_backend(*, store=None):
                 namespace=_user_namespace,
             ),
         },
+        artifacts_root="/tmp",
     )
 
 

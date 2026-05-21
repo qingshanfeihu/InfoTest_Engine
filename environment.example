@@ -61,19 +61,45 @@ LANGSMITH_PROJECT=ultra_agent_qa
 
 # -----------------------------------------------------------------------------
 # 测试 Agent 运行时（main/qa_agent/）
+#
+# LLM 供应商选择：注释/取消注释切换 qwen ↔ deepseek（评审主链路用，KMS 旁支不受影响）
+#
+# QA_AGENT_LLM_PROVIDER：dashscope（默认）/ deepseek，必须跟 QA_AGENT_FALLBACK_MODEL 前缀一致
 # QA_AGENT_MODEL：主 LLM（默认 qwen-plus）
 # QA_AGENT_REVIEW_MODEL：测试评审默认模型；为空时继承 QA_AGENT_MODEL
 # QA_AGENT_ALLOWED_MODELS：平台允许用户显式切换的模型白名单，逗号分隔
-# QA_AGENT_FALLBACK_MODEL：空=强制 ChatTongyi；填 "openai:gpt-4o-mini" 等
-#   则在 ChatTongyi 与 deepagents task 工具不兼容时回落到此模型。
+# QA_AGENT_FALLBACK_MODEL：openai:<model> 走 DashScope 兼容 / deepseek:<model> 走 DeepSeek
 # QA_AGENT_REVIEW_DEPTH：quick|standard|deep（Skill 读取）
 # QA_AGENT_SQLITE_PATH：本地 Checkpointer 数据库
 # -----------------------------------------------------------------------------
+
+# ━━━━━━━━ qwen3.6-plus（默认）━━━━━━━━
+QA_AGENT_LLM_PROVIDER=dashscope
 QA_AGENT_MODEL=qwen-plus
 QA_AGENT_REVIEW_MODEL=qwen-plus
 QA_AGENT_ALLOWED_MODELS=qwen-plus,qwen3.6-plus
 QA_AGENT_FALLBACK_MODEL=
 QA_AGENT_REVIEW_DEPTH=standard
+
+# ━━━━━━━━ deepseek-v4-pro（实验，启用时把上面 qwen 块注释掉）━━━━━━━━
+# DeepSeek 优势（相对 qwen3.6-plus）：
+#   - tool_choice="required" 原生支持 → SubAgent + Pydantic response_format 可走结构化
+#   - 自动 prompt cache（前缀匹配 + 命中价 1/50）→ 减轻"每次重发完整 prompt"问题
+#   - reasoning_content 字段名跟 qwen 一致 → _ChatOpenAIWithReasoning 子类直接复用
+# 痛点：deepseek-reasoner 不支持 function calling（不能用作主 agent 模型）
+#
+# DEEPSEEK_API_KEY 在 https://platform.deepseek.com/api_keys 申请
+#
+# QA_AGENT_LLM_PROVIDER=deepseek
+# DEEPSEEK_API_KEY=
+# DEEPSEEK_BASE_URL=https://api.deepseek.com
+# QA_AGENT_MODEL=deepseek-v4-pro
+# QA_AGENT_FALLBACK_MODEL=deepseek:deepseek-v4-pro
+# QA_AGENT_REVIEW_MODEL=deepseek-v4-pro
+# QA_AGENT_ALLOWED_MODELS=deepseek-v4-pro,deepseek-v4-flash,deepseek-chat
+# QA_AGENT_OPUS_MODEL=deepseek-v4-pro
+# QA_AGENT_SONNET_MODEL=deepseek-v4-pro
+# QA_AGENT_HAIKU_MODEL=deepseek-v4-flash
 QA_AGENT_SQLITE_PATH=./qa_agent.sqlite
 
 # -----------------------------------------------------------------------------
@@ -159,3 +185,13 @@ PLAYWRIGHT_STATE_DIR=knowledge/defect_raw/_state
 #   python -m main.ingest.defect_fetch --backend bugzilla --refresh-login
 #   python -m main.ingest.defect_fetch --backend zentao   --refresh-login
 # 然后后续 headless 运行都会复用 storage_state
+
+# -----------------------------------------------------------------------------
+# 记忆子系统（main/qa_agent/memory/）
+# -----------------------------------------------------------------------------
+# 总开关（0 关闭所有 memory middleware）
+# QA_AGENT_MEMORY_ENABLED=1
+# fork extractor agent 每 N 轮触发一次 distill（默认 30）
+QA_AGENT_MEMORY_DISTILL_EVERY_N=30
+# 关闭 fork agent LLM 抽取 + dream task（仅保留规则抽取 L1 热路径）
+# QA_AGENT_MEMORY_DISABLE_LLM=0

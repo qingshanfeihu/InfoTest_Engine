@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +17,12 @@ from main.qa_agent.tools.deepagent import (
 )
 from main.qa_agent.tools.deepagent.exec_tools import qa_bash, qa_exec
 from main.qa_agent.tools.knowledge.web_bug_search import web_bug_search
+from main.qa_agent.tools.skills import qa_invoke_skill, qa_sanity_check
+from main.qa_agent.tools.ask_user import qa_ask_user
 
 logger = logging.getLogger(__name__)
+
+_SKILLS_DIR = str(Path(__file__).resolve().parents[1] / "skills")
 
 
 def _default_generic_tools() -> list[Any]:
@@ -31,6 +36,13 @@ def _default_generic_tools() -> list[Any]:
         qa_bash,
         # web_bug_search：按 ticket id 查 bug/story 详情（本地优先，远端 Playwright 兜底）
         web_bug_search,
+        # qa_invoke_skill：仿 Claude Code 的 Skill tool 调用机制（BLOCKING REQUIREMENT
+        # 措辞），让 LLM 把"读 SKILL.md"当 tool_call 触发，而非依赖自觉
+        qa_invoke_skill,
+        # qa_sanity_check：test-case-review skill 的字面自检 tool
+        qa_sanity_check,
+        # qa_ask_user：仿 Claude Code 的 AskUserQuestion——P0/P1 不确定时让用户决策
+        qa_ask_user,
     ]
 
 
@@ -80,11 +92,12 @@ def build_main_agent(**kwargs: Any):
         from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware  # type: ignore[import-not-found]
 
         project_root = Path(__file__).resolve().parents[3]
-        backend_kwarg["backend"] = FilesystemBackend(
+        backend = FilesystemBackend(
             root_dir=str(project_root),
             virtual_mode=True,
             max_file_size_mb=10,
         )
+        backend_kwarg["backend"] = backend
         middleware = [
             *middleware,
             _ToolExclusionMiddleware(
@@ -99,17 +112,134 @@ def build_main_agent(**kwargs: Any):
                 }
             ),
         ]
+
+        # SkillsMiddleware: 负责从磁盘加载 skill metadata 到 state（before_agent
+        # 阶段一次性扫描），并在 system prompt 末尾注入 skill 列表（用于 Claude 类
+        # 模型的 progressive disclosure）
+        try:
+            from deepagents.middleware.skills import SkillsMiddleware  # type: ignore[import-not-found]
+
+            skills_mw = SkillsMiddleware(
+                backend=backend,
+                sources=[(_SKILLS_DIR, "IST-Core")],
+            )
+            middleware.append(skills_mw)
+        except Exception as skills_exc:  # noqa: BLE001
+            logger.info("SkillsMiddleware 不可用: %s", skills_exc)
+
+        # PerTurnSkillReminderMiddleware: 仿 Claude Code skill_listing attachment
+        # 机制——在每轮 before_model 把 skill listing 作为 user-role
+        # <system-reminder> 注入对话，离当前 reasoning context 最近，让 qwen 等
+        # 非 Anthropic 模型也能稳定遵守 BLOCKING REQUIREMENT
+        try:
+            from main.qa_agent.middleware.per_turn_skill_reminder import (
+                PerTurnSkillReminderMiddleware,
+            )
+
+            middleware.append(PerTurnSkillReminderMiddleware(skills_dir=_SKILLS_DIR))
+        except Exception as exc:  # noqa: BLE001
+            logger.info("PerTurnSkillReminderMiddleware 不可用: %s", exc)
+
+        # 三层记忆子系统：CompositeBackend 替换 FilesystemBackend +
+        # MemoryInjectionMiddleware（L1/L2 user-role reminder）+
+        # MemoryWriteMiddleware（after_model L1 hot path + fork agent distill 触发）
+        #
+        # L3 (memory/AGENTS.md) 由 deepagents 内置 MemoryMiddleware 处理（通过
+        # create_deep_agent(memory=...) 触发，挂在 deepagent middleware tail）。
+        #
+        # 失败兜底：任何异常都不阻塞 agent 构建——原 FilesystemBackend 仍然生效。
+        memory_extras: dict[str, Any] = {}
+        try:
+            from main.qa_agent import memory as _memory
+
+            if _memory.is_enabled():
+                # 用 factory 模式：deepagents 在每次 graph 调用时把 ToolRuntime 传进来，
+                # 让 namespace 能按运行时 user.identity 变化（多用户部署）。
+                # factory 内部缓存单例，不会重复构造 backend。
+                _mem_backend_factory = _memory.make_memory_backend_factory()
+                # 同时构造一个静态 backend 给 fork extractor agent / store 用
+                # （这两条不进 ToolRuntime 流程，需要直接拿到 backend 实例）
+                _mem_backend = _memory.build_memory_backend()
+                # 主 agent 注入 factory（让 deepagents 决定何时调用）
+                backend_kwarg["backend"] = _mem_backend_factory
+                _store = _memory.MemoryStore(_mem_backend, _memory.get_default_root())
+                # 把磁盘 AGENTS.md 同步到 backend，让 MemoryMiddleware 能读到
+                # 注意：sync 调用走 backend.write/edit，路由到 StoreBackend；
+                # StoreBackend 需要 graph 上下文才能用 get_store()，所以这里
+                # 必须显式传 store。我们已经在 backend.py 的 StoreBackend 用
+                # store= 显式注入，可以在 graph 之外调。
+                try:
+                    _store.sync_agents_md_to_backend()
+                except Exception as sync_exc:
+                    logger.debug("sync AGENTS.md to backend 失败: %s", sync_exc)
+
+                # 让 deepagents 的 MemoryMiddleware 在 system prompt 注入 AGENTS.md
+                memory_extras["memory"] = _memory.get_memory_sources()
+                # 共享 store 单例
+                memory_extras["store"] = _memory.get_default_store()
+
+                _extractor = _memory.build_extractor_agent(backend=_mem_backend)
+                middleware.append(_memory.MemoryInjectionMiddleware(_store))
+                _distill_n = int(os.environ.get("QA_AGENT_MEMORY_DISTILL_EVERY_N", "30"))
+                middleware.append(
+                    _memory.MemoryWriteMiddleware(
+                        _store, _extractor, distill_every_n=_distill_n
+                    )
+                )
+                logger.info("memory subsystem 启用: root=%s extractor=%s",
+                            _memory.get_default_root(),
+                            "ok" if _extractor is not None else "disabled")
+        except Exception as exc:  # noqa: BLE001
+            logger.info("memory subsystem 不可用，沿用原 FilesystemBackend: %s", exc)
+
     except ImportError as exc:
         logger.info("deepagents filesystem/exclusion middleware 不可用，使用显式 qa_deepagent_* 工具: %s", exc)
+
+    # Phase 5 P5-3：注册语义自检 sub-agent（仿 doc-coauthoring Stage 3 Reader Testing）
+    # deepagents 自动给 task 工具注册 subagents，主 agent 调
+    # task(subagent_type='semantic-self-check', description=..., prompt=...) spawn
+    semantic_subagents: list[Any] = []
+    try:
+        from main.qa_agent.agents.semantic_check_agent import build_semantic_check_subagent
+
+        semantic_subagents.append(build_semantic_check_subagent())
+    except Exception as exc:  # noqa: BLE001
+        logger.info("semantic_check_agent 不可用: %s", exc)
+
+    subagents_kwarg: dict[str, Any] = {"subagents": semantic_subagents} if semantic_subagents else {}
 
     return create_deep_agent(
         model=model,
         tools=tools,
         system_prompt=system_prompt,
         middleware=middleware,
+        interrupt_on=_resolve_interrupt_on(),
+        **subagents_kwarg,
         **backend_kwarg,
+        **memory_extras,
         **kwargs,
     )
+
+
+def _resolve_interrupt_on() -> dict[str, Any] | None:
+    """从 ``QA_AGENT_INTERRUPT_ON`` 解析 deepagents interrupt_on 配置。
+
+    格式：逗号分隔工具名（全部走 ``True`` = 允许 approve/edit/reject/respond）。
+    例：``QA_AGENT_INTERRUPT_ON=web_bug_search,qa_exec``。
+
+    默认空——即所有工具自动批准。打开 interrupt_on 会让 graph 在指定工具调用
+    前暂停，需要 TUI 实现 ``HumanInterrupt`` 决策的渲染（基础设施 bridge.py
+    已有 resume_with 接 ``Command(resume=...)``）。
+    """
+    import os as _os
+
+    raw = (_os.environ.get("QA_AGENT_INTERRUPT_ON") or "").strip()
+    if not raw:
+        return None
+    tool_names = [t.strip() for t in raw.split(",") if t.strip()]
+    if not tool_names:
+        return None
+    return {name: True for name in tool_names}
 
 
 def _build_fallback_react_agent(*, model, tools, system_prompt: str):

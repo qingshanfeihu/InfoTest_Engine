@@ -56,6 +56,7 @@ class GraphBridge:
         self._task: asyncio.Task | None = None
         self._cancelled = False
         self._pending_resume: Any = None  # 存放 HIL 决策，由 resume_with 写入
+        self._graph: Any = None
 
     @property
     def thread_id(self) -> str:
@@ -101,12 +102,17 @@ class GraphBridge:
             return
         worker.join(timeout=timeout)
 
+    def _get_graph(self) -> Any:
+        if self._graph is None:
+            self._graph = self._graph_factory()
+        return self._graph
+
     def _run_in_thread(self, payload: Any, is_resume: bool) -> None:
         loop = asyncio.new_event_loop()
         self._loop = loop
         asyncio.set_event_loop(loop)
         try:
-            graph = self._graph_factory()
+            graph = self._get_graph()
             config = {"configurable": {"thread_id": self._thread_id}}
             sinks: list[Callable] = [self._sink, *self._extra_sinks]
             from main.qa_agent.events import reset_default_bus

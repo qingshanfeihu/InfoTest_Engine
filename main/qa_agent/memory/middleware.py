@@ -89,13 +89,23 @@ class MemoryInjectionMiddleware(AgentMiddleware):
         self._key_resolvers = key_resolvers
         self._max_items = max(1, int(max_items))
 
-    def _build_reminder(self, messages: list) -> HumanMessage | None:
+    def _build_reminder(self, messages: list = None, *, thread_id: str = "", query: str = "", request: Any = None) -> HumanMessage | None:
         sections: list[str] = []
 
-        query = self._query_extractor(messages)
+        if not query:
+            query = self._query_extractor(messages or [])
 
-        # 1. 按 key_resolvers 直接读指定路径
-        if self._key_resolvers:
+        # L1 工作记忆
+        if thread_id:
+            try:
+                working = self._store.read_working(thread_id, max_lines=40)
+                if working:
+                    sections.append(f"## Working Notes\n{working}")
+            except Exception as exc:
+                logger.debug("read_working 失败: %s", exc)
+
+        # key_resolvers 直接读指定路径
+        if self._key_resolvers and messages:
             try:
                 keys = self._key_resolvers(messages)
                 for _ns, key in keys[:self._max_items]:
@@ -106,14 +116,17 @@ class MemoryInjectionMiddleware(AgentMiddleware):
             except Exception as exc:
                 logger.debug("key_resolvers 读取失败: %s", exc)
 
-        # 2. 按 query 关键词检索 long-term（补足到 max_items）
+        # L2 按 query 关键词检索 long-term
         remaining = self._max_items - len(sections)
         if remaining > 0 and query:
             try:
                 hits = self._store.read_long_term(query, top_k=remaining)
-                for path, content in hits:
-                    snippet = content if len(content) <= 800 else content[:797] + "..."
-                    sections.append(f"## {path}\n{snippet}")
+                if hits:
+                    lt_parts = []
+                    for path, content in hits:
+                        snippet = content if len(content) <= 800 else content[:797] + "..."
+                        lt_parts.append(f"### {path}\n{snippet}")
+                    sections.append("## Relevant Long-Term Notes\n" + "\n\n".join(lt_parts))
             except Exception as exc:
                 logger.debug("read_long_term 失败: %s", exc)
 
@@ -129,7 +142,18 @@ class MemoryInjectionMiddleware(AgentMiddleware):
         try:
             if _has_recent_reminder(request.messages):
                 return request
-            reminder = self._build_reminder(request.messages)
+            query = self._query_extractor(request.messages)
+            thread_id = ""
+            try:
+                state = getattr(request, "state", None)
+                runtime = getattr(request, "runtime", None)
+                if state and runtime:
+                    thread_id = self._get_thread_id(state, runtime)
+            except Exception:
+                pass
+            reminder = self._build_reminder(
+                request.messages, thread_id=thread_id, query=query, request=request
+            )
             if reminder is None:
                 return request
             new_msgs = list(request.messages)
@@ -143,6 +167,10 @@ class MemoryInjectionMiddleware(AgentMiddleware):
         except Exception as exc:
             logger.debug("MemoryInjectionMiddleware 注入失败: %s", exc)
             return request
+
+    @staticmethod
+    def _get_thread_id(state: Any, runtime: Any) -> str:
+        return MemoryWriteMiddleware._get_thread_id(state, runtime)
 
     def wrap_model_call(
         self,
@@ -164,34 +192,82 @@ class MemoryInjectionMiddleware(AgentMiddleware):
 # ----------------------------------------------------------------------
 
 
-class MemoryWriteMiddleware(AgentMiddleware):
-    """任务结束后触发 finalizer 回调蒸馏结论写入 store。
+_DISTILL_KEYWORDS = {"以后", "下次", "记住", "不要再", "每次都", "总是"}
 
-    不再每轮 after_model 写过程日志。只在 finalizer 判定任务结束时触发一次。
+
+class MemoryWriteMiddleware(AgentMiddleware):
+    """每轮 after_model 抽取 L1 工作记忆 + 定期触发 distill fork agent。
+
+    同时保留 finalizer 回调路径（评审场景蒸馏结论写入 long_term）。
 
     Args:
-        store: MemoryStore facade
-        finalizer: 检测任务结束 + 蒸馏内容的回调，返回 {path: content} 写入计划或 None
+        store: MemoryStore facade 或任何实现 append_working 的对象
+        finalizer: 检测任务结束 + 蒸馏内容的回调
+        extractor_agent: fork extractor agent 实例（None 时跳过 distill）
+        distill_every_n: 每 N 轮触发一次 distill（关键词命中时立即触发）
     """
 
     def __init__(
         self,
-        store: MemoryStore,
+        store: Any,
         finalizer: Finalizer | None = None,
+        *,
+        extractor_agent: Any = None,
+        distill_every_n: int | None = None,
     ) -> None:
         self._store = store
         self._finalizer = finalizer
+        self._extractor_agent = extractor_agent
+        self._distill_every_n = distill_every_n or int(
+            os.environ.get("QA_AGENT_MEMORY_DISTILL_EVERY_N", "10")
+        )
         self._finalized: set[str] = set()
+        self._seen_threads: set[str] = set()
+        self._turn_counts: dict[str, int] = {}
+
+    def _should_distill(self, messages: list, turn_count: int) -> bool:
+        """判断是否应触发 distill：关键词命中或达到轮次阈值。"""
+        if turn_count >= self._distill_every_n:
+            return True
+        for m in reversed(messages[-3:] if len(messages) > 3 else messages):
+            if isinstance(m, HumanMessage):
+                text = m.content if isinstance(m.content, str) else str(m.content)
+                if any(kw in text for kw in _DISTILL_KEYWORDS):
+                    return True
+        return False
 
     def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        if self._finalizer is None:
-            return None
         try:
             messages = state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)
             if not messages:
                 return None
 
             thread_id = self._get_thread_id(state, runtime)
+
+            # L1 规则抽取 → append_working
+            try:
+                from main.qa_agent.memory.extractor import extract_working_entry
+                entry = extract_working_entry(messages)
+                if entry:
+                    self._store.append_working(thread_id, entry)
+            except Exception as exc:
+                logger.debug("L1 working write: %s", exc)
+
+            # session counter（每个 thread 首轮 +1）
+            if thread_id not in self._seen_threads:
+                self._seen_threads.add(thread_id)
+                self._increment_session_counter()
+
+            # distill 触发
+            tc = self._turn_counts.get(thread_id, 0) + 1
+            self._turn_counts[thread_id] = tc
+            if self._should_distill(messages, tc):
+                self._turn_counts[thread_id] = 0
+                self._kick_distill_async(thread_id, messages)
+
+            # finalizer 路径（评审专用）
+            if self._finalizer is None:
+                return None
             if thread_id in self._finalized:
                 return None
 
@@ -210,6 +286,28 @@ class MemoryWriteMiddleware(AgentMiddleware):
 
     async def aafter_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         return self.after_model(state, runtime)
+
+    def _kick_distill_async(self, thread_id: str, messages: list) -> None:
+        """后台触发 fork extractor agent 蒸馏 L1 → L2。"""
+        if self._extractor_agent is None:
+            return
+        if os.environ.get("QA_AGENT_MEMORY_DISABLE_LLM", "").strip() == "1":
+            return
+        try:
+            from main.qa_agent.memory.extractor_agent import run_extractor_async
+            run_extractor_async(self._store, thread_id, messages)
+        except Exception as exc:
+            logger.debug("distill trigger: %s", exc)
+
+    def _increment_session_counter(self) -> None:
+        """dream 闸门 session 计数 +1。"""
+        try:
+            current = read_session_counter()
+            path = _session_counter_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(current + 1), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("session counter increment: %s", exc)
 
     @staticmethod
     def _get_thread_id(state: Any, runtime: Any) -> str:
@@ -235,6 +333,11 @@ class MemoryWriteMiddleware(AgentMiddleware):
 # ----------------------------------------------------------------------
 # Session counter for dream task gate (保留供 dream.py 使用)
 # ----------------------------------------------------------------------
+
+
+def _extract_thread_id(state: Any, runtime: Any) -> str:
+    """模块级 thread_id 提取（供测试 + 外部调用）。"""
+    return MemoryWriteMiddleware._get_thread_id(state, runtime)
 
 
 def read_session_counter() -> int:
@@ -279,6 +382,7 @@ def reset_session_counter() -> None:
 __all__ = [
     "MemoryInjectionMiddleware",
     "MemoryWriteMiddleware",
+    "_extract_thread_id",
     "read_session_counter",
     "reset_session_counter",
 ]

@@ -197,10 +197,51 @@ def build_main_agent(**kwargs: Any):
     except ImportError as exc:
         logger.info("deepagents filesystem/exclusion middleware 不可用，使用显式 qa_deepagent_* 工具: %s", exc)
 
-    # sub-agent 注册（当前无活跃 sub-agent，保留扩展点）
-    semantic_subagents: list[Any] = []
+    # Explore sub-agent（全局通用，跟 qa_ls/qa_grep 同级）
+    # 任何 skill 都能通过 task(subagent_type="explore", description="...") 调用
+    # 注意：通过 subagents 参数传给 create_deep_agent，不能手动加 SubAgentMiddleware
+    subagents_kwarg: dict[str, Any] = {}
+    try:
+        from main.qa_agent.agents._llm import build_explore_model
 
-    subagents_kwarg: dict[str, Any] = {"subagents": semantic_subagents} if semantic_subagents else {}
+        _EXPLORE_SYSTEM_PROMPT = (
+            "你是一个只读检索代理（Explore Agent）。你的职责是根据任务描述，"
+            "用工具精确查找信息并返回结构化证据。\n\n"
+            "## 行为规范\n"
+            "- 只做检索和信息整理，不做评审判断、不给建议、不写报告\n"
+            "- 返回找到的原始证据：文件路径 + 行号 + 内容摘录\n"
+            "- 如果找不到目标信息，明确说\"未找到：{搜索了哪些路径}\"\n"
+            "- 控制输出长度：每次任务最多 3000 字符\n"
+            "- 优先返回与任务最相关的内容，次要信息可省略\n\n"
+            "## 工具使用策略\n"
+            "1. 先用 grep（output_mode=\"files_with_matches\"）定位文件\n"
+            "2. 再用 grep（output_mode=\"content\", context=5）获取上下文\n"
+            "3. 最后用 read_file（offset/limit）精确读取关键段落\n"
+            "4. 避免全文读取大文件——用 grep 定位后只读相关段\n\n"
+            "## 输出格式\n"
+            "用 Markdown 格式：\n"
+            "## 找到的证据\n"
+            "### 来源 1：{文件路径} L{行号}\n"
+            "{关键内容摘录}\n\n"
+            "## 路径约束\n"
+            "所有文件操作限制在 knowledge/data/ 目录下。"
+        )
+
+        explore_subagent: dict[str, Any] = {
+            "name": "explore",
+            "description": (
+                "通用只读检索代理。给它明确的搜索任务，它会用文件工具查找并返回结构化结果。"
+                "适合：搜索文件、grep 关键词、读取文档片段、统计分析、执行 sanity_check。"
+                "不适合：评审判断、生成报告、修改文件。"
+            ),
+            "system_prompt": _EXPLORE_SYSTEM_PROMPT,
+            "tools": tools,
+            "model": build_explore_model(),
+        }
+        subagents_kwarg["subagents"] = [explore_subagent]
+        logger.info("Explore sub-agent 已注册 (model=%s)", explore_subagent["model"].model_name)
+    except Exception as explore_exc:  # noqa: BLE001
+        logger.info("Explore sub-agent 注册失败: %s", explore_exc)
 
     return create_deep_agent(
         model=model,
@@ -208,7 +249,6 @@ def build_main_agent(**kwargs: Any):
         system_prompt=system_prompt,
         middleware=middleware,
         interrupt_on=_resolve_interrupt_on(),
-        **subagents_kwarg,
         **backend_kwarg,
         **memory_extras,
         **kwargs,

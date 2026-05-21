@@ -52,6 +52,14 @@ def _build_parser() -> argparse.ArgumentParser:
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="日志级别（默认：TUI 模式 ERROR / print 模式 WARNING）")
     parser.add_argument("--version", action="store_true", help="打印版本后退出")
+    parser.add_argument("-server", "--server", nargs="?", const="start",
+                        choices=["start", "stop", "restart"],
+                        help="SSH server 管理：start/stop/restart（默认 start）")
+    parser.add_argument("-web", "--web", nargs="?", const="start",
+                        choices=["start", "stop", "restart"],
+                        help="Web TUI 管理：start/stop/restart（默认 start）")
+    parser.add_argument("-P", "--port", type=int, default=None,
+                        help="监听端口（-server 默认 2222，-web 默认 8080）")
     return parser
 
 
@@ -112,6 +120,158 @@ def _resolve_continue_thread() -> Optional[str]:
     return CheckpointRepo().most_recent_thread_id()
 
 
+def _run_server_command(action: str, port: int) -> int:
+    """SSH server 管理：start / stop / restart。"""
+    import os
+    import signal
+    import subprocess
+    import time
+
+    pid_file = Path(__file__).resolve().parents[3] / ".ssh_server.pid"
+
+    def _read_pid() -> int | None:
+        if not pid_file.exists():
+            return None
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)  # 检查进程是否存活
+            return pid
+        except (ValueError, ProcessLookupError, PermissionError):
+            pid_file.unlink(missing_ok=True)
+            return None
+
+    def _stop() -> bool:
+        pid = _read_pid()
+        if pid is None:
+            print("SSH server 未运行")
+            return False
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(20):
+            time.sleep(0.1)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pid_file.unlink(missing_ok=True)
+                print(f"SSH server 已停止 (PID {pid})")
+                return True
+        os.kill(pid, signal.SIGKILL)
+        pid_file.unlink(missing_ok=True)
+        print(f"SSH server 已强制停止 (PID {pid})")
+        return True
+
+    def _start() -> bool:
+        if _read_pid():
+            print(f"SSH server 已在运行 (PID {_read_pid()}, port {port})")
+            return False
+        project_root = Path(__file__).resolve().parents[3]
+        log_file = project_root / "logs" / "ssh_server.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "main.qa_agent.ssh_server",
+             "--port", str(port), "--log-level", "INFO"],
+            cwd=str(project_root),
+            stdout=open(log_file, "a"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        pid_file.write_text(str(proc.pid))
+        time.sleep(0.5)
+        if proc.poll() is not None:
+            print(f"SSH server 启动失败，查看日志: {log_file}")
+            pid_file.unlink(missing_ok=True)
+            return False
+        print(f"SSH server 已启动 (PID {proc.pid}, port {port})")
+        print(f"  日志: {log_file}")
+        print(f"  连接: ssh -p {port} <user>@<host>")
+        return True
+
+    if action == "stop":
+        _stop()
+    elif action == "start":
+        _start()
+    elif action == "restart":
+        _stop()
+        time.sleep(0.3)
+        _start()
+    return 0
+
+
+def _run_web_command(action: str, port: int) -> int:
+    """Web TUI 管理：start / stop / restart。"""
+    import os
+    import signal
+    import subprocess
+    import time
+
+    pid_file = Path(__file__).resolve().parents[3] / ".web_server.pid"
+
+    def _read_pid() -> int | None:
+        if not pid_file.exists():
+            return None
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)
+            return pid
+        except (ValueError, ProcessLookupError, PermissionError):
+            pid_file.unlink(missing_ok=True)
+            return None
+
+    def _stop() -> bool:
+        pid = _read_pid()
+        if pid is None:
+            print("Web TUI 未运行")
+            return False
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(20):
+            time.sleep(0.1)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pid_file.unlink(missing_ok=True)
+                print(f"Web TUI 已停止 (PID {pid})")
+                return True
+        os.kill(pid, signal.SIGKILL)
+        pid_file.unlink(missing_ok=True)
+        print(f"Web TUI 已强制停止 (PID {pid})")
+        return True
+
+    def _start() -> bool:
+        if _read_pid():
+            print(f"Web TUI 已在运行 (PID {_read_pid()}, port {port})")
+            return False
+        project_root = Path(__file__).resolve().parents[3]
+        log_file = project_root / "logs" / "web_server.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "main.qa_agent.web_server",
+             "--port", str(port)],
+            cwd=str(project_root),
+            stdout=open(log_file, "a"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        pid_file.write_text(str(proc.pid))
+        time.sleep(1.0)
+        if proc.poll() is not None:
+            print(f"Web TUI 启动失败，查看日志: {log_file}")
+            pid_file.unlink(missing_ok=True)
+            return False
+        print(f"Web TUI 已启动 (PID {proc.pid}, port {port})")
+        print(f"  日志: {log_file}")
+        print(f"  访问: http://localhost:{port}")
+        return True
+
+    if action == "stop":
+        _stop()
+    elif action == "start":
+        _start()
+    elif action == "restart":
+        _stop()
+        time.sleep(0.3)
+        _start()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -120,6 +280,16 @@ def main(argv: list[str] | None = None) -> int:
         from main.qa_agent.tui import __init__ as _init  # noqa: F401
         print("infotest 0.1.0 (IST-Core TUI MVP)")
         return 0
+
+    # -server 子命令：SSH server 管理
+    if args.server:
+        port = args.port or 2222
+        return _run_server_command(args.server, port)
+
+    # -web 子命令：Web TUI 管理
+    if args.web:
+        port = args.port or 8080
+        return _run_web_command(args.web, port)
 
     # TUI 模式默认 ERROR（不让 WARNING 污染屏幕）；print 模式默认 WARNING
     log_level = args.log_level or ("WARNING" if args.print else "ERROR")

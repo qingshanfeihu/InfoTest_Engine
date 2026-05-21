@@ -225,6 +225,30 @@ def _build_deepseek_compat(model_name: str, **kwargs: Any):
     # invoke 186s 不可接受。直接关闭 thinking，让模型全部 token 预算用于 content。
     # 不设 max_tokens——让模型自由输出完整报告（评审场景需要 15-23 条建议）。
     extra_body = dict(kwargs.pop("extra_body", None) or {})
+    extra_body.setdefault("reasoning_effort", "max")
+    kwargs["extra_body"] = extra_body
+
+    cls = _get_chat_openai_with_reasoning()
+    return cls(
+        model=model_name,
+        base_url=base_url,
+        api_key=api_key,
+        **kwargs,
+    )
+
+
+def build_explore_model(**kwargs):
+    """Explore sub-agent 用：deepseek-v4-flash, thinking=disabled, 快速低成本检索。"""
+    model_name = os.environ.get("QA_AGENT_HAIKU_MODEL", "deepseek-v4-flash").strip()
+    base_url = (os.environ.get("DEEPSEEK_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL).strip()
+    api_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("Explore model 需要 DEEPSEEK_API_KEY")
+
+    kwargs.setdefault("temperature", 0.0)
+    kwargs.setdefault("top_p", 0.5)
+    kwargs.setdefault("streaming", True)
+    extra_body = dict(kwargs.pop("extra_body", None) or {})
     extra_body.setdefault("thinking", {"type": "disabled"})
     kwargs["extra_body"] = extra_body
 

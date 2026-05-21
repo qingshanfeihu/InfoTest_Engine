@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import threading
 import uuid
+from pathlib import Path
 from typing import Any, Callable
 
 from main.qa_agent.ink.app import InkApp
@@ -93,6 +94,8 @@ class IstInkApp:
         self._is_loading = False
         self._bridge: Any = None
         self._streaming_buf: list[str] = []
+        self._last_md_render_ts: float = 0.0
+        self._md_renderer: Any = None
         self._model: str = ""
         self._welcome_shown: bool = False
         self._last_ctrl_c: float = 0.0
@@ -203,6 +206,22 @@ class IstInkApp:
     def _handle_key(self, kp: KeyPress) -> None:
         """Handle keyboard events."""
         import time as _time
+
+        # 上传确认模式：Y/N 处理
+        if getattr(self, '_awaiting_upload_confirm', False):
+            if kp.key in ("y", "Y"):
+                self._awaiting_upload_confirm = False
+                self._transcript.append_message("  \x1b[2m正在从客户端拉取文件...\x1b[0m")
+                self._app.render()
+                self._do_reverse_sftp()
+                return
+            elif kp.key in ("n", "N", "escape"):
+                self._awaiting_upload_confirm = False
+                self._transcript.append_message("  \x1b[2m已取消\x1b[0m")
+                self._app.render()
+                return
+            # 忽略其他按键
+            return
 
         # Reverse-i-search mode swallows most input until exited
         if self._input_history.in_search_mode:
@@ -545,6 +564,44 @@ class IstInkApp:
             self._transcript.clear()
             self._welcome_shown = False
 
+        # 输入预处理：检测文件路径，自动复制/转换到沙箱
+        from main.qa_agent.tui.input_preprocessor import preprocess_file_paths
+        import os as _os
+        _session_dir = _os.environ.get("IST_SESSION_DIR")
+        processed_text, preprocess_status = preprocess_file_paths(
+            expanded,
+            session_dir=Path(_session_dir) if _session_dir else None,
+        )
+        if preprocess_status:
+            if preprocess_status.startswith("⬆ NEED_UPLOAD:"):
+                # 远程 SSH 场景：文件在客户端，提示用户确认上传
+                filename = preprocess_status.removeprefix("⬆ NEED_UPLOAD:")
+                self._pending_upload_query = expanded
+                self._pending_upload_filename = filename.strip()
+                # 从 expanded 中提取原始远程路径
+                import re as _re
+                _path_patterns = [
+                    _re.compile(r"'([^']{3,})'"),
+                    _re.compile(r'"([^"]{3,})"'),
+                    _re.compile(r'([A-Za-z]:[\\\/]\S+)'),
+                ]
+                self._pending_upload_remote_path = None
+                for _pat in _path_patterns:
+                    _m = _pat.search(expanded)
+                    if _m:
+                        self._pending_upload_remote_path = _m.group(1)
+                        break
+                self._transcript.append_message(
+                    f"  \x1b[33m⬆ 是否从客户端上传 {filename}？(Y/n)\x1b[0m"
+                )
+                self._awaiting_upload_confirm = True
+                self._app.render()
+                return
+            else:
+                # 本地文件已处理，显示状态并用处理后的文本
+                self._transcript.append_message(f"  \x1b[2m{preprocess_status}\x1b[0m")
+                expanded = processed_text
+
         # Show user message (indented, no "> " prefix — matches old TUI)
         for line in expanded.split("\n"):
             self._transcript.append_message(f"  {line}")
@@ -560,6 +617,64 @@ class IstInkApp:
         # Use the placeholder-expanded form so the LLM sees the full
         # pasted content instead of the [Pasted text #N] short form.
         self._run_via_bridge(expanded)
+
+    def _do_reverse_sftp(self) -> None:
+        """反向 SFTP 连回客户端拉取文件，保存到沙箱后自动重新提交 query。"""
+        import os as _os
+        import threading
+
+        client_ip = _os.environ.get("IST_SSH_CLIENT_IP")
+        ssh_user = _os.environ.get("IST_SSH_USER", "")
+        remote_path = getattr(self, '_pending_upload_remote_path', None)
+        query = getattr(self, '_pending_upload_query', None)
+
+        if not client_ip or not remote_path or not query:
+            self._transcript.append_message("  \x1b[31m缺少客户端信息，无法拉取\x1b[0m")
+            self._app.render()
+            return
+
+        def _fetch():
+            import asyncio
+            from main.qa_agent.tui.reverse_sftp import fetch_file_from_client
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(
+                fetch_file_from_client(
+                    client_ip,
+                    remote_path,
+                    ssh_user=ssh_user,
+                )
+            )
+            loop.close()
+            return result
+
+        def _on_done(local_path):
+            if local_path is None:
+                self._transcript.append_message(
+                    "  \x1b[31m拉取失败：请确认 Windows OpenSSH Server 已启动\x1b[0m"
+                )
+                self._transcript.append_message(
+                    "  \x1b[2m并在 ssh_users.json 中配置 client_os_user/client_os_password\x1b[0m"
+                )
+                self._app.render()
+                return
+            from pathlib import Path as _Path
+            _KD = _Path(__file__).resolve().parents[4] / "knowledge" / "data"
+            try:
+                sandbox_rel = local_path.resolve().relative_to(_KD.resolve()).as_posix()
+            except ValueError:
+                sandbox_rel = str(local_path)
+            self._transcript.append_message(
+                f"  \x1b[32m✓ 已拉取 → {sandbox_rel}\x1b[0m"
+            )
+            self._app.render()
+            new_query = query.replace(remote_path, sandbox_rel)
+            self._submit(new_query)
+
+        def _thread_target():
+            result = _fetch()
+            _on_done(result)
+
+        threading.Thread(target=_thread_target, daemon=True).start()
 
     def _submit_expanded(self, expanded: str) -> None:
         """Submit raw multi-line content directly, bypassing the prompt
@@ -577,15 +692,20 @@ class IstInkApp:
 
     def _run_via_bridge(self, text: str) -> None:
         """Run query through GraphBridge in background thread."""
+        from langchain_core.messages import HumanMessage
         from main.qa_agent.tui.bridge import GraphBridge
         from main.qa_agent.tui.sink import IstUiEvent
 
         if self._bridge is None:
             thread_id = self._thread_id or uuid.uuid4().hex[:12]
+            from main.qa_agent.sinks.jsonl_sink import JsonlFileSink
+            from pathlib import Path
+            jsonl_sink = JsonlFileSink(log_dir=Path("logs"))
             self._bridge = GraphBridge(
                 graph_factory=self._build_graph,
                 post=self._on_ui_event,
                 thread_id=thread_id,
+                extra_sinks=[jsonl_sink],
             )
 
         if self._bridge.is_running:
@@ -596,7 +716,7 @@ class IstInkApp:
         initial_state = {
             "task_type": self._task_type,
             "user_input": text,
-            "messages": [],
+            "messages": [HumanMessage(content=text)],
         }
         self._streaming_buf = []
         self._transcript.append_message("")  # placeholder for streaming
@@ -622,6 +742,11 @@ class IstInkApp:
             self._flush_pending_tools()
             chunk = (event.extra or {}).get("chunk", "")
             self._streaming_buf.append(chunk)
+            import time as _t
+            now = _t.monotonic()
+            if self._ai_stream_idx >= 0 and (now - self._last_md_render_ts) < 0.05:
+                return
+            self._last_md_render_ts = now
             partial = "".join(self._streaming_buf)
             rendered = self._render_markdown(partial)
             # 第一次 token：append 一个新行作为这段 AI 独白的锚点；
@@ -640,7 +765,7 @@ class IstInkApp:
             self._flush_pending_tools()
             final = "".join(self._streaming_buf)
             if final:
-                rendered = self._render_markdown(final)
+                rendered = self._render_markdown(final, final=True)
                 if self._ai_stream_idx >= 0:
                     self._transcript.update_message_at(
                         self._ai_stream_idx, f" ⏺ {rendered}"
@@ -775,7 +900,7 @@ class IstInkApp:
         elif cls_name == "AIFinalMessage":
             content = getattr(msg, "content", "") or ""
             if content:
-                rendered = self._render_markdown(content)
+                rendered = self._render_markdown(content, final=True)
                 self._transcript.append_message(f" ⏺ {rendered}")
 
         elif cls_name == "ToolCallMessage":
@@ -912,20 +1037,19 @@ class IstInkApp:
             self._thinking_line.style.height = 0
             self._thinking_text.set_value("")
 
-    def _render_markdown(self, text: str) -> str:
-        """Basic Markdown rendering: bold, inline code, bullets."""
-        import re
-        B = self._BOLD
-        C = self._CYAN
-        R = self._RESET
-        # Bold: **text** or __text__
-        text = re.sub(r'\*\*(.+?)\*\*', f'{B}\\1{R}', text)
-        text = re.sub(r'__(.+?)__', f'{B}\\1{R}', text)
-        # Inline code: `code`
-        text = re.sub(r'`([^`]+)`', f'{C}\\1{R}', text)
-        # Bullet points: - item or * item at line start
-        text = re.sub(r'^(\s*)[-*]\s', r'\1• ', text, flags=re.MULTILINE)
-        return text
+    def _render_markdown(self, text: str, *, final: bool = False) -> str:
+        """Render markdown to ANSI. Streaming uses fast regex; final uses Rich."""
+        if self._md_renderer is None:
+            from main.qa_agent.ink.components.markdown_renderer import MarkdownRenderer
+            w = self._transcript._node.rect.width or 80
+            self._md_renderer = MarkdownRenderer(width=max(w - 4, 20))
+        else:
+            w = self._transcript._node.rect.width
+            if w > 0:
+                self._md_renderer.set_width(max(w - 4, 20))
+        if final:
+            return self._md_renderer.render_final(text)
+        return self._md_renderer.render_streaming(text)
 
     def _handle_slash(self, text: str) -> None:
         """Handle slash commands."""

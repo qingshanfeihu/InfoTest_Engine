@@ -107,8 +107,8 @@ main/qa_agent/tools/
 
 - `backend.py` — `CompositeBackend` + `_user_namespace` factory + InMemory/SQLite/Postgres store
 - `store.py` — `MemoryStore` facade + 三闸路径校验（traversal / 平台黑名单 / 子目录白名单）+ frontmatter 解析（仿 SKILL.md 风格，yaml-free）
-- `middleware.py` — `MemoryInjectionMiddleware`（每轮把 L1+L2 拼成 `<memory-context>` HumanMessage 注入到 user query 之前；陈旧条目加 `[stale: Xd ago]` 标签）+ `MemoryWriteMiddleware`（after_model 规则抽 L1 + distill 触发 fork agent）
-- `extractor.py` / `extractor_agent.py` — fork agent（仿 cc-haha extractMemories：5 turn 上限 + 互斥锁 + 受限工具）
+- `middleware.py` — `MemoryInjectionMiddleware`（每轮把 L1 工作记忆 + L2 长期记忆拼成 `<memory-context>` HumanMessage 注入到 user query 之前）+ `MemoryWriteMiddleware`（after_model 调 `extract_working_entry` 写 L1 + `_should_distill` 判定后触发 fork agent 蒸馏 L1→L2；同时保留 finalizer 路径供评审场景用）
+- `extractor.py` / `extractor_agent.py` — fork agent（仿 cc-haha extractMemories：5 turn 上限 + 互斥锁 + 受限工具）+ `run_extractor_async` 后台线程入口
 - `dream.py` — DreamTask 五道闸（功能开关 / 24h / 10min / ≥5sessions / fcntl PID 锁）+ 四阶段（Orient → Gather → Consolidate → Prune）；prune 阶段把 >7 天 working 移到 `working/.archive/`，long_term 加 `archived: true` 标记
 - `dream_graph.py` — 包成 LangGraph，注册到 `langgraph.json::memory_dream`
 - `scripts/maintenance/memory_dream.py` — 系统 cron 入口

@@ -154,4 +154,34 @@ def run_extractor(
         return ""
 
 
-__all__ = ["build_extractor_agent", "run_extractor"]
+def run_extractor_async(store: Any, thread_id: str, messages: list) -> None:
+    """后台线程触发 fork extractor agent（非阻塞）。
+
+    由 MemoryWriteMiddleware._trigger_distill 调用。
+    互斥锁保证同一时刻只有一个 extractor 在跑。
+    """
+    def _worker():
+        if not _extractor_lock.acquire(blocking=False):
+            logger.debug("extractor 互斥锁被占，跳过 distill")
+            return
+        try:
+            from main.qa_agent.memory.backend import build_memory_backend
+            backend = build_memory_backend()
+            agent = build_extractor_agent(backend=backend)
+            if agent is None:
+                return
+            prompt_input = format_extraction_input(messages, tail_n=10)
+            agent.invoke(
+                {"messages": [HumanMessage(content=prompt_input)]},
+                config={"recursion_limit": 14},
+            )
+        except Exception as exc:
+            logger.warning("extractor async 失败: %s", exc)
+        finally:
+            _extractor_lock.release()
+
+    t = threading.Thread(target=_worker, name="memory-distill", daemon=True)
+    t.start()
+
+
+__all__ = ["build_extractor_agent", "run_extractor", "run_extractor_async"]

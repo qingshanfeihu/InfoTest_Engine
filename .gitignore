@@ -46,7 +46,12 @@ Thumbs.db
 # Large files
 large_tool_results/
 conversation_history/
-memory/
+# Memory subsystem: 用户私有偏好 / 工作记忆 / dream 锁不进 git；
+# AGENTS.md 是团队级项目指令，git 跟踪（用 ! 反选必须先按子路径忽略，
+# 不能直接 ignore "memory/" 整体——目录级 ignore 优先于反选规则）
+memory/working/
+memory/long_term/
+memory/.dream/
 knowledge/
 
 # Claude

@@ -88,10 +88,55 @@ main/qa_agent/tools/
 - `main/mineru_batch_export.py` — PDF/docx → markdown
 - `main/xlsx_to_markdown.py` — xlsx → GFM 表格
 - `main/knowledge_paths.py` — 路径常量 + `source_authority()` 权威度
-- `main/function_llm.py` — DashScope chat_completion（仅 kms_classifier 用）
+- `main/function_llm.py` — DashScope chat_completion（kms_classifier + memory dream consolidate 用）
 - `main/langchain_env.py` — `environment` 文件 dotenv loader
 - `main/utils.py` — JSON I/O、原子写入、SHA256、UTC 时间戳
 - `main/terminal_progress.py` — 单行刷新进度条（`NO_PROGRESS=1` 降级）
+
+## 记忆子系统（`main/qa_agent/memory/`）
+
+三层架构（仿 Claude Code auto memory + deepagents memory 设计）：
+
+| 层 | 路径 | 注入位置 | 写入触发 | 持久化 |
+|---|---|---|---|---|
+| L1 工作记忆 | `memory/working/<thread_id>.md` | reminder 末尾（每轮）| `MemoryWriteMiddleware.after_model` 规则抽取 | 真实磁盘 |
+| L2 长期记忆 | `memory/long_term/{preferences,feedback,project,reference}` | reminder（关键词 top-k=3）| `/remember` 显式 + `MemoryWriteMiddleware` distill 触发 fork agent | 真实磁盘 |
+| L3 项目指令 | `memory/AGENTS.md` | system prompt（启动时由 deepagents `MemoryMiddleware`）| dream task LLM 蒸馏 / 手工 | 真实磁盘（git 跟踪） |
+
+**关键模块**：
+
+- `backend.py` — `CompositeBackend` + `_user_namespace` factory + InMemory/SQLite/Postgres store
+- `store.py` — `MemoryStore` facade + 三闸路径校验（traversal / 平台黑名单 / 子目录白名单）+ frontmatter 解析（仿 SKILL.md 风格，yaml-free）
+- `middleware.py` — `MemoryInjectionMiddleware`（每轮把 L1+L2 拼成 `<memory-context>` HumanMessage 注入到 user query 之前；陈旧条目加 `[stale: Xd ago]` 标签）+ `MemoryWriteMiddleware`（after_model 规则抽 L1 + distill 触发 fork agent）
+- `extractor.py` / `extractor_agent.py` — fork agent（仿 cc-haha extractMemories：5 turn 上限 + 互斥锁 + 受限工具）
+- `dream.py` — DreamTask 五道闸（功能开关 / 24h / 10min / ≥5sessions / fcntl PID 锁）+ 四阶段（Orient → Gather → Consolidate → Prune）；prune 阶段把 >7 天 working 移到 `working/.archive/`，long_term 加 `archived: true` 标记
+- `dream_graph.py` — 包成 LangGraph，注册到 `langgraph.json::memory_dream`
+- `scripts/maintenance/memory_dream.py` — 系统 cron 入口
+
+**TUI 集成**：
+- `/memory` — 总览 / 查看 / 清除（list / show / clear / status）
+- `/remember <text>` — 显式追加偏好（默认 user 类）
+- `/remember --feedback|--project|--reference <topic> <text>` — 仿 cc-haha 四类
+- 底栏 dreaming 指示：`💭 dreaming` / `✓ memory consolidated`（检测 `memory/.dream/running.pid` 与 `last_run`）
+
+**写入路径白名单（三闸）**：
+1. 拒 `..` / 绝对外部路径 / `~`
+2. 必须 `/working/` 或 `/memories/` 前缀；写入时再过子目录白名单
+3. basename 字符必须 `[A-Za-z0-9_\-.]+`
+
+**安全边界**：
+- 主 agent 通过 `_ToolExclusionMiddleware` 屏蔽 `read_file/write_file/edit_file/ls/glob/grep/execute`，无法直接操作 backend 虚拟 fs
+- agent 视野隔离：`memory/` 已在 `file_tools._PLATFORM_DENIED_TOP_LEVEL`，`qa_deepagent_*` 拦截
+- fork extractor agent 唯一例外：可调 `read_file/edit_file`，但 prompt 强约束 + facade 三闸双保险
+- 所有写入入口失败一律静默（logger.warning），主流程不挂
+
+**关键 env**：
+- `QA_AGENT_MEMORY_ENABLED=1`（总开关；`0` 时所有 middleware 不挂）
+- `QA_AGENT_MEMORY_ROOT=<repo>/memory`（根目录）
+- `QA_AGENT_MEMORY_STORE_DSN`（空 → InMemory；`sqlite:///path` 或 `postgresql://...`）
+- `QA_AGENT_MEMORY_L2_TOPK=3`、`QA_AGENT_MEMORY_DISTILL_EVERY_N=10`、`QA_AGENT_MEMORY_STALE_DAYS=30`
+- `QA_AGENT_DREAM_ENABLED=1`、`QA_AGENT_DREAM_LOOKBACK_DAYS=7`、`QA_AGENT_DREAM_PRUNE_DAYS=7`
+- `QA_AGENT_MEMORY_DISABLE_LLM=1`（仅规则抽取，不调 fork agent + dream）
 
 ## Token 安全
 

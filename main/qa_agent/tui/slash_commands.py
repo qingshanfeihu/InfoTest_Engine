@@ -295,6 +295,11 @@ def _cmd_init(args: str, app: "IstApp") -> SlashCommandResult:
     ))
 
 
+def _cmd_kms(args: str, app: "IstApp") -> SlashCommandResult:
+    from main.qa_agent.tui.kms_command import cmd_kms
+    return cmd_kms(args, app)
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -311,6 +316,7 @@ BUILTIN_COMMANDS: list[SlashCommand] = [
     SlashCommand("compact",  "Reset token counter (clears transcript)",      _cmd_compact),
     SlashCommand("plan",     "Toggle plan-only mode for next query",         _cmd_plan),
     SlashCommand("init",     "Run project bootstrap analysis workflow",      _cmd_init),
+    SlashCommand("kms",      "Knowledge base status / update pipeline",      _cmd_kms),
     SlashCommand("version",  "Print version",                                _cmd_version),
     SlashCommand("exit",     "Exit the TUI",                                 _cmd_exit),
 ]

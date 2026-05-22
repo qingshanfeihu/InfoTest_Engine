@@ -154,6 +154,7 @@ def preprocess_file_paths(
             if path is not None and path.is_file():
                 # 文件存在于本地——直接处理
                 if _is_in_sandbox(path):
+                    seen_spans.add(span)
                     continue
                 suffix = path.suffix.lower()
                 result_path: Path | None = None

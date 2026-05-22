@@ -32,6 +32,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "  infotest --continue          继续最近一次 thread\n"
             "  infotest --input X.xlsx      结构化输入（agent 内部识别意图）\n"
             "  infotest threads             列出历史 thread 后退出\n"
+            "  infotest kms                 知识库总览\n"
+            "  infotest kms product update  产品知识库更新（前台执行）\n"
+            "  infotest kms qa update       测试知识库更新（前台执行）\n"
         ),
     )
     parser.add_argument("query", nargs="?", default=None,
@@ -194,6 +197,15 @@ def _run_server_command(action: str, port: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = argv if argv is not None else sys.argv[1:]
+
+    # kms 子命令：在 argparse 之前拦截（因为 kms 后面跟多级参数 argparse 处理不了）
+    if raw_argv and raw_argv[0] == "kms":
+        logging.basicConfig(level="WARNING", format="%(levelname)s %(name)s: %(message)s")
+        _ensure_env()
+        from main.qa_agent.tui.kms_cli import run_kms_command
+        return run_kms_command(raw_argv[1:])
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 

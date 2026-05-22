@@ -26,14 +26,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
-if TYPE_CHECKING:
-    from main.qa_agent.tui.app import IstApp
+# Ink IstInkApp；历史 Textual IstApp 若恢复可实现 call_from_thread
+KmsApp = Any
 
 
 # ---------------------------------------------------------------------------
@@ -43,6 +45,142 @@ if TYPE_CHECKING:
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _post_kms_status(app: KmsApp, msg: str) -> None:
+    """向 TUI transcript 追加 KMS 进度（Ink 线程安全；兼容 Textual）。"""
+    if hasattr(app, "append_transcript_info"):
+        app.append_transcript_info(msg)
+        return
+    if hasattr(app, "call_from_thread") and hasattr(app, "_append_info"):
+        try:
+            app.call_from_thread(app._append_info, msg)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def _kms_update_timeout_sec() -> int:
+    raw = (os.environ.get("KMS_UPDATE_TIMEOUT_SEC") or "7200").strip()
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return 7200
+
+
+def _kms_log_poll_interval_sec() -> float:
+    raw = (os.environ.get("KMS_LOG_POLL_INTERVAL_SEC") or "2").strip()
+    try:
+        return max(0.5, float(raw))
+    except ValueError:
+        return 2.0
+
+
+_KMS_LOG_ECHO = re.compile(
+    r"(\[batch\s+\d+/\d+\]|"
+    r"\[KMS_PRODUCT_FILES\]|"
+    r"\[cache\]|"
+    r"提交批次|batch_id=|上传完成|轮询|"
+    r"^\s*[✓✗→]|"
+    r"完成：|"
+    r"全部\s+\d+\s+个|"
+    r"\d+\s+个命中缓存)",
+)
+
+
+def _should_echo_log_line(line: str) -> bool:
+    """关键进度行写入 transcript；其余仅更新 thinking 行。"""
+    return bool(_KMS_LOG_ECHO.search(line))
+
+
+def _clear_background_status(app: KmsApp | None) -> None:
+    if app is not None and hasattr(app, "set_background_status"):
+        app.set_background_status(None)
+
+
+def _push_log_progress(app: KmsApp | None, tag: str, line: str) -> None:
+    if app is None:
+        return
+    display = line if len(line) <= 100 else line[:97] + "..."
+    if hasattr(app, "set_background_status"):
+        app.set_background_status(f"{tag} {display}")
+    if _should_echo_log_line(line):
+        _post_kms_status(app, f"{tag} {display}")
+
+
+def _flush_log_to_ui(app: KmsApp | None, log_path: Path, offset: int, tag: str) -> int:
+    """从 log_path 的 offset 起读取新行并刷新 TUI，返回新 offset。"""
+    if not log_path.exists():
+        return offset
+    try:
+        with log_path.open("r", encoding="utf-8", errors="replace") as f:
+            f.seek(offset)
+            chunk = f.read()
+            new_offset = f.tell()
+    except OSError:
+        return offset
+    if not chunk:
+        return new_offset
+    for raw in chunk.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("--- kms"):
+            continue
+        _push_log_progress(app, tag, line)
+    return new_offset
+
+
+def _tail_log_lines(path: Path, n: int = 8) -> list[str]:
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return lines[-n:] if lines else []
+
+
+def _run_mineru_subprocess(
+    project_root: Path,
+    venv_python: Path,
+    env: dict[str, str],
+    *,
+    log_path: Path,
+    timeout_sec: int,
+    app: KmsApp | None = None,
+    progress_tag: str = "[/kms]",
+) -> tuple[int, list[str]]:
+    """跑 mineru_batch_export；日志写 log_path，轮询 tail 到 TUI，返回 (rc, 日志尾部)。"""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    run_env = dict(env)
+    run_env["PYTHONUNBUFFERED"] = "1"
+    poll_iv = _kms_log_poll_interval_sec()
+    deadline = time.monotonic() + timeout_sec
+    log_offset = 0
+
+    with log_path.open("w", encoding="utf-8") as log_f:
+        log_f.write("--- kms mineru subprocess started ---\n")
+        log_f.flush()
+        proc = subprocess.Popen(
+            [str(venv_python), "-u", "-m", "main.mineru_batch_export"],
+            cwd=str(project_root),
+            env=run_env,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+        )
+
+    while proc.poll() is None:
+        if time.monotonic() >= deadline:
+            proc.kill()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            log_offset = _flush_log_to_ui(app, log_path, log_offset, progress_tag)
+            _clear_background_status(app)
+            return -1, _tail_log_lines(log_path, 12)
+        log_offset = _flush_log_to_ui(app, log_path, log_offset, progress_tag)
+        time.sleep(poll_iv)
+
+    log_offset = _flush_log_to_ui(app, log_path, log_offset, progress_tag)
+    _clear_background_status(app)
+    rc = proc.returncode if proc.returncode is not None else 1
+    return rc, _tail_log_lines(log_path, 12)
 
 
 def _count(path: Path, pattern: str = "*", *, recurse: bool = False) -> int:
@@ -124,8 +262,8 @@ def _format_overall_status() -> str:
 
     lines.append("")
     lines.append("Subcommands:")
-    lines.append("  /kms product status|update|rebuild|delete   — 产品知识库（mineru 链）")
-    lines.append("  /kms qa      status|update|rebuild|delete   — 测试知识库（xlsx 链, phase 2）")
+    lines.append("  infotest kms product status|update   — 产品知识库（mineru 链）")
+    lines.append("  infotest kms qa      status|update   — 测试知识库（xlsx + mineru）")
     return "\n".join(lines)
 
 
@@ -197,76 +335,62 @@ def _format_qa_status() -> str:
 
 
 # ---------------------------------------------------------------------------
-# product update — runs mineru → clean → trunk → feature
+# product update — mineru_batch_export → markdown/product/
 # ---------------------------------------------------------------------------
 
 
-def _kick_product_update(app: "IstApp") -> None:
+def _kick_product_update(app: KmsApp, *, product_files: str) -> None:
     """启 subprocess 跑产品链：仅 mineru_batch_export 一步出 markdown。"""
+    from main import knowledge_paths as kp
+
     project_root = _project_root()
     venv_python = project_root / ".venv" / "bin" / "python"
     if not venv_python.exists():
         venv_python = Path(sys.executable)
 
-    buckets = _orgin_buckets()
-    product_files = ",".join(buckets.get("product", []))
-
-    steps = [
-        ("mineru_batch_export", [str(venv_python), "-m", "main.mineru_batch_export"]),
-    ]
-
     env = dict(os.environ)
-    env["KMS_PRODUCT_FILES"] = product_files       # 白名单：只摄入 product 桶文件
-    env["KMS_OUTPUT_BUCKET"] = "product"           # 解出的 full.md 写到 markdown/product/
+    env["KMS_PRODUCT_FILES"] = product_files
+    env["KMS_OUTPUT_BUCKET"] = "product"
+
+    log_path = kp.KNOWLEDGE_INTERMEDIATE / ".kms_product_update.log"
+    timeout_sec = _kms_update_timeout_sec()
+    rel_log = log_path.relative_to(project_root)
 
     def _run() -> None:
-        for label, cmd in steps:
-            try:
-                app.call_from_thread(
-                    app._append_info,  # type: ignore[attr-defined]
-                    f"[/kms product update] starting: {label}",
-                )
-            except Exception:
-                pass
-            try:
-                proc = subprocess.run(  # noqa: PLW1510
-                    cmd,
-                    cwd=str(project_root),
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=1800,
-                )
-                tail = (proc.stdout or "").strip().splitlines()[-3:]
-                err_tail = (proc.stderr or "").strip().splitlines()[-3:]
-                summary = " | ".join(tail) or "(no stdout)"
-                if proc.returncode != 0:
-                    summary = f"FAILED rc={proc.returncode} | err: {' | '.join(err_tail)}"
-                try:
-                    app.call_from_thread(
-                        app._append_info,  # type: ignore[attr-defined]
-                        f"[/kms product update] {label}: {summary}",
-                    )
-                except Exception:
-                    pass
-                if proc.returncode != 0:
-                    return
-            except subprocess.TimeoutExpired:
-                try:
-                    app.call_from_thread(
-                        app._append_info,  # type: ignore[attr-defined]
-                        f"[/kms product update] {label}: TIMEOUT (>30min)",
-                    )
-                except Exception:
-                    pass
-                return
-        try:
-            app.call_from_thread(
-                app._append_info,  # type: ignore[attr-defined]
-                "[/kms product update] all steps completed; markdown ready in knowledge/data/markdown/product/",
+        _post_kms_status(
+            app,
+            f"[/kms product update] starting mineru_batch_export (log: {rel_log})",
+        )
+        rc, tail = _run_mineru_subprocess(
+            project_root,
+            venv_python,
+            env,
+            log_path=log_path,
+            timeout_sec=timeout_sec,
+            app=app,
+            progress_tag="[/kms product update]",
+        )
+        if rc == -1:
+            _post_kms_status(
+                app,
+                f"[/kms product update] TIMEOUT (>{timeout_sec}s). See {rel_log}",
             )
-        except Exception:
-            pass
+            return
+        summary = " | ".join(tail) or "(see log)"
+        if rc != 0:
+            _post_kms_status(
+                app,
+                f"[/kms product update] FAILED rc={rc} | {summary}",
+            )
+            return
+        _post_kms_status(
+            app,
+            f"[/kms product update] done | {summary}",
+        )
+        _post_kms_status(
+            app,
+            "[/kms product update] markdown ready in knowledge/data/markdown/product/",
+        )
 
     threading.Thread(target=_run, daemon=True, name="kms-product-update").start()
 
@@ -280,7 +404,13 @@ _QA_XLSX_EXTS = {".xlsx", ".xlsm", ".xls"}
 _QA_MINERU_EXTS = {".pdf", ".doc", ".docx", ".pptx", ".ppt", ".html", ".htm"}
 
 
-def _kick_qa_update(app: "IstApp") -> None:
+def _kick_qa_update(
+    app: KmsApp,
+    *,
+    xlsx_files: list[str],
+    mineru_files: list[str],
+    skipped: list[str],
+) -> None:
     """启 subprocess 跑测试知识链：xlsx 用 xlsx_to_markdown，其他走 mineru。"""
     project_root = _project_root()
     venv_python = project_root / ".venv" / "bin" / "python"
@@ -289,15 +419,13 @@ def _kick_qa_update(app: "IstApp") -> None:
 
     from main import knowledge_paths as kp
 
-    buckets = _orgin_buckets()
-    qa_files = list(buckets.get("test_case_list", [])) + list(buckets.get("test_strategy", []))
-    xlsx_files = [n for n in qa_files if Path(n).suffix.lower() in _QA_XLSX_EXTS]
-    mineru_files = [n for n in qa_files if Path(n).suffix.lower() in _QA_MINERU_EXTS]
-    skipped = [n for n in qa_files if n not in xlsx_files and n not in mineru_files]
+    log_path = kp.KNOWLEDGE_INTERMEDIATE / ".kms_qa_update.log"
+    timeout_sec = _kms_update_timeout_sec()
+    rel_log = log_path.relative_to(project_root)
 
     def _run() -> None:
-        # 1. xlsx → md（不开 subprocess，本地直接调）
         from main.xlsx_to_markdown import write_markdown
+
         kp.KNOWLEDGE_MARKDOWN_QA.mkdir(parents=True, exist_ok=True)
         for name in xlsx_files:
             src = kp.KNOWLEDGE_ORGIN / name
@@ -307,72 +435,51 @@ def _kick_qa_update(app: "IstApp") -> None:
                 msg = f"xlsx → md: {name} -> {out.name}"
             except Exception as exc:  # noqa: BLE001
                 msg = f"xlsx FAILED {name}: {exc}"
-            try:
-                app.call_from_thread(
-                    app._append_info,  # type: ignore[attr-defined]
-                    f"[/kms qa update] {msg}",
-                )
-            except Exception:
-                pass
+            _post_kms_status(app, f"[/kms qa update] {msg}")
 
-        # 2. doc/pdf → mineru
         if mineru_files:
             env = dict(os.environ)
-            env["KMS_PRODUCT_FILES"] = ",".join(mineru_files)  # 借用白名单：让 batch_export 只跑这批
+            env["KMS_PRODUCT_FILES"] = ",".join(mineru_files)
             env["KMS_OUTPUT_BUCKET"] = "qa"
-            try:
-                app.call_from_thread(
-                    app._append_info,  # type: ignore[attr-defined]
-                    f"[/kms qa update] starting mineru_batch_export ({len(mineru_files)} files)",
+            _post_kms_status(
+                app,
+                f"[/kms qa update] starting mineru_batch_export "
+                f"({len(mineru_files)} files, log: {rel_log})",
+            )
+            rc, tail = _run_mineru_subprocess(
+                project_root,
+                venv_python,
+                env,
+                log_path=log_path,
+                timeout_sec=timeout_sec,
+                app=app,
+                progress_tag="[/kms qa update]",
+            )
+            if rc == -1:
+                _post_kms_status(
+                    app,
+                    f"[/kms qa update] mineru TIMEOUT (>{timeout_sec}s). See {rel_log}",
                 )
-            except Exception:
-                pass
-            try:
-                proc = subprocess.run(  # noqa: PLW1510
-                    [str(venv_python), "-m", "main.mineru_batch_export"],
-                    cwd=str(project_root),
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=1800,
+            elif rc != 0:
+                summary = " | ".join(tail) or "(see log)"
+                _post_kms_status(
+                    app,
+                    f"[/kms qa update] mineru FAILED rc={rc} | {summary}",
                 )
-                tail = (proc.stdout or "").strip().splitlines()[-3:]
-                err_tail = (proc.stderr or "").strip().splitlines()[-3:]
-                summary = " | ".join(tail) or "(no stdout)"
-                if proc.returncode != 0:
-                    summary = f"FAILED rc={proc.returncode} | err: {' | '.join(err_tail)}"
-                try:
-                    app.call_from_thread(
-                        app._append_info,  # type: ignore[attr-defined]
-                        f"[/kms qa update] mineru_batch_export: {summary}",
-                    )
-                except Exception:
-                    pass
-            except subprocess.TimeoutExpired:
-                try:
-                    app.call_from_thread(
-                        app._append_info,  # type: ignore[attr-defined]
-                        "[/kms qa update] mineru_batch_export: TIMEOUT (>30min)",
-                    )
-                except Exception:
-                    pass
+            else:
+                summary = " | ".join(tail) or "(see log)"
+                _post_kms_status(app, f"[/kms qa update] mineru done | {summary}")
 
         if skipped:
-            try:
-                app.call_from_thread(
-                    app._append_info,  # type: ignore[attr-defined]
-                    f"[/kms qa update] skipped (unsupported ext): {', '.join(skipped)}",
-                )
-            except Exception:
-                pass
-
-        try:
-            app.call_from_thread(
-                app._append_info,  # type: ignore[attr-defined]
-                "[/kms qa update] done; markdown ready in knowledge/data/markdown/qa/",
+            _post_kms_status(
+                app,
+                f"[/kms qa update] skipped (unsupported ext): {', '.join(skipped)}",
             )
-        except Exception:
-            pass
+
+        _post_kms_status(
+            app,
+            "[/kms qa update] done; markdown ready in knowledge/data/markdown/qa/",
+        )
 
     threading.Thread(target=_run, daemon=True, name="kms-qa-update").start()
 
@@ -382,24 +489,31 @@ def _kick_qa_update(app: "IstApp") -> None:
 # ---------------------------------------------------------------------------
 
 
-def _dispatch_product(action: str, rest: str, app: "IstApp"):  # noqa: ANN201
+def _dispatch_product(action: str, rest: str, app: KmsApp):  # noqa: ANN201
     from main.qa_agent.tui.slash_commands import (
         ErrorResult, InfoResult, TextResult,
     )
+    from main import knowledge_paths as kp
+
     if action in ("", "status"):
         return TextResult(text=_format_product_status())
 
     if action == "update":
         if not os.environ.get("MINERU_TOKEN"):
             return ErrorResult(text="/kms product update needs MINERU_TOKEN in environment file")
-        if not os.environ.get("DASHSCOPE_API_KEY"):
-            return ErrorResult(text="/kms product update needs DASHSCOPE_API_KEY in environment file")
-        _kick_product_update(app)
-        n_product = len(_orgin_buckets().get("product", []))
+        buckets = _orgin_buckets()
+        product_names = buckets.get("product", [])
+        product_files = ",".join(product_names)
+        _kick_product_update(app, product_files=product_files)
+        rel_log = (kp.KNOWLEDGE_INTERMEDIATE / ".kms_product_update.log").relative_to(
+            _project_root()
+        )
+        batch_size = (os.environ.get("MINERU_BATCH_SIZE") or "30").strip()
         return InfoResult(text=(
             f"[/kms product update] kicked off in background "
-            f"({n_product} product source files; mineru → clean → trunk → feature). "
-            f"Watch transcript for per-step summaries; cache will skip unchanged sources."
+            f"({len(product_names)} product sources → mineru_batch_export → markdown/product/; "
+            f"zip cache直出 + API 分批默认每批 {batch_size}). "
+            f"进度见 transcript 与输入框上方状态行；完整日志: {rel_log}"
         ))
 
     if action in ("rebuild", "delete"):
@@ -411,25 +525,36 @@ def _dispatch_product(action: str, rest: str, app: "IstApp"):  # noqa: ANN201
     ))
 
 
-def _dispatch_qa(action: str, rest: str, app: "IstApp"):  # noqa: ANN201
+def _dispatch_qa(action: str, rest: str, app: KmsApp):  # noqa: ANN201
     from main.qa_agent.tui.slash_commands import (
         ErrorResult, InfoResult, TextResult,
     )
+    from main import knowledge_paths as kp
+
     if action in ("", "status"):
         return TextResult(text=_format_qa_status())
 
     if action == "update":
-        rows = _orgin_rows()
-        qa_rows = [r for r in rows if r["category"] in ("test_case_list", "test_strategy")]
-        n_xlsx = sum(1 for r in qa_rows if Path(r["name"]).suffix.lower() in _QA_XLSX_EXTS)
-        n_mineru = sum(1 for r in qa_rows if Path(r["name"]).suffix.lower() in _QA_MINERU_EXTS)
-        if n_mineru and not os.environ.get("MINERU_TOKEN"):
+        buckets = _orgin_buckets()
+        qa_files = list(buckets.get("test_case_list", [])) + list(
+            buckets.get("test_strategy", [])
+        )
+        xlsx_files = [n for n in qa_files if Path(n).suffix.lower() in _QA_XLSX_EXTS]
+        mineru_files = [n for n in qa_files if Path(n).suffix.lower() in _QA_MINERU_EXTS]
+        skipped = [n for n in qa_files if n not in xlsx_files and n not in mineru_files]
+        if mineru_files and not os.environ.get("MINERU_TOKEN"):
             return ErrorResult(text="/kms qa update needs MINERU_TOKEN to handle non-xlsx files")
-        _kick_qa_update(app)
+        _kick_qa_update(
+            app,
+            xlsx_files=xlsx_files,
+            mineru_files=mineru_files,
+            skipped=skipped,
+        )
+        rel_log = (kp.KNOWLEDGE_INTERMEDIATE / ".kms_qa_update.log").relative_to(_project_root())
         return InfoResult(text=(
             f"[/kms qa update] kicked off in background "
-            f"({n_xlsx} xlsx via openpyxl, {n_mineru} via mineru). "
-            f"Watch transcript for per-file summaries; output → knowledge/data/markdown/qa/"
+            f"({len(xlsx_files)} xlsx via openpyxl, {len(mineru_files)} via mineru). "
+            f"进度见 transcript 与输入框上方状态行；完整日志: {rel_log}"
         ))
 
     if action in ("rebuild", "delete"):
@@ -444,7 +569,7 @@ def _dispatch_qa(action: str, rest: str, app: "IstApp"):  # noqa: ANN201
 _LEGACY_FLAT_ACTIONS = {"update", "rebuild", "delete", "ingest"}
 
 
-def cmd_kms(args: str, app: "IstApp"):  # noqa: ANN201
+def cmd_kms(args: str, app: KmsApp):  # noqa: ANN201
     """Top-level /kms dispatcher — see module docstring for grammar."""
     from main.qa_agent.tui.slash_commands import (
         ErrorResult, TextResult,

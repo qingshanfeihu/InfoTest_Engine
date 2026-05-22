@@ -117,6 +117,18 @@ class IstInkApp:
         from main.qa_agent.tui.state import TuiState
         self.tui_state = TuiState(thread_id=self._thread_id or "")
 
+    def append_transcript_info(self, text: str) -> None:
+        """线程安全地向 transcript 追加一行（供 KMS 等后台任务回写进度）。"""
+        with self._app.lock:
+            self._transcript.append_message(f" {text}")
+            self._app.render()
+
+    def set_background_status(self, text: str | None) -> None:
+        """后台任务进度（显示在输入框上方 thinking 行，不刷屏 transcript）。"""
+        with self._app.lock:
+            self._update_thinking_line(text)
+            self._app.render()
+
     def run(self) -> None:
         """Start the TUI (blocking)."""
         import warnings
@@ -998,6 +1010,20 @@ class IstInkApp:
         except Exception as e:
             self._transcript.append_message(f" \x1b[31m✗\x1b[0m /{cmd_name}: {e}")
         self._app.render()
+
+    # -- KMS / background task progress API ------------------------------------
+
+    def append_transcript_info(self, msg: str) -> None:
+        """Thread-safe: append a status line to transcript (used by kms_command)."""
+        with self._app.lock:
+            self._transcript.append_message(f"  \x1b[2m{msg}\x1b[0m")
+            self._app.render()
+
+    def set_background_status(self, text: str | None) -> None:
+        """Thread-safe: update the thinking line above input (used by kms_command)."""
+        with self._app.lock:
+            self._update_thinking_line(text)
+            self._app.render()
 
     def _cancel_query(self) -> None:
         """Cancel the running query and stop the bridge thread."""

@@ -240,6 +240,14 @@ def _post_batch(
     }
 
     r = session.post(FILE_URLS_BATCH, headers=_headers(token), json=body, timeout=120)
+    # 429 限流重试
+    if r.status_code == 429:
+        for wait in (10, 20, 40):
+            print(f"  ⏳ 429 限流，等待 {wait}s 后重试…", flush=True)
+            time.sleep(wait)
+            r = session.post(FILE_URLS_BATCH, headers=_headers(token), json=body, timeout=120)
+            if r.status_code != 429:
+                break
     r.raise_for_status()
     data = r.json()
     if data.get("code") != 0:
@@ -523,6 +531,34 @@ class FileOutcome:
     warnings: list[str] = field(default_factory=list)
 
 
+def _is_success(outcome: FileOutcome) -> bool:
+    """``done`` + JSON，或 ``cached`` + markdown 直出，均视为成功。"""
+    if outcome.state == "done" and outcome.code_format_path:
+        return True
+    return outcome.state == "cached" and bool(outcome.markdown_path)
+
+
+def _mineru_batch_size() -> int:
+    raw = (os.environ.get("MINERU_BATCH_SIZE") or "30").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 30
+    return max(1, n)
+
+
+def _chunk_paths(paths: list[Path], size: int) -> list[list[Path]]:
+    return [paths[i : i + size] for i in range(0, len(paths), size)]
+
+
+def _should_exit_error(outcomes: list[FileOutcome]) -> bool:
+    if not outcomes:
+        return True
+    ok = sum(1 for o in outcomes if _is_success(o))
+    failed = sum(1 for o in outcomes if o.state in ("failed", "error"))
+    return ok == 0 or failed > 0
+
+
 def _resolve_markdown_dir() -> Path | None:
     """KMS_OUTPUT_BUCKET=product|qa 时返回对应 markdown 子目录，否则 None。
 
@@ -667,168 +703,190 @@ def main() -> None:
         return list(buckets.values())
 
     batches = split_by_model_version(file_paths)
+    batch_size = _mineru_batch_size()
     session = requests.Session()
 
     for group in batches:
         mv_arg = args.model_version
         # 对该组使用统一 model_version
         effective_mv = _model_version_for_path(group[0], mv_arg if mv_arg != "auto" else None)
-        print(f"提交批次：{len(group)} 个文件，model_version={effective_mv}")
+        chunks = _chunk_paths(group, batch_size)
+        n_chunks = len(chunks)
 
-        batch_id, upload_urls = _post_batch(
-            session,
-            token,
-            group,
-            effective_mv=effective_mv,
-            language=args.language,
-            enable_formula=args.enable_formula,
-            enable_table=args.enable_table,
-            is_ocr=args.is_ocr,
-        )
-        print(f"batch_id={batch_id}，开始上传…")
-        _upload_files(session, group, upload_urls)
-        print("上传完成，轮询解析结果…")
-
-        # 并发下载 + 解压 + 写盘：同一文件一变 terminal 就立刻 submit。
-        by_source_name = {p.name: p for p in group}
-        download_workers = max(
-            1, int(os.environ.get("MINERU_DOWNLOAD_WORKERS", "4"))
-        )
-        outcomes_lock = threading.Lock()
-        batch_outcomes: list[FileOutcome] = []
-
-        def _finalize(info: dict[str, Any]) -> FileOutcome:
-            file_name = info.get("file_name") or ""
-            p = by_source_name.get(file_name)
-            if p is None:
-                return FileOutcome(
-                    source=file_name,
-                    stem=file_name,
-                    state="error",
-                    err_msg="file_name 不在本批次",
-                )
-            stem = _unique_output_stem(p, used_stems)
-            state = info.get("state") or "unknown"
-            err_msg = info.get("err_msg") or ""
-            fo = FileOutcome(
-                source=p.name,
-                stem=stem,
-                state=state,
-                err_msg=err_msg,
-                full_zip_url=info.get("full_zip_url"),
+        for chunk_idx, chunk in enumerate(chunks, start=1):
+            # batch 间延迟，避免 429 限流
+            if chunk_idx > 1:
+                time.sleep(5)
+            print(
+                f"[batch {chunk_idx}/{n_chunks}] 提交 {len(chunk)} 个文件，"
+                f"model_version={effective_mv}",
+                flush=True,
             )
-            if state != "done" or not fo.full_zip_url:
-                return fo
-            try:
-                zb = _download_zip(session, fo.full_zip_url)
-                pack = _extract_outputs_from_zip(
-                    zb,
-                    embed_binary_in_json=args.embed_binary_in_json,
-                    embed_max_bytes_per_file=embed_max,
-                )
-                fo.warnings.extend(pack.get("warnings_extra") or [])
 
-                zip_sha256 = hashlib.sha256(zb).hexdigest()
-                mineru_zip_name = f"{stem}.mineru.zip"
-                mineru_zip_path = output_dir / mineru_zip_name
-                if args.save_mineru_zip:
-                    mineru_zip_path.write_bytes(zb)
-                    fo.mineru_zip_path = str(mineru_zip_path)
+            batch_id, upload_urls = _post_batch(
+                session,
+                token,
+                chunk,
+                effective_mv=effective_mv,
+                language=args.language,
+                enable_formula=args.enable_formula,
+                enable_table=args.enable_table,
+                is_ocr=args.is_ocr,
+            )
+            print(f"batch_id={batch_id}，开始上传…", flush=True)
+            _upload_files(session, chunk, upload_urls)
+            print("上传完成，轮询解析结果…", flush=True)
 
-                code_obj = {
-                    "source_file": p.name,
-                    "mineru_model_version": effective_mv,
-                    "task_meta": {
-                        "file_name": info.get("file_name"),
-                        "data_id": info.get("data_id"),
-                        "batch_id": batch_id,
-                        "full_zip_url": fo.full_zip_url,
-                    },
-                    "markdown": pack.get("markdown"),
-                    "content_list": pack.get("content_list"),
-                    "content_list_v2": pack.get("content_list_v2"),
-                    "zip_inventory": pack.get("zip_inventory"),
-                    "mineru_output_archive": {
-                        "file": mineru_zip_name if args.save_mineru_zip else None,
-                        "sha256": zip_sha256,
-                        "size_bytes": len(zb),
-                        "saved_locally": bool(args.save_mineru_zip),
-                    },
-                    "embedded_binary": pack.get("embedded_binary"),
-                    "embedded_binary_omitted": pack.get("embedded_binary_omitted"),
-                    "restore_note": (
-                        "语义与版式以 MinerU 解析为准。embedded_binary 含 Markdown 引用的图片及 zip 内其余非 JSON 成员；"
-                        "与 content_list / model / middle 共同可还原 MinerU 输出。原始 Office/PDF 二进制亦见 zip 内 *_origin.pdf（若存在）。"
-                    ),
-                    "warnings": fo.warnings,
-                }
-                raw_obj = {
-                    "source_file": p.name,
-                    "mineru_model_version": effective_mv,
-                    "model": pack.get("model"),
-                    "middle": pack.get("middle"),
-                    "zip_inventory": pack.get("zip_inventory"),
-                    "mineru_output_archive": code_obj["mineru_output_archive"],
-                    "warnings": fo.warnings,
-                }
+            # 并发下载 + 解压 + 写盘：同一文件一变 terminal 就立刻 submit。
+            by_source_name = {p.name: p for p in chunk}
+            download_workers = max(
+                1, int(os.environ.get("MINERU_DOWNLOAD_WORKERS", "4"))
+            )
+            outcomes_lock = threading.Lock()
+            batch_outcomes: list[FileOutcome] = []
 
-                code_path = output_dir / f"{stem}.code_format.json"
-                raw_path = output_dir / f"{stem}.raw_data.json"
-                code_path.write_text(
-                    json.dumps(code_obj, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                raw_path.write_text(
-                    json.dumps(raw_obj, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                fo.code_format_path = str(code_path)
-                fo.raw_data_path = str(raw_path)
-
-                md_text = pack.get("markdown")
-                md_dir = _resolve_markdown_dir()
-                if md_dir is not None and md_text:
-                    md_path = md_dir / f"{stem}.md"
-                    md_path.write_text(str(md_text), encoding="utf-8")
-                    fo.markdown_path = str(md_path)
-            except Exception as e:  # noqa: BLE001
-                fo.state = "error"
-                fo.err_msg = str(e)
-            return fo
-
-        try:
-            with ThreadPoolExecutor(max_workers=download_workers) as pool:
-                futures = []
-                for info in _poll_batch_stream(
-                    session,
-                    token,
-                    batch_id,
-                    poll_interval=args.poll_interval_sec,
-                    max_wait_sec=args.max_wait_min * 60,
-                ):
-                    print(f"  → {info.get('file_name')} {info.get('state')}，下发下载")
-                    futures.append(pool.submit(_finalize, info))
-                for fut in as_completed(futures):
-                    fo = fut.result()
-                    with outcomes_lock:
-                        batch_outcomes.append(fo)
-                        if fo.code_format_path:
-                            print(f"  ✓ {fo.source} -> {Path(fo.code_format_path).name}")
-                        elif fo.state == "failed":
-                            print(f"  ✗ {fo.source}: {fo.err_msg}")
-        except Exception as e:
-            for p in group:
-                if not any(o.source == p.name for o in batch_outcomes):
-                    batch_outcomes.append(
-                        FileOutcome(
-                            source=p.name,
-                            stem=_unique_output_stem(p, used_stems),
-                            state="error",
-                            err_msg=str(e),
-                        )
+            def _finalize(info: dict[str, Any]) -> FileOutcome:
+                file_name = info.get("file_name") or ""
+                p = by_source_name.get(file_name)
+                if p is None:
+                    return FileOutcome(
+                        source=file_name,
+                        stem=file_name,
+                        state="error",
+                        err_msg="file_name 不在本批次",
                     )
+                stem = _unique_output_stem(p, used_stems)
+                state = info.get("state") or "unknown"
+                err_msg = info.get("err_msg") or ""
+                fo = FileOutcome(
+                    source=p.name,
+                    stem=stem,
+                    state=state,
+                    err_msg=err_msg,
+                    full_zip_url=info.get("full_zip_url"),
+                )
+                if state != "done" or not fo.full_zip_url:
+                    return fo
+                try:
+                    zb = _download_zip(session, fo.full_zip_url)
+                    pack = _extract_outputs_from_zip(
+                        zb,
+                        embed_binary_in_json=args.embed_binary_in_json,
+                        embed_max_bytes_per_file=embed_max,
+                    )
+                    fo.warnings.extend(pack.get("warnings_extra") or [])
 
-        all_outcomes.extend(batch_outcomes)
+                    zip_sha256 = hashlib.sha256(zb).hexdigest()
+                    mineru_zip_name = f"{stem}.mineru.zip"
+                    mineru_zip_path = output_dir / mineru_zip_name
+                    if args.save_mineru_zip:
+                        mineru_zip_path.write_bytes(zb)
+                        fo.mineru_zip_path = str(mineru_zip_path)
+
+                    code_obj = {
+                        "source_file": p.name,
+                        "mineru_model_version": effective_mv,
+                        "task_meta": {
+                            "file_name": info.get("file_name"),
+                            "data_id": info.get("data_id"),
+                            "batch_id": batch_id,
+                            "full_zip_url": fo.full_zip_url,
+                        },
+                        "markdown": pack.get("markdown"),
+                        "content_list": pack.get("content_list"),
+                        "content_list_v2": pack.get("content_list_v2"),
+                        "zip_inventory": pack.get("zip_inventory"),
+                        "mineru_output_archive": {
+                            "file": mineru_zip_name if args.save_mineru_zip else None,
+                            "sha256": zip_sha256,
+                            "size_bytes": len(zb),
+                            "saved_locally": bool(args.save_mineru_zip),
+                        },
+                        "embedded_binary": pack.get("embedded_binary"),
+                        "embedded_binary_omitted": pack.get("embedded_binary_omitted"),
+                        "restore_note": (
+                            "语义与版式以 MinerU 解析为准。embedded_binary 含 Markdown 引用的图片及 zip 内其余非 JSON 成员；"
+                            "与 content_list / model / middle 共同可还原 MinerU 输出。原始 Office/PDF 二进制亦见 zip 内 *_origin.pdf（若存在）。"
+                        ),
+                        "warnings": fo.warnings,
+                    }
+                    raw_obj = {
+                        "source_file": p.name,
+                        "mineru_model_version": effective_mv,
+                        "model": pack.get("model"),
+                        "middle": pack.get("middle"),
+                        "zip_inventory": pack.get("zip_inventory"),
+                        "mineru_output_archive": code_obj["mineru_output_archive"],
+                        "warnings": fo.warnings,
+                    }
+
+                    code_path = output_dir / f"{stem}.code_format.json"
+                    raw_path = output_dir / f"{stem}.raw_data.json"
+                    code_path.write_text(
+                        json.dumps(code_obj, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    raw_path.write_text(
+                        json.dumps(raw_obj, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    fo.code_format_path = str(code_path)
+                    fo.raw_data_path = str(raw_path)
+
+                    md_text = pack.get("markdown")
+                    md_dir = _resolve_markdown_dir()
+                    if md_dir is not None and md_text:
+                        md_path = md_dir / f"{stem}.md"
+                        md_path.write_text(str(md_text), encoding="utf-8")
+                        fo.markdown_path = str(md_path)
+                except Exception as e:  # noqa: BLE001
+                    fo.state = "error"
+                    fo.err_msg = str(e)
+                return fo
+
+            try:
+                with ThreadPoolExecutor(max_workers=download_workers) as pool:
+                    futures = []
+                    for info in _poll_batch_stream(
+                        session,
+                        token,
+                        batch_id,
+                        poll_interval=args.poll_interval_sec,
+                        max_wait_sec=args.max_wait_min * 60,
+                    ):
+                        print(
+                            f"  → {info.get('file_name')} {info.get('state')}，下发下载",
+                            flush=True,
+                        )
+                        futures.append(pool.submit(_finalize, info))
+                    for fut in as_completed(futures):
+                        fo = fut.result()
+                        with outcomes_lock:
+                            batch_outcomes.append(fo)
+                            if fo.code_format_path:
+                                print(
+                                    f"  ✓ {fo.source} -> {Path(fo.code_format_path).name}",
+                                    flush=True,
+                                )
+                            elif fo.state == "failed":
+                                print(f"  ✗ {fo.source}: {fo.err_msg}", flush=True)
+            except Exception as e:
+                for p in chunk:
+                    if not any(o.source == p.name for o in batch_outcomes):
+                        batch_outcomes.append(
+                            FileOutcome(
+                                source=p.name,
+                                stem=_unique_output_stem(p, used_stems),
+                                state="error",
+                                err_msg=str(e),
+                            )
+                        )
+
+            all_outcomes.extend(batch_outcomes)
+            print(
+                f"[batch {chunk_idx}/{n_chunks}] 完成，本批 {len(batch_outcomes)} 个结果",
+                flush=True,
+            )
 
     manifest = {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -855,9 +913,14 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    ok = sum(1 for o in all_outcomes if o.state == "done" and o.code_format_path)
-    print(f"完成：成功写出 {ok}/{len(all_outcomes)} 组 JSON，manifest: {output_dir / 'manifest.json'}")
-    if ok < len(all_outcomes):
+    ok = sum(1 for o in all_outcomes if _is_success(o))
+    failed = sum(1 for o in all_outcomes if o.state in ("failed", "error"))
+    print(
+        f"完成：成功 {ok}/{len(all_outcomes)}（含 cached 直出 md），"
+        f"失败 {failed}，manifest: {output_dir / 'manifest.json'}",
+        flush=True,
+    )
+    if _should_exit_error(all_outcomes):
         sys.exit(1)
 
 

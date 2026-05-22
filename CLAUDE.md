@@ -149,6 +149,10 @@ main/qa_agent/tools/
 
 - `KMS_PRODUCT_FILES`（逗号分隔文件名）— mineru_batch_export 白名单过滤，由 `/kms product update` / `/kms qa update` 设置
 - `KMS_OUTPUT_BUCKET=product|qa` — mineru_batch_export 决定 markdown 落到哪个子目录
+- `MINERU_BATCH_SIZE`（默认 30）— MinerU API 每批文件数（全量在子进程内串行多批）
+- `KMS_UPDATE_TIMEOUT_SEC`（默认 7200）— TUI `/kms * update` 子进程超时秒数
+- TUI 日志：`knowledge/.intermediate/.kms_product_update.log` / `.kms_qa_update.log`（子进程输出；TUI 每 `KMS_LOG_POLL_INTERVAL_SEC` 秒 tail 到 transcript + 输入框上方状态行）
+- `KMS_LOG_POLL_INTERVAL_SEC`（默认 2）— TUI 刷新 MinerU 进度的轮询间隔
 - `QA_WEB_SEARCH_REPEAT_LIMIT` / `QA_WEB_SEARCH_REPEAT_WINDOW_S`（默认 2 / 600s）— `qa_web_search` 同 query 重复调用上限
 - `CAPTCHA_OCR_RETRY`（默认 10）— `defect_fetch_on_demand` 验证码识别重试次数
 - `NO_PROGRESS=1` — 非 TTY 环境禁用进度条

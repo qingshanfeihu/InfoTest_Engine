@@ -207,22 +207,6 @@ class IstInkApp:
         """Handle keyboard events."""
         import time as _time
 
-        # 上传确认模式：Y/N 处理
-        if getattr(self, '_awaiting_upload_confirm', False):
-            if kp.key in ("y", "Y"):
-                self._awaiting_upload_confirm = False
-                self._transcript.append_message("  \x1b[2m正在从客户端拉取文件...\x1b[0m")
-                self._app.render()
-                self._do_reverse_sftp()
-                return
-            elif kp.key in ("n", "N", "escape"):
-                self._awaiting_upload_confirm = False
-                self._transcript.append_message("  \x1b[2m已取消\x1b[0m")
-                self._app.render()
-                return
-            # 忽略其他按键
-            return
-
         # Reverse-i-search mode swallows most input until exited
         if self._input_history.in_search_mode:
             if self._handle_search_key(kp):
@@ -574,27 +558,12 @@ class IstInkApp:
         )
         if preprocess_status:
             if preprocess_status.startswith("⬆ NEED_UPLOAD:"):
-                # 远程 SSH 场景：文件在客户端，提示用户确认上传
+                # Web Terminal 场景下不会走到这里（文件通过 HTTP 上传）
+                # 本地 TUI 场景：提示用户文件不在本地
                 filename = preprocess_status.removeprefix("⬆ NEED_UPLOAD:")
-                self._pending_upload_query = expanded
-                self._pending_upload_filename = filename.strip()
-                # 从 expanded 中提取原始远程路径
-                import re as _re
-                _path_patterns = [
-                    _re.compile(r"'([^']{3,})'"),
-                    _re.compile(r'"([^"]{3,})"'),
-                    _re.compile(r'([A-Za-z]:[\\\/]\S+)'),
-                ]
-                self._pending_upload_remote_path = None
-                for _pat in _path_patterns:
-                    _m = _pat.search(expanded)
-                    if _m:
-                        self._pending_upload_remote_path = _m.group(1)
-                        break
                 self._transcript.append_message(
-                    f"  \x1b[33m⬆ 是否从客户端上传 {filename}？(Y/n)\x1b[0m"
+                    f"  \x1b[33m⬆ 文件 {filename} 不在本地，请通过 Web Terminal 上传\x1b[0m"
                 )
-                self._awaiting_upload_confirm = True
                 self._app.render()
                 return
             else:
@@ -617,64 +586,6 @@ class IstInkApp:
         # Use the placeholder-expanded form so the LLM sees the full
         # pasted content instead of the [Pasted text #N] short form.
         self._run_via_bridge(expanded)
-
-    def _do_reverse_sftp(self) -> None:
-        """反向 SFTP 连回客户端拉取文件，保存到沙箱后自动重新提交 query。"""
-        import os as _os
-        import threading
-
-        client_ip = _os.environ.get("IST_SSH_CLIENT_IP")
-        ssh_user = _os.environ.get("IST_SSH_USER", "")
-        remote_path = getattr(self, '_pending_upload_remote_path', None)
-        query = getattr(self, '_pending_upload_query', None)
-
-        if not client_ip or not remote_path or not query:
-            self._transcript.append_message("  \x1b[31m缺少客户端信息，无法拉取\x1b[0m")
-            self._app.render()
-            return
-
-        def _fetch():
-            import asyncio
-            from main.qa_agent.tui.reverse_sftp import fetch_file_from_client
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(
-                fetch_file_from_client(
-                    client_ip,
-                    remote_path,
-                    ssh_user=ssh_user,
-                )
-            )
-            loop.close()
-            return result
-
-        def _on_done(local_path):
-            if local_path is None:
-                self._transcript.append_message(
-                    "  \x1b[31m拉取失败：请确认 Windows OpenSSH Server 已启动\x1b[0m"
-                )
-                self._transcript.append_message(
-                    "  \x1b[2m并在 ssh_users.json 中配置 client_os_user/client_os_password\x1b[0m"
-                )
-                self._app.render()
-                return
-            from pathlib import Path as _Path
-            _KD = _Path(__file__).resolve().parents[4] / "knowledge" / "data"
-            try:
-                sandbox_rel = local_path.resolve().relative_to(_KD.resolve()).as_posix()
-            except ValueError:
-                sandbox_rel = str(local_path)
-            self._transcript.append_message(
-                f"  \x1b[32m✓ 已拉取 → {sandbox_rel}\x1b[0m"
-            )
-            self._app.render()
-            new_query = query.replace(remote_path, sandbox_rel)
-            self._submit(new_query)
-
-        def _thread_target():
-            result = _fetch()
-            _on_done(result)
-
-        threading.Thread(target=_thread_target, daemon=True).start()
 
     def _submit_expanded(self, expanded: str) -> None:
         """Submit raw multi-line content directly, bypassing the prompt

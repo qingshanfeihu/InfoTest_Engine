@@ -49,3 +49,8 @@ ddgs>=2.0.0
 pytest>=8,<10
 pytest-asyncio>=0.23,<1
 pytest-textual-snapshot>=0.4,<2
+
+# Web Terminal
+fastapi>=0.110,<1
+uvicorn>=0.27,<1
+python-multipart>=0.0.9,<1

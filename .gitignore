@@ -56,3 +56,4 @@ knowledge/
 
 # Claude
 .claude/
+ssh_users.json

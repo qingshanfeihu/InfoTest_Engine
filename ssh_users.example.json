@@ -1,0 +1,19 @@
+{
+  "_comment": "IST-Core 用户管理。修改后无需重启 server，下次认证时自动生效。",
+  "users": [
+    {
+      "username": "test",
+      "password": "test",
+      "enabled": true,
+      "role": "reviewer",
+      "note": "演示账号"
+    },
+    {
+      "username": "jyz",
+      "password": "ist2024",
+      "enabled": true,
+      "role": "admin",
+      "note": "管理员"
+    }
+  ]
+}

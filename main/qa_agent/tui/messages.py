@@ -90,6 +90,20 @@ class ToolCallMessage(IstMessage):
 
 
 @dataclass
+class SubAgentTaskMessage(IstMessage):
+    """``task`` tool（deepagents SubAgentMiddleware）的专属渲染。
+
+    显示 subagent_type + description 摘要 + spinner，完成后显示结果长度。
+    """
+
+    subagent_type: str = ""
+    description: str = ""
+    result: str = ""
+    status: str = "pending"  # pending | running | done | error
+    css_class: ClassVar[str] = "ist-subagent-task"
+
+
+@dataclass
 class PlatformTaskMessage(IstMessage):
     """``qa_platform_run_task`` 4 段渲染：session / task / allowed_tools / result。
 
@@ -339,4 +353,5 @@ TOOL_NAME_TO_MESSAGE: dict[str, type[IstMessage]] = {
     "qa_deepagent_glob": LsTreeMessage,
     "qa_exec": PythonExecMessage,
     "qa_bash": BashExecMessage,
+    "task": SubAgentTaskMessage,
 }

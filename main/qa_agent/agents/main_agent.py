@@ -199,53 +199,37 @@ def build_main_agent(**kwargs: Any):
 
     # Explore sub-agent（全局通用，跟 qa_ls/qa_grep 同级）
     # 任何 skill 都能通过 task(subagent_type="explore", description="...") 调用
-    # 用 CompiledSubAgent 方式自己编译 graph，设低 recursion_limit 硬性限制工具调用轮数
+    # 只传内置 FilesystemMiddleware 做不到的工具，避免重复
     subagents_kwarg: dict[str, Any] = {}
     try:
         from main.qa_agent.agents._llm import build_explore_model
-        from deepagents.graph import create_deep_agent as _create_explore_graph  # type: ignore[import-not-found]
 
         _EXPLORE_SYSTEM_PROMPT = (
-            "你是一个快速只读检索代理（Explore Agent）。你的职责是根据任务描述，"
-            "用工具精确查找信息并返回结构化证据。\n\n"
-            "## 速度纪律（最重要）\n"
-            "你是一个 FAST agent，必须尽快返回结果：\n"
-            "- 每次任务最多 5 次工具调用，找到足够证据就停\n"
-            "- 优先用 grep 定位，只对确认相关的文件才 read_file\n"
-            "- 尽可能在一轮中并行调用多个工具\n"
-            "- 如果第一次 grep 没命中，最多再试 1 次不同关键词\n\n"
-            "## 行为规范\n"
-            "- 只做检索和信息整理，不做评审判断、不给建议、不写报告\n"
-            "- 返回找到的原始证据：文件路径 + 行号 + 内容摘录\n"
-            "- 如果找不到，明确说\"未找到\"\n"
-            "- 控制输出长度：最多 3000 字符\n\n"
-            "## 工具使用策略\n"
-            "1. grep（output_mode=\"files_with_matches\"）定位\n"
-            "2. grep（output_mode=\"content\", context=5）获取上下文\n"
-            "3. read_file（offset/limit）精确读取\n\n"
-            "## 路径约束\n"
-            "所有文件操作限制在 knowledge/data/ 目录下。"
+            "你是一个只读检索代理。根据任务描述查找信息并返回结构化证据。\n"
+            "只做检索，不做判断。返回：文件路径 + 行号 + 内容摘录。\n"
+            "找不到就说\"未找到\"。"
         )
 
-        _explore_graph = _create_explore_graph(
-            model=build_explore_model(),
-            tools=tools,
-            system_prompt=_EXPLORE_SYSTEM_PROMPT,
-            middleware=[],
-            **backend_kwarg,
-        ).with_config({"recursion_limit": 20})
+        # 只传 FilesystemMiddleware 不提供的工具
+        # FilesystemMiddleware 自动提供：ls, glob, grep, read_file
+        _explore_only_tools = [
+            t for t in tools
+            if getattr(t, "name", "") in ("web_bug_search", "qa_sanity_check")
+        ]
 
         explore_subagent: dict[str, Any] = {
             "name": "explore",
             "description": (
-                "通用只读检索代理。给它明确的搜索任务，它会用文件工具查找并返回结构化结果。"
-                "适合：搜索文件、grep 关键词、读取文档片段、执行 sanity_check。"
-                "不适合：评审判断、生成报告、修改文件。"
+                "通用只读检索代理。给它明确的搜索任务，返回结构化结果。"
+                "适合：跨多文件搜索、读取文档片段、执行 sanity_check。"
+                "不适合：评审判断、生成报告、简单单次查询（直接用 grep）。"
             ),
-            "runnable": _explore_graph,
+            "system_prompt": _EXPLORE_SYSTEM_PROMPT,
+            "tools": _explore_only_tools,
+            "model": build_explore_model(),
         }
         subagents_kwarg["subagents"] = [explore_subagent]
-        logger.info("Explore sub-agent 已注册 (CompiledSubAgent, recursion_limit=20)")
+        logger.info("Explore sub-agent 已注册 (tools=%s)", [t.name for t in _explore_only_tools])
     except Exception as explore_exc:  # noqa: BLE001
         logger.info("Explore sub-agent 注册失败: %s", explore_exc)
 

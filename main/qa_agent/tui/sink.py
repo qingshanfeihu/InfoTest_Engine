@@ -37,6 +37,7 @@ from main.qa_agent.tui.messages import (
     PlatformTaskMessage,
     PythonExecMessage,
     SubAgentDispatchMessage,
+    SubAgentTaskMessage,
     TOOL_NAME_TO_MESSAGE,
     ToolCallMessage,
     WarnMessage,
@@ -305,6 +306,15 @@ class TuiSink:
         if cls is BashExecMessage:
             command = (args or {}).get("command") if isinstance(args, dict) else ""
             return BashExecMessage(run_id=run_id, seq=seq, ts=ts, command=str(command or ""))
+        if cls is SubAgentTaskMessage:
+            subagent_type = (args or {}).get("subagent_type") if isinstance(args, dict) else ""
+            description = (args or {}).get("description") if isinstance(args, dict) else ""
+            return SubAgentTaskMessage(
+                run_id=run_id, seq=seq, ts=ts,
+                subagent_type=str(subagent_type or ""),
+                description=str(description or "")[:200],
+                status="running",
+            )
         if cls is PlatformTaskMessage:
             return PlatformTaskMessage(
                 run_id=run_id,

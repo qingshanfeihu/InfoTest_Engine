@@ -18,6 +18,10 @@ from __future__ import annotations
 import logging
 import sys
 
+from main.langchain_env import langchain_load_dotenv_if_present, langchain_ensure_dashscope_api_key_from_aliases
+langchain_load_dotenv_if_present()
+langchain_ensure_dashscope_api_key_from_aliases()
+
 from main.qa_agent.memory.dream import DreamTask, should_run_dream
 from main.qa_agent.memory.backend import build_memory_backend, get_default_root
 from main.qa_agent.memory.store import MemoryStore
@@ -26,12 +30,29 @@ from main.qa_agent.memory.store import MemoryStore
 def _build_llm():
     """复用 main.function_llm.chat_completion 作为 dream consolidate 阶段的 LLM。
 
-    chat_completion(prompt) → str；失败时 LLM=None，consolidate 自然 skip。
+    返回 (prompt: str) -> str 的闭包；失败时返回 None，consolidate 自然 skip。
     """
     try:
-        from main.function_llm import chat_completion as _chat
+        import os
+        import requests
+        from main.function_llm import chat_completion
+
+        api_key = (os.environ.get("DASHSCOPE_API_KEY") or "").strip()
+        if not api_key:
+            logging.warning("DASHSCOPE_API_KEY 未配置，dream LLM 关闭")
+            return None
+        session = requests.Session()
+
         def _wrapper(prompt: str) -> str:
-            return _chat(prompt)
+            import json
+            result = chat_completion(
+                session, api_key,
+                "你是 IST-Core 的 Dream 整理助手，输出严格 JSON。",
+                prompt,
+                max_tokens=4096,
+                temperature=0.1,
+            )
+            return json.dumps(result) if isinstance(result, (dict, list)) else str(result)
         return _wrapper
     except Exception as exc:
         logging.warning("function_llm.chat_completion 不可用: %s", exc)

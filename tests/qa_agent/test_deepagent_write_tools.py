@@ -13,7 +13,6 @@ def _setup_sandbox(tmp_path, monkeypatch):
     agent_root.mkdir(parents=True)
     (agent_root / "defects").mkdir()
     (agent_root / "markdown").mkdir()
-    (agent_root / "baselines").mkdir()
     (agent_root / "reports").mkdir()
     (agent_root / "orgin").mkdir()
     monkeypatch.setattr(file_tools, "_PROJECT_ROOT", tmp_path)

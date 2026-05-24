@@ -816,7 +816,6 @@ def qa_deepagent_grep(
 _WRITABLE_SUBDIRS: frozenset[str] = frozenset({
     "defects",
     "markdown",
-    "baselines",
     "reports",
 })
 _MAX_WRITE_BYTES = 1 * 1024 * 1024  # 1 MiB

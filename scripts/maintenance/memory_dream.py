@@ -6,7 +6,7 @@ Crontab 示例（凌晨 3 点跑）：
 
     0 3 * * * cd /path/to/InfoTest_Engine && \
         .venv/bin/python -m scripts.maintenance.memory_dream \
-        >> logs/dream.log 2>&1
+        >> runtime/logs/dream.log 2>&1
 
 退出码：
     0 — 成功（含被五道闸跳过的情况）

@@ -30,7 +30,7 @@ logger = logging.getLogger("ist_web")
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _USERS_FILE = _PROJECT_ROOT / "ssh_users.json"
-_SANDBOX = _PROJECT_ROOT / "knowledge" / "data" / "markdown" / "qa"
+_SANDBOX = _PROJECT_ROOT / "workspace" / "inputs"
 _WEB_DIR = Path(__file__).resolve().parent / "web"
 _CONVERTIBLE = {".xlsx", ".xls"}
 _ALLOWED = {

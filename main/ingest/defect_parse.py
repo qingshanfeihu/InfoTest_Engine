@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from main.ingest.html_extractors import get_extractor
-from main.knowledge_paths import KNOWLEDGE_DEFECTS, KNOWLEDGE_INTERMEDIATE
+from main.knowledge_paths import KNOWLEDGE_INTERMEDIATE, WORKSPACE_DEFECTS
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 #   原始 HTML 落 .intermediate/（agent 不可见）
 #   cleaned JSON 落 knowledge/data/defects/（agent 可见，最终位置）
 RAW_ROOT = KNOWLEDGE_INTERMEDIATE / "defect_raw"
-CLEAN_ROOT = KNOWLEDGE_DEFECTS
+CLEAN_ROOT = WORKSPACE_DEFECTS
 
 
 def _meta_lookup(backend: str) -> dict[str, dict]:

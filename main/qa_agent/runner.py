@@ -12,7 +12,7 @@
     python -m main.qa_agent.runner "..." --stream --verbose
 
     # 回放历史事件
-    python -m main.qa_agent.runner --replay logs/run-xxx.jsonl
+    python -m main.qa_agent.runner --replay runtime/logs/run-xxx.jsonl
 """
 
 from __future__ import annotations

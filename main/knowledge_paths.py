@@ -30,12 +30,17 @@ KNOWLEDGE_INTERMEDIATE = KNOWLEDGE_ROOT / ".intermediate"
 
 # Agent 可见区
 KNOWLEDGE_ORGIN = KNOWLEDGE_DATA_ROOT / "orgin"
-KNOWLEDGE_DEFECTS = KNOWLEDGE_DATA_ROOT / "defects"
 
 # Agent 直读的 markdown 输出（KMS 简化管线产物）
 KNOWLEDGE_MARKDOWN = KNOWLEDGE_DATA_ROOT / "markdown"
 KNOWLEDGE_MARKDOWN_PRODUCT = KNOWLEDGE_MARKDOWN / "product"
 KNOWLEDGE_MARKDOWN_QA = KNOWLEDGE_MARKDOWN / "qa"
+
+# Workspace（agent 工作区，与知识库分离）
+WORKSPACE_ROOT = PROJECT_ROOT / "workspace"
+WORKSPACE_INPUTS = WORKSPACE_ROOT / "inputs"
+WORKSPACE_OUTPUTS = WORKSPACE_ROOT / "outputs"
+WORKSPACE_DEFECTS = WORKSPACE_ROOT / "defects"
 
 # Agent 不可见区（由 /kms 命令维护的中间产物）
 KNOWLEDGE_MINERU = KNOWLEDGE_INTERMEDIATE / "mineru"
@@ -95,9 +100,14 @@ def ensure_data_dirs() -> None:
     for d in (
         KNOWLEDGE_DATA_ROOT,
         KNOWLEDGE_ORGIN,
-        KNOWLEDGE_DEFECTS,
         KNOWLEDGE_MARKDOWN,
         KNOWLEDGE_MARKDOWN_PRODUCT,
         KNOWLEDGE_MARKDOWN_QA,
     ):
+        d.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_workspace_dirs() -> None:
+    """初始化 ``workspace/`` 子目录。"""
+    for d in (WORKSPACE_ROOT, WORKSPACE_INPUTS, WORKSPACE_OUTPUTS, WORKSPACE_DEFECTS):
         d.mkdir(parents=True, exist_ok=True)

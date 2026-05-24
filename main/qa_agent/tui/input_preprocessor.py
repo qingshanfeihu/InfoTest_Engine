@@ -29,8 +29,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_KNOWLEDGE_DATA = _PROJECT_ROOT / "knowledge" / "data"
-_DEFAULT_INBOX = _KNOWLEDGE_DATA / "markdown" / "qa"
+_WORKSPACE = _PROJECT_ROOT / "workspace"
+_DEFAULT_INBOX = _WORKSPACE / "inputs"
 
 # 路径正则：匹配引号包裹的路径 或 常见绝对路径模式
 _PATH_PATTERNS = [
@@ -84,9 +84,15 @@ def _extract_filename(raw: str) -> str:
 
 
 def _is_in_sandbox(path: Path) -> bool:
-    """路径是否已经在 knowledge/data/ 沙箱内。"""
+    """路径是否已经在 agent 可访问的沙箱内（knowledge/data 或 workspace）。"""
+    _knowledge_data = _PROJECT_ROOT / "knowledge" / "data"
     try:
-        path.resolve().relative_to(_KNOWLEDGE_DATA.resolve())
+        path.resolve().relative_to(_knowledge_data.resolve())
+        return True
+    except ValueError:
+        pass
+    try:
+        path.resolve().relative_to(_WORKSPACE.resolve())
         return True
     except ValueError:
         return False
@@ -126,7 +132,7 @@ def preprocess_file_paths(
     Args:
         text: 用户原始输入
         session_dir: per-session 目录（远程 TUI 时由 env 注入）；
-                     不影响输出位置——转换后的文件始终放到 knowledge/data/markdown/qa/
+                     不影响输出位置——转换后的文件始终放到 workspace/inputs/
                      以确保 agent 沙箱能读取。
 
     Returns:
@@ -168,7 +174,7 @@ def preprocess_file_paths(
                     continue
                 try:
                     sandbox_rel = result_path.resolve().relative_to(
-                        _KNOWLEDGE_DATA.resolve()
+                        _WORKSPACE.resolve()
                     ).as_posix()
                 except ValueError:
                     sandbox_rel = str(result_path)

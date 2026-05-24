@@ -36,6 +36,7 @@ def _setup_multi_root(tmp_path, monkeypatch):
 
     monkeypatch.setattr(file_tools, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(file_tools, "_AGENT_ROOT", agent_root)
+    monkeypatch.setattr(file_tools, "_WORKSPACE_ROOT", tmp_path / "workspace_nonexist")
     monkeypatch.setenv("IST_SESSION_DIR", str(session_dir))
     monkeypatch.setenv("IST_USER_DIR", str(user_dir))
     return agent_root, session_dir, user_dir, tmp_path
@@ -47,6 +48,7 @@ def test_no_env_falls_back_to_single_root(tmp_path, monkeypatch):
     agent_root.mkdir(parents=True)
     monkeypatch.setattr(file_tools, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(file_tools, "_AGENT_ROOT", agent_root)
+    monkeypatch.setattr(file_tools, "_WORKSPACE_ROOT", tmp_path / "workspace_nonexist")
     monkeypatch.delenv("IST_SESSION_DIR", raising=False)
     monkeypatch.delenv("IST_USER_DIR", raising=False)
 
@@ -200,6 +202,7 @@ def test_nonexistent_session_dir_env_ignored(tmp_path, monkeypatch):
     agent_root.mkdir(parents=True)
     monkeypatch.setattr(file_tools, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(file_tools, "_AGENT_ROOT", agent_root)
+    monkeypatch.setattr(file_tools, "_WORKSPACE_ROOT", tmp_path / "workspace_nonexist")
     monkeypatch.setenv("IST_SESSION_DIR", str(tmp_path / "does_not_exist"))
     monkeypatch.delenv("IST_USER_DIR", raising=False)
 

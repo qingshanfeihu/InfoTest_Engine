@@ -234,10 +234,10 @@ def _format_overall_status() -> str:
     )
 
     lines.append("")
-    lines.append("== knowledge/data/ (out of scope: not from orgin) ==")
+    lines.append("== workspace/defects/ (bugzilla/plm cache) ==")
     lines.append(
-        f"  {'defects (bugzilla/plm cache)':30} {_count(kp.KNOWLEDGE_DEFECTS, '*.json', recurse=True):>4}  "
-        f"{kp.KNOWLEDGE_DEFECTS.relative_to(rel)}"
+        f"  {'defects (bugzilla/plm cache)':30} {_count(kp.WORKSPACE_DEFECTS, '*.json', recurse=True):>4}  "
+        f"{kp.WORKSPACE_DEFECTS.relative_to(rel)}"
     )
 
     lines.append("")

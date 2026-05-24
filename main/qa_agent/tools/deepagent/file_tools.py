@@ -21,6 +21,29 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 # 与 CLAUDE.md "agent 视野：agent 只看 knowledge/data/" 对齐。
 # 修改此值即修改 agent 沙箱范围，需经安全评审。
 _AGENT_ROOT = (_PROJECT_ROOT / "knowledge" / "data").resolve()
+_WORKSPACE_ROOT = (_PROJECT_ROOT / "workspace").resolve()
+
+
+def _agent_roots() -> tuple[Path, ...]:
+    """返回 agent 可访问的根目录列表（按优先级排序）。
+
+    优先级：knowledge/data > workspace > IST_SESSION_DIR > IST_USER_DIR。
+    不存在的目录自动跳过，保证向后兼容。
+    """
+    roots: list[Path] = [_AGENT_ROOT]
+    if _WORKSPACE_ROOT.is_dir():
+        roots.append(_WORKSPACE_ROOT)
+    session = os.environ.get("IST_SESSION_DIR")
+    if session:
+        p = Path(session).resolve()
+        if p.is_dir():
+            roots.append(p)
+    user_dir = os.environ.get("IST_USER_DIR")
+    if user_dir:
+        p = Path(user_dir).resolve()
+        if p.is_dir():
+            roots.append(p)
+    return tuple(roots)
 
 # Defense-in-depth：仓库根下平台自身资产；即使白名单失守也必须挡。
 _PLATFORM_DENIED_TOP_LEVEL = {
@@ -38,7 +61,9 @@ _PLATFORM_DENIED_TOP_LEVEL = {
     ".langgraph_data",
     ".pytest_cache",
     "memory",
-    # 历史归档（沿用旧黑名单语义）
+    # 运行时产物（统一收纳到 runtime/）
+    "runtime",
+    # 历史归档
     "backup",
     "conversation_history",
     "large_tool_results",
@@ -74,8 +99,6 @@ _RG_DEFENSE_PREFIXES = (
     "knowledge/.index_cache.json",
     "knowledge/.schema_gaps.jsonl",
     "knowledge/_ingest_quality_report.json",
-    "logs/reviewer_evidence",
-    "logs/reviewer_jobs",
 )
 _TEXT_SUFFIXES = {
     ".cfg",
@@ -138,8 +161,8 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
       1. Traversal: reject ``..`` and ``~`` components outright.
       2. Platform deny-list: reject any repo-root subpath that lives in
          ``_PLATFORM_DENIED_TOP_LEVEL`` or is a ``_PLATFORM_DENIED_FILES`` entry.
-      3. Sandbox white-list: resolved path must live under ``_AGENT_ROOT``
-         (i.e. ``knowledge/data/``).
+      3. Sandbox white-list: resolved path must live under one of
+         ``_agent_roots()`` (knowledge/data, workspace, session, user).
     """
     text = (raw_path or ".").strip() or "."
 
@@ -154,19 +177,25 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
     if path.is_absolute():
         resolved = path.resolve()
     else:
-        # Accept two relative-path forms:
-        #   - "markdown/product/x.md"            → resolved under _AGENT_ROOT (preferred)
-        #   - "knowledge/data/markdown/product/x.md" → resolved under _PROJECT_ROOT
-        #     (legacy form used by historical review_inputs/*.json tool_calls)
-        agent_candidate = (_AGENT_ROOT / path).resolve()
-        if agent_candidate.exists():
-            resolved = agent_candidate
-        else:
-            resolved = (_PROJECT_ROOT / path).resolve()
+        # Try each root in priority order; first existing match wins.
+        # Also accept "knowledge/data/..." and "workspace/..." prefixes
+        # resolved under _PROJECT_ROOT for legacy compatibility.
+        resolved = None
+        for root in _agent_roots():
+            candidate = (root / path).resolve()
+            if candidate.exists():
+                resolved = candidate
+                break
+        if resolved is None:
+            # Fallback: try under _PROJECT_ROOT (legacy "knowledge/data/x" form)
+            project_candidate = (_PROJECT_ROOT / path).resolve()
+            if project_candidate.exists():
+                resolved = project_candidate
+            else:
+                # Default to first root for non-existent relative paths
+                resolved = (_agent_roots()[0] / path).resolve()
 
-    # Gate 2: platform deny-list. Tripped before the white-list so we always emit
-    # a "platform-denied" error for repo-root paths instead of a generic
-    # "outside agent sandbox" message — clearer signal to the agent.
+    # Gate 2: platform deny-list.
     try:
         rel_to_project = resolved.relative_to(_PROJECT_ROOT)
     except ValueError:
@@ -184,14 +213,18 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
                     f"path is a platform metadata file: {top}"
                 )
 
-    # Gate 3: white-list. Must live under _AGENT_ROOT.
-    try:
-        resolved.relative_to(_AGENT_ROOT)
-    except ValueError as exc:
+    # Gate 3: white-list. Must live under one of _agent_roots().
+    for root in _agent_roots():
+        try:
+            resolved.relative_to(root)
+            break
+        except ValueError:
+            continue
+    else:
         raise PermissionError(
             "path outside agent sandbox; agent can only read paths under "
-            f"knowledge/data/. requested: {raw_path}"
-        ) from exc
+            f"knowledge/data/ or workspace/. requested: {raw_path}"
+        )
 
     if must_exist and not resolved.exists():
         raise FileNotFoundError(f"path not found: {raw_path}")
@@ -814,9 +847,7 @@ def qa_deepagent_grep(
 
 
 _WRITABLE_SUBDIRS: frozenset[str] = frozenset({
-    "defects",
-    "markdown",
-    "reports",
+    "outputs",
 })
 _MAX_WRITE_BYTES = 1 * 1024 * 1024  # 1 MiB
 _WRITABLE_SUFFIXES = _TEXT_SUFFIXES | {".json", ".jsonl"}
@@ -825,9 +856,7 @@ _WRITABLE_SUFFIXES = _TEXT_SUFFIXES | {".json", ".jsonl"}
 def _resolve_writable_path(raw_path: str | None) -> Path:
     """Resolve a path for write operations (four gates).
 
-    Unlike _resolve_inside_root (which falls back to _PROJECT_ROOT for
-    non-existent paths), this always resolves relative paths under _AGENT_ROOT
-    since write targets typically don't exist yet.
+    Writes are restricted to workspace/outputs/ only.
     """
     text = (raw_path or ".").strip() or "."
 
@@ -842,13 +871,14 @@ def _resolve_writable_path(raw_path: str | None) -> Path:
     if path.is_absolute():
         resolved = path.resolve()
     else:
-        # For write: always resolve under _AGENT_ROOT (file may not exist yet).
-        # Also accept "knowledge/data/..." prefix for legacy compatibility.
-        knowledge_data_prefix = "knowledge/data/"
-        if text.startswith(knowledge_data_prefix):
+        # For write: resolve under workspace/ (file may not exist yet).
+        # Accept "workspace/outputs/..." or bare "outputs/..." prefix.
+        if text.startswith("workspace/"):
             resolved = (_PROJECT_ROOT / path).resolve()
+        elif text.startswith("outputs/"):
+            resolved = (_WORKSPACE_ROOT / path).resolve()
         else:
-            resolved = (_AGENT_ROOT / path).resolve()
+            resolved = (_WORKSPACE_ROOT / "outputs" / path).resolve()
 
     # Gate 2: platform deny-list
     try:
@@ -868,26 +898,26 @@ def _resolve_writable_path(raw_path: str | None) -> Path:
                     f"path is a platform metadata file: {top}"
                 )
 
-    # Gate 3: must live under _AGENT_ROOT
+    # Gate 3: must live under workspace/
     try:
-        rel = resolved.relative_to(_AGENT_ROOT)
+        rel = resolved.relative_to(_WORKSPACE_ROOT)
     except ValueError as exc:
         raise PermissionError(
-            "path outside agent sandbox; agent can only write paths under "
-            f"knowledge/data/. requested: {raw_path}"
+            "write only allowed under workspace/; "
+            f"requested: {raw_path}"
         ) from exc
 
-    # Gate 4: writable subdirectory whitelist
-    parts = rel.parts
-    if not parts:
+    # Gate 4: writable subdirectory whitelist (only outputs/)
+    ws_parts = rel.parts
+    if not ws_parts:
         raise PermissionError(
-            "cannot write directly to knowledge/data/ root; "
-            f"must target a subdirectory: {sorted(_WRITABLE_SUBDIRS)}"
+            "cannot write directly to workspace/ root; "
+            f"must target: {sorted(_WRITABLE_SUBDIRS)}"
         )
-    top_subdir = parts[0]
+    top_subdir = ws_parts[0]
     if top_subdir not in _WRITABLE_SUBDIRS:
         raise PermissionError(
-            f"write not allowed to subdirectory '{top_subdir}'; "
+            f"write not allowed to workspace/{top_subdir}/; "
             f"writable: {sorted(_WRITABLE_SUBDIRS)}"
         )
     return resolved

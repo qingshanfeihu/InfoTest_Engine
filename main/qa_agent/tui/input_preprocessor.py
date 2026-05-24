@@ -83,6 +83,18 @@ def _extract_filename(raw: str) -> str:
     return normalized.rsplit("/", 1)[-1] if "/" in normalized else raw
 
 
+def _find_by_basename(raw: str) -> Path | None:
+    """按文件名在常见本地目录搜索（workspace/inputs/ → 项目根 → CWD）。"""
+    basename = _extract_filename(raw)
+    if not basename:
+        return None
+    for candidate_dir in (_DEFAULT_INBOX, _PROJECT_ROOT, Path.cwd()):
+        candidate = candidate_dir / basename
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _is_in_sandbox(path: Path) -> bool:
     """路径是否已经在 agent 可访问的沙箱内（knowledge/data 或 workspace）。"""
     _knowledge_data = _PROJECT_ROOT / "knowledge" / "data"
@@ -157,36 +169,60 @@ def preprocess_file_paths(
             raw_path = match.group(1)
             path = _expand_path(raw_path)
 
-            if path is not None and path.is_file():
-                # 文件存在于本地——直接处理
-                if _is_in_sandbox(path):
+            if path is None or not path.is_file():
+                # 指定路径不存在——按 basename 在本地常见目录回退搜索
+                found = _find_by_basename(raw_path)
+                if found is not None:
+                    path = found
+                elif _looks_like_file_path(raw_path):
+                    filename = _extract_filename(raw_path)
+                    need_upload.append((raw_path, filename))
                     seen_spans.add(span)
                     continue
-                suffix = path.suffix.lower()
-                result_path: Path | None = None
-                if suffix in _CONVERTIBLE_SUFFIXES:
-                    result_path = _convert_xlsx(path, dest_dir)
-                elif suffix in _COPYABLE_SUFFIXES:
-                    result_path = _copy_to_sandbox(path, dest_dir)
                 else:
                     continue
-                if result_path is None:
-                    continue
+
+            # 文件存在于本地——直接处理
+            if _is_in_sandbox(path):
+                # 已在沙箱：替换路径为沙箱相对路径，agent 可直接访问
                 try:
-                    sandbox_rel = result_path.resolve().relative_to(
+                    sandbox_rel = path.resolve().relative_to(
                         _WORKSPACE.resolve()
                     ).as_posix()
                 except ValueError:
-                    sandbox_rel = str(result_path)
+                    try:
+                        _kd = _PROJECT_ROOT / "knowledge" / "data"
+                        sandbox_rel = path.resolve().relative_to(
+                            _kd.resolve()
+                        ).as_posix()
+                    except ValueError:
+                        sandbox_rel = str(path)
                 old_span = match.group(0)
-                modified = modified.replace(old_span, sandbox_rel, 1)
-                processed.append(f"{path.name} → {sandbox_rel}")
+                if old_span != sandbox_rel:
+                    modified = modified.replace(old_span, sandbox_rel, 1)
+                    processed.append(f"{path.name} → {sandbox_rel}")
                 seen_spans.add(span)
-            elif _looks_like_file_path(raw_path):
-                # 路径格式合法但本地不存在——可能是远程客户端路径，需要上传
-                filename = _extract_filename(raw_path)
-                need_upload.append((raw_path, filename))
-                seen_spans.add(span)
+                continue
+            suffix = path.suffix.lower()
+            result_path: Path | None = None
+            if suffix in _CONVERTIBLE_SUFFIXES:
+                result_path = _convert_xlsx(path, dest_dir)
+            elif suffix in _COPYABLE_SUFFIXES:
+                result_path = _copy_to_sandbox(path, dest_dir)
+            else:
+                continue
+            if result_path is None:
+                continue
+            try:
+                sandbox_rel = result_path.resolve().relative_to(
+                    _WORKSPACE.resolve()
+                ).as_posix()
+            except ValueError:
+                sandbox_rel = str(result_path)
+            old_span = match.group(0)
+            modified = modified.replace(old_span, sandbox_rel, 1)
+            processed.append(f"{path.name} → {sandbox_rel}")
+            seen_spans.add(span)
 
     # 需要上传文件（远程 SSH 场景）
     if need_upload and not processed:

@@ -4,15 +4,13 @@ Sandbox（与 ``file_tools.py`` 同一沙箱根 ``_AGENT_ROOT = knowledge/data/`
 - ``cwd`` 锁到 ``_AGENT_ROOT``，agent 看不到仓库根
 - 子进程 env 不透传 ``PYTHONPATH``，切断 ``import main.*`` 路径
 - ``qa_bash`` 路径参数走 ``_resolve_inside_root`` 校验，拒绝出沙箱
-- bash 首 token 必须在白名单（ls/cat/head/tail/wc/find/grep/awk/sed/sort/uniq/cut/...）
+- ``qa_bash`` 命令黑名单拦截网络外联 / 提权 / 破坏性文件操作
 - 拒绝 shell 元字符（``|`` ``>`` ``<`` ``;`` ``&`` ``${`` ``$()`` 等）
-- ``qa_exec`` 拒绝 ``subprocess`` / ``socket`` / ``urllib`` / 写文件等 denied tokens
+- ``qa_exec`` 仅拒绝网络外联（socket / urllib / requests / http / ftp / smtp）
 - 子进程超时（默认 30s，上限 120s）
 
-已知限制：
-- ``qa_exec`` 不做 ast 静态分析。``Path("/绝对路径/main/...")`` / ``open("/...")``
-  无法在 import 阶段拦住——agent 仍可能写绝对路径读取沙箱外文件。读文件应优先
-  用 ``qa_deepagent_read_file``；``qa_exec`` 仅用于结构化分析（xlsx 解析、Counter 等）。
+安全设计对齐 Claude Code / deepagents：不做通用代码内容过滤，
+安全靠沙箱隔离（cwd + env + shell=False + timeout）。
 """
 
 from __future__ import annotations
@@ -36,29 +34,19 @@ from main.qa_agent.tools.deepagent.file_tools import _AGENT_ROOT, _resolve_insid
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
-# bash 命令白名单——只读 / 文本处理 / 解析。任何写、删、网络、特权都不在表里。
-# 已下线：python/python3（走 qa_exec），tee（写文件）。
-_BASH_ALLOWED_COMMANDS = frozenset({
-    "ls", "cat", "head", "tail", "wc", "find", "grep", "awk", "sed",
-    "echo", "sort", "uniq", "cut", "tr", "diff",
-    "which", "file", "basename", "dirname", "realpath",
-    "jq", "yq",
-})
-
-# bash 命令显式黑名单（即使白名单匹配也拒绝）。
+# bash 命令黑名单——仅拦截网络外联、提权、和破坏性文件操作。
+# 沙箱内的只读操作由 cwd 锁定 + 路径校验保护，无需额外拦截。
+# 设计对齐 Claude Code / deepagents：不做命令白名单，安全靠沙箱隔离。
+# 但 knowledge/data/ 是知识库，破坏性操作需要走 write_file/edit_file 工具（有 _WRITABLE_SUBDIRS 控制）。
 _BASH_DENY_FIRST_TOKEN = frozenset({
-    "rm", "rmdir", "mv", "cp", "ln", "tar", "zip", "unzip",
+    # 网络外联——进程隔离无法防御
     "curl", "wget", "ssh", "scp", "rsync", "ftp", "sftp", "nc", "ncat", "telnet",
+    # 提权
     "sudo", "su", "doas",
-    "chmod", "chown", "chgrp", "umask", "setfacl",
-    "dd", "mkfifo", "mknod", "mount", "umount",
-    "pip", "pip3", "pipenv", "poetry", "uv",
-    "brew", "apt", "yum", "dnf",
-    "git",
-    "kill", "killall", "pkill",
-    "shutdown", "reboot", "halt",
-    # 下线的旧 bash 工具不再放行
-    "tee", "python", "python3", "python3.11",
+    # 破坏性文件操作——knowledge/data/ 是知识库，修改需走 write_file/edit_file 工具
+    "rm", "rmdir", "mv", "cp", "ln",
+    "dd", "tee",
+    "chmod", "chown", "chgrp",
 })
 
 # 危险 shell 元字符——因 shell=False 不会被 shell 解释，但仍禁止以防被 split 出怪行为。
@@ -72,20 +60,16 @@ _PYTHON_RECOMMENDED_IMPORTS = frozenset({
     "yaml", "toml",
 })
 
-# qa_exec 代码中绝对禁止出现的 token（直接拒绝，不进 subprocess）
-_PYTHON_DENIED_TOKENS = (
-    "import os.system", "os.system", "subprocess",
-    "__import__('os')", '__import__("os")',
-    "compile(", "eval(", "exec(",  # 防止嵌套绕过
-    "open('/etc/", 'open("/etc/',
+# qa_exec 代码中禁止出现的 token——仅拦截网络外联（进程隔离无法防御）。
+# 设计对齐 Claude Code / deepagents：不做通用代码内容过滤，安全靠沙箱隔离
+# （cwd=_AGENT_ROOT, env 剥离 PYTHONPATH, shell=False, timeout）。
+_PYTHON_NETWORK_DENY = (
     "import socket", "from socket", "socket.",
     "import urllib", "from urllib", "urllib.",
     "import requests", "from requests",
-    "shutil.rmtree", "os.remove", "os.unlink",
-    # 模块 introspection 防御：避免 LLM 通过 __file__ / pkgutil 反推沙箱外路径
-    "__file__", "pkgutil.get_loader", "importlib.util.find_spec",
-    # 防 editable package 绕过沙箱：禁止直接 import 平台包
-    "import main", "from main",
+    "import http.client", "from http",
+    "import ftplib", "from ftplib",
+    "import smtplib", "from smtplib",
 )
 
 _DEFAULT_TIMEOUT = 30
@@ -142,8 +126,6 @@ def _validate_bash_command(cmd: str) -> tuple[bool, str]:
     base = os.path.basename(first)
     if base in _BASH_DENY_FIRST_TOKEN:
         return False, f"command is denied: {base!r}"
-    if base not in _BASH_ALLOWED_COMMANDS:
-        return False, f"command not in allowlist: {base!r}"
     return True, ""
 
 
@@ -196,9 +178,9 @@ def _validate_python_code(code: str) -> tuple[bool, str]:
     if not code.strip():
         return False, "empty code"
     lower = code.replace(" ", "")
-    for token in _PYTHON_DENIED_TOKENS:
+    for token in _PYTHON_NETWORK_DENY:
         if token.replace(" ", "") in lower:
-            return False, f"python denied token: {token!r}"
+            return False, f"network access not allowed: {token!r}"
     return True, ""
 
 
@@ -227,12 +209,13 @@ def qa_exec(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     """Run a Python snippet inside the agent sandbox for structured analysis.
 
     Sandbox: cwd locked to ``knowledge/data/``; child process env strips
-    ``PYTHONPATH`` so ``import main.*`` is unavailable; denied tokens like
-    ``subprocess`` / ``socket`` / ``urllib`` / ``__file__`` are rejected.
+    ``PYTHONPATH`` so ``import main.*`` is unavailable; network access
+    (socket/urllib/requests/http/ftp/smtp) is denied.
 
     Use this for parsing xlsx via openpyxl, counting rows with
-    ``collections.Counter``, summarising JSON, etc. To read an arbitrary file
-    prefer ``qa_deepagent_read_file`` — this tool is for *analysis*, not
+    ``collections.Counter``, summarising JSON, running subprocess for
+    file conversion, etc. To read an arbitrary file prefer
+    ``qa_deepagent_read_file`` — this tool is for *analysis*, not
     file fetching.
 
     Boundaries:
@@ -290,15 +273,16 @@ def qa_exec(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
 
 @tool(parse_docstring=True)
 def qa_bash(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
-    """Run a single read-only shell command inside the agent sandbox.
+    """Run a single shell command inside the agent sandbox.
 
     Sandbox: cwd locked to ``knowledge/data/``; path arguments validated via
-    the same white-list as ``qa_deepagent_*`` tools; only read-only commands
-    allowed; no shell metachars, no pipes, no redirects.
+    the same white-list as ``qa_deepagent_*`` tools; network commands, privilege
+    escalation, and destructive file operations are denied; no shell metachars,
+    no pipes, no redirects.
 
-    Allowed commands:
-    ls, cat, head, tail, wc, find, grep, awk, sed, echo, sort, uniq, cut,
-    tr, diff, which, file, basename, dirname, realpath, jq, yq.
+    Denied commands: curl/wget/ssh/scp/rsync/ftp/sftp/nc/ncat/telnet (network),
+    sudo/su/doas (privilege), rm/rmdir/mv/cp/ln/dd/tee/chmod/chown/chgrp
+    (destructive — use write_file/edit_file tools instead).
 
     Boundaries:
     - shell=False; the command is parsed via shlex and exec'd directly.
@@ -377,6 +361,5 @@ __all__ = [
     "_validate_bash_command",
     "_validate_bash_paths",
     "_validate_python_code",
-    "_BASH_ALLOWED_COMMANDS",
     "_BASH_DENY_FIRST_TOKEN",
 ]

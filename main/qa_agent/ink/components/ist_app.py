@@ -570,12 +570,12 @@ class IstInkApp:
         )
         if preprocess_status:
             if preprocess_status.startswith("⬆ NEED_UPLOAD:"):
-                # Web Terminal 场景下不会走到这里（文件通过 HTTP 上传）
-                # 本地 TUI 场景：提示用户文件不在本地
                 filename = preprocess_status.removeprefix("⬆ NEED_UPLOAD:")
-                self._transcript.append_message(
-                    f"  \x1b[33m⬆ 文件 {filename} 不在本地，请通过 Web Terminal 上传\x1b[0m"
-                )
+                if _session_dir:
+                    msg = f"⬆ 文件 {filename} 不在本地，请通过 Web Terminal 上传"
+                else:
+                    msg = f"⬆ 文件 {filename} 不存在，请检查路径是否正确"
+                self._transcript.append_message(f"  \x1b[33m{msg}\x1b[0m")
                 self._app.render()
                 return
             else:

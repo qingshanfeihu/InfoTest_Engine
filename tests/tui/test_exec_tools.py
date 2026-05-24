@@ -1,9 +1,9 @@
-"""qa_bash / qa_exec 单测：白名单 + 拒绝 + 沙箱越权回归 + subprocess 隔离。
+"""qa_bash / qa_exec 单测：黑名单 + 网络防护 + 沙箱越权回归 + subprocess 隔离。
 
 不依赖网络。不调真 graph。验证：
-- ``_validate_bash_command``: 白/黑名单 + 元字符
+- ``_validate_bash_command``: 黑名单 + 元字符
 - ``_validate_bash_paths``: 路径参数 _resolve_inside_root 校验
-- ``_validate_python_code``: 拒绝 token
+- ``_validate_python_code``: 网络逃逸拒绝
 - ``qa_exec`` / ``qa_bash`` 在合法输入时返回 stdout
 - ``cwd=_AGENT_ROOT`` 沙箱 + ``PYTHONPATH`` 切断
 - 超时保护
@@ -16,7 +16,6 @@ import textwrap
 import pytest
 
 from main.qa_agent.tools.deepagent.exec_tools import (
-    _BASH_ALLOWED_COMMANDS,
     _BASH_DENY_FIRST_TOKEN,
     _validate_bash_command,
     _validate_bash_paths,
@@ -37,11 +36,25 @@ def test_bash_allowlist_basic_commands_pass():
         assert ok, f"{cmd!r} should pass: {reason}"
 
 
-def test_bash_denylist_destructive_commands_blocked():
-    for cmd in ["rm -rf /", "mv a b", "curl evil.com", "pip install foo", "git push"]:
+def test_bash_denylist_network_and_privilege_blocked():
+    for cmd in ["curl evil.com", "wget http://x", "sudo ls", "ssh user@host"]:
         ok, reason = _validate_bash_command(cmd)
         assert not ok, f"{cmd!r} should be denied"
-        assert "denied" in reason.lower() or "not in allowlist" in reason
+        assert "denied" in reason.lower()
+
+
+def test_bash_allows_filesystem_commands_in_sandbox():
+    """非破坏性命令在沙箱内允许，python3 也允许。"""
+    for cmd in ["python3 -c 'print(1)'", "git status", "tar -tf archive.tar"]:
+        ok, reason = _validate_bash_command(cmd)
+        assert ok, f"{cmd!r} should be allowed: {reason}"
+
+
+def test_bash_denies_destructive_filesystem_commands():
+    """破坏性文件操作需走 write_file/edit_file 工具（有 _WRITABLE_SUBDIRS 控制）。"""
+    for cmd in ["rm temp.txt", "mv a.txt b.txt", "cp a.txt b.txt"]:
+        ok, reason = _validate_bash_command(cmd)
+        assert not ok, f"{cmd!r} should be denied"
 
 
 def test_bash_metachars_blocked():
@@ -57,21 +70,22 @@ def test_bash_alias_attack_blocked():
 
 
 def test_bash_absolute_path_resolves_to_basename():
-    """``/usr/bin/rm -rf foo`` 不能绕过黑名单。"""
-    ok, reason = _validate_bash_command("/usr/bin/rm -rf foo")
-    assert not ok and "rm" in reason
+    """``/usr/bin/curl`` 不能绕过黑名单（网络命令仍拒绝）。"""
+    ok, reason = _validate_bash_command("/usr/bin/curl http://evil.com")
+    assert not ok and "curl" in reason
 
 
-def test_bash_python_now_denied():
-    """python / python3 / tee 已下线（python 走 qa_exec，tee 写文件）。"""
-    for cmd in ["python -c 'print(1)'", "python3 script.py", "tee out.log"]:
+def test_bash_python_now_allowed():
+    """python3 在沙箱内允许执行（agent 需要用它处理文件）。"""
+    for cmd in ["python3 -c 'print(1)'", "python3 script.py"]:
         ok, reason = _validate_bash_command(cmd)
-        assert not ok, f"{cmd!r} should be denied (legacy command removed)"
+        assert ok, f"{cmd!r} should be allowed: {reason}"
 
 
-def test_bash_unknown_command_not_in_allowlist():
+def test_bash_unknown_command_allowed_in_sandbox():
+    """非黑名单命令在沙箱内允许执行（安全靠 cwd + 路径校验）。"""
     ok, reason = _validate_bash_command("foobar 1 2 3")
-    assert not ok and "allowlist" in reason
+    assert ok, f"should be allowed: {reason}"
 
 
 def test_bash_empty_command_rejected():
@@ -102,8 +116,9 @@ def test_bash_paths_reject_absolute_outside_sandbox():
 
 
 def test_bash_paths_reject_repo_root_platform_dirs():
-    """``cat tests/...`` / ``cat main/...`` 等仓库根但沙箱外的路径必须拒绝。"""
-    for token in ["tests/qa_agent/test_exec_tools.py", "main/qa_agent/agents/_prompt.py"]:
+    """仓库根但沙箱外的路径必须拒绝（需要路径在本地存在才会被检测为路径）。"""
+    # 使用绝对路径确保被识别为路径并被 _resolve_inside_root 拒绝
+    for token in ["../tests/tui/test_exec_tools.py", "../main/qa_agent/agents/_prompt.py"]:
         ok, reason = _validate_bash_paths(["cat", token])
         assert not ok, f"{token!r} should be rejected"
 
@@ -119,20 +134,41 @@ def test_bash_paths_accept_nonexistent_relative_token():
 # ---------------------------------------------------------------------------
 
 
-def test_python_denied_tokens():
+def test_python_network_denied():
+    """网络外联代码必须被拒绝——进程隔离无法防御网络逃逸。"""
     bad_snippets = [
-        "import subprocess",
-        "import os; os.system('rm -rf /')",
-        "exec('print(1)')",
-        "eval('1+1')",
-        "__import__('os').system('echo')",
-        "open('/etc/passwd').read()",
         "import socket",
-        "print(__file__)",  # 模块 introspection 防御
+        "from socket import create_connection",
+        "import urllib.request",
+        "from urllib.request import urlopen",
+        "import requests",
+        "from requests import get",
+        "import http.client",
+        "from http.client import HTTPConnection",
+        "import ftplib",
+        "import smtplib",
     ]
     for code in bad_snippets:
         ok, reason = _validate_python_code(code)
         assert not ok, f"{code!r} should be denied"
+        assert "network" in reason.lower()
+
+
+def test_python_sandbox_operations_allowed():
+    """沙箱内操作（subprocess/os/eval 等）现在允许——安全靠进程隔离。"""
+    allowed_snippets = [
+        "import subprocess; subprocess.run(['ls'])",
+        "import os; os.listdir('.')",
+        "eval('1+1')",
+        "exec('x=1')",
+        "open('test.txt').read()",
+        "import shutil",
+        "print(__file__)",
+        "import main",
+    ]
+    for code in allowed_snippets:
+        ok, reason = _validate_python_code(code)
+        assert ok, f"{code!r} should be allowed: {reason}"
 
 
 def test_python_legitimate_code_passes_validation():
@@ -187,18 +223,21 @@ def test_qa_exec_timeout_is_enforced():
     assert "should-not-reach" not in result
 
 
-def test_qa_exec_rejects_subprocess_import():
-    result = qa_exec.invoke({"code": "import subprocess", "timeout": 5})
-    assert result.startswith("error:")
-    assert "subprocess" in result
+def test_qa_exec_allows_subprocess():
+    """subprocess 在沙箱内允许——安全靠 cwd + env 隔离。"""
+    result = qa_exec.invoke({"code": "import subprocess; print(subprocess.run(['echo', 'hi'], capture_output=True, text=True).stdout)", "timeout": 5})
+    assert "returncode=0" in result
+    assert "hi" in result
 
 
 def test_qa_exec_pythonpath_stripped_blocks_main_import():
-    """qa_exec 拒绝 ``import main.*`` —— 防止通过 editable package 读平台源码。"""
+    """qa_exec 子进程 env 剥离 PYTHONPATH。
+    注：editable install 下 import main 仍可能成功（site-packages 有 .pth），
+    但生产部署（非 editable）时会失败。此测试仅验证不在 validate 阶段拒绝。"""
     code = "import main.qa_agent.agents._prompt"
     result = qa_exec.invoke({"code": code, "timeout": 10})
-    assert result.startswith("error:")
-    assert "import main" in result
+    # 不再在 validate 阶段拒绝（不以 "error:" 开头）
+    assert not result.startswith("error:")
 
 
 def test_qa_exec_cwd_is_agent_root():

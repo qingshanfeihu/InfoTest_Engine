@@ -13,25 +13,19 @@
 
 ```mermaid
 flowchart LR
-    src["knowledge/orgin/<br/>*.pdf / *.docx"] --> mineru["main.ingest.batch_export<br/>MinerU 批量解析"]
-    mineru --> raw["knowledge/mineru/<br/>*.code_format.json<br/>*.raw_data.json"]
-    raw --> merge["main.ingest.merged_pre_data<br/>合并 + hash 缓存"]
-    merge --> preset["knowledge/data/<br/>preset_input_data.json"]
-    preset --> clean["main.ingest.pre_data_clean<br/>v7 清洗 + 语义去重"]
-    preset --> trunkm["main.ingest.trunk_merged<br/>L3 release_status 标记"]
-    clean --> clean_out["knowledge/data/<br/>*.input_data.json"]
-    trunkm --> merged["knowledge/merged/<br/>*.trunk.json<br/>含 units + release_status"]
-    merged --> extract["main.extraction.pipeline<br/>LLM 11 批次抽取"]
-    extract --> feat["knowledge/features/<br/>*.feature.json"]
-    feat --> idxF["main.indexing.feature_index"]
-    merged --> idxT["main.indexing.trunk_index<br/>跳过 template_placeholder"]
-    idxF --> qdrant[("Qdrant<br/>ultra_agent_vectors<br/>feature_json + trunk_unit")]
-    idxT --> qdrant
-    qdrant --> rag["main.rag.runner<br/>LangGraph 6 节点"]
-    rag --> ans["RAG Answer<br/>CLI / 通用知识"]
+    src["knowledge/orgin/<br/>*.pdf / *.docx"] --> mineru["main.mineru_batch_export<br/>MinerU 批量解析"]
+    mineru --> md["knowledge/data/markdown/<br/>{product|qa}/*.md"]
+    md --> agent["IST-Core Agent<br/>read_file / grep / ls"]
+    upload["用户上传<br/>TUI / Web"] --> inputs["workspace/inputs/<br/>*.md / *.xlsx"]
+    inputs --> agent
+    agent --> outputs["workspace/outputs/<br/>评审报告 / 标注"]
+    fetch["web_bug_search<br/>Playwright"] --> defects["workspace/defects/<br/>{backend}/*.json"]
+    defects --> agent
 ```
 
 所有路径均相对仓库根。`knowledge/orgin` 拼写固定（trunk_id / stem 依赖），不要改为 `origin`。
+
+> **注意**：上述 Qdrant / RAG / feature extraction 管线为 v1.0-v1.5 历史架构，当前已简化收口（详见 CLAUDE.md "架构原则"）。当前 IST-Core 数据流为：orgin → mineru → markdown 直出 + agent 直读。
 
 ## 2. RAG 6 节点流程
 

@@ -54,6 +54,18 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": "qa_deepagent_grep",
         "intent": "read",
     },
+    "qa_deepagent_write_file": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "write",
+    },
+    "qa_deepagent_edit_file": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "write",
+    },
     "qa_exec": {
         "read_only": True,
         "concurrency_safe": False,

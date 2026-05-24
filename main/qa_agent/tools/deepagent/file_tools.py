@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import html
+import os
 import re
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Iterable
@@ -811,6 +813,105 @@ def qa_deepagent_grep(
         return f"error: {exc}"
 
 
+_WRITABLE_SUBDIRS: frozenset[str] = frozenset({
+    "defects",
+    "markdown",
+    "baselines",
+    "reports",
+})
+_MAX_WRITE_BYTES = 1 * 1024 * 1024  # 1 MiB
+_WRITABLE_SUFFIXES = _TEXT_SUFFIXES | {".json", ".jsonl"}
+
+
+def _resolve_writable_path(raw_path: str | None) -> Path:
+    """Resolve a path for write operations (four gates).
+
+    Unlike _resolve_inside_root (which falls back to _PROJECT_ROOT for
+    non-existent paths), this always resolves relative paths under _AGENT_ROOT
+    since write targets typically don't exist yet.
+    """
+    text = (raw_path or ".").strip() or "."
+
+    # Gate 1: refuse traversal tokens
+    parts = Path(text).parts
+    if ".." in parts or text.startswith("~") or "~" in parts:
+        raise PermissionError(
+            "path traversal not allowed; agent sandbox is rooted at knowledge/data/"
+        )
+
+    path = Path(text)
+    if path.is_absolute():
+        resolved = path.resolve()
+    else:
+        # For write: always resolve under _AGENT_ROOT (file may not exist yet).
+        # Also accept "knowledge/data/..." prefix for legacy compatibility.
+        knowledge_data_prefix = "knowledge/data/"
+        if text.startswith(knowledge_data_prefix):
+            resolved = (_PROJECT_ROOT / path).resolve()
+        else:
+            resolved = (_AGENT_ROOT / path).resolve()
+
+    # Gate 2: platform deny-list
+    try:
+        rel_to_project = resolved.relative_to(_PROJECT_ROOT)
+    except ValueError:
+        rel_to_project = None
+    if rel_to_project is not None:
+        rel_parts = rel_to_project.parts
+        if rel_parts:
+            top = rel_parts[0]
+            if top in _PLATFORM_DENIED_TOP_LEVEL:
+                raise PermissionError(
+                    f"path is in platform-denied directory: {top}/"
+                )
+            if len(rel_parts) == 1 and top in _PLATFORM_DENIED_FILES:
+                raise PermissionError(
+                    f"path is a platform metadata file: {top}"
+                )
+
+    # Gate 3: must live under _AGENT_ROOT
+    try:
+        rel = resolved.relative_to(_AGENT_ROOT)
+    except ValueError as exc:
+        raise PermissionError(
+            "path outside agent sandbox; agent can only write paths under "
+            f"knowledge/data/. requested: {raw_path}"
+        ) from exc
+
+    # Gate 4: writable subdirectory whitelist
+    parts = rel.parts
+    if not parts:
+        raise PermissionError(
+            "cannot write directly to knowledge/data/ root; "
+            f"must target a subdirectory: {sorted(_WRITABLE_SUBDIRS)}"
+        )
+    top_subdir = parts[0]
+    if top_subdir not in _WRITABLE_SUBDIRS:
+        raise PermissionError(
+            f"write not allowed to subdirectory '{top_subdir}'; "
+            f"writable: {sorted(_WRITABLE_SUBDIRS)}"
+        )
+    return resolved
+
+
+def _atomic_write(target: Path, data: bytes) -> None:
+    """Write data to target atomically via tmpfile + rename."""
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(target.parent), suffix=".tmp", prefix=".qa_write_"
+    )
+    try:
+        os.write(fd, data)
+        os.close(fd)
+        os.replace(tmp_path, str(target))
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+
+
 @tool(parse_docstring=True)
 def qa_deepagent_read_file(path: str, offset: int = 0, limit: int = 200) -> str:
     """Read a project file with line-oriented pagination.
@@ -848,5 +949,105 @@ def qa_deepagent_read_file(path: str, offset: int = 0, limit: int = 200) -> str:
         if suffix not in _TEXT_SUFFIXES and _is_probably_binary(target):
             return f"error: unsupported binary file for generic read_file: {_project_rel(target)}"
         return _read_text_file(target, offset=offset, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        return f"error: {exc}"
+
+
+@tool(parse_docstring=True)
+def qa_deepagent_write_file(path: str, content: str, overwrite: bool = False) -> str:
+    """Write content to a file inside the agent sandbox.
+
+    Creates a new file under the writable subdirectories of knowledge/data/.
+    If the file already exists, set overwrite=True to replace it.
+
+    Boundaries:
+    - Write-only to allowed subdirectories (defects, markdown, baselines,
+      reports).
+    - Refuses to overwrite existing files unless overwrite=True.
+    - Parent directory must already exist.
+    - Content capped at 1 MiB; only text file suffixes allowed.
+    - Subject to the four-gate security model.
+
+    Args:
+        path: Project-relative or absolute path inside this repository.
+        content: Text content to write.
+        overwrite: If True, allows overwriting an existing file.
+
+    Returns:
+        Success message with the written path and byte count, or error string.
+    """
+    try:
+        target = _resolve_writable_path(path)
+        suffix = target.suffix.lower()
+        if suffix and suffix not in _WRITABLE_SUFFIXES:
+            return f"error: suffix '{suffix}' not allowed for write; use text files"
+        if not suffix:
+            return "error: file must have a text extension (e.g. .md, .json, .txt)"
+        encoded = content.encode("utf-8")
+        if len(encoded) > _MAX_WRITE_BYTES:
+            return f"error: content too large ({len(encoded)} bytes); max {_MAX_WRITE_BYTES}"
+        if target.exists() and not overwrite:
+            return f"error: file already exists: {_project_rel(target)}; set overwrite=True"
+        if not target.parent.exists():
+            return f"error: parent directory does not exist: {_project_rel(target.parent)}"
+        _atomic_write(target, encoded)
+        return f"wrote {len(encoded)} bytes to {_project_rel(target)}"
+    except PermissionError as exc:
+        return f"error: {exc}"
+    except Exception as exc:  # noqa: BLE001
+        return f"error: {exc}"
+
+
+@tool(parse_docstring=True)
+def qa_deepagent_edit_file(
+    path: str, old_string: str, new_string: str, replace_all: bool = False
+) -> str:
+    """Edit an existing file by replacing exact string matches.
+
+    Performs in-place string replacement on a file within the agent sandbox.
+    The file must already exist and be in a writable subdirectory.
+
+    Boundaries:
+    - Target file must exist and be within the writable sandbox.
+    - old_string must differ from new_string.
+    - Unless replace_all=True, old_string must appear exactly once.
+    - Subject to the four-gate security model.
+
+    Args:
+        path: Project-relative or absolute path to the file to edit.
+        old_string: The exact text to find. Must be unique unless replace_all.
+        new_string: Replacement text. Must differ from old_string.
+        replace_all: If True, replaces all occurrences. Default False.
+
+    Returns:
+        Success message with replacement count, or error string.
+    """
+    try:
+        target = _resolve_writable_path(path)
+        if not target.exists():
+            return f"error: file not found: {_project_rel(target)}"
+        if not target.is_file():
+            return f"error: not a file: {_project_rel(target)}"
+        if old_string == new_string:
+            return "error: old_string and new_string are identical"
+        if not old_string:
+            return "error: old_string must not be empty"
+        content = target.read_text(encoding="utf-8")
+        count = content.count(old_string)
+        if count == 0:
+            return "error: old_string not found in file"
+        if count > 1 and not replace_all:
+            return (
+                f"error: old_string found {count} times; "
+                "set replace_all=True or provide more context"
+            )
+        new_content = content.replace(old_string, new_string, -1 if replace_all else 1)
+        encoded = new_content.encode("utf-8")
+        if len(encoded) > _MAX_WRITE_BYTES:
+            return f"error: result too large ({len(encoded)} bytes); max {_MAX_WRITE_BYTES}"
+        _atomic_write(target, encoded)
+        return f"replaced {count} occurrence(s) in {_project_rel(target)}"
+    except PermissionError as exc:
+        return f"error: {exc}"
     except Exception as exc:  # noqa: BLE001
         return f"error: {exc}"

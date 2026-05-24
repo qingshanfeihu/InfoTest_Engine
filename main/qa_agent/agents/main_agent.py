@@ -10,10 +10,12 @@ from typing import Any
 from main.qa_agent.agents._llm import build_agent_chat_model
 from main.qa_agent.agents._prompt import build_system_prompt
 from main.qa_agent.tools.deepagent import (
+    qa_deepagent_edit_file,
     qa_deepagent_glob,
     qa_deepagent_grep,
     qa_deepagent_ls,
     qa_deepagent_read_file,
+    qa_deepagent_write_file,
 )
 from main.qa_agent.tools.deepagent.exec_tools import qa_bash, qa_exec
 from main.qa_agent.tools.knowledge.web_bug_search import web_bug_search
@@ -31,6 +33,8 @@ def _default_generic_tools() -> list[Any]:
         qa_deepagent_glob,
         qa_deepagent_grep,
         qa_deepagent_read_file,
+        qa_deepagent_write_file,
+        qa_deepagent_edit_file,
         # Stage 4: cluade.md 验收依赖的统计/解析能力（受白名单沙箱保护）
         qa_exec,
         qa_bash,

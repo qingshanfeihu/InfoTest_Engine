@@ -38,6 +38,9 @@ class GraphBridge:
         bridge.resume_with({"approved": True})  # HIL 决策
     """
 
+    _shared_loop: asyncio.AbstractEventLoop | None = None
+    _loop_lock = threading.Lock()
+
     def __init__(
         self,
         *,
@@ -65,6 +68,13 @@ class GraphBridge:
     @property
     def is_running(self) -> bool:
         return self._worker is not None and self._worker.is_alive()
+
+    def _get_shared_loop(self) -> asyncio.AbstractEventLoop:
+        """获取或创建共享的 event loop，避免重复创建导致 Lock 绑定问题。"""
+        with GraphBridge._loop_lock:
+            if GraphBridge._shared_loop is None or GraphBridge._shared_loop.is_closed():
+                GraphBridge._shared_loop = asyncio.new_event_loop()
+        return GraphBridge._shared_loop
 
     def start(self, initial_state: dict[str, Any]) -> None:
         """启动后台 worker 跑 graph。同一 bridge 实例不重入——is_running 检查。"""
@@ -108,7 +118,7 @@ class GraphBridge:
         return self._graph
 
     def _run_in_thread(self, payload: Any, is_resume: bool) -> None:
-        loop = asyncio.new_event_loop()
+        loop = self._get_shared_loop()
         self._loop = loop
         asyncio.set_event_loop(loop)
         try:
@@ -159,11 +169,6 @@ class GraphBridge:
                 loop.run_until_complete(loop.shutdown_asyncgens())
             except Exception:  # noqa: BLE001
                 pass
-            try:
-                loop.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self._loop = None
             self._task = None
 
     def resume_with(self, decision: dict[str, Any]) -> None:

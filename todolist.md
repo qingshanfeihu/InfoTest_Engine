@@ -135,3 +135,30 @@ E2E 验证既然通过，知识管线一并瘦身：
 - 删除 21 个老管线模块 + `main/knowledge/` 子包；移除 `qdrant-client` / `langchain-qdrant` / `langchain-postgres` 依赖。
 
 实测：cookie 121100 评审能从 markdown/qa + markdown/product 读到用例和规格，给出 4 段式专业评审（10 项缺口 + 12 项分级建议），覆盖 todolist 第 5 节全部验收点。
+
+## 8. Footprint 知识树（2026-05-25 落地）
+
+autodream 增强：在 dream consolidate 阶段，除了产出 AGENTS.md 行为规则，还额外提取**结构化产品/测试事实**到 `knowledge/footprints/` 知识树。
+
+**为什么做**：
+- 之前 dream 只产出 AGENTS.md（"用户说评审就调 skill"这类操作规则），缺少**产品事实**（"ircookie 5 种模式、enc_name 需要 passwd"）的沉淀。
+- 每次评审 agent 都要重新 grep 同一份 CLI 文档，读到的还是有噪音、有冲突的原始内容。
+- Footprint 是 LLM 已经验证过的精炼事实，权威度高于原始文档。
+
+**核心设计**：
+- 数据源：`memory/working/*.md`（完整读取，不受 dream gather 5000 字符截断限制）
+- 提取：dream consolidate 用 haiku tier 模型（`QA_AGENT_HAIKU_MODEL`，默认 deepseek-v4-flash）逐文件 LLM 提取
+- 路由：剥离 `no/show/clear` 操作前缀 → 命令 token 化 → 按公共前缀分组到 leaf/trunk/branch；无 CLI 命令的 fact 直接丢弃
+- 存储：`knowledge/footprints/{leaf,trunk,branch}/*.json`（5 个 section：cli/decision_rules/behaviors/known_issues/version_scope）
+- 检索：`MemoryInjectionMiddleware` 自动注入（自然语言查询）+ `qa_footprint_lookup` tool（agent 主动按 CLI 命令名精确查）
+- TUI：`/footprint` 总览 / show / search / stats / list
+
+**预估满载规模**（CLI 文档 26K 行 / 891 命令）：~658 leaf 节点，~1.5 MB 内存，纯内存 dict 索引（无需 Qdrant）。
+
+**关键 env**：`FOOTPRINT_ENABLED=1`、`QA_AGENT_HAIKU_MODEL=deepseek-v4-flash`。
+
+**后续优化点**（不阻塞上线）：
+- decision_rules / behaviors 内容精炼（LLM distill 二次压缩）
+- footprint trunk/branch 的丰富化策略
+- agent 注入策略调优（top_k、token 上限）
+- footprint 节点的合并去重策略（同一命令的多次提取结果合并）

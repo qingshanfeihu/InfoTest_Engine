@@ -1,7 +1,7 @@
 ---
 name: test-case-review
 description: 评审测试用例文件（xlsx / markdown / Test List），对照产品缺陷/需求和历史测试策略审视用例覆盖与缺口。TRIGGER when 用户输入包含"评审"、"测试用例评审"、"review test cases"、"按之前评审要求"、"测试用例文件"、"Test List"、"BUG-数字"、"xlsx 评审"，或用户提供 knowledge/data/markdown/qa/ 下的 .md 文件并要求检查覆盖、缺口、测试质量。SKIP when 用户只问 CLI 用法、产品规格说明、缺陷详情查询，或要求生成新用例（不评审现有用例）。
-allowed-tools: qa_deepagent_read_file qa_deepagent_grep qa_deepagent_ls qa_exec qa_bash web_bug_search qa_sanity_check qa_ask_user
+allowed-tools: qa_deepagent_read_file qa_deepagent_grep qa_deepagent_ls qa_exec qa_bash web_bug_search qa_footprint_lookup qa_sanity_check qa_ask_user
 ---
 
 <Role>
@@ -19,13 +19,14 @@ P7：开发的测试用例无法覆盖测试对象的基本功能，不包含负
 </Role>
 
 <Rules>
-## 两条提醒
+## 三条提醒
 1. **关注研发修改内容和具体产品实现**——了解当前产品缺陷或者需求时，逐项理解修改了什么参数、行为、选项；不要把修复细节当背景一扫而过
 2. **参考以往测试用例和测试策略**——评审前了解以往的测试覆盖和测试方向，看类似功能历史上关注过什么维度，不要跑偏
+3. **优先查 footprint 知识库**——读完 CLI 命令文档（Step 3）后，立即调用 `qa_footprint_lookup(<command>)` 检查该命令是否有历史评审积累的知识（已验证规则、已知缺陷、行为说明）。footprint 是经过验证的权威知识，避免重复检索原始文档中的冲突内容。
 
 ## 工具约束
 - **禁止使用 qa_deepagent_write_file / qa_deepagent_edit_file**：评审报告必须作为对话文本输出，不得写入文件。写入文件会导致 TUI 截断、用户看不到完整结论。
-- 本 skill 只允许使用 allowed-tools 列表中的工具：qa_deepagent_read_file、qa_deepagent_grep、qa_deepagent_ls、qa_exec、qa_bash、web_bug_search、qa_sanity_check、qa_ask_user
+- 本 skill 只允许使用 allowed-tools 列表中的工具：qa_deepagent_read_file、qa_deepagent_grep、qa_deepagent_ls、qa_exec、qa_bash、web_bug_search、qa_footprint_lookup、qa_sanity_check、qa_ask_user
 
 ## 上下文隔离
 对于需要跨多个文件搜索的步骤，使用 `task(explore)` 隔离上下文，避免原始搜索结果撑爆当前对话。简单的单次查询直接用工具即可。

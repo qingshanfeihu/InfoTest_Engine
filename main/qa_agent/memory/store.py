@@ -348,6 +348,68 @@ class MemoryStore:
         scored.sort(key=lambda x: (-x[0], x[1].as_posix()))
         return [p for _, p in scored[:top_k]]
 
+    def read_footprints(
+        self, query: str, *, top_k: int = 2
+    ) -> list[tuple[str, str]]:
+        """检索 footprint 知识库，返回与 query 最相关的 footprint 摘要。
+
+        走 FootprintIndex 单例（懒加载 + 多路匹配）。
+        返回 [(feature_id, formatted_summary), ...]。
+        """
+        try:
+            from main.qa_agent.memory.footprint import get_footprint_index
+            return get_footprint_index().search(query, top_k=top_k)
+        except Exception as exc:
+            logger.debug("read_footprints 失败: %s", exc)
+            return []
+
+    def lookup_footprint(self, command: str) -> dict | None:
+        """精确查找 footprint（供 qa_footprint_lookup tool 调用）。
+
+        - 完整命令: "http rewrite body" → leaf 完整内容
+        - 前缀命令: "slb mode" → 子节点列表
+        - 未命中: None
+        """
+        try:
+            from main.qa_agent.memory.footprint import get_footprint_index
+            return get_footprint_index().lookup(command)
+        except Exception as exc:
+            logger.debug("lookup_footprint 失败: %s", exc)
+            return None
+
+    @staticmethod
+    def _format_footprint(data: dict) -> str:
+        """将 footprint JSON 格式化为注入用的简洁摘要。"""
+        lines: list[str] = []
+        fid = data.get("feature_id", "?")
+        level = data.get("level", "?")
+        meta = data.get("footprint_meta", {})
+        lines.append(f"[{fid}] ({level}, verified {meta.get('verified_count', 0)}x)")
+
+        cli = data.get("cli", {}).get("commands", [])
+        for cmd in cli[:5]:
+            lines.append(f"  cmd: {cmd.get('command', '')}")
+
+        for r in data.get("decision_rules", [])[:4]:
+            cond = r.get("condition", "")[:100]
+            dec = r.get("decision", "")
+            if dec:
+                lines.append(f"  rule: {cond} → {dec}")
+            else:
+                lines.append(f"  rule: {cond}")
+
+        for b in data.get("behaviors", [])[:3]:
+            lines.append(f"  behavior: {b.get('content', '')[:100]}")
+
+        for iss in data.get("known_issues", [])[:4]:
+            lines.append(f"  issue: {iss.get('issue_id', '')} {iss.get('title', '')[:60]}")
+
+        vs = data.get("version_scope", {})
+        if vs.get("product_versions"):
+            lines.append(f"  versions: {', '.join(vs['product_versions'][:5])}")
+
+        return "\n".join(lines)
+
     def upsert_long_term(
         self,
         rel_path: str,

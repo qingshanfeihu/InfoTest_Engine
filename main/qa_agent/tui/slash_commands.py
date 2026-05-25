@@ -295,9 +295,43 @@ def _cmd_init(args: str, app: "IstApp") -> SlashCommandResult:
     ))
 
 
+def _cmd_reset(args: str, app: "IstApp") -> SlashCommandResult:
+    """清除对话历史和 agent 临时存储文件。
+
+    用法::
+
+        /reset           — 默认清理（保留长期记忆）
+        /reset --all     — 同时清理长期记忆
+    """
+    from main.qa_agent.tui.reset_command import perform_reset
+
+    include_long_term = "--all" in (args or "")
+    try:
+        result = perform_reset(include_long_term=include_long_term)
+    except Exception as exc:  # noqa: BLE001
+        return ErrorResult(text=f"reset failed: {exc}")
+    return TextResult(text=result.summary())
+
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
+
+
+def _cmd_footprint_dispatch(args: str, app: "IstApp") -> SlashCommandResult:
+    from main.qa_agent.tui.footprint_command import cmd_footprint
+    return cmd_footprint(args, app)
+
+
+def _cmd_memory_dispatch(args: str, app: "IstApp") -> SlashCommandResult:
+    from main.qa_agent.tui.memory_command import cmd_memory
+    return cmd_memory(args, app)
+
+
+def _cmd_remember_dispatch(args: str, app: "IstApp") -> SlashCommandResult:
+    from main.qa_agent.tui.memory_command import cmd_remember
+    return cmd_remember(args, app)
 
 
 BUILTIN_COMMANDS: list[SlashCommand] = [
@@ -311,6 +345,10 @@ BUILTIN_COMMANDS: list[SlashCommand] = [
     SlashCommand("compact",  "Reset token counter (clears transcript)",      _cmd_compact),
     SlashCommand("plan",     "Toggle plan-only mode for next query",         _cmd_plan),
     SlashCommand("init",     "Run project bootstrap analysis workflow",      _cmd_init),
+    SlashCommand("reset",    "Clear conversation history and temp storage (--all for long-term)", _cmd_reset),
+    SlashCommand("memory",   "Memory overview / show / clear (subcommands: show, clear, status)", _cmd_memory_dispatch),
+    SlashCommand("remember", "Add user preference / feedback / project / reference",   _cmd_remember_dispatch),
+    SlashCommand("footprint","Footprint knowledge tree (subcommands: show, search, stats, list)", _cmd_footprint_dispatch),
     SlashCommand("version",  "Print version",                                _cmd_version),
     SlashCommand("exit",     "Exit the TUI",                                 _cmd_exit),
 ]

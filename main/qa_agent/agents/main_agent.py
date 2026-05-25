@@ -19,6 +19,7 @@ from main.qa_agent.tools.deepagent import (
 )
 from main.qa_agent.tools.deepagent.exec_tools import qa_bash, qa_exec
 from main.qa_agent.tools.knowledge.web_bug_search import web_bug_search
+from main.qa_agent.tools.knowledge.footprint_lookup import qa_footprint_lookup
 from main.qa_agent.tools.skills import qa_invoke_skill, qa_sanity_check
 from main.qa_agent.tools.ask_user import qa_ask_user
 
@@ -40,6 +41,8 @@ def _default_generic_tools() -> list[Any]:
         qa_bash,
         # web_bug_search：按 ticket id 查 bug/story 详情（本地优先，远端 Playwright 兜底）
         web_bug_search,
+        # qa_footprint_lookup：查询 footprint 知识树（评审/对话中获取已积累的 CLI 命令知识）
+        qa_footprint_lookup,
         # qa_invoke_skill：仿 Claude Code 的 Skill tool 调用机制（BLOCKING REQUIREMENT
         # 措辞），让 LLM 把"读 SKILL.md"当 tool_call 触发，而非依赖自觉
         qa_invoke_skill,

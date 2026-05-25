@@ -258,11 +258,16 @@ class DreamTask:
         return payloads
 
     def consolidate(self, payloads: list[Payload]) -> list[str]:
-        """阶段 3：LLM 抽取 → 判断是否合并 / 蒸馏 / 更新 AGENTS.md。"""
+        """阶段 3：Footprint 纯规则提取 + LLM 抽取 → AGENTS.md。"""
         if not payloads:
             return []
+
+        # --- Footprint（纯规则，独立读完整 working memory）---
+        fp_decisions = self._consolidate_footprints()
+
+        # --- AGENTS.md（LLM，保留原逻辑）---
         if self._llm is None:
-            return ["skip: no LLM configured"]
+            return fp_decisions or ["skip: no LLM configured"]
 
         combined = "\n\n---\n\n".join(
             f"## {p.path}\n{p.content[:2000]}" for p in payloads[:20]
@@ -312,7 +317,113 @@ class DreamTask:
                 applied.append(f"merge: {d.get('source')} → {d.get('target')} (TODO)")
         if not applied:
             applied.append("skip: no changes needed")
-        return applied
+        return fp_decisions + applied
+
+    def _consolidate_footprints(self) -> list[str]:
+        """LLM 提取 footprint 产品事实，然后纯代码 route + merge。
+
+        使用 QA_AGENT_HAIKU_MODEL（默认 deepseek-v4-flash）降低成本。
+        """
+        if os.environ.get("FOOTPRINT_ENABLED", "1") != "1":
+            return []
+
+        try:
+            from main.qa_agent.memory.footprint import extract_facts, route_facts, merge_fact
+        except Exception as exc:
+            logger.debug("footprint import 失败: %s", exc)
+            return []
+
+        # 构建 haiku tier LLM 调用函数
+        llm_chat = self._build_footprint_llm()
+        if llm_chat is None:
+            return []
+
+        root = get_default_root()
+        footprint_dir = root.parent / "knowledge" / "footprints"
+        working_dir = root / "working"
+
+        if not working_dir.exists():
+            return []
+
+        for sub in ("leaf", "trunk", "branch"):
+            (footprint_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        cutoff = time.time() - self._lookback_days * 86400
+        results: list[str] = []
+
+        for f in sorted(working_dir.glob("*.md")):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    continue
+                content = f.read_text(encoding="utf-8")
+                if len(content) < 200:
+                    continue
+
+                facts = extract_facts(content, llm_chat=llm_chat)
+                if not facts:
+                    continue
+
+                routed = route_facts(facts, footprint_dir)
+                for rf in routed:
+                    r = merge_fact(rf, footprint_dir)
+                    if r.action != "skip":
+                        results.append(f"footprint:{r.action}:{r.target_file}")
+            except Exception as exc:
+                logger.debug("footprint %s: %s", f.name, exc)
+
+        return results
+
+    def _build_footprint_llm(self):
+        """构建 footprint 提取用的 haiku tier LLM 调用函数。
+
+        复用 function_llm.chat_completion，获得 retry + truncation 检测 + cache。
+        使用 QA_AGENT_HAIKU_MODEL（默认 deepseek-v4-flash）。
+        """
+        try:
+            import requests as _requests
+            from main.qa_agent.agents._llm import (
+                qa_agent_tier_model,
+                resolve_llm_api_key,
+                resolve_llm_provider,
+                DEFAULT_DASHSCOPE_BASE_URL,
+                DEFAULT_DEEPSEEK_BASE_URL,
+            )
+            from main.function_llm import chat_completion, TruncationError
+        except Exception as exc:
+            logger.debug("footprint LLM 构建失败: %s", exc)
+            return None
+
+        api_key = resolve_llm_api_key()
+        if not api_key:
+            logger.debug("footprint: no API key")
+            return None
+
+        model = qa_agent_tier_model("haiku")
+        provider = resolve_llm_provider()
+        if provider == "deepseek":
+            base_url = os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL).strip()
+        else:
+            base_url = os.environ.get("DASHSCOPE_BASE_URL", DEFAULT_DASHSCOPE_BASE_URL).strip()
+
+        chat_url = f"{base_url}/chat/completions"
+        session = _requests.Session()
+
+        def _call(system_prompt: str, user_prompt: str):
+            try:
+                return chat_completion(
+                    session, api_key, system_prompt, user_prompt,
+                    model=model,
+                    base_url=chat_url,
+                    max_tokens=4096,
+                    temperature=0.1,
+                    top_p=0.1,
+                )
+            except TruncationError:
+                logger.warning("footprint LLM 输出被截断，跳过")
+                return {"facts": []}
+
+        logger.info("footprint LLM: model=%s provider=%s", model, provider)
+        return _call
 
     def prune(self, inventory: Inventory) -> int:
         """阶段 4：归档过期文件（>prune_days 天未更新）。

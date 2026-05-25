@@ -130,6 +130,16 @@ class MemoryInjectionMiddleware(AgentMiddleware):
             except Exception as exc:
                 logger.debug("read_long_term 失败: %s", exc)
 
+        # Footprint 知识检索（与 L2 并列，按 query 切词匹配 footprint 内容）
+        if query:
+            try:
+                fp_hits = self._store.read_footprints(query, top_k=2)
+                if fp_hits:
+                    fp_parts = [f"### {fid}\n{summary}" for fid, summary in fp_hits]
+                    sections.append("## Product Knowledge (footprint)\n" + "\n\n".join(fp_parts))
+            except Exception as exc:
+                logger.debug("read_footprints 失败: %s", exc)
+
         if not sections:
             return None
 

@@ -64,22 +64,27 @@ def chat_completion(
     system_prompt: str,
     user_prompt: str,
     *,
+    model: str | None = None,
+    base_url: str | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float = DEFAULT_TEMPERATURE,
     top_p: float = DEFAULT_TOP_P,
     max_retries: int = 3,
 ) -> dict[str, Any]:
-    """Call qwen-plus and return parsed JSON dict.
+    """Call LLM and return parsed JSON dict.
 
     Raises TruncationError if output was truncated.
     Raises ChatCompletionError on persistent failures.
     """
+    use_model = model or CHAT_MODEL
+    use_url = base_url or DASHSCOPE_CHAT_URL
+
     cache = _get_llm_cache()
     if cache is not None:
         cached = cache.get(
             system=system_prompt,
             user=user_prompt,
-            model=CHAT_MODEL,
+            model=use_model,
             max_tokens=max_tokens,
         )
         if cached is not None:
@@ -91,7 +96,7 @@ def chat_completion(
         "Content-Type": "application/json",
     }
     body = {
-        "model": CHAT_MODEL,
+        "model": use_model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -106,7 +111,7 @@ def chat_completion(
     for attempt in range(max_retries):
         try:
             r = session.post(
-                DASHSCOPE_CHAT_URL,
+                use_url,
                 headers=headers,
                 json=body,
                 timeout=REQUEST_TIMEOUT,
@@ -145,7 +150,7 @@ def chat_completion(
                     result=result,
                     system=system_prompt,
                     user=user_prompt,
-                    model=CHAT_MODEL,
+                    model=use_model,
                     max_tokens=max_tokens,
                 )
             return result

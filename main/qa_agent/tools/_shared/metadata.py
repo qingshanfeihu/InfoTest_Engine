@@ -86,6 +86,13 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": None,
         "intent": "search",
     },
+    # qa_footprint_lookup: 查询 footprint 知识树（内存索引，毫秒级）
+    "qa_footprint_lookup": {
+        "read_only": True,
+        "concurrency_safe": True,
+        "fallback_for": None,
+        "intent": "search",
+    },
 }
 
 

@@ -70,7 +70,7 @@ LANGSMITH_PROJECT=ultra_agent_qa
 # QA_AGENT_ALLOWED_MODELS：平台允许用户显式切换的模型白名单，逗号分隔
 # QA_AGENT_FALLBACK_MODEL：openai:<model> 走 DashScope 兼容 / deepseek:<model> 走 DeepSeek
 # QA_AGENT_REVIEW_DEPTH：quick|standard|deep（Skill 读取）
-# QA_AGENT_SQLITE_PATH：本地 Checkpointer 数据库
+# QA_AGENT_SQLITE_PATH：本地 Checkpointer 数据库（TUI 使用 AsyncSqliteSaver，需 pip install aiosqlite）
 # -----------------------------------------------------------------------------
 
 # ━━━━━━━━ qwen3.6-plus（默认）━━━━━━━━
@@ -195,3 +195,9 @@ PLAYWRIGHT_STATE_DIR=knowledge/defect_raw/_state
 QA_AGENT_MEMORY_DISTILL_EVERY_N=30
 # 关闭 fork agent LLM 抽取 + dream task（仅保留规则抽取 L1 热路径）
 # QA_AGENT_MEMORY_DISABLE_LLM=0
+
+# Footprint 知识树（autodream 增强，按 CLI 命令组织产品/测试知识）
+# 0 关闭 footprint 提取（dream consolidate 跳过 footprint 路径，AGENTS.md 路径不受影响）
+# FOOTPRINT_ENABLED=1
+# Footprint 提取走 haiku tier 模型（QA_AGENT_HAIKU_MODEL，默认 deepseek-v4-flash），
+# 见上面 LLM 模型配置块

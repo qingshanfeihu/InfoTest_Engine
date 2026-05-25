@@ -1,9 +1,11 @@
 """IST-Core Web Terminal server.
 
 xterm.js 前端 + WebSocket PTY 后端：
-- / GET：xterm.js 终端页面（含登录 + 文件上传按钮）
+- / GET：xterm.js 终端页面（含登录 + 文件上传/下载按钮）
 - /api/login POST：验证用户
 - /api/upload POST：文件上传到沙箱
+- /api/files GET：列出 workspace/outputs/ 下可下载文件
+- /api/download GET：下载 workspace/outputs/ 中的文件
 - /ws/terminal WebSocket：PTY 桥接（spawn TUI 子进程）
 """
 
@@ -91,6 +93,36 @@ async def upload(file: UploadFile = File(...), token: str = ""):
             return {"path": rel, "filename": file.filename, "error": str(e)}
     rel = dest.relative_to(_PROJECT_ROOT / "knowledge" / "data").as_posix()
     return {"path": rel, "filename": file.filename}
+
+
+_OUTPUTS = _PROJECT_ROOT / "workspace" / "outputs"
+
+
+@app.get("/api/files")
+async def list_files(token: str = ""):
+    if not _sessions.get(token):
+        raise HTTPException(401, "未登录")
+    if not _OUTPUTS.is_dir():
+        return {"files": []}
+    files = []
+    for f in sorted(_OUTPUTS.iterdir()):
+        if f.is_file():
+            files.append({"name": f.name, "size": f.stat().st_size})
+    return {"files": files}
+
+
+@app.get("/api/download")
+async def download_file(token: str = "", name: str = ""):
+    if not _sessions.get(token):
+        raise HTTPException(401, "未登录")
+    if not name or "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(400, "非法文件名")
+    target = (_OUTPUTS / name).resolve()
+    if not str(target).startswith(str(_OUTPUTS.resolve())):
+        raise HTTPException(403, "路径越权")
+    if not target.is_file():
+        raise HTTPException(404, "文件不存在")
+    return FileResponse(target, filename=name)
 
 
 def _set_winsize(fd: int, cols: int, rows: int):

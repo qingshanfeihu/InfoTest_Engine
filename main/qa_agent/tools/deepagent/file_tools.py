@@ -986,19 +986,19 @@ def qa_deepagent_read_file(path: str, offset: int = 0, limit: int = 200) -> str:
 def qa_deepagent_write_file(path: str, content: str, overwrite: bool = False) -> str:
     """Write content to a file inside the agent sandbox.
 
-    Creates a new file under the writable subdirectories of knowledge/data/.
-    If the file already exists, set overwrite=True to replace it.
+    All writes go to ``workspace/outputs/``. Pass a bare filename like
+    ``report.md`` or prefix with ``outputs/`` — both resolve to
+    ``workspace/outputs/<name>``.
 
     Boundaries:
-    - Write-only to allowed subdirectories (defects, markdown, baselines,
-      reports).
+    - Write-only to workspace/outputs/.
     - Refuses to overwrite existing files unless overwrite=True.
     - Parent directory must already exist.
     - Content capped at 1 MiB; only text file suffixes allowed.
-    - Subject to the four-gate security model.
 
     Args:
-        path: Project-relative or absolute path inside this repository.
+        path: Filename or relative path. Examples: ``report.md``,
+            ``outputs/result.json``, ``workspace/outputs/data.txt``.
         content: Text content to write.
         overwrite: If True, allows overwriting an existing file.
 
@@ -1018,7 +1018,7 @@ def qa_deepagent_write_file(path: str, content: str, overwrite: bool = False) ->
         if target.exists() and not overwrite:
             return f"error: file already exists: {_project_rel(target)}; set overwrite=True"
         if not target.parent.exists():
-            return f"error: parent directory does not exist: {_project_rel(target.parent)}"
+            target.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(target, encoded)
         return f"wrote {len(encoded)} bytes to {_project_rel(target)}"
     except PermissionError as exc:

@@ -21,6 +21,12 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 #toolbar .upload-btn { background: #414868; border: none; color: #c0caf5; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
 #toolbar .upload-btn:hover { background: #565f89; }
 #toolbar .status { color: #9ece6a; font-size: 0.8rem; }
+#toolbar { position: relative; }
+#downloadPanel { display:none; position:absolute; top:100%; left:80px; background:#24283b; border:1px solid #414868; border-radius:6px; padding:8px; min-width:240px; max-height:300px; overflow-y:auto; z-index:10; box-shadow:0 4px 12px rgba(0,0,0,0.4); }
+#downloadPanel .dl-item { display:flex; justify-content:space-between; align-items:center; padding:4px 6px; border-radius:3px; cursor:pointer; font-size:0.82rem; color:#c0caf5; }
+#downloadPanel .dl-item:hover { background:#414868; }
+#downloadPanel .dl-size { color:#565f89; font-size:0.75rem; margin-left:12px; }
+#downloadPanel .dl-empty { color:#565f89; font-size:0.82rem; padding:4px; }
 #terminal { flex: 1; }
 </style>
 </head>
@@ -38,7 +44,9 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
   <div id="toolbar">
     <input type="file" id="fileInput" hidden>
     <button class="upload-btn" onclick="document.getElementById('fileInput').click()">📎 上传文件</button>
+    <button class="upload-btn" onclick="showDownloads()">📥 下载</button>
     <span class="status" id="uploadStatus"></span>
+    <div id="downloadPanel"></div>
   </div>
   <div id="terminal"></div>
 </div>
@@ -145,6 +153,38 @@ document.getElementById('termPage')?.addEventListener('drop', async (e) => {
 });
 
 document.getElementById('password')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+// 下载功能
+async function showDownloads() {
+  const panel = document.getElementById('downloadPanel');
+  if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+  panel.innerHTML = '<div class="dl-empty">加载中...</div>';
+  panel.style.display = 'block';
+  try {
+    const r = await fetch('/api/files?token=' + encodeURIComponent(token));
+    const d = await r.json();
+    if (!d.files || d.files.length === 0) {
+      panel.innerHTML = '<div class="dl-empty">暂无输出文件</div>';
+      return;
+    }
+    panel.innerHTML = d.files.map(f => {
+      const size = f.size < 1024 ? f.size + 'B' : (f.size/1024).toFixed(1) + 'KB';
+      return `<div class="dl-item" onclick="doDownload('${f.name}')">${f.name}<span class="dl-size">${size}</span></div>`;
+    }).join('');
+  } catch(e) { panel.innerHTML = '<div class="dl-empty">加载失败</div>'; }
+}
+
+function doDownload(name) {
+  window.open('/api/download?token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(name), '_blank');
+  document.getElementById('downloadPanel').style.display = 'none';
+}
+
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('downloadPanel');
+  if (panel && !panel.contains(e.target) && !e.target.textContent.includes('下载')) {
+    panel.style.display = 'none';
+  }
+});
 </script>
 </body>
 </html>

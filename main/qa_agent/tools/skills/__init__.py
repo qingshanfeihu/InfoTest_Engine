@@ -84,7 +84,7 @@ def qa_sanity_check(target_file: str, bug_severity: str = "") -> str:
     传入，启用 Priority 分布 vs BUG 严重度匹配检查。
 
     BLOCKING REQUIREMENT for test-case-review skill：评审报告 finalize 前必须
-    跑一次本 tool 并把输出映射到 P0/P1 缺口（详见 SKILL.md Step 6.5 + reference/SELF_CHECK.md）。
+    跑一次本 tool 并把输出映射到 P0/P1 缺口（详见 SKILL.md Step 6.5）。
 
     Args:
         target_file: 用例 markdown 文件路径。支持以下形式：

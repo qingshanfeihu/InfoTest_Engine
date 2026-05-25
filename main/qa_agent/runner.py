@@ -28,7 +28,7 @@ from typing import Any
 
 
 def _ensure_env() -> None:
-    """加载项目根 ``environment`` 文件并校验 DASHSCOPE_API_KEY 已配置。"""
+    """加载项目根 ``environment`` 文件并校验当前 provider 的 API key 已配置。"""
     try:
         from dotenv import load_dotenv
 
@@ -41,13 +41,14 @@ def _ensure_env() -> None:
     except Exception:  # noqa: BLE001
         pass
 
+    provider = (os.environ.get("IST_LLM_PROVIDER") or "dashscope").strip().lower()
     missing: list[str] = []
-    if not (os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("BAILIAN_API_KEY") or "").strip():
-        # 允许 QA_AGENT_FALLBACK_MODEL=openai:... 时跳过 DashScope 校验
-        if not (os.environ.get("QA_AGENT_FALLBACK_MODEL") or "").strip():
+    if provider == "deepseek":
+        if not (os.environ.get("DEEPSEEK_API_KEY") or "").strip():
+            missing.append("DEEPSEEK_API_KEY")
+    else:
+        if not (os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("BAILIAN_API_KEY") or "").strip():
             missing.append("DASHSCOPE_API_KEY / BAILIAN_API_KEY")
-    if not (os.environ.get("QDRANT_HOST") or "").strip():
-        missing.append("QDRANT_HOST")
     if missing:
         print(
             f"❌ 缺少环境变量: {', '.join(missing)}\n"
@@ -86,7 +87,10 @@ def run_single(
     """单次调用 Graph，返回最终 state。"""
     from main.qa_agent.graph import build_qa_agent_graph
 
-    graph = build_qa_agent_graph(checkpointer=True)
+    # stream 模式走 astream_events（async），非 stream 走 graph.invoke（sync）。
+    # checkpointer_mode 必须匹配，否则 SQLite saver 在 sync/async 边界互锁。
+    mode = "async" if stream else "sync"
+    graph = build_qa_agent_graph(checkpointer=True, checkpointer_mode=mode)
 
     thread_id = thread_id or f"run-{uuid.uuid4().hex[:8]}"
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}

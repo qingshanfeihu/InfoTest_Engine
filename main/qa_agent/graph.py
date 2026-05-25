@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Agent 延迟构造（避免 import graph 即触发 deepagents/ChatTongyi 初始化）
+# Agent 延迟构造（避免 import graph 即触发 deepagents 初始化）
 # ---------------------------------------------------------------------------
 
 _MAIN_AGENT: Any | None = None
@@ -217,7 +217,22 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         return self._tool_name_stack.pop() if self._tool_name_stack else ""
 
     def on_tool_end(self, output, **kwargs) -> None:  # noqa: D401, ANN001
-        if hasattr(output, "content"):
+        from langgraph.types import Command  # noqa: PLC0415
+
+        tool_name = self._pop_tool_name()
+        if isinstance(output, Command):
+            # write_todos 等工具返回 Command 做 state update，不是用户可见输出
+            update = getattr(output, "update", None) or {}
+            if "todos" in update:
+                todos = update["todos"]
+                summary = "; ".join(
+                    f"[{t.get('status', '?')}] {t.get('content', '')[:60]}"
+                    for t in (todos if isinstance(todos, list) else [])
+                )
+                text = f"plan updated: {summary}" if summary else "plan updated"
+            else:
+                text = "state updated"
+        elif hasattr(output, "content"):
             try:
                 inner = output.content
                 text = inner if isinstance(inner, str) else str(inner)
@@ -225,7 +240,6 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
                 text = str(output)
         else:
             text = output if isinstance(output, str) else str(output)
-        tool_name = self._pop_tool_name()
         self._emit_to_bus(
             "tool_result",
             payload={"name": tool_name, "output": text},
@@ -330,10 +344,34 @@ def _open_async_sqlite_checkpointer(sqlite_path: str) -> Any:
     return loop.run_until_complete(_open())
 
 
-def _make_checkpointer():
-    """三级降级：Postgres -> SQLite -> InMemorySaver。"""
+def _open_sync_sqlite_checkpointer(sqlite_path: str) -> Any:
+    """同步 ``SqliteSaver``，用于 ``graph.invoke()`` 同步调用路径。
+
+    LangGraph 契约：从主线程同步调 AsyncSqliteSaver 会因事件循环 +
+    asyncio.Lock 互锁僵持（aio.py:164 抛 InvalidStateError）。同步路径必须用
+    threading.Lock + 同步 sqlite3.Connection 的 SqliteSaver。
+    """
+    import sqlite3
+
+    from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore[import-not-found]
+
+    conn = sqlite3.connect(sqlite_path, check_same_thread=False)
+    saver = SqliteSaver(conn)
+    saver.setup()
+    return saver
+
+
+def _make_checkpointer(mode: str = "async"):
+    """三级降级：Postgres -> SQLite -> InMemorySaver。
+
+    ``mode``:
+      - ``"async"``（默认，TUI / langgraph dev / astream_events）：SQLite 用 AsyncSqliteSaver
+      - ``"sync"``（runner.py print 模式 / graph.invoke）：SQLite 用同步 SqliteSaver
+
+    Postgres 与 InMemory 的实现 sync/async 通用，无需分支。
+    """
     postgres_dsn = (
-        os.environ.get("QA_AGENT_POSTGRES_CHECKPOINT_DSN")
+        os.environ.get("IST_POSTGRES_CHECKPOINT_DSN")
         or os.environ.get("LANGGRAPH_POSTGRES_DSN")
         or ""
     ).strip()
@@ -352,26 +390,38 @@ def _make_checkpointer():
                 row_factory=dict_row,
             )
             saver = PostgresSaver(conn)
-            if (os.environ.get("QA_AGENT_POSTGRES_CHECKPOINT_SETUP") or "1").lower() not in {"0", "false", "no"}:
+            if (os.environ.get("IST_POSTGRES_CHECKPOINT_SETUP") or "1").lower() not in {"0", "false", "no"}:
                 saver.setup()
             return saver
         except Exception as exc:  # noqa: BLE001
             logger.warning("PostgresSaver 初始化失败，降级本地 checkpointer: %s", exc)
 
-    sqlite_path = (os.environ.get("QA_AGENT_SQLITE_PATH") or "").strip()
+    sqlite_path = (os.environ.get("IST_SQLITE_PATH") or "").strip()
     if sqlite_path:
         try:
+            if mode == "sync":
+                return _open_sync_sqlite_checkpointer(sqlite_path)
             return _open_async_sqlite_checkpointer(sqlite_path)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("AsyncSqliteSaver 初始化失败，降级 InMemorySaver: %s", exc)
+            logger.warning("SQLite checkpointer (%s) 初始化失败，降级 InMemorySaver: %s", mode, exc)
 
     from langgraph.checkpoint.memory import InMemorySaver
 
     return InMemorySaver()
 
 
-def build_qa_agent_graph(*, checkpointer: Any | bool = True, store: Any | bool = True):
-    """构造 IST-Core v1 主图。"""
+def build_qa_agent_graph(
+    *,
+    checkpointer: Any | bool = True,
+    store: Any | bool = True,
+    checkpointer_mode: str = "async",
+):
+    """构造 IST-Core v1 主图。
+
+    ``checkpointer_mode`` 决定默认 checkpointer 工厂走 sync 还是 async 路径
+    （仅在 ``checkpointer is True`` 时生效）。runner.py print 模式必须传
+    ``"sync"``，TUI / langgraph dev / streaming 走默认 ``"async"``。
+    """
     g = StateGraph(QaAgentState)
     g.add_node("normalize_input", normalize_input)
     g.add_node("qa_node", qa_node)
@@ -384,7 +434,7 @@ def build_qa_agent_graph(*, checkpointer: Any | bool = True, store: Any | bool =
 
     compile_kwargs: dict[str, Any] = {}
     if checkpointer is True:
-        compile_kwargs["checkpointer"] = _make_checkpointer()
+        compile_kwargs["checkpointer"] = _make_checkpointer(mode=checkpointer_mode)
     elif checkpointer not in (False, None):
         compile_kwargs["checkpointer"] = checkpointer
 

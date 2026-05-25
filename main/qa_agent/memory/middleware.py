@@ -229,7 +229,7 @@ class MemoryWriteMiddleware(AgentMiddleware):
         self._finalizer = finalizer
         self._extractor_agent = extractor_agent
         self._distill_every_n = distill_every_n or int(
-            os.environ.get("QA_AGENT_MEMORY_DISTILL_EVERY_N", "10")
+            os.environ.get("IST_MEMORY_DISTILL_EVERY_N", "10")
         )
         self._finalized: set[str] = set()
         self._seen_threads: set[str] = set()
@@ -301,7 +301,7 @@ class MemoryWriteMiddleware(AgentMiddleware):
         """后台触发 fork extractor agent 蒸馏 L1 → L2。"""
         if self._extractor_agent is None:
             return
-        if os.environ.get("QA_AGENT_MEMORY_DISABLE_LLM", "").strip() == "1":
+        if os.environ.get("IST_MEMORY_DISABLE_LLM", "").strip() == "1":
             return
         try:
             from main.qa_agent.memory.extractor_agent import run_extractor_async

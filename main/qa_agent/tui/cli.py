@@ -35,6 +35,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "  infotest kms                 知识库总览\n"
             "  infotest kms product update  产品知识库更新（前台执行）\n"
             "  infotest kms qa update       测试知识库更新（前台执行）\n"
+            "  infotest reset               清除对话历史和临时文件（默认交互确认）\n"
+            "  infotest reset --all -y      同时清理长期记忆且不询问\n"
         ),
     )
     parser.add_argument("query", nargs="?", default=None,
@@ -102,7 +104,7 @@ def _run_threads_mode() -> int:
     if not threads:
         if not repo.is_persistent:
             print("(no threads — using InMemorySaver)", file=sys.stderr)
-            print("Set QA_AGENT_SQLITE_PATH or QA_AGENT_POSTGRES_CHECKPOINT_DSN to persist.", file=sys.stderr)
+            print("Set IST_SQLITE_PATH or IST_POSTGRES_CHECKPOINT_DSN to persist.", file=sys.stderr)
         else:
             print("(no threads found)")
         return 0
@@ -140,8 +142,22 @@ def _run_server_command(action: str, port: int) -> int:
             pid_file.unlink(missing_ok=True)
             return None
 
+    def _find_port_pid() -> int | None:
+        """Fallback: find PID occupying the port via lsof."""
+        try:
+            out = subprocess.check_output(
+                ["lsof", "-ti", f":{port}"], text=True, stderr=subprocess.DEVNULL
+            ).strip()
+            if out:
+                return int(out.splitlines()[0])
+        except (subprocess.CalledProcessError, ValueError):
+            pass
+        return None
+
     def _stop() -> bool:
         pid = _read_pid()
+        if pid is None:
+            pid = _find_port_pid()
         if pid is None:
             print("Web Terminal 未运行")
             return False
@@ -206,12 +222,19 @@ def main(argv: list[str] | None = None) -> int:
         from main.qa_agent.tui.kms_cli import run_kms_command
         return run_kms_command(raw_argv[1:])
 
+    # reset 子命令：清除对话历史和临时文件
+    if raw_argv and raw_argv[0] == "reset":
+        logging.basicConfig(level="WARNING", format="%(levelname)s %(name)s: %(message)s")
+        _ensure_env()
+        from main.qa_agent.tui.reset_cli import run_reset_command
+        return run_reset_command(raw_argv[1:])
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.version:
         from main.qa_agent.tui import __init__ as _init  # noqa: F401
-        print("infotest 0.1.0 (IST-Core TUI MVP)")
+        print("infotest 1.0.2 (IST-Core)")
         return 0
 
     # -server 子命令：Web Terminal 管理

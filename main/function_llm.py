@@ -42,7 +42,8 @@ def _get_llm_cache() -> LLMCache | None:
     return _LLM_CACHE
 
 DASHSCOPE_COMPAT_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-DASHSCOPE_CHAT_URL = f"{DASHSCOPE_COMPAT_BASE}/chat/completions"
+_CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
+DASHSCOPE_CHAT_URL = f"{DASHSCOPE_COMPAT_BASE}{_CHAT_COMPLETIONS_SUFFIX}"
 CHAT_MODEL = "qwen-plus"
 DEFAULT_MAX_TOKENS = 8192
 DEFAULT_TEMPERATURE = 0.1
@@ -56,6 +57,16 @@ class TruncationError(Exception):
 
 class ChatCompletionError(Exception):
     """Raised on non-retryable chat completion failures."""
+
+
+def resolve_chat_completions_url(base_url: str | None) -> str:
+    """OpenAI 兼容 API 根（或已含 ``/chat/completions`` 的 URL）→ POST 目标."""
+    if not base_url:
+        return DASHSCOPE_CHAT_URL
+    root = base_url.strip().rstrip("/")
+    if root.endswith(_CHAT_COMPLETIONS_SUFFIX):
+        return root
+    return f"{root}{_CHAT_COMPLETIONS_SUFFIX}"
 
 
 def chat_completion(
@@ -75,9 +86,12 @@ def chat_completion(
 
     Raises TruncationError if output was truncated.
     Raises ChatCompletionError on persistent failures.
+
+    ``base_url`` 为 OpenAI 兼容 API 根（如 ``https://api.deepseek.com`` 或
+    DashScope ``.../compatible-mode/v1``）；已含 ``/chat/completions`` 时原样使用。
     """
     use_model = model or CHAT_MODEL
-    use_url = base_url or DASHSCOPE_CHAT_URL
+    use_url = resolve_chat_completions_url(base_url)
 
     cache = _get_llm_cache()
     if cache is not None:

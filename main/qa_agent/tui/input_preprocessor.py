@@ -32,15 +32,25 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _WORKSPACE = _PROJECT_ROOT / "workspace"
 _DEFAULT_INBOX = _WORKSPACE / "inputs"
 
+# 已知文档后缀，作为路径正则的贪婪止步锚点（允许路径中间含空格 / 中文）
+_KNOWN_SUFFIXES = r"(?:xlsx|xls|pdf|docx|doc|pptx|ppt|md|txt|json|csv|conf|cfg|ini|yaml|yml|xml|log)"
+
 # 路径正则：匹配引号包裹的路径 或 常见绝对路径模式
 _PATH_PATTERNS = [
     # 单引号包裹
     re.compile(r"'([^']{3,})'"),
     # 双引号包裹
     re.compile(r'"([^"]{3,})"'),
-    # Windows 绝对路径（无引号）
+    # Windows 绝对路径（无引号，到已知后缀止）—— 允许中间含空格 / 中文
+    re.compile(rf'([A-Za-z]:[\\\/][^\n"\']*?\.{_KNOWN_SUFFIXES})\b', re.IGNORECASE),
+    # Windows 绝对路径（无引号，无后缀回退到 \S+）
     re.compile(r'([A-Za-z]:[\\\/]\S+)'),
-    # POSIX 绝对路径（无引号，非 http）
+    # POSIX 绝对路径（无引号，到已知后缀止）—— 允许中间含空格 / 中文
+    re.compile(
+        rf'(?<!\w)(\/(?:Users|home|tmp|var|opt|mnt|media)\/[^\n"\']*?\.{_KNOWN_SUFFIXES})\b',
+        re.IGNORECASE,
+    ),
+    # POSIX 绝对路径（无引号，无后缀回退到 \S+）
     re.compile(r'(?<!\w)(\/(?:Users|home|tmp|var|opt|mnt|media)[\/]\S+)'),
     # ~/xxx
     re.compile(r'(~\/\S+)'),

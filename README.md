@@ -8,15 +8,18 @@
 # 安装
 pip install -e .
 
-# 配置（复制 environment.example 并填入 DashScope API Key）
+# 配置（复制 environment.example 并填入 API Key）
 cp environment.example environment
-# 编辑 environment 填入 DASHSCOPE_API_KEY
+# 编辑 environment 填入 DASHSCOPE_API_KEY 或 DEEPSEEK_API_KEY，并选用对应 provider
 
 # 启动 TUI
 infotest
 
 # 单次查询（print 模式）
 infotest -p "项目里有哪些测试用例？"
+
+# 清除对话历史和临时文件
+infotest reset           # 默认交互确认；加 --yes 跳过；--all 含长期记忆
 ```
 
 ## 功能
@@ -26,7 +29,7 @@ infotest -p "项目里有哪些测试用例？"
 - 大仓库文件搜索：优先使用 ripgrep，支持按文件列表 / 命中内容 / 计数搜索，支持结果分页和大文件按行范围读取；ripgrep 不可用时自动回退到 Python 只读实现
 - 3 tier 模型分级（opus / sonnet / haiku）按任务复杂度自动选模型
 - Thinking block 渲染（qwen3 / Claude 系列 thinking 输出折叠展开）
-- 13 个 slash 命令
+- 16 个 slash 命令
 
 ## 文件搜索能力
 
@@ -86,7 +89,6 @@ project_root/
 | `/help` | 显示帮助 |
 | `/clear` | 清屏 |
 | `/model` | 列出 / 切换模型 |
-| `/tier` | 列出 / 切换模型 tier |
 | `/threads` | 列出历史会话 |
 | `/resume` | 恢复历史会话 |
 | `/continue` | 继续上次对话 |
@@ -94,6 +96,10 @@ project_root/
 | `/compact` | 压缩上下文 |
 | `/plan` | 切换 plan 模式 |
 | `/init` | 初始化项目分析 |
+| `/reset` | 清除对话历史 + 临时文件（`--all` 含长期记忆） |
+| `/memory` | 查看 / 清理记忆系统 |
+| `/remember` | 显式追加偏好 / 反馈到长期记忆 |
+| `/footprint` | 查询 CLI footprint 知识树 |
 | `/version` | 显示版本 |
 | `/exit` | 退出 |
 
@@ -112,14 +118,15 @@ project_root/
 ## 模型配置
 
 ```bash
-# environment 文件
-QA_AGENT_FALLBACK_MODEL=anthropic:qwen-plus
-QA_AGENT_ALLOWED_MODELS=qwen-plus,qwen-turbo,qwen-max,qwen3.6-plus
+# environment 文件（详见 environment.example）
+IST_LLM_PROVIDER=dashscope                    # 或 deepseek
+IST_MODEL=qwen-plus
+IST_ALLOWED_MODELS=qwen-plus,qwen-turbo,qwen-max,qwen3.6-plus
 
 # 3 tier 分级
-QA_AGENT_OPUS_MODEL=qwen3.6-plus      # 高复杂度
-QA_AGENT_SONNET_MODEL=qwen-plus       # 中等
-QA_AGENT_HAIKU_MODEL=qwen-turbo       # 简单
+IST_OPUS_MODEL=qwen3.6-plus      # 高复杂度
+IST_SONNET_MODEL=qwen-plus       # 中等
+IST_HAIKU_MODEL=qwen-turbo       # 简单
 ```
 
 ## 架构

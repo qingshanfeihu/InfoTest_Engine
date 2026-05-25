@@ -65,16 +65,16 @@ def test_parse_just_a_slash_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# Built-in command registry (13 commands required)
+# Built-in command registry
 # ---------------------------------------------------------------------------
 
 
-def test_registry_has_13_builtin_commands():
-    assert len(BUILTIN_COMMANDS) == 13
+def test_registry_has_expected_builtin_commands():
     names = {cmd.name for cmd in BUILTIN_COMMANDS}
     expected = {
         "help", "clear", "threads", "resume", "continue", "model",
-        "cost", "compact", "plan", "init", "kms", "version", "exit",
+        "cost", "compact", "plan", "init", "reset", "memory", "remember",
+        "footprint", "version", "exit",
     }
     assert names == expected
 
@@ -128,7 +128,7 @@ def test_dispatch_version_returns_info_result_with_version():
     result = dispatch_slash_command(p, _mock_app())
     assert isinstance(result, InfoResult)
     assert "infotest" in result.text
-    assert "0.1.0" in result.text
+    assert "1.0.2" in result.text
 
 
 def test_dispatch_resume_without_arg_returns_error():
@@ -164,8 +164,8 @@ def test_dispatch_continue_uses_most_recent():
 
 
 def test_dispatch_model_with_arg_records_override(monkeypatch):
-    """/model <name> 设置 override（name 必须在 QA_AGENT_ALLOWED_MODELS 列表里）。"""
-    monkeypatch.setenv("QA_AGENT_ALLOWED_MODELS", "qwen-plus,gpt-4-turbo,claude-haiku")
+    """/model <name> 设置 override（name 必须在 IST_ALLOWED_MODELS 列表里）。"""
+    monkeypatch.setenv("IST_ALLOWED_MODELS", "qwen-plus,gpt-4-turbo,claude-haiku")
     app = _mock_app()
     p = parse_slash_command("/model gpt-4-turbo")
     result = dispatch_slash_command(p, app)
@@ -176,7 +176,7 @@ def test_dispatch_model_with_arg_records_override(monkeypatch):
 
 def test_dispatch_model_no_arg_lists_available(monkeypatch):
     """/model 无参 -> 列出可用模型 + 标 current。"""
-    monkeypatch.setenv("QA_AGENT_ALLOWED_MODELS", "qwen-plus,gpt-4-turbo")
+    monkeypatch.setenv("IST_ALLOWED_MODELS", "qwen-plus,gpt-4-turbo")
     app = _mock_app()
     p = parse_slash_command("/model")
     result = dispatch_slash_command(p, app)
@@ -188,7 +188,7 @@ def test_dispatch_model_no_arg_lists_available(monkeypatch):
 
 def test_dispatch_model_unknown_returns_error(monkeypatch):
     """/model <unknown> 不在 allowed list -> ErrorResult。"""
-    monkeypatch.setenv("QA_AGENT_ALLOWED_MODELS", "qwen-plus")
+    monkeypatch.setenv("IST_ALLOWED_MODELS", "qwen-plus")
     app = _mock_app()
     p = parse_slash_command("/model unknown-model")
     result = dispatch_slash_command(p, app)

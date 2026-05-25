@@ -156,7 +156,7 @@ def _cmd_exit(args: str, app: "IstApp") -> SlashCommandResult:
 
 
 def _cmd_version(args: str, app: "IstApp") -> SlashCommandResult:
-    return InfoResult(text="infotest 0.1.0 (IST-Core TUI MVP)")
+    return InfoResult(text="infotest 1.0.2 (IST-Core)")
 
 
 def _cmd_threads(args: str, app: "IstApp") -> SlashCommandResult:
@@ -168,7 +168,7 @@ def _cmd_threads(args: str, app: "IstApp") -> SlashCommandResult:
         if not app._checkpoint_repo.is_persistent:
             return InfoResult(
                 text="(no threads — using InMemorySaver; "
-                     "set QA_AGENT_SQLITE_PATH or QA_AGENT_POSTGRES_CHECKPOINT_DSN to persist)"
+                     "set IST_SQLITE_PATH or IST_POSTGRES_CHECKPOINT_DSN to persist)"
             )
         return InfoResult(text="(no threads found)")
     lines = ["Recent threads:", ""]
@@ -204,7 +204,7 @@ def _cmd_continue(args: str, app: "IstApp") -> SlashCommandResult:
 def _cmd_model(args: str, app: "IstApp") -> SlashCommandResult:
     """List available models or switch to one. 
 
-    - ``/model``        -> list available models(QA_AGENT_ALLOWED_MODELS env or default)
+    - ``/model``        -> list available models(IST_ALLOWED_MODELS env or default)
     - ``/model <name>`` -> switch model for next turn
     """
     name = (args or "").strip()
@@ -243,7 +243,7 @@ def _cmd_model(args: str, app: "IstApp") -> SlashCommandResult:
         if not allowed or len(allowed) == 1:
             lines.append("")
             lines.append(
-                "(Configure ``QA_AGENT_ALLOWED_MODELS=`` env to add more model options)"
+                "(Configure ``IST_ALLOWED_MODELS=`` env to add more model options)"
             )
         return TextResult(text="\n".join(lines))
 
@@ -251,7 +251,7 @@ def _cmd_model(args: str, app: "IstApp") -> SlashCommandResult:
     if allowed and name not in allowed:
         return ErrorResult(text=(
             f"model {name!r} not in allowed list: {allowed}.\n"
-            f"Set QA_AGENT_ALLOWED_MODELS env to expand."
+            f"Set IST_ALLOWED_MODELS env to expand."
         ))
     app.tui_state.__dict__["override_model"] = name
     return InfoResult(text=f"model switched to {name} (applies to next turn)")

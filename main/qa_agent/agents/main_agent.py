@@ -253,10 +253,10 @@ def build_main_agent(**kwargs: Any):
 
 
 def _resolve_interrupt_on() -> dict[str, Any] | None:
-    """从 ``QA_AGENT_INTERRUPT_ON`` 解析 deepagents interrupt_on 配置。
+    """从 ``IST_INTERRUPT_ON`` 解析 deepagents interrupt_on 配置。
 
     格式：逗号分隔工具名（全部走 ``True`` = 允许 approve/edit/reject/respond）。
-    例：``QA_AGENT_INTERRUPT_ON=web_bug_search,qa_exec``。
+    例：``IST_INTERRUPT_ON=web_bug_search,qa_exec``。
 
     默认空——即所有工具自动批准。打开 interrupt_on 会让 graph 在指定工具调用
     前暂停，需要 TUI 实现 ``HumanInterrupt`` 决策的渲染（基础设施 bridge.py
@@ -264,7 +264,7 @@ def _resolve_interrupt_on() -> dict[str, Any] | None:
     """
     import os as _os
 
-    raw = (_os.environ.get("QA_AGENT_INTERRUPT_ON") or "").strip()
+    raw = (_os.environ.get("IST_INTERRUPT_ON") or "").strip()
     if not raw:
         return None
     tool_names = [t.strip() for t in raw.split(",") if t.strip()]

@@ -191,7 +191,7 @@ class IstInkApp:
 
         # Simple, clean welcome — no heavy box
         self._transcript.append_message("")
-        self._transcript.append_message(f"  \x1b[1mInfoTest Engine v1.0.0\x1b[0m")
+        self._transcript.append_message(f"  \x1b[1mInfoTest Engine v1.0.2\x1b[0m")
         self._transcript.append_message(f"  \x1b[2m{model} · {os.getcwd()}\x1b[0m")
         self._transcript.append_message("")
         self._transcript.append_message(f"  \x1b[2m输入自然语言描述测试分析需求，自动调用工具查阅知识库。\x1b[0m")
@@ -759,22 +759,22 @@ class IstInkApp:
                 self._transcript.update_message_at(
                     idx, f" \x1b[32m⏺\x1b[0m \x1b[1m{name}\x1b[0m"
                 )
-            if result:
+            # write_todos: render structured plan update
+            if tool_name == "write_todos" and result:
+                self._render_plan_update(result)
+            elif result:
                 full_lines = str(result).split("\n")
                 start_idx = self._transcript.message_count()
                 expanded = getattr(self, '_tool_outputs_expanded', False)
                 if expanded or len(full_lines) <= 5:
-                    # Show all lines
                     for line in full_lines:
                         self._transcript.append_message(f"   \x1b[2m⎿\x1b[0m {line[:75]}")
                     display_count = len(full_lines)
                 else:
-                    # Collapsed: 5 lines + hint
                     for line in full_lines[:5]:
                         self._transcript.append_message(f"   \x1b[2m⎿\x1b[0m {line[:75]}")
                     self._transcript.append_message(f"   \x1b[2m… +{len(full_lines) - 5} lines (ctrl+o to expand)\x1b[0m")
                     display_count = 6
-                # Track for Ctrl+O toggle
                 if not hasattr(self, '_tool_output_blocks'):
                     self._tool_output_blocks = []
                 self._tool_output_blocks.append({
@@ -839,6 +839,22 @@ class IstInkApp:
             if not hasattr(self, '_tool_start_stack'):
                 self._tool_start_stack = []
             self._tool_start_stack.append((idx, tool_name))
+
+        elif cls_name == "TodoListMessage":
+            todos = getattr(msg, "todos", [])
+            idx = self._transcript.message_count()
+            self._transcript.append_message(f" \x1b[5;33m⏺\x1b[0m {B}Plan{X}")
+            if not hasattr(self, '_tool_start_stack'):
+                self._tool_start_stack = []
+            self._tool_start_stack.append((idx, "Plan"))
+            if not hasattr(self, '_plan_line_start'):
+                self._plan_line_start = -1
+            self._plan_line_start = self._transcript.message_count()
+            for todo in todos:
+                content = todo.get("content", "")[:70]
+                status = todo.get("status", "pending")
+                icon = self._todo_status_icon(status)
+                self._transcript.append_message(f"   {icon} {content}")
 
         elif cls_name == "FileReadMessage":
             path = getattr(msg, "path", "")
@@ -950,6 +966,50 @@ class IstInkApp:
                 idx, f" {G}⏺{X} {B}{name}{X}"
             )
         self._tool_start_stack.clear()
+
+    def _todo_status_icon(self, status: str) -> str:
+        """Return ANSI-colored status icon for a todo item."""
+        if status == "completed":
+            return f"{self._GREEN}●{self._RESET}"
+        if status == "in_progress":
+            return f"\x1b[33m◉{self._RESET}"
+        return f"\x1b[2m○{self._RESET}"
+
+    def _render_plan_update(self, result: str) -> None:
+        """Render a plan update from write_todos tool_done result."""
+        import json
+        D = self._DIM
+        X = self._RESET
+
+        todos = self._parse_plan_result(result)
+        if not todos:
+            return
+
+        plan_start = getattr(self, '_plan_line_start', -1)
+        if plan_start >= 0 and plan_start < self._transcript.message_count():
+            count = self._transcript.message_count() - plan_start
+            for i in range(count):
+                self._transcript.update_message_at(plan_start + i, "")
+            self._plan_line_start = plan_start
+        else:
+            self._plan_line_start = self._transcript.message_count()
+
+        for todo in todos:
+            content = todo.get("content", "")[:70]
+            status = todo.get("status", "pending")
+            icon = self._todo_status_icon(status)
+            self._transcript.append_message(f"   {icon} {content}")
+
+    def _parse_plan_result(self, result: str) -> list[dict[str, str]]:
+        """Parse plan result string back into todos list."""
+        import re
+        todos: list[dict[str, str]] = []
+        pattern = re.compile(r"\[(pending|in_progress|completed)\]\s*(.+)")
+        for part in result.replace("plan updated: ", "").split(";"):
+            m = pattern.match(part.strip())
+            if m:
+                todos.append({"status": m.group(1), "content": m.group(2).strip()})
+        return todos
 
     def _update_thinking_line(self, text: str | None) -> None:
         """Show/hide the thinking status line above the input divider."""

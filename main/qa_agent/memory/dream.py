@@ -77,14 +77,14 @@ def _last_run_path() -> Path:
 def should_run_dream() -> tuple[bool, str]:
     """五道闸判断。返回 (是否跑, 原因说明)。"""
     # 闸 1：功能开关
-    if (os.environ.get("QA_AGENT_DREAM_ENABLED") or "1").strip() == "0":
-        return False, "disabled by QA_AGENT_DREAM_ENABLED=0"
+    if (os.environ.get("IST_DREAM_ENABLED") or "1").strip() == "0":
+        return False, "disabled by IST_DREAM_ENABLED=0"
 
-    if (os.environ.get("QA_AGENT_MEMORY_ENABLED") or "1").strip() == "0":
-        return False, "disabled by QA_AGENT_MEMORY_ENABLED=0"
+    if (os.environ.get("IST_MEMORY_ENABLED") or "1").strip() == "0":
+        return False, "disabled by IST_MEMORY_ENABLED=0"
 
-    if (os.environ.get("QA_AGENT_MEMORY_DISABLE_LLM") or "0").strip() == "1":
-        return False, "disabled by QA_AGENT_MEMORY_DISABLE_LLM=1"
+    if (os.environ.get("IST_MEMORY_DISABLE_LLM") or "0").strip() == "1":
+        return False, "disabled by IST_MEMORY_DISABLE_LLM=1"
 
     # 闸 2：24h 时间门
     last_run = _last_run_path()
@@ -109,7 +109,7 @@ def should_run_dream() -> tuple[bool, str]:
 
     # 闸 4：会话计数门 ≥ 5
     sessions = read_session_counter()
-    min_sessions = int(os.environ.get("QA_AGENT_DREAM_MIN_SESSIONS") or "5")
+    min_sessions = int(os.environ.get("IST_DREAM_MIN_SESSIONS") or "5")
     if sessions < min_sessions:
         return False, f"only {sessions} sessions (need >= {min_sessions})"
 
@@ -187,8 +187,8 @@ class DreamTask:
     def __init__(self, *, store: MemoryStore, llm_chat: Any) -> None:
         self._store = store
         self._llm = llm_chat
-        self._lookback_days = int(os.environ.get("QA_AGENT_DREAM_LOOKBACK_DAYS") or "7")
-        self._prune_days = int(os.environ.get("QA_AGENT_DREAM_PRUNE_DAYS") or "7")
+        self._lookback_days = int(os.environ.get("IST_DREAM_LOOKBACK_DAYS") or "7")
+        self._prune_days = int(os.environ.get("IST_DREAM_PRUNE_DAYS") or "7")
 
     def run(self) -> DreamReport:
         t0 = time.time()
@@ -322,7 +322,7 @@ class DreamTask:
     def _consolidate_footprints(self) -> list[str]:
         """LLM 提取 footprint 产品事实，然后纯代码 route + merge。
 
-        使用 QA_AGENT_HAIKU_MODEL（默认 deepseek-v4-flash）降低成本。
+        使用 IST_HAIKU_MODEL（默认 deepseek-v4-flash）降低成本。
         """
         if os.environ.get("FOOTPRINT_ENABLED", "1") != "1":
             return []
@@ -377,7 +377,7 @@ class DreamTask:
         """构建 footprint 提取用的 haiku tier LLM 调用函数。
 
         复用 function_llm.chat_completion，获得 retry + truncation 检测 + cache。
-        使用 QA_AGENT_HAIKU_MODEL（默认 deepseek-v4-flash）。
+        使用 IST_HAIKU_MODEL（默认 deepseek-v4-flash）。
         """
         try:
             import requests as _requests
@@ -405,7 +405,6 @@ class DreamTask:
         else:
             base_url = os.environ.get("DASHSCOPE_BASE_URL", DEFAULT_DASHSCOPE_BASE_URL).strip()
 
-        chat_url = f"{base_url}/chat/completions"
         session = _requests.Session()
 
         def _call(system_prompt: str, user_prompt: str):
@@ -413,7 +412,7 @@ class DreamTask:
                 return chat_completion(
                     session, api_key, system_prompt, user_prompt,
                     model=model,
-                    base_url=chat_url,
+                    base_url=base_url,
                     max_tokens=4096,
                     temperature=0.1,
                     top_p=0.1,

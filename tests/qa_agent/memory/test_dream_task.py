@@ -14,7 +14,7 @@ from main.qa_agent.memory.store import MemoryStore
 
 @pytest.fixture
 def isolated_root(tmp_path, monkeypatch):
-    monkeypatch.setenv("QA_AGENT_MEMORY_ROOT", str(tmp_path / "memory"))
+    monkeypatch.setenv("IST_MEMORY_ROOT", str(tmp_path / "memory"))
     (tmp_path / "memory").mkdir(parents=True, exist_ok=True)
     dream._release_pid_lock()
     yield tmp_path / "memory"

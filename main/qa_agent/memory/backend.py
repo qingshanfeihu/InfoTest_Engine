@@ -34,7 +34,7 @@ _store_singleton_dsn: str | None = None
 
 
 def _build_default_store():
-    """按 env QA_AGENT_MEMORY_STORE_DSN 选 InMemoryStore / SqliteStore / PostgresStore。
+    """按 env IST_MEMORY_STORE_DSN 选 InMemoryStore / SqliteStore / PostgresStore。
 
     DSN 格式：
     - (空) → InMemoryStore（默认，进程内）
@@ -43,7 +43,7 @@ def _build_default_store():
     """
     global _store_singleton, _store_singleton_dsn
 
-    dsn = (os.environ.get("QA_AGENT_MEMORY_STORE_DSN") or "").strip()
+    dsn = (os.environ.get("IST_MEMORY_STORE_DSN") or "").strip()
     if _store_singleton is not None and _store_singleton_dsn == dsn:
         return _store_singleton
 
@@ -88,7 +88,7 @@ def _build_default_store():
             _store_singleton_dsn = dsn
             return _store_singleton
 
-    logger.warning("未识别的 QA_AGENT_MEMORY_STORE_DSN=%r，使用 InMemoryStore", dsn)
+    logger.warning("未识别的 IST_MEMORY_STORE_DSN=%r，使用 InMemoryStore", dsn)
     from langgraph.store.memory import InMemoryStore
     _store_singleton = InMemoryStore()
     _store_singleton_dsn = dsn
@@ -160,7 +160,7 @@ def get_memory_sources() -> list[str]:
 
 def get_default_root() -> Path:
     """返回真实磁盘上的 memory 根目录（用于 dream task / AGENTS.md 种子文件）。"""
-    root_env = (os.environ.get("QA_AGENT_MEMORY_ROOT") or "").strip()
+    root_env = (os.environ.get("IST_MEMORY_ROOT") or "").strip()
     if root_env:
         return Path(root_env).resolve()
     project_root = Path(__file__).resolve().parents[3]

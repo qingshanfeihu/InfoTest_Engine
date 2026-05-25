@@ -6,12 +6,54 @@ Plan 风险 #4：Postgres DSN 未配时 sidebar 报错——三级降级
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
 
 logger = logging.getLogger(__name__)
+
+
+def _saver_uses_async_api(saver: Any) -> bool:
+    return callable(getattr(saver, "alist", None))
+
+
+def _run_sync(coro_factory):
+    """在无 running loop 的 UI 线程里跑 async checkpoint 读操作。"""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro_factory())
+    raise RuntimeError("CheckpointRepo 无法在运行中的 event loop 内同步读 checkpoint")
+
+
+def _saver_list_checkpoints(saver: Any, *, limit: int) -> list[Any]:
+    if _saver_uses_async_api(saver):
+        async def _collect() -> list[Any]:
+            out: list[Any] = []
+            try:
+                async_iter = saver.alist(None, limit=limit)
+            except TypeError:
+                async_iter = saver.alist({}, limit=limit)
+            async for item in async_iter:
+                out.append(item)
+            return out
+
+        return _run_sync(_collect)
+    try:
+        return list(saver.list(None, limit=limit))
+    except TypeError:
+        return list(saver.list({}, limit=limit))
+
+
+def _saver_get_tuple(saver: Any, config: dict[str, Any]) -> Any:
+    if _saver_uses_async_api(saver):
+        async def _get() -> Any:
+            return await saver.aget_tuple(config)
+
+        return _run_sync(_get)
+    return saver.get_tuple(config)
 
 
 @dataclass
@@ -31,7 +73,7 @@ class CheckpointRepo:
     - ``get_thread(tid)`` → 返回最终 state（用于 ``--resume`` 回灌 message log）
 
     构造时不传 saver → 使用 graph.py:_make_checkpointer 同款工厂
-    （按 env QA_AGENT_POSTGRES_CHECKPOINT_DSN / QA_AGENT_SQLITE_PATH 自动选）。
+    （按 env IST_POSTGRES_CHECKPOINT_DSN / IST_SQLITE_PATH 自动选）。
     """
 
     def __init__(self, saver: Any | None = None) -> None:
@@ -69,14 +111,7 @@ class CheckpointRepo:
         if self._saver is None:
             return []
         try:
-            tuples = self._saver.list(None, limit=limit * 4)  # 多取几条以便去重
-        except TypeError:
-            # 旧版 langgraph 接口——空 config 不接受
-            try:
-                tuples = self._saver.list({}, limit=limit * 4)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("CheckpointRepo.list_threads list() 不支持: %s", exc)
-                return []
+            tuples = _saver_list_checkpoints(self._saver, limit=limit * 4)
         except Exception as exc:  # noqa: BLE001
             logger.debug("CheckpointRepo.list_threads 失败: %s", exc)
             return []
@@ -99,7 +134,7 @@ class CheckpointRepo:
             return None
         config = {"configurable": {"thread_id": thread_id}}
         try:
-            tup = self._saver.get_tuple(config)
+            tup = _saver_get_tuple(self._saver, config)
         except Exception as exc:  # noqa: BLE001
             logger.debug("get_tuple 失败 tid=%s: %s", thread_id, exc)
             return None

@@ -121,7 +121,7 @@ _TEXT_SUFFIXES = {
     ".yaml",
     ".yml",
 }
-_SPREADSHEET_SUFFIXES = {".xlsx", ".xlsm"}
+_SPREADSHEET_SUFFIXES = {".xlsx", ".xlsm", ".xls"}
 _DOCX_SUFFIXES = {".docx"}
 _VCS_DIRECTORIES_TO_EXCLUDE = {".git", ".svn", ".hg", ".bzr", ".jj", ".sl"}
 _RG_MAX_COLUMNS = 500
@@ -441,6 +441,17 @@ def _cell_text(value: object) -> str:
 
 
 def _read_spreadsheet(path: Path, *, offset: int, limit: int) -> str:
+    suffix = path.suffix.lower()
+
+    # 旧 .xls 走 xlrd 路径，复用 main.xlsx_to_markdown 的转换逻辑
+    if suffix == ".xls":
+        try:
+            from main.xlsx_to_markdown import convert_xlsx_to_markdown
+            md_text = convert_xlsx_to_markdown(path)
+        except Exception as exc:  # noqa: BLE001
+            return f"error: unable to read .xls (need xlrd>=2.0,<3): {exc}"
+        return _format_page(md_text.splitlines(), offset=offset, limit=limit)
+
     try:
         import openpyxl  # type: ignore[import-not-found]
     except Exception as exc:  # noqa: BLE001

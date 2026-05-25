@@ -25,7 +25,7 @@ class _StubStore:
 
 @pytest.fixture
 def isolated_memory_root(tmp_path, monkeypatch):
-    monkeypatch.setenv("QA_AGENT_MEMORY_ROOT", str(tmp_path / "memory"))
+    monkeypatch.setenv("IST_MEMORY_ROOT", str(tmp_path / "memory"))
     yield tmp_path / "memory"
 
 

@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 本项目展示名为 **InfoTest Engine**，agent 核心展示名为 **IST-Core**。代码包路径与 graph id 保留历史名（`main.qa_agent`、`qa_agent` 等运行时标识不动）；环境变量已统一迁移到 `IST_*` 前缀（vendor 专有 key 如 `DASHSCOPE_*` / `DEEPSEEK_*` / `MINERU_*` 不变）。
 
-InfoTest Engine 把技术文档（网络 / IPv6 / HTTP/2 / 网关配置指南等）和测试用例（xlsx）转成 markdown 落地，让 IST-Core agent 用 `read_file` / `grep` / `ls` / `write_file` / `edit_file` 直读直写，配合 `qwen3.6-plus` 提供测试评审、测试资产理解能力。
+InfoTest Engine 把技术文档（网络 / IPv6 / HTTP/2 / 网关配置指南等）和测试用例（xlsx）转成 markdown 落地，让 IST-Core agent 用 `read_file` / `grep` / `ls` / `write_file` / `edit_file` 直读直写，配合可切换的 LLM provider（默认 deepseek-v4-pro，可切 dashscope qwen 系）提供测试评审、测试资产理解能力。
 
 **架构原则（2026-05-20 简化收口）**：不再做 LLM 特征抽取 / Qdrant 向量索引 / RAG 检索。orgin/ 文档只做两件事：①KMS 分桶；②转 markdown 直出。
 

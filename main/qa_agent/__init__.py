@@ -8,7 +8,7 @@
 - ``server_graph.py`` — ``langgraph dev`` 入口（langgraph.json 指向这里）
 - ``events.py``     — 类型化事件 ``QaAgentEvent`` + ``EventBus``
 - ``streaming.py``  — ``astream_events(version="v2")`` -> ``QaAgentEvent`` 适配器
-- ``agents/``       — IST-Core（main_agent 兼容入口）/ 专用 Reviewer（deepagents 构造 + ChatOpenAI / ChatTongyi 降级）
+- ``agents/``       — IST-Core（main_agent 兼容入口）/ 专用 Reviewer（deepagents + ChatOpenAI 兼容端点）
 - ``tools/``        — 12 个 ``@tool``（8 检索 + 4 对话式评审编排）
 - ``sinks/``        — CLI / JSONL / LangSmith 三端 sink
 

@@ -17,6 +17,7 @@ dashscope>=1.14.0
 langgraph>=1.1,<2
 langgraph-checkpoint>=4,<5
 langgraph-checkpoint-sqlite>=3,<4
+aiosqlite>=0.20,<1                    # AsyncSqliteSaver（TUI astream_events 必需）
 # Deep Agents：主 Agent 内核（要求 Python >= 3.11）
 deepagents>=0.5.3,<0.6
 # Product testing platform runtime state store + LangGraph Postgres checkpointer.

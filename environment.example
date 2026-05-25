@@ -1,203 +1,166 @@
 # =============================================================================
-# 本地密钥：复制本文件为项目根目录的「environment」（无扩展名），再填写下方取值。
-#   Windows: copy environment.example environment
-#   macOS/Linux: cp environment.example environment
-# 「environment」已在 .gitignore，勿提交到 Git。
+# InfoTest Engine 本地配置
+# 复制为 environment（无扩展名）后填入下方取值。已在 .gitignore，勿提交。
+#   cp environment.example environment
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# MinerU（https://mineru.net/）
-# 用于：main/mineru_batch_export.py、main/mineru_merged_pre_data.py 等
-# 也可通过环境变量 MINERU_API_TOKEN 提供（二选一）
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# 一、API 凭证（按厂商分组）
+# =============================================================================
+
+# ---- DashScope / 阿里云百炼 ------------------------------------------------
+# 用途：qwen 系列 chat（KMS 分类、memory dream、可选评审主链路）
+# 申请：https://bailian.console.aliyun.com/?tab=model#/api-key
+DASHSCOPE_API_KEY=
+# 同一把 Key 的别名（与 DASHSCOPE_API_KEY 二选一）
+# BAILIAN_API_KEY=
+# 可选：自定义兼容端点（一般留空走默认 OpenAI 兼容地址）
+# DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+
+
+# ---- DeepSeek -------------------------------------------------------------
+# 用途：deepseek-v4-pro 评审主链路、deepseek-v4-flash explore / haiku tier
+# 申请：https://platform.deepseek.com/api_keys
+DEEPSEEK_API_KEY=
+# DEEPSEEK_BASE_URL=https://api.deepseek.com
+
+
+# ---- MinerU --------------------------------------------------------------
+# 用途：main/mineru_batch_export.py PDF / docx → markdown
 MINERU_TOKEN=
 
-# -----------------------------------------------------------------------------
-# 阿里云百炼 / DashScope
-# 用于：main/mineru_pre_data_clean.py（语义去重 embeddings，OpenAI 兼容 embeddings API）
-# 控制台创建的 API-Key；缺失或调用失败时 mineru_pre_data_clean 非零退出。
-# -----------------------------------------------------------------------------
-DASHSCOPE_API_KEY=
 
-# 与上一项二选一：百炼控制台发放的 Key 与 DashScope 相同；未设置 DASHSCOPE_API_KEY 时会自动采用。
-# BAILIAN_API_KEY=
-
-# 可选：国际区或自定义 compatible 基址（一般留空即可）
-# DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-# 可选：embedding 模型名（预清洗）
-# DASHSCOPE_EMBEDDING_MODEL=text-embedding-v4
-# DASHSCOPE_EMBEDDING_DIMENSIONS=1024
-
-# -----------------------------------------------------------------------------
-# Qdrant 向量库（本地 podman 部署，见 main/langchain_qdrant.py）
-# 启动容器:
-#   podman machine start
-#   podman run -d --name qdrant_ultra -p 6333:6333 -p 6334:6334 \
-#     -v ./qdrant_storage:/qdrant/storage:Z docker.m.daocloud.io/qdrant/qdrant:latest
-# -----------------------------------------------------------------------------
-QDRANT_HOST=localhost
-QDRANT_PORT=6333
-# 可选：集合名（未设置时默认 ultra_agent_vectors / ultra_agent_qa）
-# QDRANT_COLLECTION_NAME=ultra_agent_vectors
-# QDRANT_QA_COLLECTION=ultra_agent_qa
-
-# -----------------------------------------------------------------------------
-# RAG hybrid retrieval / rerank
-# dense + Qdrant text query 召回后，默认用百炼 DashScope rerank 重排；失败自动降级。
-# -----------------------------------------------------------------------------
-RAG_RERANK_ENABLED=true
-RAG_RERANK_PROVIDER=dashscope
-RAG_RERANK_MODEL=qwen3-vl-rerank
-RAG_RERANK_MAX_INPUT_CHARS=120000
-RAG_RERANK_RPM=600
-RAG_RERANK_TPM=9000000
-
-# -----------------------------------------------------------------------------
-# LangSmith 观测（main/qa_agent/sinks/langsmith_sink.py + §12 评估）
-# -----------------------------------------------------------------------------
+# ---- LangSmith 观测（默认关闭；调试时临时打开，trace 含 prompt 全文）-------
 LANGSMITH_TRACING=false
-LANGSMITH_API_KEY=
-LANGSMITH_PROJECT=ultra_agent_qa
+# LANGSMITH_API_KEY=
+# LANGSMITH_PROJECT=infotest_engine
 
-# -----------------------------------------------------------------------------
-# 测试 Agent 运行时（main/qa_agent/）
+
+# =============================================================================
+# 二、模型路由（IST-Core 评审主链路 + 三档 tier）
 #
-# LLM 供应商选择：注释/取消注释切换 qwen ↔ deepseek（评审主链路用，KMS 旁支不受影响）
-#
-# QA_AGENT_LLM_PROVIDER：dashscope（默认）/ deepseek，必须跟 QA_AGENT_FALLBACK_MODEL 前缀一致
-# QA_AGENT_MODEL：主 LLM（默认 qwen-plus）
-# QA_AGENT_REVIEW_MODEL：测试评审默认模型；为空时继承 QA_AGENT_MODEL
-# QA_AGENT_ALLOWED_MODELS：平台允许用户显式切换的模型白名单，逗号分隔
-# QA_AGENT_FALLBACK_MODEL：openai:<model> 走 DashScope 兼容 / deepseek:<model> 走 DeepSeek
-# QA_AGENT_REVIEW_DEPTH：quick|standard|deep（Skill 读取）
-# QA_AGENT_SQLITE_PATH：本地 Checkpointer 数据库（TUI 使用 AsyncSqliteSaver，需 pip install aiosqlite）
-# -----------------------------------------------------------------------------
+# 设计：dashscope / deepseek 两个 provider 平等并列。启用方式 = 把目标 provider
+# 那一组取消注释，另一组整组保留注释作为参考。tier 是按任务复杂度分档的
+# 模型映射，opus = 评审 / 推理，sonnet = QA / 文档问答，haiku = explore / 路由。
+# =============================================================================
 
-# ━━━━━━━━ qwen3.6-plus（默认）━━━━━━━━
-QA_AGENT_LLM_PROVIDER=dashscope
-QA_AGENT_MODEL=qwen-plus
-QA_AGENT_REVIEW_MODEL=qwen-plus
-QA_AGENT_ALLOWED_MODELS=qwen-plus,qwen3.6-plus
-QA_AGENT_FALLBACK_MODEL=
-QA_AGENT_REVIEW_DEPTH=standard
+# ---- 选项 A：DashScope qwen ------------------------------------------------
+IST_LLM_PROVIDER=dashscope
+IST_MODEL=qwen-plus
+IST_REVIEW_MODEL=qwen-plus
+IST_OPUS_MODEL=qwen3.6-plus
+IST_SONNET_MODEL=qwen-plus
+IST_HAIKU_MODEL=qwen-turbo
+IST_ALLOWED_MODELS=qwen-plus,qwen3.6-plus,qwen-turbo
 
-# ━━━━━━━━ deepseek-v4-pro（实验，启用时把上面 qwen 块注释掉）━━━━━━━━
+
+# ---- 选项 B：DeepSeek （启用时把上面 A 整组注释）---------------------------
 # DeepSeek 优势（相对 qwen3.6-plus）：
-#   - tool_choice="required" 原生支持 → SubAgent + Pydantic response_format 可走结构化
-#   - 自动 prompt cache（前缀匹配 + 命中价 1/50）→ 减轻"每次重发完整 prompt"问题
-#   - reasoning_content 字段名跟 qwen 一致 → _ChatOpenAIWithReasoning 子类直接复用
-# 痛点：deepseek-reasoner 不支持 function calling（不能用作主 agent 模型）
+#   - tool_choice="required" 原生支持 → SubAgent / Pydantic 结构化输出可靠
+#   - 自动 prompt cache（前缀匹配，命中价 1/50）
+#   - reasoning_content 字段名跟 qwen 一致 → ChatOpenAIWithReasoning 直接复用
+# 痛点：deepseek-reasoner 不支持 function calling，主 agent 不可用。
 #
-# DEEPSEEK_API_KEY 在 https://platform.deepseek.com/api_keys 申请
-#
-# QA_AGENT_LLM_PROVIDER=deepseek
-# DEEPSEEK_API_KEY=
-# DEEPSEEK_BASE_URL=https://api.deepseek.com
-# QA_AGENT_MODEL=deepseek-v4-pro
-# QA_AGENT_FALLBACK_MODEL=deepseek:deepseek-v4-pro
-# QA_AGENT_REVIEW_MODEL=deepseek-v4-pro
-# QA_AGENT_ALLOWED_MODELS=deepseek-v4-pro,deepseek-v4-flash,deepseek-chat
-# QA_AGENT_OPUS_MODEL=deepseek-v4-pro
-# QA_AGENT_SONNET_MODEL=deepseek-v4-pro
-# QA_AGENT_HAIKU_MODEL=deepseek-v4-flash
-QA_AGENT_SQLITE_PATH=./qa_agent.sqlite
+# IST_LLM_PROVIDER=deepseek
+# IST_MODEL=deepseek-v4-pro
+# IST_REVIEW_MODEL=deepseek-v4-pro
+# IST_OPUS_MODEL=deepseek-v4-pro
+# IST_SONNET_MODEL=deepseek-v4-pro
+# IST_HAIKU_MODEL=deepseek-v4-flash
+# IST_ALLOWED_MODELS=deepseek-v4-pro,deepseek-v4-flash,deepseek-chat
 
-# -----------------------------------------------------------------------------
-# 产品测试平台 PostgreSQL（Podman，本地任务状态 / trace / 可选 LangGraph checkpoint）
-# -----------------------------------------------------------------------------
-# 推荐用 pgvector/pgvector:pg16，兼容 LangChain Postgres / PGVectorStore 的 pgvector 要求。
-# 启动:
-#   bash scripts/maintenance/postgres_runtime.sh start
-# 初始化业务 schema:
-#   python -m main.qa_agent.runtime.postgres_admin --init --check
-QA_PLATFORM_POSTGRES_HOST=localhost
-QA_PLATFORM_POSTGRES_PORT=6543
-QA_PLATFORM_POSTGRES_DB=ultra_agent
-QA_PLATFORM_POSTGRES_USER=ultra_agent
-QA_PLATFORM_POSTGRES_PASSWORD=ultra_agent
-QA_PLATFORM_POSTGRES_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
-# LangChain langchain-postgres / PGVectorStore 使用 SQLAlchemy driver URL：
-QA_PLATFORM_POSTGRES_VECTOR_DSN=postgresql+psycopg://ultra_agent:ultra_agent@localhost:6543/ultra_agent
-# 可选：启用 LangGraph Postgres checkpoint；不设时仍使用 QA_AGENT_SQLITE_PATH / MemorySaver。
-# QA_AGENT_POSTGRES_CHECKPOINT_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
-QA_AGENT_POSTGRES_CHECKPOINT_SETUP=1
 
-# -----------------------------------------------------------------------------
-# 缺陷库 HTML 抓取（main/ingest/defect_fetch.py + v1.5.1 真实 WebVPN 对接）
-# -----------------------------------------------------------------------------
-# DEFECT_BACKEND 控制批量索引入口（main.indexing.defect_index）的数据来源：
-#   - fixtures：读 knowledge/fixtures/bugs_*.json（无 VPN 可用，CI 默认）
-#   - live    ：读 knowledge/defect_cleaned/{backend}/*.json（defect_fetch + defect_parse 的产物）
-# 注意：Agent 的按需抓取（defect_fetch_on_demand Tool）独立于此变量，由 DEFECT_ON_DEMAND_ENABLED 控制
+# ---- 评审通用 -------------------------------------------------------------
+IST_REVIEW_DEPTH=standard               # quick | standard | deep
+# IST_INTERRUPT_ON=web_bug_search,qa_exec   # 调试时强制人工 interrupt 的工具
+# IST_DEBUG_PAYLOAD=1                       # 打印 deepseek payload 大小 + reasoning_content 注入数
+
+
+# =============================================================================
+# 三、运行时持久化（Checkpoint / Memory store）
+# =============================================================================
+
+# LangGraph checkpoint（TUI 用 AsyncSqliteSaver，需 pip install aiosqlite）
+IST_SQLITE_PATH=./qa_agent.sqlite
+
+# 可选：Postgres checkpoint（不设时用 IST_SQLITE_PATH，再降级 InMemorySaver）
+# IST_POSTGRES_CHECKPOINT_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
+IST_POSTGRES_CHECKPOINT_SETUP=1
+
+# Memory store backend（空 → InMemory；sqlite:/// 或 postgresql:// 持久化）
+# IST_MEMORY_STORE_DSN=sqlite:///./memory_store.sqlite
+
+
+# =============================================================================
+# 四、记忆子系统（main/qa_agent/memory/）
+# =============================================================================
+IST_MEMORY_ENABLED=1
+# IST_MEMORY_ROOT=<repo>/memory                 # 默认 repo/memory
+IST_MEMORY_DISTILL_EVERY_N=30                   # 每 N 轮触发 fork agent distill
+IST_MEMORY_L2_TOPK=3
+IST_MEMORY_STALE_DAYS=30
+# IST_MEMORY_DISABLE_LLM=0                      # 1 = 仅规则抽取，不调 fork agent / dream
+
+IST_DREAM_ENABLED=1
+IST_DREAM_LOOKBACK_DAYS=7
+IST_DREAM_PRUNE_DAYS=7
+IST_DREAM_MIN_SESSIONS=5
+
+FOOTPRINT_ENABLED=1                             # CLI footprint 知识树（autodream 增强）
+
+
+# =============================================================================
+# 五、产品测试平台 PostgreSQL（任务状态 / trace；可选）
+# =============================================================================
+# 启动：bash scripts/maintenance/postgres_runtime.sh start
+# 初始化：python -m main.qa_agent.runtime.postgres_admin --init --check
+IST_POSTGRES_HOST=localhost
+IST_POSTGRES_PORT=6543
+IST_POSTGRES_DB=ultra_agent
+IST_POSTGRES_USER=ultra_agent
+IST_POSTGRES_PASSWORD=ultra_agent
+IST_POSTGRES_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
+
+
+# =============================================================================
+# 六、缺陷库抓取（Bugzilla / 禅道 / WebVPN）
+# =============================================================================
+# DEFECT_BACKEND 控制批量索引入口数据来源：
+#   fixtures — 读 knowledge/fixtures/bugs_*.json（CI / 离线默认）
+#   live     — 读 knowledge/defect_cleaned/{backend}/*.json
 DEFECT_BACKEND=fixtures
-
-# Reviewer / defect_miner 在 RAG 未命中 + 可识别 bug_id 时是否触发 Playwright on-demand 抓取
 DEFECT_ON_DEMAND_ENABLED=true
 DEFECT_CACHE_TTL_HOURS=24
-# 缓存文件位置（默认 knowledge/defect_cache.json）
-# DEFECT_CACHE_PATH=knowledge/defect_cache.json
-
-# ---- Bugzilla → 禅道 迁移期 fallback chain ----
-# BUG-12345 / 纯数字 这类前缀模糊的 id 在 backend="auto" 时按下表顺序逐个 backend 试，
-# 首个返回有效详情页（is_valid_detail=True）的即落库。明确前缀（BZ-/ZT-/STORY-）不走 chain。
-# 默认 zentao,bugzilla（迁移后新 bug 都在禅道，命中率更高；Bugzilla 历史库兜底）
+# 模糊前缀（BUG-12345 / 纯数字）按下表顺序逐个 backend 试，首个有效详情页落库
 DEFECT_FETCH_AUTO_CHAIN=zentao,bugzilla
+# DEFECT_FETCH_DISPLAY=1                        # 强制 headful，调试 / 演示用
 
-# ---- Playwright 显示模式 ----
-# 默认 headless；调试 / Reviewer 演示时设 DEFECT_FETCH_DISPLAY=1 临时强制 headful
-# （让用户实时看到 Chrome 自动登录、翻页过程）
-# DEFECT_FETCH_DISPLAY=1
-
-# ---- WebVPN 门户登录（抓取 Bugzilla / 禅道 必需）----
-# 统一账号：PORTAL_LOGIN_USER / PORTAL_LOGIN_PASS
-# 分别覆盖：BUGZILLA_LOGIN_USER / BUGZILLA_LOGIN_PASS / ZENDAO_LOGIN_USER / ZENDAO_LOGIN_PASS
+# WebVPN 门户登录（抓取 Bugzilla / 禅道 必需）
 PORTAL_LOGIN_USER=
 PORTAL_LOGIN_PASS=
-# BUGZILLA_LOGIN_USER=
-# BUGZILLA_LOGIN_PASS=
-# ZENDAO_LOGIN_USER=
-# ZENDAO_LOGIN_PASS=
+# BUGZILLA_LOGIN_USER= / BUGZILLA_LOGIN_PASS= / ZENDAO_LOGIN_USER= / ZENDAO_LOGIN_PASS=  覆盖 PORTAL_*
+# PORTAL_LOGIN_URL=                              # 入口默认够用，企业内网 IP 变更时覆盖
 
-# 门户登录入口（默认够用；企业内网 IP 变更时才覆盖）
-# PORTAL_LOGIN_URL=https://portal.infosec.com.cn/prx/000/http/localh/login/menhu/WebVPN/login/index.html
-
-# 真实 Bugzilla / 禅道 直连地址（WebVPN 代理失败时作 fallback）
+# 真实地址（WebVPN 代理失败时 fallback）
 BUGZILLA_BASE_URL=http://bugzilla.arraynetworks.com.cn/bugzilla
 ZENTAO_BASE_URL=https://plm.infosec.com.cn
-# PLM_BASE_URL 为 ZENTAO_BASE_URL 的旧别名（不建议使用）
-# PLM_BASE_URL=
 
-# 已知 WebVPN 代理 URL（一般无需改）
-# BUGZILLA_PROXY_URL=https://portal.infosec.com.cn/prx/000/http/bugzilla.arraynetworks.com.cn:80/bugzilla
-# PLM_PROXY_URL=https://portal.infosec.com.cn/prx/000/https/plm.infosec.com.cn/index.php?m=my&f=index
-
-# Playwright 参数
+# Playwright
 PLAYWRIGHT_HEADLESS=1
-PLAYWRIGHT_STATE_DIR=knowledge/defect_raw/_state
-
-# 验证码 OCR（ddddocr）调优；不设即使用默认值
-# CAPTCHA_LEN_MIN=4
-# CAPTCHA_LEN_MAX=6
-# CAPTCHA_OCR_RETRY=4
+PLAYWRIGHT_STATE_DIR=knowledge/.intermediate/defect_raw/_state
+# CAPTCHA_OCR_RETRY=10
 # LOGIN_RETRY=5
 
-# 首次使用：
-#   python -m main.ingest.defect_fetch --backend bugzilla --refresh-login
-#   python -m main.ingest.defect_fetch --backend zentao   --refresh-login
-# 然后后续 headless 运行都会复用 storage_state
+# 首次：python -m main.ingest.defect_fetch --backend {bugzilla|zentao} --refresh-login
 
-# -----------------------------------------------------------------------------
-# 记忆子系统（main/qa_agent/memory/）
-# -----------------------------------------------------------------------------
-# 总开关（0 关闭所有 memory middleware）
-# QA_AGENT_MEMORY_ENABLED=1
-# fork extractor agent 每 N 轮触发一次 distill（默认 30）
-QA_AGENT_MEMORY_DISTILL_EVERY_N=30
-# 关闭 fork agent LLM 抽取 + dream task（仅保留规则抽取 L1 热路径）
-# QA_AGENT_MEMORY_DISABLE_LLM=0
 
-# Footprint 知识树（autodream 增强，按 CLI 命令组织产品/测试知识）
-# 0 关闭 footprint 提取（dream consolidate 跳过 footprint 路径，AGENTS.md 路径不受影响）
-# FOOTPRINT_ENABLED=1
-# Footprint 提取走 haiku tier 模型（QA_AGENT_HAIKU_MODEL，默认 deepseek-v4-flash），
-# 见上面 LLM 模型配置块
+# =============================================================================
+# 七、KMS / MinerU 管线（运行时由 /kms 子命令设置；下面是 override 示例）
+# =============================================================================
+# KMS_PRODUCT_FILES=                             # 逗号分隔白名单
+# KMS_OUTPUT_BUCKET=qa                           # product | qa
+# MINERU_BATCH_SIZE=30
+# KMS_UPDATE_TIMEOUT_SEC=7200
+# KMS_LOG_POLL_INTERVAL_SEC=2
+# NO_PROGRESS=1                                  # 非 TTY 环境禁用进度条

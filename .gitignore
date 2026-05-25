@@ -11,8 +11,16 @@ build/
 
 # Virtual environment
 .venv/
+.venv311/
 venv/
 ENV/
+
+# Python test / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # IDE
 .idea/
@@ -38,21 +46,46 @@ postgres_storage/
 qdrant_storage/
 .langgraph_data/
 .langgraph_api/
+.web_server.pid
+
+# LangGraph checkpoint（QA_AGENT_SQLITE_PATH，含 WAL/SHM 同伴文件）
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite.wal
+*.sqlite.shm
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Large files
+# Runtime（CLAUDE.md：logs / conversation_history / large_tool_results / users）
+runtime/
+
+# 历史：仓库根下同名目录（与 runtime/ 子目录并存时仍生效）
 large_tool_results/
 conversation_history/
+
 # Memory subsystem: 用户私有偏好 / 工作记忆 / dream 锁不进 git；
 # AGENTS.md 是团队级项目指令，git 跟踪（用 ! 反选必须先按子路径忽略，
 # 不能直接 ignore "memory/" 整体——目录级 ignore 优先于反选规则）
 memory/working/
 memory/long_term/
+memory/reviews/
 memory/.dream/
 knowledge/
+
+# 可选前端（pyproject 已 exclude；本地 clone 含 node_modules）
+agent-chat-ui/
+
+# Agent workspace（运行时：上传 / 产出 / 缺陷缓存；仅跟踪 .gitkeep 占位）
+workspace/*
+!workspace/*/
+workspace/*/*
+!workspace/*/.gitkeep
+
+# 本地开发笔记（不进版本库）
+测试评审skill开发tips.md
 
 # Claude
 .claude/

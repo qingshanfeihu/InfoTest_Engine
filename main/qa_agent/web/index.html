@@ -33,7 +33,7 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 <body>
 <div id="loginPage">
   <div class="login-box">
-    <h2>InfoTest Engine v1.0.0</h2>
+    <h2>InfoTest Engine v1.0.2</h2>
     <input type="text" id="username" placeholder="用户名" autocomplete="off">
     <input type="password" id="password" placeholder="密码">
     <button onclick="doLogin()">登录</button>
@@ -119,16 +119,18 @@ document.getElementById('fileInput')?.addEventListener('change', async (e) => {
   const fd = new FormData();
   fd.append('file', file);
   document.getElementById('uploadStatus').textContent = '上传中...';
-  const r = await fetch('/api/upload?token=' + encodeURIComponent(token), {method:'POST', body:fd});
-  const d = await r.json();
-  if (d.path) {
-    document.getElementById('uploadStatus').textContent = '✓ ' + (d.filename || file.name);
-    // 将沙箱路径注入终端输入
-    if (ws && ws.readyState === 1) {
-      ws.send(new Blob([d.path]));
+  try {
+    const r = await fetch('/api/upload?token=' + encodeURIComponent(token), {method:'POST', body:fd});
+    if (!r.ok) { document.getElementById('uploadStatus').textContent = '上传失败 (' + r.status + ')'; e.target.value = ''; return; }
+    const d = await r.json();
+    if (d.path) {
+      document.getElementById('uploadStatus').textContent = '✓ ' + (d.filename || file.name);
+      if (ws && ws.readyState === 1) ws.send(new Blob([d.path]));
+    } else {
+      document.getElementById('uploadStatus').textContent = '上传失败';
     }
-  } else {
-    document.getElementById('uploadStatus').textContent = '上传失败';
+  } catch(err) {
+    document.getElementById('uploadStatus').textContent = '上传失败: 网络错误';
   }
   e.target.value = '';
 });
@@ -142,13 +144,18 @@ document.getElementById('termPage')?.addEventListener('drop', async (e) => {
   const fd = new FormData();
   fd.append('file', file);
   document.getElementById('uploadStatus').textContent = '上传中...';
-  const r = await fetch('/api/upload?token=' + encodeURIComponent(token), {method:'POST', body:fd});
-  const d = await r.json();
-  if (d.path) {
-    document.getElementById('uploadStatus').textContent = '✓ ' + (d.filename || file.name);
-    if (ws && ws.readyState === 1) ws.send(new Blob([d.path]));
-  } else {
-    document.getElementById('uploadStatus').textContent = '上传失败';
+  try {
+    const r = await fetch('/api/upload?token=' + encodeURIComponent(token), {method:'POST', body:fd});
+    if (!r.ok) { document.getElementById('uploadStatus').textContent = '上传失败 (' + r.status + ')'; return; }
+    const d = await r.json();
+    if (d.path) {
+      document.getElementById('uploadStatus').textContent = '✓ ' + (d.filename || file.name);
+      if (ws && ws.readyState === 1) ws.send(new Blob([d.path]));
+    } else {
+      document.getElementById('uploadStatus').textContent = '上传失败';
+    }
+  } catch(err) {
+    document.getElementById('uploadStatus').textContent = '上传失败: 网络错误';
   }
 });
 

@@ -17,7 +17,7 @@ from main.qa_agent.memory.middleware import reset_session_counter
 @pytest.fixture(autouse=True)
 def isolated_dream_root(tmp_path, monkeypatch):
     """每个 test 用独立的 memory 根目录，避免 lockfile / counter 串扰。"""
-    monkeypatch.setenv("QA_AGENT_MEMORY_ROOT", str(tmp_path / "memory"))
+    monkeypatch.setenv("IST_MEMORY_ROOT", str(tmp_path / "memory"))
     # 释放可能持有的锁
     dream._release_pid_lock()
     yield
@@ -33,23 +33,23 @@ def _set_sessions(n: int):
 
 
 def test_gate1_dream_disabled_by_env(monkeypatch):
-    monkeypatch.setenv("QA_AGENT_DREAM_ENABLED", "0")
+    monkeypatch.setenv("IST_DREAM_ENABLED", "0")
     _set_sessions(10)
     ok, reason = dream.should_run_dream()
     assert ok is False
-    assert "QA_AGENT_DREAM_ENABLED=0" in reason
+    assert "IST_DREAM_ENABLED=0" in reason
 
 
 def test_gate1_memory_disabled_by_env(monkeypatch):
-    monkeypatch.setenv("QA_AGENT_MEMORY_ENABLED", "0")
+    monkeypatch.setenv("IST_MEMORY_ENABLED", "0")
     _set_sessions(10)
     ok, reason = dream.should_run_dream()
     assert ok is False
-    assert "QA_AGENT_MEMORY_ENABLED=0" in reason
+    assert "IST_MEMORY_ENABLED=0" in reason
 
 
 def test_gate1_disable_llm_blocks_dream(monkeypatch):
-    monkeypatch.setenv("QA_AGENT_MEMORY_DISABLE_LLM", "1")
+    monkeypatch.setenv("IST_MEMORY_DISABLE_LLM", "1")
     _set_sessions(10)
     ok, reason = dream.should_run_dream()
     assert ok is False
@@ -94,7 +94,7 @@ def test_gate4_passes_at_threshold():
 
 
 def test_gate4_threshold_overridable_via_env(monkeypatch):
-    monkeypatch.setenv("QA_AGENT_DREAM_MIN_SESSIONS", "1")
+    monkeypatch.setenv("IST_DREAM_MIN_SESSIONS", "1")
     _set_sessions(1)
     ok, _ = dream.should_run_dream()
     assert ok is True

@@ -24,12 +24,7 @@
 - **TUI 表现**：思考行被滚出屏幕外；按 ↑/↓（如果 transcript 实现了上下翻）或 ctrl+l 重渲染。
 - **应对**：暂未实现可折叠的 `✶ Thinking (ctrl+o to expand)`，目前思考整段以 dim 灰 `✶` 前缀直接打。后续考虑把 ThinkingMessage 也接入 `_tool_output_blocks` 的折叠逻辑。
 
-### 4. ChatTongyi 路径未启用 thinking
-
-- **现象**：`extra_body.enable_thinking` 仅在 OpenAI 兼容 (`QA_AGENT_FALLBACK_MODEL=openai:*`) 路径加了。如果某天回退到 ChatTongyi（DashScope 原生 SDK，`fallback` 为空），不会自动开 thinking。
-- **应对**：当前 environment 全锁 `openai:qwen3.6-plus`，不触发；若回退要在 `langchain_create_chat_tongyi` 里另加 `thinking_enabled` 参数。
-
-### 5. `reasoning_content` 字段名不稳定
+### 4. `reasoning_content` 字段名不稳定
 
 - **现象**：抽 thinking 走 `additional_kwargs.get("reasoning_content") or additional_kwargs.get("reasoning")`。LangChain 不同小版本字段名有过摇摆（`reasoning` vs `reasoning_content` vs nested under `extra_data`）。
 - **应对**：兜底已加两个 key；若升级 langchain-openai 后又看不到思考行，先打 `additional_kwargs.keys()` 排查。

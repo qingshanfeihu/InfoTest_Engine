@@ -338,6 +338,20 @@ class ThinkingMessage(IstMessage):
     css_class: ClassVar[str] = "ist-thinking"
 
 
+@dataclass
+class TodoListMessage(IstMessage):
+    """``write_todos`` 工具的专属渲染——plan panel。
+
+    显示结构化的 todo 列表，每项带状态标记：
+    - pending: ○
+    - in_progress: ◉ (yellow)
+    - completed: ● (green)
+    """
+
+    todos: list[dict[str, str]] = field(default_factory=list)
+    css_class: ClassVar[str] = "ist-todo-list"
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table — TuiSink consumes this to map ``tool_call.name`` → subclass
 # ---------------------------------------------------------------------------
@@ -354,4 +368,5 @@ TOOL_NAME_TO_MESSAGE: dict[str, type[IstMessage]] = {
     "qa_exec": PythonExecMessage,
     "qa_bash": BashExecMessage,
     "task": SubAgentTaskMessage,
+    "write_todos": TodoListMessage,
 }

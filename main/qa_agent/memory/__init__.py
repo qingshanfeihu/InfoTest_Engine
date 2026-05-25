@@ -20,8 +20,8 @@ from typing import Any
 
 
 def is_enabled() -> bool:
-    """总开关：env QA_AGENT_MEMORY_ENABLED != '0' 时启用。"""
-    return (os.environ.get("QA_AGENT_MEMORY_ENABLED") or "1").strip() != "0"
+    """总开关：env IST_MEMORY_ENABLED != '0' 时启用。"""
+    return (os.environ.get("IST_MEMORY_ENABLED") or "1").strip() != "0"
 
 
 def get_default_root():

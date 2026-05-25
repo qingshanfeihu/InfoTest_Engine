@@ -38,6 +38,7 @@ from main.qa_agent.tui.messages import (
     PythonExecMessage,
     SubAgentDispatchMessage,
     SubAgentTaskMessage,
+    TodoListMessage,
     TOOL_NAME_TO_MESSAGE,
     ToolCallMessage,
     WarnMessage,
@@ -324,6 +325,9 @@ class TuiSink:
                 permission_profile=str((args or {}).get("permission_profile") or "") if isinstance(args, dict) else "",
                 dry_run=bool((args or {}).get("dry_run", True)) if isinstance(args, dict) else True,
             )
+        if cls is TodoListMessage:
+            todos = _extract_todos_from_args(args)
+            return TodoListMessage(run_id=run_id, seq=seq, ts=ts, todos=todos)
         # Generic fallback
         return ToolCallMessage(
             run_id=run_id,
@@ -404,3 +408,29 @@ def _parse_input_str_to_args(input_str: str, tool_name: str) -> dict:
     if primary:
         return {primary: raw}
     return {"raw": raw}
+
+
+def _extract_todos_from_args(args: Any) -> list[dict[str, str]]:
+    """从 write_todos 的 tool_call args 中提取 todos 列表。
+
+    args 可能是：
+    - dict: {"todos": [{"content": "...", "status": "..."}]}
+    - str: JSON 字符串
+    """
+    import json
+
+    if isinstance(args, dict):
+        todos = args.get("todos", [])
+        if isinstance(todos, list):
+            return [
+                {"content": str(t.get("content", "")), "status": str(t.get("status", "pending"))}
+                for t in todos if isinstance(t, dict)
+            ]
+    if isinstance(args, str):
+        try:
+            parsed = json.loads(args)
+            if isinstance(parsed, dict):
+                return _extract_todos_from_args(parsed)
+        except (ValueError, TypeError):
+            pass
+    return []

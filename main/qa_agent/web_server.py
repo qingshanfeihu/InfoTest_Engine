@@ -80,18 +80,17 @@ async def upload(file: UploadFile = File(...), token: str = ""):
     dest = _SANDBOX / file.filename
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
+    rel = dest.relative_to(_PROJECT_ROOT).as_posix()
     if suffix in _CONVERTIBLE:
         try:
             from main.xlsx_to_markdown import convert_xlsx_to_markdown
             md = convert_xlsx_to_markdown(dest)
             md_path = dest.with_suffix(".md")
             md_path.write_text(md, encoding="utf-8")
-            rel = md_path.relative_to(_PROJECT_ROOT / "knowledge" / "data").as_posix()
-            return {"path": rel, "filename": file.filename, "converted": True}
+            md_rel = md_path.relative_to(_PROJECT_ROOT).as_posix()
+            return {"path": md_rel, "filename": file.filename, "converted": True}
         except Exception as e:
-            rel = dest.relative_to(_PROJECT_ROOT / "knowledge" / "data").as_posix()
             return {"path": rel, "filename": file.filename, "error": str(e)}
-    rel = dest.relative_to(_PROJECT_ROOT / "knowledge" / "data").as_posix()
     return {"path": rel, "filename": file.filename}
 
 

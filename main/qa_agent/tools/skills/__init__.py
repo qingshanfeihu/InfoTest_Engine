@@ -78,8 +78,13 @@ def qa_sanity_check(target_file: str, bug_severity: str = "") -> str:
     Test Types 标记一致性 / 数值规律性 / Priority 分布 vs BUG 严重度匹配 / CLI help
     占比 / 章节冗余。**用脚本而非 LLM 眼扫**——眼扫无法精确数 277 行的频率分布。
 
+    支持的输入格式：
+    - ``.md`` 测试用例 markdown（直接喂给 sanity_check 脚本）
+    - ``.xlsx`` / ``.xls`` 原始 Excel（自动转 markdown 后扫描，临时文件落到
+      系统 tmp，扫完即弃；不污染 workspace/inputs）
+
     用法：在 `Step 6.5: 字面一致性自检` 阶段调用本 tool；输入是当前评审用例的
-    markdown 路径（相对项目根目录或 knowledge/data/ 子目录皆可）。**强烈建议**
+    路径（相对项目根目录、knowledge/data/ 子目录、或绝对路径皆可）。**强烈建议**
     把 Step 1 web_bug_search 拿到的 `metadata.severity` 作为 bug_severity 参数
     传入，启用 Priority 分布 vs BUG 严重度匹配检查。
 
@@ -87,9 +92,10 @@ def qa_sanity_check(target_file: str, bug_severity: str = "") -> str:
     跑一次本 tool 并把输出映射到 P0/P1 缺口（详见 SKILL.md Step 6.5）。
 
     Args:
-        target_file: 用例 markdown 文件路径。支持以下形式：
+        target_file: 用例文件路径（``.md`` / ``.xlsx`` / ``.xls``）。支持以下形式：
             - `knowledge/data/markdown/qa/<file>.md`（相对项目根）
             - `markdown/qa/<file>.md`（相对 knowledge/data/）
+            - `workspace/inputs/<file>.xlsx`（用户上传的原始 Excel）
             - 绝对路径
         bug_severity: 当前 BUG 的严重度（来自 web_bug_search JSON 的
             ``metadata.severity``，如 "low" / "high"）。可选；不传则跳过
@@ -100,6 +106,7 @@ def qa_sanity_check(target_file: str, bug_severity: str = "") -> str:
         没异常时 `status: success`，否则 `status: issues_found`。
     """
     import sys
+    import tempfile
 
     # 路径解析：支持 3 种形式
     p = Path(target_file)
@@ -119,6 +126,29 @@ def qa_sanity_check(target_file: str, bug_severity: str = "") -> str:
             "error": f"file not found: tried {[str(c) for c in candidates]}",
         }, indent=2, ensure_ascii=False)
 
+    # xlsx/xls 自动转 markdown（临时文件，扫完即弃）
+    suffix = resolved.suffix.lower()
+    tmp_md_path: Path | None = None
+    if suffix in (".xlsx", ".xls", ".xlsm"):
+        try:
+            from main.xlsx_to_markdown import convert_xlsx_to_markdown
+            md_text = convert_xlsx_to_markdown(resolved)
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", encoding="utf-8", delete=False,
+                prefix=f"sanity_check_{resolved.stem}_",
+            )
+            tmp.write(md_text)
+            tmp.close()
+            tmp_md_path = Path(tmp.name)
+            scan_target = tmp_md_path
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({
+                "status": "error",
+                "error": f"xlsx → markdown 转换失败: {exc}",
+            }, indent=2, ensure_ascii=False)
+    else:
+        scan_target = resolved
+
     # import sanity_check 模块（不走 subprocess，直接 in-process 调）
     script_dir = _SKILLS_DIR / "test-case-review" / "scripts"
     sys.path.insert(0, str(script_dir))
@@ -127,11 +157,16 @@ def qa_sanity_check(target_file: str, bug_severity: str = "") -> str:
         import importlib
         import sanity_check as _mod  # type: ignore[import-not-found]
         importlib.reload(_mod)
-        result = _mod.sanity_check(str(resolved), bug_severity=bug_severity or None)
+        result = _mod.sanity_check(str(scan_target), bug_severity=bug_severity or None)
     except Exception as exc:  # noqa: BLE001
         result = {"status": "error", "error": f"sanity_check failed: {exc}"}
     finally:
         if str(script_dir) in sys.path:
             sys.path.remove(str(script_dir))
+        if tmp_md_path is not None:
+            try:
+                tmp_md_path.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
 
     return json.dumps(result, indent=2, ensure_ascii=False)

@@ -283,10 +283,19 @@ def qa_node(state: QaAgentState, config: RunnableConfig | None = None) -> dict[s
     handler = _MainAgentProgressHandler()
 
     if config is None:
-        merged_config: RunnableConfig = {"callbacks": [handler]}
+        merged_config: RunnableConfig = {
+            "callbacks": [handler],
+            "recursion_limit": 100,
+        }
     else:
         existing_cbs = list(config.get("callbacks") or [])
-        merged_config = {**config, "callbacks": existing_cbs + [handler]}
+        merged_config = {
+            **config,
+            "callbacks": existing_cbs + [handler],
+            # 评审场景：主 agent ReAct 循环 + verifier subagent 内部循环
+            # 都需要充足 recursion 预算。默认 25 不够；100 经验值。
+            "recursion_limit": max(config.get("recursion_limit") or 0, 100),
+        }
 
     try:
         result = agent.invoke(agent_input, config=merged_config)
@@ -309,8 +318,79 @@ def qa_node(state: QaAgentState, config: RunnableConfig | None = None) -> dict[s
 
 
 def finalize(state: QaAgentState) -> dict[str, Any]:
+    """Finalize 节点：写最终 final_answer.
+
+    评审场景下：deepseek-v4-pro 实测倾向于把 9080 字 verifier 报告压缩成
+    "评审完成" 15 字总结——LLM 行为，prompt 措辞修不动。runner CLI 模式只
+    输出 final_answer，用户看不到 verifier ToolMessage 内容。
+
+    工程兜底：检测 messages 里 task(review-verification) 的 ToolMessage，
+    如果它含 VERDICT/LEVEL，**强制把它当 final_answer 主体**，主 agent 的
+    收尾文本前置作为可选 prefix。
+
+    通用场景下（gate_status != passed 或没有 verifier ToolMessage）：保持原
+    行为，透传 state.final_answer。
+    """
     answer = state.get("final_answer") or ""
+
+    # 评审场景兜底：如果 review_gate passed 且有 verifier ToolMessage，
+    # 用 verifier 完整报告替代主 agent 的总结
+    if state.get("gate_status") == "passed":
+        verifier_content = _extract_verifier_report(state.get("messages") or [])
+        if verifier_content:
+            # 主 agent 自己的收尾段（如果有意义）作为 prefix
+            prefix = ""
+            if answer and len(answer) > 50 and "VERDICT" not in answer:
+                # 主 agent 写了实质内容（不是"评审完成"15 字）→ 保留作为 prefix
+                prefix = answer + "\n\n---\n\n"
+            answer = prefix + verifier_content
+
     return {"final_answer": answer}
+
+
+def _extract_verifier_report(msgs: list) -> str:
+    """从 messages 倒序找 task(review-verification) 的 ToolMessage 内容.
+
+    返回 verifier 报告原文（含 VERDICT/LEVEL）；找不到返回空串。
+
+    cc-haha 对照：cc-haha TUI 流式渲染，每个 tool_result 实时显示给用户；
+    InfoTest_Engine runner 模式单点输出 final_answer，需要工程兜底把
+    subagent 报告复制到 final_answer。
+    """
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    # 1. 找最近一次 task(subagent_type='review-verification') 的 tool_call_id
+    target_tool_use_id = None
+    for m in reversed(msgs):
+        if not isinstance(m, AIMessage):
+            continue
+        for tc in (m.tool_calls or []):
+            name = tc.get("name") if isinstance(tc, dict) else None
+            args = tc.get("args") if isinstance(tc, dict) else None
+            if name != "task" or not isinstance(args, dict):
+                continue
+            if args.get("subagent_type") != "review-verification":
+                continue
+            target_tool_use_id = tc.get("id")
+            break
+        if target_tool_use_id:
+            break
+
+    if not target_tool_use_id:
+        return ""
+
+    # 2. 找对应的 ToolMessage
+    for m in reversed(msgs):
+        if not isinstance(m, ToolMessage):
+            continue
+        if getattr(m, "tool_call_id", None) != target_tool_use_id:
+            continue
+        if getattr(m, "status", None) == "error":
+            return ""
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        if "VERDICT:" in content and "LEVEL:" in content:
+            return content
+    return ""
 
 
 # ---------------------------------------------------------------------------

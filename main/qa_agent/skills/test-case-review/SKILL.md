@@ -50,6 +50,15 @@ context: inline
 
 ## Steps
 
+### 0. 拆 todo（必做）
+
+**Execution**: Direct（用 ``write_todos``）
+
+接到评审任务后**第一件事**：调 ``write_todos`` 把下面 Step 1-8 拆成 todo list，每条标 ``pending``。每完成一步立即标 ``completed``。
+
+**Success criteria**: todo list 含 8 条（Step 1-8），按顺序排，当前进行中的标 ``in_progress``。
+**Rules**: 同时只能有一条 ``in_progress``。发现新子任务（如某个 finding 需要额外 grep 验证）立即追加到 todo，不要藏到最后。
+
 ### 1. 读缺陷 / 需求
 
 调 web_bug_search(ticket_id) 拿完整缺陷描述。
@@ -93,39 +102,46 @@ grep 产品语义。
 
 **Execution**: Task agent（review-verification）
 
-写初步草稿（检索证据列表 + 初步 finding + 初步 P 级别建议），然后立即提交给 verifier。
+先在对话里写出完整草稿：检索证据列表（每条带 file:line 引用）、初步 finding 列表（每条带行号 + 描述 + 你怀疑的 severity）、初步 P 级别 + 理由。
 
-**BLOCKING REQUIREMENT**: 草稿写完立即调：
+调 ``task`` 工具时遵守顶层 system prompt 的 **"Writing the prompt for task calls"** 约束：把完整草稿和所有 Phase 1-6 的检索证据传给 verifier——它是 fresh 零上下文，看不到你的对话历史。**Terse command-style prompts produce shallow, generic work**——`description="评审 121100"` 这种短 brief 等于让 verifier 从零评审一遍，浪费一次调用。
+
+`description` 字段建议结构（与 verifier system prompt 中"What you receive"对齐）：
 
 ```
-task(subagent_type="review-verification", description="""
-  test_case_file: <path>
-  bug_id: <id>
-  bug_summary: <oneliner>
-  cli_command: <command>
-  evidence_collected: [<Phase 1-6 检索到的证据列表>]
-  draft_findings: [<你的初步问题列表>]
-  draft_level: P0-P7
+test_case_file: <用例文件相对路径>
+bug_id: <BUG-XXXXX>
+bug_summary: <一句话核心需求 + CLI 命令变更>
+cli_command: <修改的 CLI 命令>
+evidence_collected:
+  - Phase 1 web_bug_search: <关键发现>
+  - Phase 2 product/<file>: <关键引用>
+  - Phase 3 cli__part*.md: <参数表要点>
+  - Phase 4 Test Strategy*.md: <对标维度>
+  - Phase 5 Test List*.md: <同类历史用例>
+  - Phase 6 当前用例: <分页读全文 + 章节结构>
+draft_findings:
+  - <行号> <描述> (severity P?)
+  - ...
+draft_level: P0-P7
 
-  Independently verify each finding. Try to break my draft.
-  Output per-Check format with VERDICT + LEVEL.
-""")
+Independently verify each finding with grep / read_file. 
+Try to break my draft. Find what I missed. 
+Output per-Check format with VERDICT + LEVEL.
 ```
 
-**Success criteria**: verifier 返回 VERDICT + LEVEL + Check 列表。
+**Success criteria**: verifier 返回含 `VERDICT:` + `LEVEL:` 行的报告。
 **Artifacts**: verdict, level, checks
-**Rules**: 不能修改 verifier 的 VERDICT / LEVEL；只能透传。你不能 self-assign verdict。
+**Rules**:
+- 不能修改 verifier 的 VERDICT / LEVEL；只能透传（顶层 Verification Contract 约束）
+- verifier 给 FAIL/PARTIAL 时，不要在最终报告里软化为 PASS（顶层 Faithful Reporting 约束）
+- 短 brief / verifier 拒绝 / verdict 缺失 → review_gate 自动重路由让你重做。这不是 bug，是反偷懒兜底。
 
 ### 8. 输出最终报告
 
-基于 verifier verdict 综述给用户。报告头部显示：
+verifier 的输出本身就是写给用户的最终报告（verifier 系统提示已声明 caller will relay）。把 verifier 的内容 relay 给用户，可在末尾加 ≤ 2 句你自己的概述。
 
-```
-VERDICT: ... (by verifier)
-LEVEL: ... (by verifier)
-```
-
-**Success criteria**: 用户看到 verdict + level + check 详情 + 主 agent 草稿与 verifier 反驳的 diff（如有）。
+**Success criteria**: 用户看到 VERDICT、LEVEL 和每条 Check 的内容。
 
 ### 9. 多 sheet xlsx 并发评审 (when applicable)
 

@@ -114,9 +114,12 @@ def _has_verifier_call_with_verdict(msgs: list) -> bool:
 
     流程（仿 cc-haha hasSuccessfulToolCall）：
     1. 倒序找 AIMessage tool_calls 含 ``subagent_type='review-verification'``
-    2. 校验 task description（brief）非空且含证据关键字
-    3. 找对应 ToolMessage（tool_call_id 匹配），校验 is_error 不为 true
-    4. content 含 ``VERDICT:`` + ``LEVEL:``
+    2. 找对应 ToolMessage（tool_call_id 匹配），校验 is_error 不为 true
+    3. content 含 ``VERDICT:`` + ``LEVEL:``
+
+    NOTE: 不校验 brief（task description）长度——cc-haha simplify.ts 同样
+    不校验。LLM 用极短 brief 但 verifier 仍能凭 system prompt + 自身工具
+    完成任务时不应阻断。review_gate 的职责只是确认 verifier 真给了 verdict。
     """
     target_tool_use_id = None
     for m in reversed(msgs):
@@ -127,10 +130,6 @@ def _has_verifier_call_with_verdict(msgs: list) -> bool:
                 continue
             args = tc.get("args") or {}
             if args.get("subagent_type") != "review-verification":
-                continue
-            # 避免 LLM 用空 brief 走过场——description 必须含证据字段
-            description = args.get("description") or ""
-            if not _looks_like_real_brief(description):
                 continue
             target_tool_use_id = tc.get("id")
             break
@@ -153,16 +152,10 @@ def _has_verifier_call_with_verdict(msgs: list) -> bool:
     return False
 
 
+# DEPRECATED: brief 长度校验保留代码备查但不再调用——cc-haha 同类设计不做
+# 此校验，且实测发现校验门槛 200 误拒了 verifier 实际成功的调用。
 def _looks_like_real_brief(description: str) -> bool:
-    """避免主 agent 用空 brief 走过场。
-
-    description 必须含证据 / 草稿关键字段。经验值：长度 ≥ 200 字 +
-    至少 2 个关键字段 token。
-
-    这是 InfoTest_Engine 自创防御——cc-haha 的 ``description`` 字段没有
-    类似校验（cc-haha 靠 Opus 4.7 服从度），qwen / deepseek 服从度低需要
-    工程兜底。
-    """
+    """[已废弃] brief 字段校验. 评测结果：误拒率高，已从 review_gate 移除调用."""
     if len(description) < 200:
         return False
     required_tokens = ("test_case_file", "bug_id", "draft_findings")

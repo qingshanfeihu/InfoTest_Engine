@@ -21,7 +21,6 @@ from main.qa_agent.tools.deepagent.exec_tools import qa_bash, qa_exec
 from main.qa_agent.tools.knowledge.web_bug_search import web_bug_search
 from main.qa_agent.tools.knowledge.footprint_lookup import qa_footprint_lookup
 from main.qa_agent.tools.skills import qa_invoke_skill
-from main.qa_agent.tools.ask_user import qa_ask_user
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +47,10 @@ def _default_generic_tools() -> list[Any]:
         qa_invoke_skill,
         # qa_sanity_check 已废弃（Step 7）——verifier subagent 自发 grep 探索字面问题
         qa_invoke_skill,
-        # qa_ask_user：仿 Claude Code 的 AskUserQuestion——P0/P1 不确定时让用户决策
-        qa_ask_user,
+        # qa_ask_user 已禁用（实测在评审场景被错误调用导致 derail）：
+        # 主 agent 倾向于在不确定时调它，但参数格式（options 必须 2-4 项）
+        # LLM 经常写错，导致死循环重试。评审场景应靠证据决定，不靠询问用户；
+        # 通用 QA 应直接回答。如需重启用，先解决参数格式 derail 问题。
     ]
 
 
@@ -205,6 +206,11 @@ def build_main_agent(**kwargs: Any):
         logger.info("deepagents filesystem/exclusion middleware 不可用，使用显式 qa_deepagent_* 工具: %s", exc)
 
     # Explore sub-agent（全局通用，跟 qa_ls/qa_grep 同级）
+    # 仿 cc-haha tools/AgentTool/built-in/generalPurposeAgent.ts 设计：
+    # - SHARED_PREFIX："Complete the task fully—don't gold-plate, but
+    #   don't leave it half-done"
+    # - "the caller will relay this to the user, so it only needs the
+    #   essentials"——subagent 知道自己输出会被 relay 给用户
     # 任何 skill 都能通过 task(subagent_type="explore", description="...") 调用
     # 只传内置 FilesystemMiddleware 做不到的工具，避免重复
     subagents_kwarg: dict[str, Any] = {}
@@ -212,9 +218,25 @@ def build_main_agent(**kwargs: Any):
         from main.qa_agent.agents._llm import build_explore_model
 
         _EXPLORE_SYSTEM_PROMPT = (
-            "你是一个只读检索代理。根据任务描述查找信息并返回结构化证据。\n"
-            "只做检索，不做判断。返回：文件路径 + 行号 + 内容摘录。\n"
-            "找不到就说\"未找到\"。"
+            "You are a read-only research agent for IST-Core. Given the "
+            "task description, use available tools to find information and "
+            "return structured evidence. Complete the task fully—don't "
+            "gold-plate, but don't leave it half-done.\n"
+            "\n"
+            "When you complete the task, respond with a concise report "
+            "covering what was found and any key findings — the caller "
+            "(main agent) will relay this to the user, so it only needs "
+            "the essentials.\n"
+            "\n"
+            "Output format:\n"
+            "- Cite evidence with file paths + line numbers + brief excerpts.\n"
+            "- Distinguish what you read from what you inferred.\n"
+            "- If you didn't find something, say \"未找到\"——don't invent it.\n"
+            "\n"
+            "Boundaries:\n"
+            "- Read-only: do not write/edit/delete files; do not run code.\n"
+            "- Stay inside knowledge/data/ and workspace/ sandbox roots.\n"
+            "- 中文用户场景：reply in Chinese (中文)."
         )
 
         # 只传 FilesystemMiddleware 不提供的工具

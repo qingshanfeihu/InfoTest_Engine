@@ -48,7 +48,13 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
 def _parse_skill_frontmatter(skill_md_path: Path) -> dict[str, str] | None:
-    """简易 SKILL.md frontmatter 解析（只取 name + description，不依赖 yaml 包）"""
+    """简易 SKILL.md frontmatter 解析（提取 name / description / when_to_use，
+    不依赖 yaml 包）。
+
+    cc-haha 对照：``skillify.ts:96-145`` 标准 frontmatter 含 ``when_to_use``
+    字段；listing 暴露 ``when_to_use`` 让 LLM 看到 trigger / SKIP 条件，避免
+    通用 QA 误调 skill。
+    """
     try:
         content = skill_md_path.read_text(encoding="utf-8")
     except Exception:  # noqa: BLE001
@@ -57,24 +63,44 @@ def _parse_skill_frontmatter(skill_md_path: Path) -> dict[str, str] | None:
     if not m:
         return None
     fm = m.group(1)
+
+    # 多行字段抽取：name / description / when_to_use 都可能跨多行
     name = ""
-    desc_lines: list[str] = []
-    in_desc = False
+    description_lines: list[str] = []
+    when_to_use_lines: list[str] = []
+    cur_field: str | None = None
+
     for line in fm.splitlines():
-        if line.startswith("name:"):
-            name = line.split(":", 1)[1].strip()
-            in_desc = False
-        elif line.startswith("description:"):
-            desc_lines = [line.split(":", 1)[1].strip()]
-            in_desc = True
-        elif in_desc and (line.startswith("  ") or line.startswith("\t") or line == ""):
-            desc_lines.append(line.strip())
-        elif ":" in line and not line.startswith(" "):
-            in_desc = False
-    description = " ".join(s for s in desc_lines if s).strip()
+        # 顶级字段开始（不缩进 + 含冒号）
+        if line and not line.startswith((" ", "\t", "-")) and ":" in line:
+            key, _, after = line.partition(":")
+            key = key.strip()
+            value = after.strip()
+            if key == "name":
+                name = value
+                cur_field = None
+            elif key == "description":
+                description_lines = [value] if value else []
+                cur_field = "description" if not value else None
+            elif key == "when_to_use":
+                when_to_use_lines = [value] if value and value != "|" else []
+                cur_field = "when_to_use" if (not value or value == "|") else None
+            else:
+                cur_field = None
+        elif cur_field == "description" and (line.startswith((" ", "\t")) or line == ""):
+            description_lines.append(line.strip())
+        elif cur_field == "when_to_use" and (line.startswith((" ", "\t")) or line == ""):
+            when_to_use_lines.append(line.strip())
+
+    description = " ".join(s for s in description_lines if s).strip()
+    when_to_use = " ".join(s for s in when_to_use_lines if s).strip()
     if not name or not description:
         return None
-    return {"name": name, "description": description}
+    return {
+        "name": name,
+        "description": description,
+        "when_to_use": when_to_use,
+    }
 
 
 def _load_skills_from_dir(skills_dir: Path) -> list[dict[str, str]]:
@@ -101,7 +127,13 @@ def _format_skill_list(skills_metadata: list[dict[str, str]]) -> str:
     for skill in skills_metadata:
         name = skill.get("name", "")
         description = skill.get("description", "")
+        when_to_use = skill.get("when_to_use", "")
         lines.append(f"- **{name}**: {description}")
+        if when_to_use:
+            # 缩进展示 when_to_use 的 trigger / SKIP 条件，让 LLM 判 skill 是否真匹配。
+            # 仿 cc-haha skillify.ts:145 风格："when_to_use is CRITICAL — 决定模型何时
+            # 自动调用此 skill"。
+            lines.append(f"  _When to use_: {when_to_use}")
     return "\n".join(lines)
 
 

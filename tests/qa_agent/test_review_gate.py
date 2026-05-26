@@ -158,9 +158,17 @@ def test_gate_failed_when_retry_exceeds_limit():
     assert "final_answer" in result
 
 
-def test_gate_pending_when_brief_is_empty_skeleton():
-    """主 agent 用空 brief 走过场——_looks_like_real_brief 失败，仍 pending."""
-    empty_brief = "test_case_file: foo"  # 太短 + 缺关键字段
+def test_gate_passed_with_short_brief_when_verdict_present():
+    """主 agent 用短 brief 调 verifier，verifier 仍然给了 VERDICT —— gate 应放行.
+
+    设计修订（实测对齐 cc-haha simplify.ts 风格）：review_gate 不校验 brief
+    长度——cc-haha 同类设计同样不校验，且实测发现校验门槛会误拒 verifier
+    实际成功的调用。review_gate 的职责仅是确认 verifier 真给了 verdict。
+
+    短 brief 反偷懒靠主 agent system prompt 的 "Writing the prompt for task
+    calls" 段约束（仿 cc-haha tools/AgentTool/prompt.ts），不靠 review_gate。
+    """
+    empty_brief = "评审 BUG-121100 cookie 用例"  # 极短 brief
     msgs = [
         HumanMessage(content="评审 BUG-121100"),
         _make_invoke_skill_msg(),
@@ -169,8 +177,8 @@ def test_gate_pending_when_brief_is_empty_skeleton():
     ]
     state = {"messages": msgs}
     result = review_gate(state)
-    # 即使 verifier 给了 VERDICT，brief 不合规也得 pending（防 LLM 走过场）
-    assert result["gate_status"] == "pending"
+    # verifier 给了 VERDICT 就 passed，不再校验 brief 长度
+    assert result["gate_status"] == "passed"
 
 
 # ---------------------------------------------------------------------------

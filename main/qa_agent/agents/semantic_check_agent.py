@@ -38,6 +38,13 @@ _REVIEW_VERIFICATION_PROMPT = """\
 You are a test case review verification specialist. Your job is not to
 confirm the main agent's review draft is correct — it's to try to break it.
 
+**Your output IS the user-facing review report**——the caller (main agent)
+will relay your report to the user; structure it as the final review the
+user should see, including all per-Check details + VERDICT + LEVEL.
+（仿 cc-haha generalPurposeAgent.ts:20 "the caller will relay this to the
+user, so it only needs the essentials"——但评审场景"essentials"包含逐条
+Check 的 evidence + verdict，不是一句话总结。）
+
 You have two documented failure patterns. First, **verification avoidance**:
 when faced with a check, you find reasons not to run it — you read the test
 case, narrate what you would verify, write "PASS," and move on. Reading is
@@ -47,6 +54,21 @@ inclined to confirm it. The main agent's draft is the easy part. Your entire
 value is in finding the last 20% it missed. The caller may spot-check your
 commands by re-running them — if a PASS step has no command output, or output
 that doesn't match re-execution, your report gets rejected.
+
+=== CRITICAL: DO NOT MODIFY THE PROJECT ===
+
+仿 cc-haha verificationAgent.ts:14-22。即使工具层只暴露 read_file/grep/ls，
+prompt 层也要明确禁止任何写入意图：
+
+You are STRICTLY PROHIBITED from:
+- Creating, modifying, or deleting any files IN THE PROJECT DIRECTORY
+- Installing dependencies or packages
+- Running git write operations (add, commit, push)
+- Spawning further subagents (no recursive task() / fork() calls)
+
+你的可用工具列表受限到只读检索（read_file / grep / ls）；不要尝试调用其他
+工具，遇到"如果有 X 工具能 Y 就好了"的念头时，停止——本任务不允许任何写入
+或副作用，独立验证靠 grep + 文件阅读完成。
 
 # What you receive
 
@@ -192,8 +214,7 @@ _REVIEW_VERIFICATION_DESCRIPTION = (
 
 def build_review_verification_subagent() -> "CompiledSubAgent":
     """构造 CompiledSubAgent —— 用 langchain create_agent 自己编译，
-    再 with_config 套 recursion_limit=30（充足探索预算，仿 cc-haha
-    verification agent 的 background=True 设计）。
+    再 with_config 套 recursion_limit（评审复杂用例需要充足探索预算）。
 
     走 CompiledSubAgent 路径（``subagents.py:559-564``）：deepagents 见到
     ``runnable`` 字段就 use as-is，不会自动套 TodoList / Filesystem /
@@ -201,10 +222,21 @@ def build_review_verification_subagent() -> "CompiledSubAgent":
 
     ``with_config`` 是 merge 语义，deepagents 内部再 ``with_config`` 加
     metadata/run_name 时不会丢掉我们的 recursion_limit。
+
+    recursion_limit=200：verifier 要分页读完整用例文件 + 多次 grep 验证 +
+    输出 Check 列表。30 实测会触发 recursion_limit；80 仍可能不够；200
+    是经验上限。
+
+    System prompt = parent 继承的反偷懒约束（Read-Only / Reading-vs-
+    Verification / Faithful Reporting / Evidence Discipline）+ verifier
+    特化的 try-to-break-it / OUTPUT FORMAT。仿 cc-haha forkSubagent.ts
+    "fork agent inherits parent system prompt" 设计——deepagents 不会
+    自动继承，所以这里手动拼。
     """
     from langchain.agents import create_agent
 
     from main.qa_agent.agents._llm import build_agent_chat_model, qa_agent_tier_model
+    from main.qa_agent.agents._prompt import build_verifier_inherited_sections
     from main.qa_agent.tools.deepagent import (
         qa_deepagent_grep,
         qa_deepagent_ls,
@@ -213,12 +245,20 @@ def build_review_verification_subagent() -> "CompiledSubAgent":
 
     # opus tier 跟主 agent 同档——verifier 需要业务理解，不能用 haiku
     model = build_agent_chat_model(model=qa_agent_tier_model("opus"))
+
+    # verifier 完整 system prompt = parent 继承段 + verifier 特化 prompt
+    full_prompt = (
+        build_verifier_inherited_sections()
+        + "\n\n---\n\n"
+        + _REVIEW_VERIFICATION_PROMPT
+    )
+
     runnable = create_agent(
         model,
-        system_prompt=_REVIEW_VERIFICATION_PROMPT,
+        system_prompt=full_prompt,
         tools=[qa_deepagent_read_file, qa_deepagent_grep, qa_deepagent_ls],
         name="review-verification",
-    ).with_config({"recursion_limit": 30})
+    ).with_config({"recursion_limit": 200})
 
     return {
         "name": "review-verification",

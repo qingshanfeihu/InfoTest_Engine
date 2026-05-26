@@ -20,7 +20,7 @@ from main.qa_agent.tools.deepagent import (
 from main.qa_agent.tools.deepagent.exec_tools import qa_bash, qa_exec
 from main.qa_agent.tools.knowledge.web_bug_search import web_bug_search
 from main.qa_agent.tools.knowledge.footprint_lookup import qa_footprint_lookup
-from main.qa_agent.tools.skills import qa_invoke_skill, qa_sanity_check
+from main.qa_agent.tools.skills import qa_invoke_skill
 from main.qa_agent.tools.ask_user import qa_ask_user
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,8 @@ def _default_generic_tools() -> list[Any]:
         # qa_invoke_skill：仿 Claude Code 的 Skill tool 调用机制（BLOCKING REQUIREMENT
         # 措辞），让 LLM 把"读 SKILL.md"当 tool_call 触发，而非依赖自觉
         qa_invoke_skill,
-        # qa_sanity_check：test-case-review skill 的字面自检 tool
-        qa_sanity_check,
+        # qa_sanity_check 已废弃（Step 7）——verifier subagent 自发 grep 探索字面问题
+        qa_invoke_skill,
         # qa_ask_user：仿 Claude Code 的 AskUserQuestion——P0/P1 不确定时让用户决策
         qa_ask_user,
     ]
@@ -221,21 +221,34 @@ def build_main_agent(**kwargs: Any):
         # FilesystemMiddleware 自动提供：ls, glob, grep, read_file
         _explore_only_tools = [
             t for t in tools
-            if getattr(t, "name", "") in ("web_bug_search", "qa_sanity_check")
+            if getattr(t, "name", "") in ("web_bug_search",)
         ]
 
         explore_subagent: dict[str, Any] = {
             "name": "explore",
             "description": (
                 "通用只读检索代理。给它明确的搜索任务，返回结构化结果。"
-                "适合：跨多文件搜索、读取文档片段、执行 sanity_check。"
+                "适合：跨多文件搜索、读取文档片段。"
                 "不适合：评审判断、生成报告、简单单次查询（直接用 grep）。"
             ),
             "system_prompt": _EXPLORE_SYSTEM_PROMPT,
             "tools": _explore_only_tools,
             "model": build_explore_model(),
         }
-        subagents_kwarg["subagents"] = [explore_subagent]
+        subagents_list: list[dict[str, Any]] = [explore_subagent]
+        # review-verification subagent（评审场景的 adversarial verifier）：
+        # 仿 cc-haha verificationAgent.ts —— 主 agent 评审完写草稿后必须 spawn
+        # 这个 subagent 给最终 VERDICT + LEVEL，主 agent 不能 self-assign。
+        # cc-haha 对照：constants/prompts.ts:390-395 "you cannot self-assign"
+        try:
+            from main.qa_agent.agents.semantic_check_agent import (
+                build_review_verification_subagent,
+            )
+            subagents_list.append(build_review_verification_subagent())
+            logger.info("review-verification subagent 已注册 (CompiledSubAgent)")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("review-verification 注册失败: %s", exc)
+        subagents_kwarg["subagents"] = subagents_list
         logger.info("Explore sub-agent 已注册 (tools=%s)", [t.name for t in _explore_only_tools])
     except Exception as explore_exc:  # noqa: BLE001
         logger.info("Explore sub-agent 注册失败: %s", explore_exc)
@@ -248,6 +261,7 @@ def build_main_agent(**kwargs: Any):
         interrupt_on=_resolve_interrupt_on(),
         **backend_kwarg,
         **memory_extras,
+        **subagents_kwarg,
         **kwargs,
     )
 

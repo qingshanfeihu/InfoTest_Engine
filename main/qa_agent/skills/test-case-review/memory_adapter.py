@@ -111,57 +111,21 @@ def review_key_resolvers(messages: list) -> list[tuple[str, str]]:
 
 
 def review_finalizer(messages: list, store: "MemoryStore") -> dict[str, str] | None:
-    """检测评审结束，蒸馏 findings 写入 store。
+    """评审场景 finalizer：彻底不写"评审结论"类条目。
 
-    结束条件：最后一条 AIMessage 无 tool_calls 且含"建议修改汇总"或"P0"关键词。
+    历史规则（已废弃 2026-05-26）：检测 P0-P7 关键字 → 写
+    ``reviews/cases/<case>/findings.md`` + ``reviews/tickets/<id>/findings.md``。
+    实测发现：写入的评审结论被 ``review_key_resolvers`` 注入回主 agent，
+    导致下次评审复用历史结论（trace 实证 LLM thought 出现"memory context 里
+    提到已有评审结果"），形成"越评越懒"反馈环。
+
+    新规则（仿 cc-haha "不存评审结论到 memory"源头治理）：
+    评审结论留在当轮 ``state.final_review`` + 当轮对话即可，下次评审 fresh
+    重跑。需要历史 archive 时跑
+    ``scripts/maintenance/archive_review_findings.py``。
+
+    cc-haha 对照：grep ``review.*cache`` /cc-haha/src 无结果——cc-haha review
+    skill 跑一次出报告就完，不存进 memory；治"复用历史结论"的方式不是 inject
+    端过滤，是源头不写。
     """
-    from langchain_core.messages import AIMessage
-
-    if not messages:
-        return None
-
-    last_ai = None
-    for m in reversed(messages):
-        if isinstance(m, AIMessage):
-            last_ai = m
-            break
-    if last_ai is None:
-        return None
-
-    has_tool_calls = bool(getattr(last_ai, "tool_calls", None))
-    if has_tool_calls:
-        return None
-
-    content = last_ai.content if isinstance(last_ai.content, str) else str(last_ai.content)
-    is_final_report = any(kw in content for kw in ("建议修改汇总", "P0", "P1", "证据缺口"))
-    if not is_final_report:
-        return None
-
-    case_file = _extract_case_filename(messages)
-    ticket_id = _extract_ticket_id(messages)
-
-    if not case_file and not ticket_id:
-        return None
-
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-    frontmatter = f"""---
-name: {case_file or ticket_id}
-type: case-finding
-case_filename: {case_file or "unknown"}
-ticket_id: {ticket_id or ""}
-created: {now}
----
-
-"""
-    report_snippet = content[-3000:] if len(content) > 3000 else content
-
-    write_plan: dict[str, str] = {}
-    if case_file:
-        path = f"reviews/cases/{case_file}/findings.md"
-        write_plan[path] = frontmatter + report_snippet
-    if ticket_id:
-        path = f"reviews/tickets/{ticket_id}/findings.md"
-        write_plan[path] = frontmatter + report_snippet
-
-    return write_plan
+    return None

@@ -24,7 +24,8 @@ from main.qa_agent.tui.messages import (
     PhaseMarkerMessage,
     PlatformTaskMessage,
     PythonExecMessage,
-    SubAgentDispatchMessage,
+    SubAgentTaskMessage,
+    TodoListMessage,
     ToolCallMessage,
     XlsxSheetMessage,
 )
@@ -127,6 +128,24 @@ def test_phase_marker_routed_as_message(sink, captured):
     assert appends and appends[0].message.phase == "scope"
 
 
+def test_write_todos_routes_to_todo_list_message(sink, captured):
+    """write_todos 必须路由到 TodoListMessage 并保留完整 todos——
+    PlanPanel 在 tool_call 阶段就要拿到 todos 整列重渲染。"""
+    todos = [
+        {"status": "completed", "content": "step 1"},
+        {"status": "in_progress", "content": "step 2"},
+        {"status": "pending", "content": "step 3"},
+    ]
+    sink(_ev(
+        "tool_call",
+        tags={"name": "write_todos"},
+        payload={"input": {"todos": todos}},
+    ))
+    appends = [e for e in captured if e.kind == "append"]
+    assert appends and isinstance(appends[0].message, TodoListMessage)
+    assert appends[0].message.todos == todos
+
+
 def test_evidence_and_finding_events(sink, captured):
     sink(_ev("evidence_added", payload={"summary": "ev1"}))
     sink(_ev("finding_emitted", payload={"summary": "f1"}))
@@ -148,13 +167,41 @@ def test_hil_request_routed_with_payload_fields(sink, captured):
     assert hils[0].message.reason == "needs review"
 
 
-def test_subagent_lifecycle_emits_dispatch_messages(sink, captured):
-    sink(_ev("subagent_start", tags={"name": "coverage_analyst"}))
-    sink(_ev("subagent_end", tags={"name": "coverage_analyst"}))
-    msgs = [e.message for e in captured if e.kind in {"subagent_start", "subagent_end"}]
-    assert all(isinstance(m, SubAgentDispatchMessage) for m in msgs)
-    statuses = [m.status for m in msgs]  # type: ignore[attr-defined]
-    assert "running" in statuses and "done" in statuses
+def test_task_tool_call_emits_subagent_task_message(sink, captured):
+    """task 工具调用走 LangChain 标准 tool_call 事件，被 sink.py:310-318 派发为
+    SubAgentTaskMessage(status='running')。
+
+    Step 8 改造：subagent_start/end 自定义事件类型已删除，task 工具的状态机
+    完全靠 LangChain on_tool_start (tool_call) + on_tool_end (tool_result)
+    驱动——仿 cc-haha AgentTool 走 tool_use/tool_result 标准接口。
+    """
+    sink(_ev("tool_call", tags={"name": "task"}, payload={
+        "name": "task",
+        "input": {"raw": '{"subagent_type": "review-verification", "description": "verify ..."}'},
+    }))
+    msgs = [e.message for e in captured]
+    assert any(isinstance(m, SubAgentTaskMessage) for m in msgs)
+    sub_msg = next(m for m in msgs if isinstance(m, SubAgentTaskMessage))
+    assert sub_msg.status == "running"
+    assert sub_msg.subagent_type == "review-verification"
+
+
+def test_task_tool_result_transitions_to_done(sink, captured):
+    """task 工具的 tool_result 事件应切 SubAgentTaskMessage 状态 running → done."""
+    sink(_ev("tool_call", tags={"name": "task"}, payload={
+        "name": "task",
+        "input": {"raw": '{"subagent_type": "review-verification", "description": "x"}'},
+    }))
+    sink(_ev("tool_result", tags={"name": "task"}, payload={
+        "name": "task",
+        "output": "VERDICT: PARTIAL\nLEVEL: P3",
+    }))
+    sub_messages = [e.message for e in captured if isinstance(e.message, SubAgentTaskMessage)]
+    assert any(m.status == "done" for m in sub_messages), (
+        f"无 done 状态切换；状态: {[m.status for m in sub_messages]}"
+    )
+    done_msg = next(m for m in sub_messages if m.status == "done")
+    assert "VERDICT" in done_msg.result
 
 
 def test_error_event_routes_to_error_message(sink, captured):

@@ -1,9 +1,12 @@
 """通用执行工具：qa_bash + qa_exec.
 
-Sandbox（与 ``file_tools.py`` 同一沙箱根 ``_AGENT_ROOT = knowledge/data/``）：
-- ``cwd`` 锁到 ``_AGENT_ROOT``，agent 看不到仓库根
+Sandbox（仿 cc-haha 三层模型）：
+
+- ``cwd`` 由 ``_resolve_cwd_for_target()`` 按命令路径参数选最匹配的沙箱根
+  （cc-haha ``BashTool/pathValidation.ts:657-694`` 用 ``resolve(cwd, path)``
+  反向解析；InfoTest_Engine 没有用户 ``cd`` 概念，直接选目标所在根）
 - 子进程 env 不透传 ``PYTHONPATH``，切断 ``import main.*`` 路径
-- ``qa_bash`` 路径参数走 ``_resolve_inside_root`` 校验，拒绝出沙箱
+- ``qa_bash`` 路径参数走 ``_resolve_inside_root`` 多根校验，拒绝出沙箱
 - ``qa_bash`` 命令黑名单拦截网络外联 / 提权 / 破坏性文件操作
 - 拒绝 shell 元字符（``|`` ``>`` ``<`` ``;`` ``&`` ``${`` ``$()`` 等）
 - ``qa_exec`` 仅拒绝网络外联（socket / urllib / requests / http / ftp / smtp）
@@ -25,14 +28,15 @@ from typing import Iterable
 
 from langchain_core.tools import tool
 
-from main.qa_agent.tools.deepagent.file_tools import _AGENT_ROOT, _resolve_inside_root
-
-
-# ---------------------------------------------------------------------------
-# Project boundaries（与 file_tools.py 共用沙箱根）
-# ---------------------------------------------------------------------------
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+from main.qa_agent.tools.deepagent._sandbox import (
+    _default_cwd,
+)
+from main.qa_agent.tools.deepagent.file_tools import (
+    _AGENT_ROOT,
+    _PROJECT_ROOT,
+    _agent_roots,
+    _resolve_inside_root,
+)
 
 # bash 命令黑名单——仅拦截网络外联、提权、和破坏性文件操作。
 # 沙箱内的只读操作由 cwd 锁定 + 路径校验保护，无需额外拦截。
@@ -133,6 +137,8 @@ def _looks_like_path(token: str) -> bool:
     用来决定是否对该 token 走 _resolve_inside_root 校验。设计上偏严：
     宁可对 grep pattern 误检（被 _resolve_inside_root 当成不存在路径放行），
     也不漏检沙箱外路径。
+
+    多根感知：遍历 ``_agent_roots()``，任一根存在该 token 即按路径处理。
     """
     if not token:
         return False
@@ -140,10 +146,11 @@ def _looks_like_path(token: str) -> bool:
         return True
     if "/" in token:  # 含路径分隔符
         return True
-    # 不含分隔符的裸 token：如果在沙箱内或仓库根存在，也按路径处理
+    # 不含分隔符的裸 token：如果在任一沙箱根或仓库根存在，按路径处理
     try:
-        if (_AGENT_ROOT / token).exists():
-            return True
+        for root in _agent_roots():
+            if (root / token).exists():
+                return True
         if (_PROJECT_ROOT / token).exists():
             return True
     except (OSError, ValueError):
@@ -154,7 +161,7 @@ def _looks_like_path(token: str) -> bool:
 def _validate_bash_paths(parts: list[str]) -> tuple[bool, str]:
     """对 bash 命令 ``parts[1:]`` 中的"像路径"参数走 _resolve_inside_root。
 
-    任何不在 ``_AGENT_ROOT`` 内的路径参数都拒绝命令。
+    任何不在 ``_agent_roots()`` 任一根内的路径参数都拒绝命令。
     """
     for token in parts[1:]:
         if token.startswith("-"):
@@ -237,7 +244,7 @@ def qa_exec(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     try:
         completed = subprocess.run(  # nosec B603 — code 已 lint，shell=False
             [sys.executable, "-c", code],
-            cwd=_AGENT_ROOT,
+            cwd=str(_default_cwd()),
             env=_safe_env(),
             capture_output=True,
             text=True,
@@ -307,11 +314,35 @@ def qa_bash(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     if not ok:
         return f"error: {reason}"
 
+    # 多根支持：把命令里像路径的相对 token 展开成绝对路径。
+    # 子进程的 cwd 是 _default_cwd()（knowledge/data/），所以 LLM 写的
+    # ``ls workspace/inputs/`` 这种相对 project_root 的路径会被子进程解释
+    # 成 ``cwd/workspace/inputs/`` 找不到——这是单根 cwd 的固有限制。
+    # 仿 cc-haha BashTool/pathValidation.ts:657-694 的做法：
+    # 在 validation 层就用 ``resolve(cwd, path)`` 把路径解析成绝对路径，
+    # 之后命令对绝对路径操作，不依赖 cwd 解释。
+    expanded_parts: list[str] = [parts[0]]
+    for token in parts[1:]:
+        if token.startswith("-"):
+            expanded_parts.append(token)
+            continue
+        if not _looks_like_path(token):
+            expanded_parts.append(token)
+            continue
+        try:
+            absolute = _resolve_inside_root(token)
+            expanded_parts.append(str(absolute))
+        except (PermissionError, FileNotFoundError, ValueError):
+            # 路径无法解析或不存在——保持原样让子进程报准确错误
+            expanded_parts.append(token)
+
+    cwd_path = _default_cwd()
+
     started = time.time()
     try:
         completed = subprocess.run(  # nosec B603 — 已 validate + shell=False
-            parts,
-            cwd=_AGENT_ROOT,
+            expanded_parts,
+            cwd=str(cwd_path),
             env=_safe_env(),
             capture_output=True,
             text=True,

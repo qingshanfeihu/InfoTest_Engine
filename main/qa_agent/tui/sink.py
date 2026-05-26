@@ -36,7 +36,6 @@ from main.qa_agent.tui.messages import (
     PhaseMarkerMessage,
     PlatformTaskMessage,
     PythonExecMessage,
-    SubAgentDispatchMessage,
     SubAgentTaskMessage,
     TodoListMessage,
     TOOL_NAME_TO_MESSAGE,
@@ -94,7 +93,12 @@ class TuiSink:
         self._token_run_seq: int = 0  # 当前流式 AIThinkingMessage 的 seq，用于增量
         self._last_flush = 0.0
         self._lock = threading.Lock()
+        # inflight by tool name —— 当 tool_call 创建消息后，对应的 tool_result
+        # 来时切状态。SubAgentTaskMessage 也走此处理（Step 8：删 subagent_start/end
+        # 死代码后，task 工具的状态机完全靠 LangChain 标准 tool_call/tool_result
+        # 驱动）。
         self._tool_calls_inflight: dict[str, ToolCallMessage] = {}  # by run_id+seq
+        self._subagent_tasks_inflight: dict[str, "SubAgentTaskMessage"] = {}  # by tool name
 
     # -- Public sink protocol ------------------------------------------------
 
@@ -171,14 +175,27 @@ class TuiSink:
             self._post(IstUiEvent(kind="append", message=PhaseMarkerMessage(run_id=run_id, seq=seq, ts=ts, phase=phase)))
         elif kind in {"tool_call", "tool_start"}:
             msg = self._make_tool_message(event)
-            self._tool_calls_inflight[f"{run_id}:{seq}"] = msg if isinstance(msg, ToolCallMessage) else None  # type: ignore[assignment]
+            if isinstance(msg, ToolCallMessage):
+                self._tool_calls_inflight[f"{run_id}:{seq}"] = msg
+            # SubAgentTaskMessage（task 工具）—— Step 8 改造：靠 LangChain 标准
+            # tool_call/tool_result 驱动状态机，不再用自定义 subagent_start/end 事件
+            if isinstance(msg, SubAgentTaskMessage):
+                tool_name = tags.get("name") or payload.get("name") or "task"
+                self._subagent_tasks_inflight[tool_name] = msg
             self._post(IstUiEvent(kind="append", message=msg))
         elif kind in {"tool_result", "tool_end"}:
+            tool_name = tags.get("name") or ""
+            # 切 SubAgentTaskMessage 状态 running → done（Step 8）
+            sub_task = self._subagent_tasks_inflight.pop(tool_name, None)
+            if sub_task is not None:
+                sub_task.status = "done"
+                sub_task.result = (payload.get("output") or "")[:500]
+                self._post(IstUiEvent(kind="update_subagent_task", message=sub_task))
             self._post(IstUiEvent(
                 kind="tool_done",
                 extra={
                     "run_id": run_id,
-                    "tool_name": tags.get("name") or "",
+                    "tool_name": tool_name,
                     "result": payload.get("output") or "",
                 },
             ))
@@ -226,19 +243,11 @@ class TuiSink:
             ))
         elif kind == "hil_response":
             self._post(IstUiEvent(kind="hil_response", extra={"run_id": run_id, "decision": payload}))
-        elif kind in {"subagent_start", "subagent_end"}:
-            name = tags.get("name") or payload.get("name") or ""
-            self._post(IstUiEvent(
-                kind=kind,
-                message=SubAgentDispatchMessage(
-                    run_id=run_id,
-                    seq=seq,
-                    ts=ts,
-                    name=name,
-                    status="running" if kind == "subagent_start" else "done",
-                    telemetry=event.get("usage") or {},
-                ),
-            ))
+        # NOTE: subagent_start / subagent_end 处理分支已删除（Step 8）。
+        # 历史死代码：grep 确认无 emit 点。task 工具走 LangChain 标准
+        # tool_call/tool_result——见本文件下方 _build_tool_call_message
+        # 派发 SubAgentTaskMessage(status="running")，on_tool_end 由
+        # ToolCallMessage 状态机切到 done。
         elif kind == "error":
             self._post(IstUiEvent(kind="append", message=ErrorMessage(run_id=run_id, seq=seq, ts=ts, text=str(payload))))
         elif kind == "warn":
@@ -346,6 +355,7 @@ class TuiSink:
             self._token_run_seq = 0
             self._last_flush = 0.0
             self._tool_calls_inflight.clear()
+            self._subagent_tasks_inflight.clear()
 
 
 # ---------------------------------------------------------------------------

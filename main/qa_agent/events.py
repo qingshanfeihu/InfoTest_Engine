@@ -27,8 +27,10 @@ EventKind = Literal[
     "phase_marker",
     "evidence_added",
     "finding_emitted",
-    "subagent_start",
-    "subagent_end",
+    # NOTE: subagent_start/end 事件类型已删除（Step 8）。
+    # 历史死代码：grep 确认无 emit 点；task 工具走 LangChain 标准
+    # tool_call/tool_result，sink.py:310-318 已通过 tool_call 派发
+    # SubAgentTaskMessage。cc-haha 同样不自定义 subagent 事件类型。
     "hil_request",
     "hil_response",
     "finding_written",

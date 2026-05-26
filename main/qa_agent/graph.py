@@ -422,14 +422,31 @@ def build_qa_agent_graph(
     （仅在 ``checkpointer is True`` 时生效）。runner.py print 模式必须传
     ``"sync"``，TUI / langgraph dev / streaming 走默认 ``"async"``。
     """
+    from main.qa_agent.nodes.review_gate import review_gate
+
     g = StateGraph(QaAgentState)
     g.add_node("normalize_input", normalize_input)
     g.add_node("qa_node", qa_node)
+    g.add_node("review_gate", review_gate)
     g.add_node("finalize", finalize)
 
     g.add_edge(START, "normalize_input")
     g.add_edge("normalize_input", "qa_node")
-    g.add_edge("qa_node", "finalize")
+    # qa_node → review_gate 检查评审硬闸
+    g.add_edge("qa_node", "review_gate")
+    # review_gate 三态：
+    # - passed: 走 finalize（评审场景验证通过 / 非评审场景透传）
+    # - pending: 重路由回 qa_node 让主 agent 重试调 verifier
+    # - failed: 重试上限到，写错误 final_answer 后走 finalize
+    g.add_conditional_edges(
+        "review_gate",
+        lambda s: s.get("gate_status", "passed"),
+        {
+            "passed": "finalize",
+            "pending": "qa_node",
+            "failed": "finalize",
+        },
+    )
     g.add_edge("finalize", END)
 
     compile_kwargs: dict[str, Any] = {}

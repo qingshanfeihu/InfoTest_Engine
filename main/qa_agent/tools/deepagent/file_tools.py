@@ -29,6 +29,11 @@ def _agent_roots() -> tuple[Path, ...]:
 
     优先级：knowledge/data > workspace > IST_SESSION_DIR > IST_USER_DIR。
     不存在的目录自动跳过，保证向后兼容。
+
+    cc-haha 对照：``filesystem.ts:667-674`` ``allWorkingDirectories()``——
+    cc-haha 主根是启动 cwd，扩展走 ``--add-dir``；InfoTest_Engine 主根
+    硬编码 knowledge/data/ + workspace/，扩展走 env（设计哲学差异：
+    cc-haha 是用户工作目录工具，InfoTest_Engine 是产品强制沙箱）。
     """
     roots: list[Path] = [_AGENT_ROOT]
     if _WORKSPACE_ROOT.is_dir():
@@ -163,6 +168,9 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
          ``_PLATFORM_DENIED_TOP_LEVEL`` or is a ``_PLATFORM_DENIED_FILES`` entry.
       3. Sandbox white-list: resolved path must live under one of
          ``_agent_roots()`` (knowledge/data, workspace, session, user).
+
+    cc-haha 对照：``filesystem.ts:683-707`` ``pathInAllowedWorkingPath()``
+    用 ``every(workingPaths.some(...))``；语义等价。
     """
     text = (raw_path or ".").strip() or "."
 

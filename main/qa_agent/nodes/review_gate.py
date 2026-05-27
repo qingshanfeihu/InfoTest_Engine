@@ -1,7 +1,5 @@
-"""review_gate 节点：评审场景的硬闸（仿 cc-haha hookHelpers.ts 的 Stop hook）.
-
-cc-haha 设计（已读 ``utils/hooks/hookHelpers.ts:70-83`` +
-``query/stopHooks.ts:257-267``）::
+"""review_gate 节点：评审场景的硬闸（
+`业界 agent 设计`）::
 
     addFunctionHook(
         setAppState, sessionId, 'Stop', '',
@@ -10,7 +8,7 @@ cc-haha 设计（已读 ``utils/hooks/hookHelpers.ts:70-83`` +
         { timeout: 5000 },
     )
 
-    // stopHooks.ts:257-267：callback 返回 false → 包成 userMessage 推回 messages
+    // 业界 agent 设计：callback 返回 false → 包成 userMessage 推回 messages
     if (result.blockingError) {
         const userMessage = createUserMessage({
             content: getStopHookMessage(result.blockingError),
@@ -27,7 +25,7 @@ InfoTest_Engine 落地（LangGraph 等价物）：
   返回的 ToolMessage content 含 ``VERDICT:`` + ``LEVEL:`` 行
 - 重路由：注入 HumanMessage 提示，state 走 ``pending`` → 回 qa_node 重试
 - retry 上限 2，超限走 ``failed`` 写错误 final_answer，**不抛异常**
-  （仿 ``stopHooks.ts:456-472`` catch + warning）
+  （仿 `业界 agent 设计` catch + warning）
 """
 
 from __future__ import annotations
@@ -38,7 +36,6 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 logger = logging.getLogger(__name__)
-
 
 def review_gate(state: dict[str, Any]) -> dict[str, Any]:
     """review 硬闸节点。
@@ -60,8 +57,8 @@ def review_gate(state: dict[str, Any]) -> dict[str, Any]:
 
     retry = (state.get("gate_retry_count") or 0) + 1
     if retry > 2:
-        # 重试上限到——写错误 final_answer 走 finalize（不抛异常，仿 cc-haha
-        # stopHooks.ts:456-472 catch + warning）。
+        # 重试上限到——写错误 final_answer 走 finalize（不抛异常，仿 业界 agent 框架
+        # 业界 agent 设计 catch + warning）。
         msg = (
             "[gate] 已重试 2 次仍未调 task(subagent_type='review-verification') "
             "+ 返回 VERDICT/LEVEL，强制终止。请检查 SKILL.md 是否包含调用指令、"
@@ -86,11 +83,8 @@ def review_gate(state: dict[str, Any]) -> dict[str, Any]:
         "messages": [HumanMessage(content=inject_text)],
     }
 
-
 def _has_invoked_review_skill(msgs: list) -> bool:
     """触发信号：扫 messages 看主 agent 是否调过 qa_invoke_skill('test-case-review').
-
-    cc-haha 对照：``utils/messages.ts:4719-4759`` ``hasSuccessfulToolCall(name)``
     模式——只看 tool name 不校验 tool_result 内容。这里也是只看 tool_call args
     不校验 SKILL.md 返回了啥。
     """
@@ -104,7 +98,6 @@ def _has_invoked_review_skill(msgs: list) -> bool:
                 return True
     return False
 
-
 def _has_verifier_call_with_verdict(msgs: list) -> bool:
     """检测 task(subagent_type='review-verification') 调用 + ToolMessage 含 VERDICT.
 
@@ -112,12 +105,12 @@ def _has_verifier_call_with_verdict(msgs: list) -> bool:
     ``Command(messages=[ToolMessage(content, tool_call_id)])``，主 agent
     看到的就是这条 ToolMessage，content 是 verifier 最后 AIMessage 的 text。
 
-    流程（仿 cc-haha hasSuccessfulToolCall）：
+    流程（
     1. 倒序找 AIMessage tool_calls 含 ``subagent_type='review-verification'``
     2. 找对应 ToolMessage（tool_call_id 匹配），校验 is_error 不为 true
     3. content 含 ``VERDICT:`` + ``LEVEL:``
 
-    NOTE: 不校验 brief（task description）长度——cc-haha simplify.ts 同样
+    NOTE: 不校验 brief（task description）长度——
     不校验。LLM 用极短 brief 但 verifier 仍能凭 system prompt + 自身工具
     完成任务时不应阻断。review_gate 的职责只是确认 verifier 真给了 verdict。
     """
@@ -151,8 +144,7 @@ def _has_verifier_call_with_verdict(msgs: list) -> bool:
         return "VERDICT:" in content and "LEVEL:" in content
     return False
 
-
-# DEPRECATED: brief 长度校验保留代码备查但不再调用——cc-haha 同类设计不做
+# DEPRECATED: brief 长度校验保留代码备查但不再调用——
 # 此校验，且实测发现校验门槛 200 误拒了 verifier 实际成功的调用。
 def _looks_like_real_brief(description: str) -> bool:
     """[已废弃] brief 字段校验. 评测结果：误拒率高，已从 review_gate 移除调用."""
@@ -161,6 +153,5 @@ def _looks_like_real_brief(description: str) -> bool:
     required_tokens = ("test_case_file", "bug_id", "draft_findings")
     matched = sum(1 for tok in required_tokens if tok in description)
     return matched >= 2
-
 
 __all__ = ["review_gate"]

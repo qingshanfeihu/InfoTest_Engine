@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 _SKILLS_DIR = str(Path(__file__).resolve().parents[1] / "skills")
 
-
 def _default_generic_tools() -> list[Any]:
     return [
         qa_deepagent_ls,
@@ -45,14 +44,11 @@ def _default_generic_tools() -> list[Any]:
         # qa_invoke_skill：仿 Claude Code 的 Skill tool 调用机制（BLOCKING REQUIREMENT
         # 措辞），让 LLM 把"读 SKILL.md"当 tool_call 触发，而非依赖自觉
         qa_invoke_skill,
-        # qa_sanity_check 已废弃（Step 7）——verifier subagent 自发 grep 探索字面问题
-        qa_invoke_skill,
         # qa_ask_user 已禁用（实测在评审场景被错误调用导致 derail）：
         # 主 agent 倾向于在不确定时调它，但参数格式（options 必须 2-4 项）
         # LLM 经常写错，导致死循环重试。评审场景应靠证据决定，不靠询问用户；
         # 通用 QA 应直接回答。如需重启用，先解决参数格式 derail 问题。
     ]
-
 
 def build_main_agent(**kwargs: Any):
     """Build the phase-one main agent.
@@ -206,7 +202,7 @@ def build_main_agent(**kwargs: Any):
         logger.info("deepagents filesystem/exclusion middleware 不可用，使用显式 qa_deepagent_* 工具: %s", exc)
 
     # Explore sub-agent（全局通用，跟 qa_ls/qa_grep 同级）
-    # 仿 cc-haha tools/AgentTool/built-in/generalPurposeAgent.ts 设计：
+    #
     # - SHARED_PREFIX："Complete the task fully—don't gold-plate, but
     #   don't leave it half-done"
     # - "the caller will relay this to the user, so it only needs the
@@ -259,9 +255,9 @@ def build_main_agent(**kwargs: Any):
         }
         subagents_list: list[dict[str, Any]] = [explore_subagent]
         # review-verification subagent（评审场景的 adversarial verifier）：
-        # 仿 cc-haha verificationAgent.ts —— 主 agent 评审完写草稿后必须 spawn
+        #
         # 这个 subagent 给最终 VERDICT + LEVEL，主 agent 不能 self-assign。
-        # cc-haha 对照：constants/prompts.ts:390-395 "you cannot self-assign"
+        #
         try:
             from main.qa_agent.agents.semantic_check_agent import (
                 build_review_verification_subagent,
@@ -287,7 +283,6 @@ def build_main_agent(**kwargs: Any):
         **kwargs,
     )
 
-
 def _resolve_interrupt_on() -> dict[str, Any] | None:
     """从 ``IST_INTERRUPT_ON`` 解析 deepagents interrupt_on 配置。
 
@@ -307,7 +302,6 @@ def _resolve_interrupt_on() -> dict[str, Any] | None:
     if not tool_names:
         return None
     return {name: True for name in tool_names}
-
 
 def _build_fallback_react_agent(*, model, tools, system_prompt: str):
     """Fallback for environments without deepagents."""

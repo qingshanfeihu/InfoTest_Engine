@@ -1,22 +1,20 @@
 """Review verification sub-agent —— InfoTest_Engine 评审 verifier.
-
-仿 cc-haha ``tools/AgentTool/built-in/verificationAgent.ts`` (v1.0)，把它的
 "verify implementation" 场景适配成"verify test case review draft"。
 
-核心机制（cc-haha 原文 ``verificationAgent.ts:10-12``）：
+核心机制（
     "You are a verification specialist. Your job is not to confirm
     the implementation works — it's to try to break it."
 
 InfoTest_Engine 适配：主 agent 评审完测试用例后写一份草稿，verifier 拿着
 草稿独立复读用例文件，try to break the draft——找草稿没说的问题、推翻
 草稿给的 P 级别。最终 verdict + level 由 verifier 给，主 agent 不能
-self-assign（仿 cc-haha ``constants/prompts.ts:390-395``）。
+self-assign（
 
 关键设计（已读 deepagents ``subagents.py:413-426`` 核实）：
 - task 工具返回 ``Command(messages=[ToolMessage(content, tool_call_id)])``
   主 agent 看到的就是 verifier 最后一条 AIMessage 的 text
 - subagent 启动时 ``messages`` 字段被强制覆盖为 ``[HumanMessage(description)]``
-  → fresh 零上下文（仿 cc-haha fork agent 设计）
+  → fresh 零上下文（
 - verifier 的 system prompt 来自本模块的 ``_REVIEW_VERIFICATION_PROMPT``
 - 主 agent 调 task 时传的 description 是 verifier 唯一能看到的输入
 
@@ -33,7 +31,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from deepagents.middleware.subagents import CompiledSubAgent
 
-
 _REVIEW_VERIFICATION_PROMPT = """\
 You are a test case review verification specialist. Your job is not to
 confirm the main agent's review draft is correct — it's to try to break it.
@@ -41,7 +38,7 @@ confirm the main agent's review draft is correct — it's to try to break it.
 **Your output IS the user-facing review report**——the caller (main agent)
 will relay your report to the user; structure it as the final review the
 user should see, including all per-Check details + VERDICT + LEVEL.
-（仿 cc-haha generalPurposeAgent.ts:20 "the caller will relay this to the
+（
 user, so it only needs the essentials"——但评审场景"essentials"包含逐条
 Check 的 evidence + verdict，不是一句话总结。）
 
@@ -56,8 +53,6 @@ commands by re-running them — if a PASS step has no command output, or output
 that doesn't match re-execution, your report gets rejected.
 
 === CRITICAL: DO NOT MODIFY THE PROJECT ===
-
-仿 cc-haha verificationAgent.ts:14-22。即使工具层只暴露 read_file/grep/ls，
 prompt 层也要明确禁止任何写入意图：
 
 You are STRICTLY PROHIBITED from:
@@ -202,7 +197,6 @@ LEVEL: P0 | P1 | P2 | P3 | P4 | P5 | P6 | P7
 ``PASS`` / ``FAIL`` / ``PARTIAL`` 之一。LEVEL 同理。
 """
 
-
 _REVIEW_VERIFICATION_DESCRIPTION = (
     "Adversarial verification of test case review draft. Reads the test "
     "case independently, tries to break the main agent's draft findings, "
@@ -210,7 +204,6 @@ _REVIEW_VERIFICATION_DESCRIPTION = (
     "Use AFTER the main agent has collected evidence and produced a draft. "
     "The main agent CANNOT self-assign verdict—only this verifier can."
 )
-
 
 def build_review_verification_subagent() -> "CompiledSubAgent":
     """构造 CompiledSubAgent —— 用 langchain create_agent 自己编译，
@@ -229,7 +222,7 @@ def build_review_verification_subagent() -> "CompiledSubAgent":
 
     System prompt = parent 继承的反偷懒约束（Read-Only / Reading-vs-
     Verification / Faithful Reporting / Evidence Discipline）+ verifier
-    特化的 try-to-break-it / OUTPUT FORMAT。仿 cc-haha forkSubagent.ts
+    特化的 try-to-break-it / OUTPUT FORMAT。
     "fork agent inherits parent system prompt" 设计——deepagents 不会
     自动继承，所以这里手动拼。
     """
@@ -265,7 +258,6 @@ def build_review_verification_subagent() -> "CompiledSubAgent":
         "description": _REVIEW_VERIFICATION_DESCRIPTION,
         "runnable": runnable,
     }
-
 
 __all__ = [
     "build_review_verification_subagent",

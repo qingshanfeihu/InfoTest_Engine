@@ -52,9 +52,15 @@ def test_bash_allows_filesystem_commands_in_sandbox():
 
 def test_bash_denies_destructive_filesystem_commands():
     """破坏性文件操作需走 write_file/edit_file 工具（有 _WRITABLE_SUBDIRS 控制）。"""
-    for cmd in ["rm temp.txt", "mv a.txt b.txt", "cp a.txt b.txt"]:
+    for cmd in ["rm temp.txt", "mv a.txt b.txt", "ln a.txt b.txt"]:
         ok, reason = _validate_bash_command(cmd)
         assert not ok, f"{cmd!r} should be denied"
+
+
+def test_bash_cp_command_name_allowed():
+    """``cp`` 命令名层不再拒——目标路径强制走 _resolve_writable_path 校验。"""
+    ok, reason = _validate_bash_command("cp a.txt outputs/b.txt")
+    assert ok, f"cp should be allowed at command-name layer: {reason}"
 
 
 def test_bash_metachars_blocked():
@@ -127,6 +133,37 @@ def test_bash_paths_accept_nonexistent_relative_token():
     """``grep -r foo`` 这种 grep pattern 不应被当成路径拒绝。"""
     ok, reason = _validate_bash_paths(["grep", "-r", "foo"])
     assert ok, reason
+
+
+# ---------------------------------------------------------------------------
+# Validation: cp — destination must resolve into workspace/outputs/
+# ---------------------------------------------------------------------------
+
+
+def test_bash_cp_dest_under_outputs_allowed():
+    """cp 目标在 workspace/outputs/ 内允许（命令名 + 路径校验都过）。"""
+    ok, reason = _validate_bash_paths(["cp", "markdown/qa.md", "outputs/qa.md"])
+    assert ok, f"cp into outputs/ should pass: {reason}"
+
+
+def test_bash_cp_dest_to_knowledge_data_rejected():
+    """cp 目标在 knowledge/data/ 内必须被拒——知识库不可写。"""
+    ok, reason = _validate_bash_paths(["cp", "outputs/x.md", "markdown/x.md"])
+    assert not ok
+    assert "destination" in reason.lower() or "rejected" in reason.lower()
+
+
+def test_bash_cp_dest_traversal_rejected():
+    """cp 目标含 ``..`` 必须被拒。"""
+    ok, reason = _validate_bash_paths(["cp", "outputs/x.md", "../../etc/passwd"])
+    assert not ok
+
+
+def test_bash_cp_missing_dest_rejected():
+    """cp 至少需要 src + dst 两个位置参数。"""
+    ok, reason = _validate_bash_paths(["cp", "outputs/x.md"])
+    assert not ok
+    assert "destination" in reason.lower() or "source" in reason.lower()
 
 
 # ---------------------------------------------------------------------------

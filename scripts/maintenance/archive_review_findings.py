@@ -21,8 +21,6 @@
 
 环境变量：
 - ``IST_MEMORY_ROOT``：memory 根目录（默认 ``<repo>/memory``）
-
-cc-haha 对照：grep 确认 cc-haha 无对应 cleanup 脚本——cc-haha 设计上根本
 不存评审结论到 memory，所以无存量需清。InfoTest_Engine 是历史负担，需要
 一次性脚本切干净反馈环。
 """
@@ -35,7 +33,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-
 def _project_root() -> Path:
     """回退查找：脚本所在 → parents 直到含 ``main/qa_agent/`` 目录."""
     p = Path(__file__).resolve()
@@ -43,7 +40,6 @@ def _project_root() -> Path:
         if (parent / "main" / "qa_agent").is_dir():
             return parent
     return Path.cwd()
-
 
 def archive_review_findings(memory_root: Path | None = None) -> dict[str, Path]:
     """把 reviews/cases + reviews/tickets 移到 archive/<时间戳>/.
@@ -89,7 +85,6 @@ def archive_review_findings(memory_root: Path | None = None) -> dict[str, Path]:
         print(f"[archive] 完成：{len(moved)} 个目录移到 {archive_root}")
     return moved
 
-
 def main() -> int:
     try:
         archive_review_findings()
@@ -97,7 +92,6 @@ def main() -> int:
         print(f"[archive] 错误：{exc}", file=sys.stderr)
         return 1
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

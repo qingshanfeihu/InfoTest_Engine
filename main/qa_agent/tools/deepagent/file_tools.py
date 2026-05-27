@@ -15,7 +15,6 @@ from langchain_core.tools import tool
 from main.qa_agent.tools.deepagent._range_reader import read_text_range
 from main.qa_agent.tools.deepagent._rg import RipgrepResult, run_ripgrep
 
-
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 # ⚠ 安全边界：IST-Core agent 的文件视野白名单根。
 # 与 CLAUDE.md "agent 视野：agent 只看 knowledge/data/" 对齐。
@@ -23,17 +22,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 _AGENT_ROOT = (_PROJECT_ROOT / "knowledge" / "data").resolve()
 _WORKSPACE_ROOT = (_PROJECT_ROOT / "workspace").resolve()
 
-
 def _agent_roots() -> tuple[Path, ...]:
     """返回 agent 可访问的根目录列表（按优先级排序）。
 
     优先级：knowledge/data > workspace > IST_SESSION_DIR > IST_USER_DIR。
     不存在的目录自动跳过，保证向后兼容。
-
-    cc-haha 对照：``filesystem.ts:667-674`` ``allWorkingDirectories()``——
-    cc-haha 主根是启动 cwd，扩展走 ``--add-dir``；InfoTest_Engine 主根
     硬编码 knowledge/data/ + workspace/，扩展走 env（设计哲学差异：
-    cc-haha 是用户工作目录工具，InfoTest_Engine 是产品强制沙箱）。
     """
     roots: list[Path] = [_AGENT_ROOT]
     if _WORKSPACE_ROOT.is_dir():
@@ -151,13 +145,11 @@ _TYPE_SUFFIXES = {
     "yml": {".yaml", ".yml"},
 }
 
-
 def _project_rel(path: Path) -> str:
     try:
         return path.resolve().relative_to(_PROJECT_ROOT).as_posix()
     except ValueError:
         return path.as_posix()
-
 
 def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> Path:
     """Resolve a user-supplied path against the agent sandbox.
@@ -168,8 +160,6 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
          ``_PLATFORM_DENIED_TOP_LEVEL`` or is a ``_PLATFORM_DENIED_FILES`` entry.
       3. Sandbox white-list: resolved path must live under one of
          ``_agent_roots()`` (knowledge/data, workspace, session, user).
-
-    cc-haha 对照：``filesystem.ts:683-707`` ``pathInAllowedWorkingPath()``
     用 ``every(workingPaths.some(...))``；语义等价。
     """
     text = (raw_path or ".").strip() or "."
@@ -238,14 +228,11 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
         raise FileNotFoundError(f"path not found: {raw_path}")
     return resolved
 
-
 def _coerce_limit(value: int | None, default: int, *, upper: int = 1000) -> int:
     return max(1, min(int(value or default), upper))
 
-
 def _coerce_offset(value: int | None) -> int:
     return max(0, int(value or 0))
-
 
 def _normalise_pattern(pattern: str, base: Path) -> str:
     pattern = (pattern or "*").strip() or "*"
@@ -261,7 +248,6 @@ def _normalise_pattern(pattern: str, base: Path) -> str:
             return pattern_path.name
     return pattern
 
-
 def _expand_brace_patterns(pattern: str) -> list[str]:
     match = re.search(r"\{([^{}]+)\}", pattern)
     if not match:
@@ -271,7 +257,6 @@ def _expand_brace_patterns(pattern: str) -> list[str]:
         out.extend(_expand_brace_patterns(pattern[: match.start()] + part + pattern[match.end() :]))
     return out
 
-
 def _is_probably_binary(path: Path) -> bool:
     try:
         chunk = path.read_bytes()[:2048]
@@ -279,11 +264,9 @@ def _is_probably_binary(path: Path) -> bool:
         return True
     return b"\x00" in chunk
 
-
 def _rg_target(path: Path) -> str:
     rel = _project_rel(path)
     return rel or "."
-
 
 def _rg_exclusion_args() -> list[str]:
     args: list[str] = []
@@ -297,7 +280,6 @@ def _rg_exclusion_args() -> list[str]:
         args.extend(["--glob", f"!{prefix}/**"])
     return args
 
-
 def _resolve_rg_path(raw_path: str) -> Path | None:
     text = raw_path.strip()
     if not text:
@@ -310,16 +292,13 @@ def _resolve_rg_path(raw_path: str) -> Path | None:
     except Exception:
         return None
 
-
 _CONTENT_PATH_RE = re.compile(r"^(?P<path>.*?)(?::(?P<line>\d+):|-(?P<context_line>\d+)-)")
-
 
 def _content_line_path(raw_line: str) -> str | None:
     match = _CONTENT_PATH_RE.match(raw_line)
     if not match:
         return None
     return match.group("path")
-
 
 def _filter_rg_file_lines(lines: list[str], *, output_mode: str) -> list[str]:
     out: list[str] = []
@@ -336,7 +315,6 @@ def _filter_rg_file_lines(lines: list[str], *, output_mode: str) -> list[str]:
         if resolved is not None:
             out.append(_project_rel(resolved))
     return out
-
 
 def _filter_rg_content_lines(lines: list[str]) -> list[str]:
     out: list[str] = []
@@ -355,7 +333,6 @@ def _filter_rg_content_lines(lines: list[str]) -> list[str]:
         out.append(_project_rel(resolved) + line[len(path_text) :])
     return out
 
-
 def _apply_window(lines: list[str], *, offset: int, head_limit: int | None) -> tuple[list[str], bool]:
     offset = _coerce_offset(offset)
     if head_limit == 0:
@@ -364,7 +341,6 @@ def _apply_window(lines: list[str], *, offset: int, head_limit: int | None) -> t
     end = offset + limit
     return lines[offset:end], len(lines) > end
 
-
 def _rg_warning(result: RipgrepResult) -> str | None:
     if result.timed_out:
         return "... rg timed out; partial results shown. Narrow path/glob or reduce the query."
@@ -372,13 +348,11 @@ def _rg_warning(result: RipgrepResult) -> str | None:
         return "... rg output exceeded 20MB; partial results shown. Narrow path/glob or reduce the query."
     return None
 
-
 def _format_page_from_range(lines: list[str], *, total: int, offset: int, limit: int) -> str:
     header = f"total_lines={total}, offset={offset}, returned={len(lines)}"
     if offset + limit < total:
         header += f", next_offset={offset + limit}"
     return header + "\n" + "\n".join(lines)
-
 
 def _iter_candidate_files(base: Path, glob_pattern: str, *, max_files: int = 5000) -> Iterable[Path]:
     pattern = _normalise_pattern(glob_pattern, base)
@@ -398,7 +372,6 @@ def _iter_candidate_files(base: Path, glob_pattern: str, *, max_files: int = 500
                 return
             yield resolved
 
-
 def _format_page(lines: list[str], *, offset: int, limit: int) -> str:
     offset = max(0, int(offset or 0))
     limit = max(1, min(int(limit or 200), 1000))
@@ -409,18 +382,15 @@ def _format_page(lines: list[str], *, offset: int, limit: int) -> str:
         header += f", next_offset={offset + limit}"
     return header + "\n" + "\n".join(page)
 
-
 def _read_text_file(path: Path, *, offset: int, limit: int) -> str:
     page = read_text_range(path, offset=offset, limit=limit)
     return _format_page_from_range(page.lines, total=page.total_lines, offset=page.offset, limit=page.limit)
-
 
 def _clean_xml_text(raw: str) -> str:
     text = re.sub(r"<[^>]+>", " ", raw)
     text = html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
-
 
 def _read_docx(path: Path, *, offset: int, limit: int) -> str:
     try:
@@ -440,13 +410,11 @@ def _read_docx(path: Path, *, offset: int, limit: int) -> str:
     numbered = [f"{i + 1}: {line}" for i, line in enumerate(lines)]
     return _format_page(numbered, offset=offset, limit=limit)
 
-
 def _cell_text(value: object) -> str:
     if value is None:
         return ""
     text = str(value).replace("\n", " ").replace("\r", " ").strip()
     return re.sub(r"\s+", " ", text)
-
 
 def _read_spreadsheet(path: Path, *, offset: int, limit: int) -> str:
     suffix = path.suffix.lower()
@@ -485,7 +453,6 @@ def _read_spreadsheet(path: Path, *, offset: int, limit: int) -> str:
             suffix = " || ..." if len(values) > len(trimmed) else ""
             lines.append(f"{sheet_name}!{row_idx}: " + " || ".join(trimmed) + suffix)
     return _format_page(lines, offset=offset, limit=limit)
-
 
 @tool(parse_docstring=True)
 def qa_deepagent_ls(path: str = ".", max_entries: int = 200) -> str:
@@ -538,7 +505,6 @@ def qa_deepagent_ls(path: str = ".", max_entries: int = 200) -> str:
     except Exception as exc:  # noqa: BLE001
         return f"error: {exc}"
 
-
 def _python_glob(base: Path, pattern: str, *, max_results: int, offset: int) -> tuple[list[str], bool]:
     matches: list[Path] = []
     seen: set[Path] = set()
@@ -555,7 +521,6 @@ def _python_glob(base: Path, pattern: str, *, max_results: int, offset: int) -> 
     matches.sort(key=lambda p: p.name.lower())
     window = matches[offset : offset + max_results]
     return [_project_rel(p) + ("/" if p.is_dir() else "") for p in window], len(matches) > offset + max_results
-
 
 def _rg_glob(base: Path, pattern: str, *, max_results: int, offset: int) -> tuple[list[str], bool] | None:
     args = [
@@ -579,7 +544,6 @@ def _rg_glob(base: Path, pattern: str, *, max_results: int, offset: int) -> tupl
     window = paths[offset : offset + max_results]
     truncated = len(paths) > offset + max_results or result.timed_out or result.truncated
     return window, truncated
-
 
 @tool(parse_docstring=True)
 def qa_deepagent_glob(pattern: str, path: str = ".", max_results: int = 200, offset: int = 0) -> str:
@@ -624,26 +588,22 @@ def qa_deepagent_glob(pattern: str, path: str = ".", max_results: int = 200, off
     except Exception as exc:  # noqa: BLE001
         return f"error: {exc}"
 
-
 def _normalise_output_mode(output_mode: str | None) -> str:
     mode = (output_mode or "content").strip().lower()
     if mode not in {"content", "files_with_matches", "count"}:
         raise ValueError("output_mode must be one of: content, files_with_matches, count")
     return mode
 
-
 def _effective_head_limit(head_limit: int | None, max_results: int) -> int:
     if head_limit is None:
         return _coerce_limit(max_results, 100)
     return max(0, min(int(head_limit), 10000))
-
 
 def _type_suffixes(type_name: str | None) -> set[str] | None:
     if not type_name:
         return None
     key = type_name.strip().lower()
     return _TYPE_SUFFIXES.get(key, {f".{key}"})
-
 
 def _python_grep(
     *,
@@ -709,7 +669,6 @@ def _python_grep(
         count_lines.sort()
         return _apply_window(count_lines, offset=offset, head_limit=max_results)
     return _apply_window(content_lines, offset=offset, head_limit=max_results)
-
 
 def _rg_grep(
     *,
@@ -781,7 +740,6 @@ def _rg_grep(
     if warning:
         window.append(warning)
     return window, truncated, None
-
 
 @tool(parse_docstring=True)
 def qa_deepagent_grep(
@@ -864,13 +822,11 @@ def qa_deepagent_grep(
     except Exception as exc:  # noqa: BLE001
         return f"error: {exc}"
 
-
 _WRITABLE_SUBDIRS: frozenset[str] = frozenset({
     "outputs",
 })
 _MAX_WRITE_BYTES = 1 * 1024 * 1024  # 1 MiB
 _WRITABLE_SUFFIXES = _TEXT_SUFFIXES | {".json", ".jsonl"}
-
 
 def _resolve_writable_path(raw_path: str | None) -> Path:
     """Resolve a path for write operations (four gates).
@@ -941,7 +897,6 @@ def _resolve_writable_path(raw_path: str | None) -> Path:
         )
     return resolved
 
-
 def _atomic_write(target: Path, data: bytes) -> None:
     """Write data to target atomically via tmpfile + rename."""
     fd, tmp_path = tempfile.mkstemp(
@@ -958,7 +913,6 @@ def _atomic_write(target: Path, data: bytes) -> None:
             pass
         Path(tmp_path).unlink(missing_ok=True)
         raise
-
 
 @tool(parse_docstring=True)
 def qa_deepagent_read_file(path: str, offset: int = 0, limit: int = 200) -> str:
@@ -999,7 +953,6 @@ def qa_deepagent_read_file(path: str, offset: int = 0, limit: int = 200) -> str:
         return _read_text_file(target, offset=offset, limit=limit)
     except Exception as exc:  # noqa: BLE001
         return f"error: {exc}"
-
 
 @tool(parse_docstring=True)
 def qa_deepagent_write_file(path: str, content: str, overwrite: bool = False) -> str:
@@ -1044,7 +997,6 @@ def qa_deepagent_write_file(path: str, content: str, overwrite: bool = False) ->
         return f"error: {exc}"
     except Exception as exc:  # noqa: BLE001
         return f"error: {exc}"
-
 
 @tool(parse_docstring=True)
 def qa_deepagent_edit_file(

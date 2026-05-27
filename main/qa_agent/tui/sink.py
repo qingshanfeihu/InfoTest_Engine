@@ -1,9 +1,6 @@
 """TuiSink：把 ``QaAgentEvent`` 翻译成 Textual ``Message`` 投递到 UI 线程。
 
-
-+ src/services/tools/StreamingToolExecutor.ts (event routing).
-
-关键约束（plan 风险表 #5/#7 已识别）：
+关键约束：
 - EventBus 是同步的，graph worker 线程会直接回调 ``__call__``
 - 不能直接 update widget，必须用 ``app.call_from_thread(post_message, msg)``
 - llm_token 节流 80ms（对齐 cli_sink.py:60），避免每个 token 都唤醒 UI
@@ -44,11 +41,9 @@ from main.qa_agent.tui.messages import (
     XlsxSheetMessage,
 )
 
-
 # ---------------------------------------------------------------------------
 # Textual Message wrappers
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class IstUiEvent:
@@ -63,11 +58,9 @@ class IstUiEvent:
     message: IstMessage | None = None
     extra: dict[str, Any] | None = None
 
-
 # ---------------------------------------------------------------------------
 # TuiSink
 # ---------------------------------------------------------------------------
-
 
 class TuiSink:
     """订阅 EventBus 的 sink；把 QaAgentEvent 映射成 IstUiEvent 投递到 UI。
@@ -159,9 +152,13 @@ class TuiSink:
         elif kind in {"node_start", "node_end"}:
             node = tags.get("node") or tags.get("name") or ""
             self._post(IstUiEvent(kind=kind, extra={"node": node, "run_id": run_id}))
-            # Fallback: agent.invoke 同步调用不发 token stream，
-            # 在 qa_node node_end 时把 final_answer 当一个完整 AIFinalMessage 投出来
-            if kind == "node_end" and node == "qa_node":
+            # 权威对话结论：必须用 finalize node 的 final_answer，不能用 qa_node。
+            # qa_node 的 final_answer 只是「本轮主 agent 最后一条 AIMessage」——
+            # 评审场景下 graph.finalize() 才把 review-verification 的 ToolMessage
+            # 全文 merge 进来；若在 qa_node_end 就投 AIFinalMessage，用户只能看到
+            # 「评审完成」短总结，看不到逐条 Check + 测试建议（与 graph.py finalize
+            # 注释中的工程兜底初衷一致）。
+            if kind == "node_end" and node == "finalize":
                 final_answer = payload.get("final_answer") or ""
                 if final_answer:
                     self._post(IstUiEvent(
@@ -357,11 +354,9 @@ class TuiSink:
             self._tool_calls_inflight.clear()
             self._subagent_tasks_inflight.clear()
 
-
 # ---------------------------------------------------------------------------
 # Reverse parser: LangChain ``on_tool_start(input_str=...)`` -> structured args
 # ---------------------------------------------------------------------------
-
 
 _TOOL_PRIMARY_KEY = {
     "qa_deepagent_read_file": "path",
@@ -371,7 +366,6 @@ _TOOL_PRIMARY_KEY = {
     "qa_exec": "code",
     "qa_bash": "command",
 }
-
 
 def _parse_input_str_to_args(input_str: str, tool_name: str) -> dict:
     """把 LangChain ``on_tool_start`` 的 input_str 反解析回 ``{path/pattern/code/command}`` dict.
@@ -418,7 +412,6 @@ def _parse_input_str_to_args(input_str: str, tool_name: str) -> dict:
     if primary:
         return {primary: raw}
     return {"raw": raw}
-
 
 def _extract_todos_from_args(args: Any) -> list[dict[str, str]]:
     """从 write_todos 的 tool_call args 中提取 todos 列表。

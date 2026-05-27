@@ -1,9 +1,9 @@
 """通用执行工具：qa_bash + qa_exec.
 
-Sandbox（仿 cc-haha 三层模型）：
+Sandbox（
 
 - ``cwd`` 由 ``_resolve_cwd_for_target()`` 按命令路径参数选最匹配的沙箱根
-  （cc-haha ``BashTool/pathValidation.ts:657-694`` 用 ``resolve(cwd, path)``
+  （
   反向解析；InfoTest_Engine 没有用户 ``cd`` 概念，直接选目标所在根）
 - 子进程 env 不透传 ``PYTHONPATH``，切断 ``import main.*`` 路径
 - ``qa_bash`` 路径参数走 ``_resolve_inside_root`` 多根校验，拒绝出沙箱
@@ -34,24 +34,33 @@ from main.qa_agent.tools.deepagent._sandbox import (
 from main.qa_agent.tools.deepagent.file_tools import (
     _AGENT_ROOT,
     _PROJECT_ROOT,
+    _WORKSPACE_ROOT,
     _agent_roots,
     _resolve_inside_root,
+    _resolve_writable_path,
 )
 
 # bash 命令黑名单——仅拦截网络外联、提权、和破坏性文件操作。
 # 沙箱内的只读操作由 cwd 锁定 + 路径校验保护，无需额外拦截。
 # 设计对齐 Claude Code / deepagents：不做命令白名单，安全靠沙箱隔离。
 # 但 knowledge/data/ 是知识库，破坏性操作需要走 write_file/edit_file 工具（有 _WRITABLE_SUBDIRS 控制）。
+# ``cp`` 例外：允许把沙箱内文件复制到 workspace/outputs/，目标路径走
+# ``_resolve_writable_path`` 校验（与 write_file 同闸口，保证不污染 knowledge/data/）。
 _BASH_DENY_FIRST_TOKEN = frozenset({
     # 网络外联——进程隔离无法防御
     "curl", "wget", "ssh", "scp", "rsync", "ftp", "sftp", "nc", "ncat", "telnet",
     # 提权
     "sudo", "su", "doas",
     # 破坏性文件操作——knowledge/data/ 是知识库，修改需走 write_file/edit_file 工具
-    "rm", "rmdir", "mv", "cp", "ln",
+    "rm", "rmdir", "mv", "ln",
     "dd", "tee",
     "chmod", "chown", "chgrp",
 })
+
+# 写命令——参数中的目标路径必须走 ``_resolve_writable_path`` 校验
+# （即只能落到 workspace/outputs/）。命令本身仍受 ``_validate_bash_command``
+# 元字符校验约束。
+_BASH_WRITE_COMMANDS = frozenset({"cp"})
 
 # 危险 shell 元字符——因 shell=False 不会被 shell 解释，但仍禁止以防被 split 出怪行为。
 _DENIED_METACHARS = ("|", ">", "<", ";", "&", "`", "$(", "${", "&&", "||", "<<", ">>")
@@ -80,33 +89,40 @@ _DEFAULT_TIMEOUT = 30
 _MAX_TIMEOUT = 120
 _MAX_OUTPUT_BYTES = 256 * 1024
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def _safe_env() -> dict[str, str]:
     """干净的子进程 ENV——只透传必要变量。
 
     显式不传 ``PYTHONPATH`` 与 ``PYTHONHOME``，切断 ``import main.*`` 的路径，
     强制子进程只能 import 三方包与标准库。
+
+    额外注入 ``IST_AGENT_ROOT`` / ``IST_WORKSPACE_ROOT`` 绝对路径，让 qa_exec
+    子进程能用 ``os.environ['IST_WORKSPACE_ROOT']`` 跨根读取（如读
+    ``workspace/inputs/<.xlsx>``），不依赖固定 cwd。仅暴露这两根（不暴露
+    ``_PROJECT_ROOT``），避免放大可读路径攻击面。延迟读 ``file_tools``
+    当前值，配合测试 monkeypatch 沙箱根。
     """
+    from main.qa_agent.tools.deepagent import file_tools as _ft
+
     keep_keys = {
         "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE",
         "DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "DEEPSEEK_API_KEY", "MINERU_TOKEN",
         "NO_PROGRESS",
         "TERM",
     }
-    return {k: v for k, v in os.environ.items() if k in keep_keys}
-
+    env = {k: v for k, v in os.environ.items() if k in keep_keys}
+    env["IST_AGENT_ROOT"] = str(_ft._AGENT_ROOT)
+    env["IST_WORKSPACE_ROOT"] = str(_ft._WORKSPACE_ROOT)
+    return env
 
 def _truncate_output(text: str, *, label: str) -> str:
     if len(text) <= _MAX_OUTPUT_BYTES:
         return text
     truncated = text[: _MAX_OUTPUT_BYTES]
     return f"{truncated}\n... [{label} truncated: original {len(text)} bytes, kept {_MAX_OUTPUT_BYTES}]"
-
 
 def _validate_bash_command(cmd: str) -> tuple[bool, str]:
     """命令名 / 元字符校验。返回 (是否允许, 拒绝原因)。"""
@@ -129,7 +145,6 @@ def _validate_bash_command(cmd: str) -> tuple[bool, str]:
     if base in _BASH_DENY_FIRST_TOKEN:
         return False, f"command is denied: {base!r}"
     return True, ""
-
 
 def _looks_like_path(token: str) -> bool:
     """启发式判断 token 是否"像路径"——含 / / .. / ~ / 绝对路径，或在沙箱内/外存在。
@@ -157,12 +172,57 @@ def _looks_like_path(token: str) -> bool:
         pass
     return False
 
+def _split_cp_sources_dest(parts: list[str]) -> tuple[list[str], str | None]:
+    """把 ``cp`` 命令切成 (sources, dest)。
+
+    cp 语义：``cp [-flags] SRC... DST``——最后一个非 flag token 是目标。
+    没有任何路径参数时返回 (parts[1:], None)，由调用方决定如何处理。
+    """
+    positional = [t for t in parts[1:] if not t.startswith("-")]
+    if len(positional) < 2:
+        return positional, None
+    return positional[:-1], positional[-1]
 
 def _validate_bash_paths(parts: list[str]) -> tuple[bool, str]:
     """对 bash 命令 ``parts[1:]`` 中的"像路径"参数走 _resolve_inside_root。
 
     任何不在 ``_agent_roots()`` 任一根内的路径参数都拒绝命令。
+
+    特殊处理 ``cp``：源路径走 ``_resolve_inside_root``（沙箱内可读即可），
+    目标路径走 ``_resolve_writable_path``（强制落到 workspace/outputs/）。
     """
+    base = os.path.basename(parts[0]) if parts else ""
+
+    if base in _BASH_WRITE_COMMANDS:
+        sources, dest = _split_cp_sources_dest(parts)
+        if dest is None:
+            return False, f"{base!r} requires source and destination"
+        for src in sources:
+            if not _looks_like_path(src):
+                continue
+            try:
+                _resolve_inside_root(src)
+            except (PermissionError, ValueError) as exc:
+                return False, f"source rejected: {src} ({exc})"
+            except FileNotFoundError:
+                continue
+        # cp 的 dst 必须显式落在 workspace/outputs/——避免 _resolve_writable_path
+        # 对 bare 相对路径（如 ``markdown/x.md``）的友好默认（自动塞进 outputs/）
+        # 把 agent "想写到知识库" 的意图错误重定向到 workspace 而不报错。
+        dest_path = Path(dest)
+        if not dest_path.is_absolute():
+            head = dest_path.parts[0] if dest_path.parts else ""
+            if head not in {"outputs", "workspace"}:
+                return False, (
+                    f"destination rejected: {dest} "
+                    "(cp dst must start with 'outputs/' or 'workspace/outputs/')"
+                )
+        try:
+            _resolve_writable_path(dest)
+        except (PermissionError, ValueError) as exc:
+            return False, f"destination rejected: {dest} ({exc})"
+        return True, ""
+
     for token in parts[1:]:
         if token.startswith("-"):
             continue  # flag
@@ -177,7 +237,6 @@ def _validate_bash_paths(parts: list[str]) -> tuple[bool, str]:
             continue
     return True, ""
 
-
 def _validate_python_code(code: str) -> tuple[bool, str]:
     code = code or ""
     if not code.strip():
@@ -187,7 +246,6 @@ def _validate_python_code(code: str) -> tuple[bool, str]:
         if token.replace(" ", "") in lower:
             return False, f"network access not allowed: {token!r}"
     return True, ""
-
 
 def _format_summary_imports(code: str) -> str:
     """返回代码顶部用到的非推荐 import（仅作 hint，不拒绝）。"""
@@ -203,11 +261,9 @@ def _format_summary_imports(code: str) -> str:
         return ""
     return f"(hint: non-standard imports detected: {', '.join(sorted(set(suspect)))})"
 
-
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
-
 
 @tool(parse_docstring=True)
 def qa_exec(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
@@ -216,6 +272,15 @@ def qa_exec(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     Sandbox: cwd locked to ``knowledge/data/``; child process env strips
     ``PYTHONPATH`` so ``import main.*`` is unavailable; network access
     (socket/urllib/requests/http/ftp/smtp) is denied.
+
+    To read across sandbox roots, use the env vars exposed in the child
+    process: ``IST_AGENT_ROOT`` (knowledge/data) and ``IST_WORKSPACE_ROOT``
+    (workspace). Example::
+
+        import os, openpyxl
+        path = os.path.join(os.environ['IST_WORKSPACE_ROOT'],
+                            'inputs', 'case.xlsx')
+        wb = openpyxl.load_workbook(path)
 
     Use this for parsing xlsx via openpyxl, counting rows with
     ``collections.Counter``, summarising JSON, running subprocess for
@@ -275,7 +340,6 @@ def qa_exec(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     except Exception as exc:  # noqa: BLE001
         return f"error: qa_exec subprocess failed: {exc}"
 
-
 @tool(parse_docstring=True)
 def qa_bash(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     """Run a single shell command inside the agent sandbox.
@@ -286,8 +350,12 @@ def qa_bash(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     no pipes, no redirects.
 
     Denied commands: curl/wget/ssh/scp/rsync/ftp/sftp/nc/ncat/telnet (network),
-    sudo/su/doas (privilege), rm/rmdir/mv/cp/ln/dd/tee/chmod/chown/chgrp
+    sudo/su/doas (privilege), rm/rmdir/mv/ln/dd/tee/chmod/chown/chgrp
     (destructive — use write_file/edit_file tools instead).
+
+    ``cp`` is allowed for staging files into ``workspace/outputs/``: the
+    source path must live under any sandbox root (read), the destination
+    must resolve under ``workspace/outputs/`` (same gates as write_file).
 
     Boundaries:
     - shell=False; the command is parsed via shlex and exec'd directly.
@@ -318,23 +386,44 @@ def qa_bash(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     # 子进程的 cwd 是 _default_cwd()（knowledge/data/），所以 LLM 写的
     # ``ls workspace/inputs/`` 这种相对 project_root 的路径会被子进程解释
     # 成 ``cwd/workspace/inputs/`` 找不到——这是单根 cwd 的固有限制。
-    # 仿 cc-haha BashTool/pathValidation.ts:657-694 的做法：
+    #
     # 在 validation 层就用 ``resolve(cwd, path)`` 把路径解析成绝对路径，
     # 之后命令对绝对路径操作，不依赖 cwd 解释。
-    expanded_parts: list[str] = [parts[0]]
-    for token in parts[1:]:
-        if token.startswith("-"):
-            expanded_parts.append(token)
-            continue
-        if not _looks_like_path(token):
-            expanded_parts.append(token)
-            continue
+    #
+    # cp 特殊处理：目标走 _resolve_writable_path（强制落到 workspace/outputs/）,
+    # 源走 _resolve_inside_root（沙箱内任意根可读）。
+    base = os.path.basename(parts[0])
+    if base in _BASH_WRITE_COMMANDS:
+        sources, dest = _split_cp_sources_dest(parts)
+        flags = [t for t in parts[1:] if t.startswith("-")]
+        expanded_parts = [parts[0]] + flags
+        for src in sources:
+            if not _looks_like_path(src):
+                expanded_parts.append(src)
+                continue
+            try:
+                expanded_parts.append(str(_resolve_inside_root(src)))
+            except (PermissionError, FileNotFoundError, ValueError):
+                expanded_parts.append(src)
         try:
-            absolute = _resolve_inside_root(token)
-            expanded_parts.append(str(absolute))
-        except (PermissionError, FileNotFoundError, ValueError):
-            # 路径无法解析或不存在——保持原样让子进程报准确错误
-            expanded_parts.append(token)
+            expanded_parts.append(str(_resolve_writable_path(dest)))
+        except (PermissionError, ValueError):
+            expanded_parts.append(dest)
+    else:
+        expanded_parts = [parts[0]]
+        for token in parts[1:]:
+            if token.startswith("-"):
+                expanded_parts.append(token)
+                continue
+            if not _looks_like_path(token):
+                expanded_parts.append(token)
+                continue
+            try:
+                absolute = _resolve_inside_root(token)
+                expanded_parts.append(str(absolute))
+            except (PermissionError, FileNotFoundError, ValueError):
+                # 路径无法解析或不存在——保持原样让子进程报准确错误
+                expanded_parts.append(token)
 
     cwd_path = _default_cwd()
 
@@ -372,16 +461,13 @@ def qa_bash(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     except Exception as exc:  # noqa: BLE001
         return f"error: qa_bash subprocess failed: {exc}"
 
-
 # ---------------------------------------------------------------------------
 # Public registry helper for downstream main_agent registration
 # ---------------------------------------------------------------------------
 
-
 def get_exec_tools() -> Iterable:
     """Return the tools list for ``build_default_registry()`` integration."""
     return [qa_exec, qa_bash]
-
 
 __all__ = [
     "qa_exec",

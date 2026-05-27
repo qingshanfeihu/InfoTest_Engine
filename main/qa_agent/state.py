@@ -14,7 +14,6 @@ from langgraph.graph.message import add_messages
 
 TaskType = Literal["QA", "Plan", "Author", "Execute", "Report"]
 
-
 class QaAgentState(TypedDict, total=False):
     """IST-Core 顶层 State。"""
 
@@ -27,7 +26,7 @@ class QaAgentState(TypedDict, total=False):
     run_id: str
     thread_id: str
 
-    # review_gate 硬闸状态（Step 4，仿 cc-haha hookHelpers.ts:70-83
+    # review_gate 硬闸状态（Step 4，
     # registerStructuredOutputEnforcement）。
     # gate_status: "pending" 注入提示重路由 qa_node；"passed" 走下一节点；
     #              "failed" 重试上限到，写错误 final_answer 走 finalize。
@@ -35,6 +34,6 @@ class QaAgentState(TypedDict, total=False):
     gate_status: Literal["pending", "passed", "failed"]
     gate_missing_reason: str
 
-    # ReviewResult 结构化输出（Step 6，仿 cc-haha SyntheticOutputTool）。
+    # ReviewResult 结构化输出（Step 6，
     # structured_extract 节点产出，下游 TUI / 日志消费。
     final_review: dict[str, Any]

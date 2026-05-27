@@ -26,7 +26,6 @@ _CASE_FILE_RE = re.compile(
     r"Test\s*List[^/]*?(\d{4,})[^/]*\.(?:md|xlsx)", re.IGNORECASE
 )
 
-
 def _extract_ticket_id(messages: list) -> str | None:
     """从 messages 倒序找 ticket id（BUG-121100 / ZT-456 等）。"""
     from langchain_core.messages import HumanMessage, ToolMessage
@@ -42,7 +41,6 @@ def _extract_ticket_id(messages: list) -> str | None:
             if match:
                 return f"{match.group(1).upper()}-{match.group(2)}"
     return None
-
 
 def _extract_case_filename(messages: list) -> str | None:
     """从 messages 提取用例文件名标识（如 'cookie121100'）。"""
@@ -62,11 +60,9 @@ def _extract_case_filename(messages: list) -> str | None:
                     return slug
     return None
 
-
 # ----------------------------------------------------------------------
 # 通用回调接口实现
 # ----------------------------------------------------------------------
-
 
 def review_query_extractor(messages: list) -> str:
     """从 messages 提取检索 query：ticket id + 用例文件关键词。"""
@@ -86,7 +82,6 @@ def review_query_extractor(messages: list) -> str:
                     parts.append(text[:100])
                     break
     return " ".join(parts)
-
 
 def review_key_resolvers(messages: list) -> list[tuple[str, str]]:
     """返回 [(namespace, key)] 列表。
@@ -109,7 +104,6 @@ def review_key_resolvers(messages: list) -> list[tuple[str, str]]:
     keys.append(("reviews", "reviews/users/default/preferences.md"))
     return keys
 
-
 def review_finalizer(messages: list, store: "MemoryStore") -> dict[str, str] | None:
     """评审场景 finalizer：彻底不写"评审结论"类条目。
 
@@ -119,12 +113,10 @@ def review_finalizer(messages: list, store: "MemoryStore") -> dict[str, str] | N
     导致下次评审复用历史结论（trace 实证 LLM thought 出现"memory context 里
     提到已有评审结果"），形成"越评越懒"反馈环。
 
-    新规则（仿 cc-haha "不存评审结论到 memory"源头治理）：
+    新规则（
     评审结论留在当轮 ``state.final_review`` + 当轮对话即可，下次评审 fresh
     重跑。需要历史 archive 时跑
     ``scripts/maintenance/archive_review_findings.py``。
-
-    cc-haha 对照：grep ``review.*cache`` /cc-haha/src 无结果——cc-haha review
     skill 跑一次出报告就完，不存进 memory；治"复用历史结论"的方式不是 inject
     端过滤，是源头不写。
     """

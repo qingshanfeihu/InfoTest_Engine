@@ -1,6 +1,4 @@
 """评审结果结构化 schema（Step 6）.
-
-仿 cc-haha ``QueryEngine.ts:328-334`` + ``hookHelpers.ts:41-64``
 ``createStructuredOutputTool`` 的 zod schema 模式——InfoTest_Engine 用
 Pydantic 等价物。
 
@@ -17,9 +15,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 class ReviewCheck(BaseModel):
-    """verifier 单条 Check 结构（对应 cc-haha verificationAgent OUTPUT FORMAT）."""
+    """verifier 单条 Check 结构（对应
 
     title: str = Field(description="Check 标题（what you're verifying）")
     source: str = Field(default="", description="证据来源（test case rows / product doc）")
@@ -27,7 +24,6 @@ class ReviewCheck(BaseModel):
     output_observed: str = Field(default="", description="命令实际输出（copy-paste）")
     result: Literal["PASS", "FAIL", "PARTIAL"] = Field(description="单条 Check 结果")
     severity: str = Field(default="", description="P0-P7 或空（仅 FAIL/PARTIAL 时有意义）")
-
 
 class ReviewResult(BaseModel):
     """评审最终结构化输出（verifier verdict + 主 agent 草稿聚合）."""

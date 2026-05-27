@@ -31,7 +31,6 @@ from langchain.agents.middleware.types import (
 )
 from langchain_core.messages import HumanMessage
 
-
 _SKILL_LISTING_TEMPLATE = """<system-reminder>
 The following skills are available for use with the qa_invoke_skill tool:
 
@@ -43,15 +42,11 @@ NEVER mention a skill without actually calling qa_invoke_skill.
 Do not invoke a skill that is already running.
 </system-reminder>"""
 
-
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
-
 
 def _parse_skill_frontmatter(skill_md_path: Path) -> dict[str, str] | None:
     """简易 SKILL.md frontmatter 解析（提取 name / description / when_to_use，
     不依赖 yaml 包）。
-
-    cc-haha 对照：``skillify.ts:96-145`` 标准 frontmatter 含 ``when_to_use``
     字段；listing 暴露 ``when_to_use`` 让 LLM 看到 trigger / SKIP 条件，避免
     通用 QA 误调 skill。
     """
@@ -102,7 +97,6 @@ def _parse_skill_frontmatter(skill_md_path: Path) -> dict[str, str] | None:
         "when_to_use": when_to_use,
     }
 
-
 def _load_skills_from_dir(skills_dir: Path) -> list[dict[str, str]]:
     """扫 skills_dir/*/SKILL.md 返回 metadata 列表"""
     out: list[dict[str, str]] = []
@@ -119,7 +113,6 @@ def _load_skills_from_dir(skills_dir: Path) -> list[dict[str, str]]:
             out.append(meta)
     return out
 
-
 def _format_skill_list(skills_metadata: list[dict[str, str]]) -> str:
     if not skills_metadata:
         return "(no skills loaded)"
@@ -131,11 +124,10 @@ def _format_skill_list(skills_metadata: list[dict[str, str]]) -> str:
         lines.append(f"- **{name}**: {description}")
         if when_to_use:
             # 缩进展示 when_to_use 的 trigger / SKIP 条件，让 LLM 判 skill 是否真匹配。
-            # 仿 cc-haha skillify.ts:145 风格："when_to_use is CRITICAL — 决定模型何时
+            #
             # 自动调用此 skill"。
             lines.append(f"  _When to use_: {when_to_use}")
     return "\n".join(lines)
-
 
 def _has_recent_reminder(messages: list) -> bool:
     """检查是否最近 4 条消息内已有 skill reminder（避免重复堆积）"""
@@ -145,7 +137,6 @@ def _has_recent_reminder(messages: list) -> bool:
         if isinstance(content, str) and "<system-reminder>" in content and "qa_invoke_skill tool" in content:
             return True
     return False
-
 
 class PerTurnSkillReminderMiddleware(AgentMiddleware):
     """Inject skill listing as a HumanMessage in each ModelRequest.
@@ -211,7 +202,5 @@ class PerTurnSkillReminderMiddleware(AgentMiddleware):
         modified = request.override(messages=new_messages)
         return await handler(modified)
 
-
 __all__ = ["PerTurnSkillReminderMiddleware"]
-
 

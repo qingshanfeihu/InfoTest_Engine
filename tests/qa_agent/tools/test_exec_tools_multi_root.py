@@ -9,12 +9,13 @@
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 
 import pytest
 
 from main.qa_agent.tools.deepagent import exec_tools, file_tools
-from main.qa_agent.tools.deepagent.exec_tools import qa_bash
+from main.qa_agent.tools.deepagent.exec_tools import qa_bash, qa_exec
 
 
 @pytest.fixture
@@ -28,6 +29,7 @@ def multi_root_sandbox(tmp_path, monkeypatch):
     (agent_root / "markdown").mkdir()
     (agent_root / "markdown" / "qa.md").write_text("agent root file")
     (workspace_root / "inputs").mkdir()
+    (workspace_root / "outputs").mkdir()
     (workspace_root / "inputs" / "case.xlsx").write_text("workspace file")
 
     monkeypatch.setattr(file_tools, "_PROJECT_ROOT", project)
@@ -88,3 +90,84 @@ def test_qa_bash_command_without_path_uses_default_cwd(multi_root_sandbox):
     result = qa_bash.invoke({"command": "echo hi", "timeout": 5})
     assert "returncode=0" in result
     assert "hi" in result
+
+
+# ---------------------------------------------------------------------------
+# qa_bash cp — 沙箱内可读源 + workspace/outputs 强制目标
+# ---------------------------------------------------------------------------
+
+
+def test_qa_bash_cp_from_knowledge_to_outputs_succeeds(multi_root_sandbox):
+    """cp knowledge/data/markdown/qa.md → workspace/outputs/qa.md：合法路径，应该成功。"""
+    workspace_root = multi_root_sandbox["workspace_root"]
+    result = qa_bash.invoke({
+        "command": "cp markdown/qa.md outputs/qa.md",
+        "timeout": 5,
+    })
+    assert "returncode=0" in result, f"unexpected: {result}"
+    copied = workspace_root / "outputs" / "qa.md"
+    assert copied.is_file()
+    assert copied.read_text() == "agent root file"
+
+
+def test_qa_bash_cp_to_knowledge_data_rejected(multi_root_sandbox):
+    """cp 目标落到 knowledge/data/ 必须被拒——知识库只读。"""
+    result = qa_bash.invoke({
+        "command": "cp outputs/x.md markdown/x.md",
+        "timeout": 5,
+    })
+    assert result.startswith("error:")
+    assert "destination" in result.lower() or "rejected" in result.lower()
+
+
+def test_qa_bash_cp_outside_sandbox_dest_rejected(multi_root_sandbox):
+    """cp 目标在 workspace/outputs/ 之外的 workspace/inputs/ 也必须被拒。"""
+    result = qa_bash.invoke({
+        "command": "cp markdown/qa.md inputs/qa.md",
+        "timeout": 5,
+    })
+    assert result.startswith("error:")
+
+
+# ---------------------------------------------------------------------------
+# qa_exec 跨根读：通过 IST_AGENT_ROOT / IST_WORKSPACE_ROOT 读 workspace/inputs/
+# ---------------------------------------------------------------------------
+
+
+def test_qa_exec_reads_workspace_via_env_var(multi_root_sandbox):
+    """qa_exec 子进程能用 ``os.environ['IST_WORKSPACE_ROOT']`` 拼路径读 workspace/inputs/."""
+    code = textwrap.dedent("""
+        import os
+        path = os.path.join(os.environ['IST_WORKSPACE_ROOT'],
+                            'inputs', 'case.xlsx')
+        with open(path) as f:
+            print(f.read())
+    """).strip()
+    result = qa_exec.invoke({"code": code, "timeout": 10})
+    assert "returncode=0" in result, f"unexpected: {result}"
+    assert "workspace file" in result
+
+
+def test_qa_exec_env_exposes_both_roots(multi_root_sandbox):
+    """qa_exec 子进程必须同时看到 IST_AGENT_ROOT 和 IST_WORKSPACE_ROOT。"""
+    code = textwrap.dedent("""
+        import os
+        print('agent=', os.environ.get('IST_AGENT_ROOT'))
+        print('workspace=', os.environ.get('IST_WORKSPACE_ROOT'))
+    """).strip()
+    result = qa_exec.invoke({"code": code, "timeout": 5})
+    assert "returncode=0" in result
+    workspace_root = multi_root_sandbox["workspace_root"]
+    agent_root = multi_root_sandbox["agent_root"]
+    assert str(workspace_root) in result
+    assert str(agent_root) in result
+
+
+def test_qa_exec_does_not_expose_project_root_env(multi_root_sandbox):
+    """显式不暴露 IST_PROJECT_ROOT，避免放大可读路径攻击面。"""
+    code = textwrap.dedent("""
+        import os
+        print('has_project_root=', 'IST_PROJECT_ROOT' in os.environ)
+    """).strip()
+    result = qa_exec.invoke({"code": code, "timeout": 5})
+    assert "has_project_root= False" in result

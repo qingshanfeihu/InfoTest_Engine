@@ -139,7 +139,7 @@ Output per-Check format with VERDICT + LEVEL.
 
 ### 8. 输出最终报告
 
-verifier 的输出本身就是写给用户的最终报告（verifier 系统提示已声明 caller will relay）。把 verifier 的内容 relay 给用户，可在末尾加 ≤ 2 句你自己的概述。
+verifier 的输出本身就是写给用户的最终报告（verifier 系统提示已声明 caller will relay）。把 verifier 的内容 relay 给用户，必须在结尾针对所有问题，按照P0-P7每个级别给出具体详细的测试建议。
 
 **Success criteria**: 用户看到 VERDICT、LEVEL 和每条 Check 的内容。
 

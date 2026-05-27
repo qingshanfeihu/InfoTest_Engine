@@ -26,13 +26,11 @@ from main.qa_agent.state import QaAgentState
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
 # Agent 延迟构造（避免 import graph 即触发 deepagents 初始化）
 # ---------------------------------------------------------------------------
 
 _MAIN_AGENT: Any | None = None
-
 
 def _get_main_agent():
     global _MAIN_AGENT
@@ -42,11 +40,9 @@ def _get_main_agent():
         _MAIN_AGENT = build_main_agent()
     return _MAIN_AGENT
 
-
 # ---------------------------------------------------------------------------
 # Node: normalize_input
 # ---------------------------------------------------------------------------
-
 
 def normalize_input(state: QaAgentState) -> dict[str, Any]:
     """把用户输入归一化到 ``state.normalized_input``。
@@ -62,7 +58,6 @@ def normalize_input(state: QaAgentState) -> dict[str, Any]:
         return {"normalized_input": user_input}
     return {"normalized_input": {"query": "", "intent": "knowledge"}}
 
-
 def _extract_latest_user_text(messages: list[Any]) -> str:
     for msg in reversed(messages or []):
         if isinstance(msg, HumanMessage):
@@ -70,11 +65,9 @@ def _extract_latest_user_text(messages: list[Any]) -> str:
             return c if isinstance(c, str) else str(c)
     return ""
 
-
 # ---------------------------------------------------------------------------
 # 进度 handler：把 main_agent 内部 LLM / 工具调用转发到 EventBus
 # ---------------------------------------------------------------------------
-
 
 class _MainAgentProgressHandler(BaseCallbackHandler):
     """把 main_agent 的 LLM 输出 / 工具调用转发到全局 EventBus。
@@ -189,7 +182,8 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         # 3. 中间步骤的 LLM 解释（带 tool_calls 的 thought）
         # - 有文本 + 有 tool_calls：打印 AI 的解释段
         # - 无文本 + 有 tool_calls：打印 ``[Calling tools]`` 占位
-        # - 有文本 + 无 tool_calls：最终答案，由 node_end qa_node 的 final_answer 通路负责
+        # - 有文本 + 无 tool_calls：最终答案由 LangGraph finalize 节点的
+        #   ``final_answer`` 写出；TUI 在 ``node_end finalize`` 时投 AIFinalMessage
         if has_tool_calls:
             content = text if text else "[Calling tools]"
             compact = " ".join(content.split())
@@ -254,11 +248,9 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
             tags={"name": tool_name},
         )
 
-
 # ---------------------------------------------------------------------------
 # Node: qa_node
 # ---------------------------------------------------------------------------
-
 
 def qa_node(state: QaAgentState, config: RunnableConfig | None = None) -> dict[str, Any]:
     """把完整对话历史传给 main_agent，支持多轮交互。
@@ -311,32 +303,31 @@ def qa_node(state: QaAgentState, config: RunnableConfig | None = None) -> dict[s
             break
     return {"messages": messages, "final_answer": answer}
 
-
 # ---------------------------------------------------------------------------
 # Node: finalize
 # ---------------------------------------------------------------------------
 
-
 def finalize(state: QaAgentState) -> dict[str, Any]:
     """Finalize 节点：写最终 final_answer.
 
-    评审场景下：deepseek-v4-pro 实测倾向于把 9080 字 verifier 报告压缩成
-    "评审完成" 15 字总结——LLM 行为，prompt 措辞修不动。runner CLI 模式只
-    输出 final_answer，用户看不到 verifier ToolMessage 内容。
-
-    工程兜底：检测 messages 里 task(review-verification) 的 ToolMessage，
-    如果它含 VERDICT/LEVEL，**强制把它当 final_answer 主体**，主 agent 的
-    收尾文本前置作为可选 prefix。
+    Skill 场景兜底：当 review_gate 等"硬闸节点"判定 passed 且 messages 中
+    存在 verifier subagent 的 ToolMessage（含 VERDICT/LEVEL）时，**强制把
+    它当 final_answer 主体**。原因：runner CLI 模式只输出 final_answer，
+    用户看不到中间 ToolMessage 内容；某些 LLM 在长上下文下会把 9000+ 字
+    subagent 报告压成 15 字总结，工程层必须兜底保证用户能看到完整报告。
 
     通用场景下（gate_status != passed 或没有 verifier ToolMessage）：保持原
     行为，透传 state.final_answer。
     """
     answer = state.get("final_answer") or ""
 
-    # 评审场景兜底：如果 review_gate passed 且有 verifier ToolMessage，
+    # 评审场景兜底：如果硬闸 passed 且有 verifier ToolMessage，
     # 用 verifier 完整报告替代主 agent 的总结
     if state.get("gate_status") == "passed":
-        verifier_content = _extract_verifier_report(state.get("messages") or [])
+        verifier_content = _extract_subagent_report(
+            state.get("messages") or [],
+            subagent_type="review-verification",
+        )
         if verifier_content:
             # 主 agent 自己的收尾段（如果有意义）作为 prefix
             prefix = ""
@@ -347,19 +338,20 @@ def finalize(state: QaAgentState) -> dict[str, Any]:
 
     return {"final_answer": answer}
 
+def _extract_subagent_report(msgs: list, *, subagent_type: str) -> str:
+    """从 messages 倒序找指定 subagent 的 ToolMessage 内容.
 
-def _extract_verifier_report(msgs: list) -> str:
-    """从 messages 倒序找 task(review-verification) 的 ToolMessage 内容.
+    在 deepagents task 工具语义下，主 agent 调 ``task(subagent_type=X)``
+    后 subagent 返回的 ToolMessage 含 ``tool_call_id`` 关联到对应 AIMessage
+    的 tool_calls。本函数倒序找到最近一次该 subagent 类型的调用，返回
+    ToolMessage content（要求含 ``VERDICT:`` + ``LEVEL:`` 行）。
 
-    返回 verifier 报告原文（含 VERDICT/LEVEL）；找不到返回空串。
-
-    cc-haha 对照：cc-haha TUI 流式渲染，每个 tool_result 实时显示给用户；
-    InfoTest_Engine runner 模式单点输出 final_answer，需要工程兜底把
-    subagent 报告复制到 final_answer。
+    用途：finalize 节点把判定类 subagent（评审 verifier 等）报告自动复制为
+    final_answer，绕开主 agent 总结环节。
     """
     from langchain_core.messages import AIMessage, ToolMessage
 
-    # 1. 找最近一次 task(subagent_type='review-verification') 的 tool_call_id
+    # 1. 找最近一次 task(subagent_type=X) 的 tool_call_id
     target_tool_use_id = None
     for m in reversed(msgs):
         if not isinstance(m, AIMessage):
@@ -369,7 +361,7 @@ def _extract_verifier_report(msgs: list) -> str:
             args = tc.get("args") if isinstance(tc, dict) else None
             if name != "task" or not isinstance(args, dict):
                 continue
-            if args.get("subagent_type") != "review-verification":
+            if args.get("subagent_type") != subagent_type:
                 continue
             target_tool_use_id = tc.get("id")
             break
@@ -392,11 +384,9 @@ def _extract_verifier_report(msgs: list) -> str:
             return content
     return ""
 
-
 # ---------------------------------------------------------------------------
 # build
 # ---------------------------------------------------------------------------
-
 
 def _open_async_sqlite_checkpointer(sqlite_path: str) -> Any:
     """``astream_events`` / ``ainvoke`` 需要 AsyncSqliteSaver（非同步 SqliteSaver）。
@@ -423,7 +413,6 @@ def _open_async_sqlite_checkpointer(sqlite_path: str) -> Any:
         )
     return loop.run_until_complete(_open())
 
-
 def _open_sync_sqlite_checkpointer(sqlite_path: str) -> Any:
     """同步 ``SqliteSaver``，用于 ``graph.invoke()`` 同步调用路径。
 
@@ -439,7 +428,6 @@ def _open_sync_sqlite_checkpointer(sqlite_path: str) -> Any:
     saver = SqliteSaver(conn)
     saver.setup()
     return saver
-
 
 def _make_checkpointer(mode: str = "async"):
     """三级降级：Postgres -> SQLite -> InMemorySaver。
@@ -488,7 +476,6 @@ def _make_checkpointer(mode: str = "async"):
     from langgraph.checkpoint.memory import InMemorySaver
 
     return InMemorySaver()
-
 
 def build_qa_agent_graph(
     *,

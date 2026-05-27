@@ -135,10 +135,29 @@ IST_HAIKU_MODEL=qwen-turbo       # 简单
 TUI (Textual App)
  ↕ Bridge (async query → graph.invoke)
  ↕ EventBus (进度事件流)
- ↕ LangGraph StateGraph (normalize → qa_node → finalize)
- ↕ main_agent (deepagents ReAct loop)
- ↕ Tools (file_tools + exec_tools)
+ ↕ LangGraph StateGraph (normalize → qa_node → review_gate → finalize)
+ ↕ main_agent (deepagents ReAct loop) + subagents (explore / review-verification)
+ ↕ Tools (file_tools + exec_tools + skills + ask_user)
 ```
+
+## Skills 系统
+
+IST-Core 支持 skill 扩展机制。已有 skill：
+
+- **test-case-review**：测试用例评审，含独立 verifier subagent + review_gate 硬闸 + 桶隔离 + finalize 工程兜底
+
+新 skill 编写参考：
+- `docs/skill_authoring_standard.md`：完整模板与编写规范
+- `docs/framework_design_notes.md`：当前框架设计说明
+
+## 文档
+
+- `WHATS_NEW.md`：版本变更记录
+- `ARCHITECTURE.md`：详细架构说明
+- `CLAUDE.md`：项目级 agent 指令（agent 启动时加载）
+- `todolist.md`：开发待办与历史决策
+- `docs/skill_authoring_standard.md`：Skill 编写标准
+- `docs/framework_design_notes.md`：框架设计说明
 
 ## License
 

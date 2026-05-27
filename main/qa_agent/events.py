@@ -30,7 +30,7 @@ EventKind = Literal[
     # NOTE: subagent_start/end 事件类型已删除（Step 8）。
     # 历史死代码：grep 确认无 emit 点；task 工具走 LangChain 标准
     # tool_call/tool_result，sink.py:310-318 已通过 tool_call 派发
-    # SubAgentTaskMessage。cc-haha 同样不自定义 subagent 事件类型。
+    # SubAgentTaskMessage。
     "hil_request",
     "hil_response",
     "finding_written",
@@ -51,7 +51,6 @@ REVIEWER_PROGRESS_EVENTS = {
     "run_error",
 }
 
-
 class QaAgentEvent(TypedDict, total=False):
     run_id: str
     parent_run_id: str | None
@@ -63,10 +62,8 @@ class QaAgentEvent(TypedDict, total=False):
     usage: dict[str, Any] | None
     elapsed_ms: int | None
 
-
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
 
 class EventBus:
     """进程内同步 EventBus（扇出到注册的 sink 回调）。
@@ -119,17 +116,14 @@ class EventBus:
                 pass
         return event
 
-
 # 进程级默认 Bus（多数场景用单例即可）
 _DEFAULT_BUS: EventBus | None = None
-
 
 def get_default_bus() -> EventBus:
     global _DEFAULT_BUS
     if _DEFAULT_BUS is None:
         _DEFAULT_BUS = EventBus()
     return _DEFAULT_BUS
-
 
 def reset_default_bus(run_id: str | None = None) -> EventBus:
     """在新 run 开始前重置单例 Bus。"""

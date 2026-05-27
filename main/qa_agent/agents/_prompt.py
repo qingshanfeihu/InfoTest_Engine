@@ -32,14 +32,11 @@ def build_system_prompt(
 def build_verifier_inherited_sections() -> str:
     """供 verifier subagent 使用的"继承自 parent"反偷懒约束块.
 
-    仿 cc-haha forkSubagent.ts 设计：fork agent 的 system prompt 继承 parent
-    完整 systemPrompt + verifier 自己的额外指令。但 deepagents 的
-    CompiledSubAgent 路径不会自动继承 parent prompt——subagent 的 system
-    prompt 是它自己 ``create_agent`` 时传的那段，独立。
-
-    这个函数返回 parent 中**通用的反偷懒约束**（Read-Only / Reading-vs-
+    deepagents 的 CompiledSubAgent 路径不会自动继承 parent system prompt
+    ——subagent 的 system prompt 是它自己 ``create_agent`` 时传的那段，
+    独立。本函数返回 parent 中**通用的反偷懒约束**（Read-Only / Reading-vs-
     Verification / Faithful Reporting / Evidence Discipline），让 verifier
-    在自己 prompt 顶部 prepend 它。verifier 特化的"try-to-break-it" /
+    在自己 prompt 顶部 prepend 它。verifier 特化的 "try-to-break-it" /
     "DO NOT MODIFY" 等内容仍然在 verifier 自己的 prompt 里。
 
     不继承的 sections：
@@ -86,10 +83,7 @@ def _readonly_boundary_section() -> str:
 
 
 def _verification_contract_section() -> str:
-    """The contract（仿 cc-haha constants/prompts.ts:390-395）.
-
-    cc-haha 原文："you cannot self-assign PARTIAL... only the verifier
-    assigns a verdict; you cannot self-assign"。InfoTest_Engine 评审场景
+    """The contract（
     沿用此契约——主 agent 不能给自己的工作打分。
     """
     return """# Verification Contract（强约束）
@@ -116,8 +110,8 @@ Your own checks, caveats, and a fork's self-checks do **NOT** substitute. If a t
 def _writing_subagent_prompt_section() -> str:
     """Writing the prompt for subagent task calls.
 
-    完全仿 cc-haha ``tools/AgentTool/prompt.ts`` 的 "Writing the prompt"
-    段落原文。这段是 cc-haha 给 LLM 的"如何给 task 工具写 brief"硬指引；
+    完全
+    段落原文。这段是
     deepagents 默认 ``TASK_TOOL_DESCRIPTION`` 里没有这段，造成 LLM 倾向
     写极短 brief（trace 实测 58/62/67 字符）——这是设计层缺失，不是模型
     服从度问题。补到主 agent system prompt 里让 LLM 每次看到。
@@ -140,7 +134,7 @@ When you spawn a fresh agent via ``task(subagent_type=..., description=...)``, t
 - 特别是 ``review-verification`` 这类需要主 agent 已检索的证据作为输入的 verifier 子任务
 
 
-## After the subagent returns（通用，仿 cc-haha AgentTool/prompt.ts:257）
+## After the subagent returns（通用，
 
 When the subagent completes, it returns a single message to you. **The result is NOT directly visible to the user**——you must send a text message to relay/summarize it.
 
@@ -154,7 +148,7 @@ How to relay depends on the subagent's role:
 
 
 def _when_not_to_use_subagent_section() -> str:
-    """仿 cc-haha tools/AgentTool/prompt.ts:232-240 "When NOT to use" 段.
+    """
 
     防止 LLM 过度委托——简单单文件读取、精确搜索、≤3 文件范围都不该走
     subagent，直接用本地工具更快。
@@ -195,7 +189,7 @@ def _skills_first_section() -> str:
 
 
 def _task_tracking_section() -> str:
-    """仿 cc-haha tools/TodoWriteTool/prompt.ts.
+    """
 
     多步任务必须先用 ``write_todos`` 拆解 + 实时维护进度，避免：
     - 跳步（漏掉 SKILL.md 阅读链中的某 Phase）
@@ -227,7 +221,7 @@ todo list 是**给你自己**的进度追踪，不是给用户看的展示——
 
 
 def _communication_style_section() -> str:
-    """仿 cc-haha "Tone and Style" 段（constants/prompts.ts）.
+    """
 
     简洁 + 直接 + 中文。不要长 preamble、不要在工具调用前后絮叨。
     """
@@ -270,10 +264,10 @@ def _evidence_discipline_section() -> str:
 
 
 def _reading_vs_verification_section() -> str:
-    """仿 cc-haha verificationAgent.ts:55 反偷懒措辞。
+    """
 
     主 agent 在查证产品 CLI / 测试用例字段时最容易犯：读了 spec 就声称
-    "确认了"，没真的 grep 行号验证。这段把 cc-haha 的"reading is not
+    "确认了"，没真的 grep 行号验证。这段把
     verification"原文移植到主 agent，让 LLM 每轮都看到。
     """
     return """# Reading is Not Verification（强约束）
@@ -292,9 +286,7 @@ This applies whenever you make claims about file contents, CLI parameter behavio
 
 
 def _faithful_reporting_section() -> str:
-    """仿 cc-haha constants/prompts.ts 的 "Report outcomes faithfully" 段.
-
-    cc-haha 顶层硬约束：不许在工具失败 / 测试不通过时假装成功。
+    """
     """
     return """# Faithful Reporting（强约束）
 
@@ -324,7 +316,7 @@ Guidelines:
 - Use pagination offsets when a result says more content is available. For large files, read narrow ranges instead of the full file.
 - Communicate the final analysis directly in chat.
 
-# Parallel tool calls（仿 cc-haha constants/prompts.ts）
+# Parallel tool calls（
 当多个工具调用之间**没有依赖关系**时，在同一条消息中并发发起以提高效率：
 - 同时 grep 多个关键词、同时 ls 多个目录、同时 read 多个独立文件
 - 同时调用多个 ``task(subagent_type=...)`` 启动多个 verifier（多 sheet xlsx 评审场景）

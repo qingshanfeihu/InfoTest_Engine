@@ -969,3 +969,161 @@ architecture sidecar schema v2 只对 root feature 生成，字段包含 `subsys
 
 - 本附录为清洗规则唯一主文档
 - 若代码与文档冲突，以当前代码实现为准，并应尽快回写本附录
+
+---
+
+## 13. v2.0 Verification 架构（2026-05-27 落地）
+
+测试评审 skill 完整对齐业界 agent 框架（Claude Code 风格）的 verification 架构，覆盖通用 agent 行为 + skill 系统 + subagent 协作三个层面。
+
+### 13.1 设计原则分层
+
+| 层 | 关注点 | 文件 |
+|---|---|---|
+| 通用 agent | 主 agent 系统提示 + 反偷懒约束 + 工具描述 | `agents/_prompt.py` |
+| Skill 系统 | Skill 注入 + 触发 + 执行 + 工具白名单 | `middleware/per_turn_skill_reminder.py` + `tools/skills/__init__.py` + `skills/<name>/SKILL.md` |
+| Subagent 系统 | Subagent 注册 + fresh 零上下文 + relay 用户 | `agents/main_agent.py` + `agents/<x>_agent.py` |
+| 节点编排 | 硬闸 + 工程兜底 + 状态字段 | `nodes/review_gate.py` + `graph.py:finalize` |
+| 文档与规范 | Skill 编写模板 + 框架设计说明 | `docs/skill_authoring_standard.md` + `docs/framework_design_notes.md` |
+
+### 13.2 主 agent system prompt 反偷懒 sections
+
+主 agent system prompt 由 13 个 sections 组成（`_prompt.py:build_system_prompt`）：
+
+1. Identity（产品域 + 中文）
+2. Read-Only Boundary
+3. Verification Contract（you cannot self-assign verdict / level）
+4. Writing the prompt for task calls（Brief like a smart colleague + Never delegate understanding + After the subagent returns）
+5. When NOT to use task（防过度委托）
+6. Skills First（命中 skill 必须先 invoke）
+7. Task Tracking（多步任务 write_todos 必用）
+8. Exploration Workflow
+9. Evidence Discipline
+10. Reading is Not Verification（grep / read_file 才算验证）
+11. Faithful Reporting（不许压制错误）
+12. Communication Style（简洁直接 + file:line 引用）
+13. Tool usage（含 Parallel tool calls 并发指引 + qa_bash 多命令链式）
+
+### 13.3 Skill 注入与触发链路
+
+```
+用户输入
+  ↓
+PerTurnSkillReminderMiddleware.wrap_model_call()
+  ↓ 解析 SKILL.md frontmatter（name / description / when_to_use）
+  ↓ 注入 <system-reminder> HumanMessage 到主 agent
+  ↓ "When a skill matches, BLOCKING REQUIREMENT: invoke qa_invoke_skill"
+  ↓
+LLM 看到 user query + skill listing
+  ↓ 比对 description / when_to_use（含 SKIP 条件）
+  ↓
+匹配 → 调 qa_invoke_skill(skill="<name>")
+  ↓ 工具返回 SKILL.md 完整内容（ToolMessage）
+  ↓
+LLM 按 SKILL.md Steps 执行（每步带 Success criteria）
+```
+
+通用 QA "如何配置 HTTP SLB"：LLM 看到 `SKIP when: 用户只问 CLI 用法、产品规格说明` → 不调 skill → 直接 grep `product/` 给答案。
+
+### 13.4 评审场景完整流程（test-case-review skill）
+
+```
+用户：评审 BUG-121100 的测试用例
+  ↓
+qa_invoke_skill(test-case-review) → 获取 SKILL.md
+  ↓
+Step 0: write_todos（拆 8 个 step）
+Step 1: web_bug_search(BUG-121100) → bug_summary + cli_command + severity
+Step 2-5: grep ONLY product/ + qa/ 桶（桶隔离强制）
+Step 6: read_file 当前用例全文
+Step 7: 写草稿 + spawn task(subagent_type="review-verification")
+  ↓ verifier subagent (fresh 零上下文)
+  ↓ "Your output IS the user-facing review report"
+  ↓ 强制 OUTPUT FORMAT (Verification command + Output observed + Result)
+  ↓ 末尾 VERDICT: PASS|PARTIAL|FAIL + LEVEL: P0-P7
+  ↓ 返回 9000+ 字 ToolMessage
+  ↓
+review_gate 节点检测：
+  ↓ has qa_invoke_skill('test-case-review') ToolMessage? YES
+  ↓ has task(review-verification) ToolMessage with VERDICT/LEVEL? YES
+  ↓ → gate_status = "passed"
+  ↓
+finalize 节点工程兜底：
+  ↓ gate_status == passed?
+  ↓ messages 含 task(review-verification) ToolMessage with VERDICT/LEVEL?
+  ↓ → final_answer = verifier ToolMessage 完整内容
+  ↓
+runner / TUI 展示 final_answer（9000+ 字完整评审报告）
+```
+
+### 13.5 review_gate 硬闸节点
+
+`nodes/review_gate.py` 实现：
+
+- **触发信号**：检测主 agent 是否调过 `qa_invoke_skill('test-case-review')`（不是 intent 推断）
+- **检测目标**：`task(subagent_type='review-verification')` 是否被调过 + 对应 ToolMessage 含 `VERDICT:` + `LEVEL:`
+- **失败处理**：注入 HumanMessage `"You MUST spawn task(...)..."` 重路由回 qa_node，retry 上限 2
+- **超限分支**：`gate_status = "failed"` + 写错误 final_answer 走 finalize（不抛异常）
+
+### 13.6 finalize 工程兜底
+
+`graph.py:finalize` 节点：
+
+- 评审 `gate_status == "passed"` 且存在 verifier ToolMessage（含 VERDICT/LEVEL）
+- → 强制把 verifier ToolMessage 内容当 `final_answer`
+- 主 agent 自己写的 AIMessage 如果有实质内容（>50 字且不含 VERDICT）→ 作为 prefix
+- 否则纯 verifier 内容
+
+**为什么需要兜底**：业界标准走 TUI 流式渲染让用户实时看到 ToolMessage 内容；IST-Core runner CLI 模式只输出 final_answer，长 ToolMessage 用户看不到；某些 LLM 在长上下文下倾向于把 9000 字 ToolMessage 总结成 15 字 "评审完成"——工程层必须保证 final_answer 完整。
+
+### 13.7 Subagent 设计
+
+| Subagent | 类型 | 职责 |
+|---|---|---|
+| explore | 通用检索 | 跨多文件查证；caller will relay essentials |
+| review-verification | 评审 verifier | 独立验证主 agent 草稿；输出本身就是 user-facing 报告 |
+
+注册位置：`agents/main_agent.py`，build_main_agent 在 subagents_kwarg 的 list 中追加 `build_review_verification_subagent()`。
+
+### 13.8 沙箱接口统一
+
+`tools/deepagent/_sandbox.py` 模块集中所有沙箱 CWD 解析逻辑：
+
+- `_default_cwd()`：默认返回 `_agent_roots()[0]`（knowledge/data/）
+- `_resolve_cwd_for_target()`：根据目标路径选最匹配的沙箱根
+- 多根沙箱：knowledge/data + workspace + IST_SESSION_DIR + IST_USER_DIR
+- 路径校验三闸：traversal / 平台黑名单 / 多根白名单
+- `qa_bash` / `qa_exec` 路径展开为绝对路径，避免 cwd 切换问题
+
+### 13.9 Memory 治理
+
+`skills/test-case-review/memory_adapter.py:review_finalizer` 改为返回 None——评审结论不再写入 memory，避免下次评审复用历史。
+
+历史已写入的评审结论用 `scripts/maintenance/archive_review_findings.py` 一次性 archive 到 `memory/reviews/archive/<timestamp>/`。
+
+### 13.10 关键文件索引
+
+| 文件 | 职责 |
+|---|---|
+| `main/qa_agent/agents/_prompt.py` | 主 agent system prompt（13 sections） |
+| `main/qa_agent/agents/main_agent.py` | 主 agent + subagents 注册 |
+| `main/qa_agent/agents/semantic_check_agent.py` | review-verification subagent |
+| `main/qa_agent/agents/_schemas.py` | ReviewResult Pydantic schema |
+| `main/qa_agent/middleware/per_turn_skill_reminder.py` | Skill listing 注入 |
+| `main/qa_agent/nodes/review_gate.py` | 评审硬闸节点 |
+| `main/qa_agent/graph.py` | StateGraph 装配 + finalize 工程兜底 |
+| `main/qa_agent/state.py` | gate_status / final_review 字段 |
+| `main/qa_agent/skills/test-case-review/SKILL.md` | 评审 skill 工作流 |
+| `main/qa_agent/tools/deepagent/_sandbox.py` | 沙箱 CWD 解析 |
+| `main/qa_agent/tools/skills/__init__.py` | qa_invoke_skill 工具 |
+| `scripts/maintenance/archive_review_findings.py` | 历史 findings archive 脚本 |
+| `docs/skill_authoring_standard.md` | Skill 编写模板与规范 |
+| `docs/framework_design_notes.md` | 框架设计说明（差异 + 待补齐项） |
+
+### 13.11 与历史模块的差异
+
+本次架构改造**不影响**以下历史模块的现有功能：
+- A.0 - A.13：历史 R0.7 / 评审 R1-R7 / HIL pending 等历史决策记录
+- 12.x：v1.6 对话式评审闭环（已被 v2.0 verification 架构替代，保留作历史参考）
+
+v2.0 verification 架构是 **InfoTest_Engine 当前评审能力的权威实现**，新功能开发应基于本节文档与 `docs/skill_authoring_standard.md`。

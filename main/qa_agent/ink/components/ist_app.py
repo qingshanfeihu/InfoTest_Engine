@@ -844,6 +844,18 @@ class IstInkApp:
                 self._tool_start_stack = []
             self._tool_start_stack.append((idx, tool_name))
 
+        elif cls_name == "SubAgentTaskMessage":
+            subagent_type = getattr(msg, "subagent_type", "") or getattr(msg, "display_title", "task")
+            desc = getattr(msg, "description", "")
+            if desc and len(desc) > 60:
+                desc = desc[:60] + "..."
+            arg_str = f"({C}{desc}{X})" if desc else ""
+            idx = self._transcript.message_count()
+            self._transcript.append_message(f" \x1b[5;33m⏺\x1b[0m {B}{subagent_type}{X}{arg_str}")
+            if not hasattr(self, '_tool_start_stack'):
+                self._tool_start_stack = []
+            self._tool_start_stack.append((idx, subagent_type))
+
         elif cls_name == "TodoListMessage":
             # Plan 走常驻 panel，整列重渲染；transcript 不再保留副本
             todos = getattr(msg, "todos", []) or []

@@ -297,20 +297,34 @@ class TuiSink:
     def _append_to_subagent_container(self, kind: str, event: QaAgentEvent) -> None:
         """把 subagent 内部事件挂到对应 SubAgentTaskMessage.inner_events。
 
-        仿业界 agent 框架 progress 冒泡 + 容器渲染设计：subagent 内部所有
-        LLM/tool 事件不在主对话区渲染为独立消息，而是追加到 SubAgentTaskMessage
-        容器的 inner_events 列表。TUI widget 折叠展示这些子事件。
+        仿业界 agent 框架 progress 冒泡设计：
+        - subagent 中间过程（tool_call / tool_result / thought / thinking）→ 折叠到容器
+        - subagent 最终文本输出（final_thought）→ **直接展示在主对话区**，不折叠
 
-        事件通过 tags.parent_subagent 识别归属（handler 已打标）。
+        这样用户默认能看到 verifier 的完整报告（直接展示），同时中间过程
+        折叠在容器里按需展开。
         """
         tags = event.get("tags") or {}
         payload = event.get("payload") or {}
-        parent_subagent = tags.get("parent_subagent") or ""
+        run_id = event.get("run_id") or ""
+        seq = int(event.get("seq") or 0)
+        ts = event.get("ts") or ""
 
-        # 找对应的 inflight SubAgentTaskMessage
+        # subagent 最终输出（final_thought）→ 直接展示在主对话区，不折叠
+        if kind == "llm_end" and payload.get("name") == "final_thought":
+            content = payload.get("content") or ""
+            if content:
+                self._last_final_thought_prefix = content[:200]
+                self._post(IstUiEvent(
+                    kind="append",
+                    message=AIFinalMessage(run_id=run_id, seq=seq, ts=ts, content=content),
+                ))
+            return
+
+        # 其他事件（中间过程）→ 折叠到容器
+        parent_subagent = tags.get("parent_subagent") or ""
         container = self._subagent_tasks_inflight.get("task")
         if container is None:
-            # 尝试用 parent_subagent 名匹配
             for _key, msg in self._subagent_tasks_inflight.items():
                 if getattr(msg, "subagent_type", "") == parent_subagent:
                     container = msg
@@ -318,7 +332,6 @@ class TuiSink:
         if container is None:
             return
 
-        # 构建简短摘要挂到 inner_events（不是完整 payload，避免内存暴涨）
         tool_name = tags.get("name") or payload.get("name") or ""
         if kind in {"tool_call", "tool_start"}:
             raw_input = (payload.get("input") or {})
@@ -334,10 +347,8 @@ class TuiSink:
             content = payload.get("content") or ""
             if name == "thought":
                 summary = f"[thought] {content[:120]}"
-            elif name == "final_thought":
-                summary = f"[output] {content[:200]}"
             elif name == "usage_only":
-                return  # usage 事件不需要挂容器
+                return
             else:
                 return
         elif kind == "info":
@@ -350,7 +361,6 @@ class TuiSink:
             return
 
         container.inner_events.append(summary)
-        # 每次子事件追加都通知 TUI 刷新容器（进度更新）
         self._post(IstUiEvent(kind="update_subagent_task", message=container))
 
     def _make_tool_message(self, event: QaAgentEvent) -> IstMessage:

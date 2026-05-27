@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from main.qa_agent.ink.app import InkApp
 from main.qa_agent.ink.components.footer import FooterPane
+from main.qa_agent.ink.components.plan_panel import PlanPanel
 from main.qa_agent.ink.components.prompt_input import PromptInput
 from main.qa_agent.ink.components.transcript import Transcript
 from main.qa_agent.ink.dom import NodeType, create_element, create_text
@@ -56,6 +57,10 @@ class IstInkApp:
             on_submit=self._on_submit,
             placeholder="输入消息（/ 触发补全）",
         )
+        # Plan panel — 钉在 thinking_line 上方，承载 write_todos 整列重渲染
+        # 与 thinking_line 可同时显示：plan 是阶段结构、thinking 是即时心跳
+        self._plan_panel = PlanPanel()
+
         # Thinking status line (above divider, like Claude Code)
         self._thinking_line = create_element(NodeType.BOX)
         self._thinking_line.style.height = 0  # hidden by default
@@ -79,8 +84,11 @@ class IstInkApp:
         self._divider_bottom_text = create_text("")
         self._divider_bottom.append_child(self._divider_bottom_text)
 
-        # Assemble layout: transcript + thinking_line + divider_top + prompt + divider_bottom + footer
+        # Assemble layout: transcript + plan_panel + thinking_line + divider_top + prompt + divider_bottom + footer
+        # plan_panel 位于 thinking_line 上方：plan 是结构性内容（停留更久），
+        # thinking 是即时心跳（每秒刷新）；plan 紧贴 transcript 历史、thinking 紧贴输入框横线
         self._app.root.append_child(self._transcript.node)
+        self._app.root.append_child(self._plan_panel.node)
         self._app.root.append_child(self._thinking_line)
         self._app.root.append_child(self._divider_top)
         self._app.root.append_child(self._prompt.node)
@@ -759,10 +767,9 @@ class IstInkApp:
                 self._transcript.update_message_at(
                     idx, f" \x1b[32m⏺\x1b[0m \x1b[1m{name}\x1b[0m"
                 )
-            # write_todos: render structured plan update
-            if tool_name == "write_todos" and result:
-                self._render_plan_update(result)
-            elif result:
+            # write_todos 的 panel 渲染由 _format_and_append 中 TodoListMessage
+            # 分支处理（tool_call 阶段就拿到完整 todos），这里不再二次解析 result
+            if result:
                 full_lines = str(result).split("\n")
                 start_idx = self._transcript.message_count()
                 expanded = getattr(self, '_tool_outputs_expanded', False)
@@ -809,13 +816,10 @@ class IstInkApp:
             pass  # No separate indicator; footer timer shows activity
 
         elif cls_name == "ThinkingMessage":
-            # Qwen3.6 + enable_thinking 输出的 reasoning_content；DashScope OpenAI
-            # 兼容端点把它放在 additional_kwargs.reasoning_content。渲染成 dim 灰
-            # ✶ 前缀 + 整段保留换行，工具调用之间能看到模型的思考过程
+            # thinking 默认折叠（Ctrl+O 展开时才显示）
             thinking = getattr(msg, "thinking", "") or ""
-            if thinking.strip():
+            if thinking.strip() and getattr(self, '_tool_outputs_expanded', False):
                 self._ai_stream_idx = -1
-                # 整段拼成单条多行消息（transcript 已按 \n 算视觉行高）
                 self._transcript.append_message(
                     f" \x1b[2m✶ {thinking.strip()}\x1b[0m"
                 )
@@ -841,20 +845,9 @@ class IstInkApp:
             self._tool_start_stack.append((idx, tool_name))
 
         elif cls_name == "TodoListMessage":
-            todos = getattr(msg, "todos", [])
-            idx = self._transcript.message_count()
-            self._transcript.append_message(f" \x1b[5;33m⏺\x1b[0m {B}Plan{X}")
-            if not hasattr(self, '_tool_start_stack'):
-                self._tool_start_stack = []
-            self._tool_start_stack.append((idx, "Plan"))
-            if not hasattr(self, '_plan_line_start'):
-                self._plan_line_start = -1
-            self._plan_line_start = self._transcript.message_count()
-            for todo in todos:
-                content = todo.get("content", "")[:70]
-                status = todo.get("status", "pending")
-                icon = self._todo_status_icon(status)
-                self._transcript.append_message(f"   {icon} {content}")
+            # Plan 走常驻 panel，整列重渲染；transcript 不再保留副本
+            todos = getattr(msg, "todos", []) or []
+            self._plan_panel.update(todos)
 
         elif cls_name == "FileReadMessage":
             path = getattr(msg, "path", "")
@@ -967,49 +960,6 @@ class IstInkApp:
             )
         self._tool_start_stack.clear()
 
-    def _todo_status_icon(self, status: str) -> str:
-        """Return ANSI-colored status icon for a todo item."""
-        if status == "completed":
-            return f"{self._GREEN}●{self._RESET}"
-        if status == "in_progress":
-            return f"\x1b[33m◉{self._RESET}"
-        return f"\x1b[2m○{self._RESET}"
-
-    def _render_plan_update(self, result: str) -> None:
-        """Render a plan update from write_todos tool_done result."""
-        import json
-        D = self._DIM
-        X = self._RESET
-
-        todos = self._parse_plan_result(result)
-        if not todos:
-            return
-
-        plan_start = getattr(self, '_plan_line_start', -1)
-        if plan_start >= 0 and plan_start < self._transcript.message_count():
-            count = self._transcript.message_count() - plan_start
-            for i in range(count):
-                self._transcript.update_message_at(plan_start + i, "")
-            self._plan_line_start = plan_start
-        else:
-            self._plan_line_start = self._transcript.message_count()
-
-        for todo in todos:
-            content = todo.get("content", "")[:70]
-            status = todo.get("status", "pending")
-            icon = self._todo_status_icon(status)
-            self._transcript.append_message(f"   {icon} {content}")
-
-    def _parse_plan_result(self, result: str) -> list[dict[str, str]]:
-        """Parse plan result string back into todos list."""
-        import re
-        todos: list[dict[str, str]] = []
-        pattern = re.compile(r"\[(pending|in_progress|completed)\]\s*(.+)")
-        for part in result.replace("plan updated: ", "").split(";"):
-            m = pattern.match(part.strip())
-            if m:
-                todos.append({"status": m.group(1), "content": m.group(2).strip()})
-        return todos
 
     def _update_thinking_line(self, text: str | None) -> None:
         """Show/hide the thinking status line above the input divider."""
@@ -1051,6 +1001,7 @@ class IstInkApp:
         if cmd_name == "clear":
             self._transcript.clear()
             self._tool_output_blocks.clear()
+            self._plan_panel.clear()
             self._app.render()
             return
 
@@ -1063,6 +1014,7 @@ class IstInkApp:
             elif isinstance(result, ClearResult):
                 self._transcript.clear()
                 self._tool_output_blocks.clear()
+                self._plan_panel.clear()
             elif isinstance(result, ErrorResult):
                 self._transcript.append_message(f" \x1b[31m✗\x1b[0m {result.text}")
             elif isinstance(result, (InfoResult, TextResult)):

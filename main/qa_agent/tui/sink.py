@@ -200,7 +200,7 @@ class TuiSink:
             sub_task = self._subagent_tasks_inflight.pop(tool_name, None)
             if sub_task is not None:
                 sub_task.status = "done"
-                sub_task.result = (payload.get("output") or "")[:500]
+                sub_task.result = payload.get("output") or ""
                 self._post(IstUiEvent(kind="update_subagent_task", message=sub_task))
             self._post(IstUiEvent(
                 kind="tool_done",
@@ -215,19 +215,14 @@ class TuiSink:
             self._post(IstUiEvent(kind="append", message=AIThinkingMessage(run_id=run_id, seq=seq, ts=ts)))
         elif kind == "llm_end":
             self._flush_tokens(force=True)
-            # AIFinalMessage——不是 finalize 流式 widget。这样在工具行上方会出现
             if payload.get("name") == "thought":
                 content = payload.get("content") or ""
-                if content:
+                if content and content != "[Calling tools]":
                     self._post(IstUiEvent(
                         kind="append",
                         message=AIFinalMessage(run_id=run_id, seq=seq, ts=ts, content=content),
                     ))
                 return
-            # final_thought：主 agent 收尾段（无 tool_call 的最后一段 LLM text）。
-            # 区别于 thought：用于显示 LLM 自己的总结/收尾文本，让用户看到主
-            # agent 结束工作时说了什么——避免被 finalize 节点的 subagent ToolMessage
-            # 兜底覆盖后用户看不到主 agent 自己的话。
             if payload.get("name") == "final_thought":
                 content = payload.get("content") or ""
                 if content:
@@ -237,8 +232,6 @@ class TuiSink:
                         message=AIFinalMessage(run_id=run_id, seq=seq, ts=ts, content=content),
                     ))
                 return
-            # graph.py:_MainAgentProgressHandler.on_chat_model_end 发的 usage-only 事件
-            # -> 只走 finalize_ai 通路更新 token 计数，不渲染消息
             if payload.get("name") == "usage_only":
                 self._post(IstUiEvent(
                     kind="finalize_ai",
@@ -277,11 +270,7 @@ class TuiSink:
         elif kind == "warn":
             self._post(IstUiEvent(kind="append", message=WarnMessage(run_id=run_id, seq=seq, ts=ts, text=str(payload))))
         elif kind == "info":
-            # 不渲染 LangGraph 内部 chain 的 on_prompt_start / on_custom_event 事件
-            # （不显示 chain name 在 transcript）
-            # 只在 payload 显式有 ``info_text`` 字段时才 append
             if payload.get("name") == "thinking_block":
-                # qwen3 / Claude 系列输出的 thinking block -> 单独 ThinkingMessage
                 from main.qa_agent.tui.messages import ThinkingMessage
                 thinking = payload.get("thinking") or ""
                 if thinking:

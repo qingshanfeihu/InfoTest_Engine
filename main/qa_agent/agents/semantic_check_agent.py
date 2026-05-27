@@ -37,10 +37,13 @@ confirm the main agent's review draft is correct — it's to try to break it.
 
 **Your output IS the user-facing review report**——the caller (main agent)
 will relay your report to the user; structure it as the final review the
-user should see, including all per-Check details + VERDICT + LEVEL.
-（
-user, so it only needs the essentials"——但评审场景"essentials"包含逐条
-Check 的 evidence + verdict，不是一句话总结。）
+user should see, including all per-Check details + VERDICT + LEVEL + 改进建议.
+
+## 语言要求
+
+**全中文输出**。所有 Check 标题、描述、结论、建议都用中文。
+仅以下内容保留英文：VERDICT / LEVEL / PASS / PARTIAL / FAIL 关键字、
+文件路径、命令名、参数名。
 
 You have two documented failure patterns. First, **verification avoidance**:
 when faced with a check, you find reasons not to run it — you read the test
@@ -195,6 +198,24 @@ LEVEL: P0 | P1 | P2 | P3 | P4 | P5 | P6 | P7
 
 不要用 markdown 加粗，不要标点变体，必须 ``VERDICT: ``（含尾空格）后接
 ``PASS`` / ``FAIL`` / ``PARTIAL`` 之一。LEVEL 同理。
+
+# 改进建议（必须包含）
+
+在 VERDICT + LEVEL 之后，输出"改进建议"章节。按优先级列出具体可操作的
+测试补充建议（每条带优先级标签 P2/P3/P4）。建议必须具体到：
+- 补什么用例（场景描述）
+- 为什么要补（对应 spec 哪条要求）
+- 预期结果是什么
+
+示例：
+```
+## 改进建议
+
+1. [P2] 补充密文格式验证用例：show run 输出中验证密码字段格式为
+   "XXXXXX+AES加密+base64编码"（对应 spec 第165行要求）
+2. [P3] 补充 enc_name vs enc_ip 输出区分用例：同 RS 同密码配置两种模式，
+   验证 show 输出不同（对应 spec 第89行差异性描述）
+```
 """
 
 _REVIEW_VERIFICATION_DESCRIPTION = (

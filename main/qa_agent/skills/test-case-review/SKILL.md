@@ -54,10 +54,21 @@ context: inline
 
 **Execution**: Direct（用 ``write_todos``）
 
-接到评审任务后**第一件事**：调 ``write_todos`` 把下面 Step 1-8 拆成 todo list，每条标 ``pending``。每完成一步立即标 ``completed``。
+接到评审任务后**第一件事**：调 ``write_todos`` 写 todo list。内容必须是**用户友好的高层描述**，不要暴露内部实现细节（如"提交 verifier"、"草稿"等）。
 
-**Success criteria**: todo list 含 8 条（Step 1-8），按顺序排，当前进行中的标 ``in_progress``。
-**Rules**: 同时只能有一条 ``in_progress``。发现新子任务（如某个 finding 需要额外 grep 验证）立即追加到 todo，不要藏到最后。
+示例 todo list：
+```
+- 读取需求文档
+- 分析产品设计
+- 确认参数规格
+- 参考测试方法
+- 对标历史用例
+- 逐行审阅用例
+- 独立验证
+- 生成报告
+```
+
+**Rules**: 同时只能有一条 ``in_progress``。发现新子任务立即追加到 todo。
 
 ### 1. 读缺陷 / 需求
 
@@ -139,15 +150,14 @@ Output per-Check format with VERDICT + LEVEL.
 
 ### 8. 输出最终报告
 
-verifier 的输出已通过 subagent 容器实时展示给用户（用户在 TUI 中能看到 verifier 内部的 grep/read_file 过程和最终报告）。**你不需要复述 verifier 的完整报告**。
+verifier 的报告已作为 task 工具的 tool_result 完整展示给用户。**你只需要说"评审完成"**。
 
-你只需要写 1-2 句引用 verifier 的 VERDICT 和 LEVEL，加上你自己对关键问题的补充建议。例如：
+**禁止**：
+- 复述 verifier 的 VERDICT / LEVEL / Check 内容
+- 输出"补充建议"——建议由 verifier 直接输出
+- 输出超过一句话的总结
 
-> verifier 判定 VERDICT: PARTIAL, LEVEL: P3。主要缺口是密文显示验证和已知限制覆盖。建议补充以下测试点：...
-
-**禁止**把 verifier 的逐条 Check 内容重新写一遍——用户已经在 subagent 容器里看到了。
-
-**Success criteria**: 用户看到简短引用 + 你的补充建议（不超过 300 字）。
+**Success criteria**: 你的最终输出只有一句话："评审完成。"
 
 ### 9. 多 sheet xlsx 并发评审 (when applicable)
 

@@ -1,6 +1,8 @@
 ---
 name: test-case-review
 description: 评审测试用例文件（xlsx / markdown / Test List），独立 verifier 给最终 verdict。
+user-invocable: true
+effort: high
 allowed-tools:
   - qa_deepagent_read_file
   - qa_deepagent_grep(knowledge/data/markdown/product/*)
@@ -23,7 +25,7 @@ context: inline
 # Test Case Review
 
 对测试用例文件做独立、有证据的评审；最终 verdict 由 verifier subagent 给出。
-主 agent 不能 self-assign verdict（仿 cc-haha constants/prompts.ts:390-395）。
+主 agent 不能 self-assign verdict。
 
 ## Inputs
 

@@ -165,7 +165,7 @@ class TuiSink:
             # 在 qa_node node_end 时把 final_answer 当一个完整 AIFinalMessage 投出来。
             # 去重：如果 final_answer 内容跟刚 emit 的 final_thought 重复（前 200 字
             # 一致），跳过——避免用户看到两次相同内容。
-            if kind == "node_end" and node == "qa_node":
+            if kind == "node_end" and node in {"qa_node", "finalize"}:
                 final_answer = payload.get("final_answer") or ""
                 if final_answer:
                     prefix = final_answer[:200]

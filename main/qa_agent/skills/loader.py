@@ -28,7 +28,7 @@ _TOOL_REGISTRY: dict[str, Any] = {}
 
 
 def _get_tool_registry() -> dict[str, Any]:
-    """延迟加载工具注册表。"""
+    """延迟加载工具注册表——包含所有可能被 fork skill 使用的工具。"""
     if not _TOOL_REGISTRY:
         from main.qa_agent.tools.deepagent import (
             qa_deepagent_grep,
@@ -40,6 +40,22 @@ def _get_tool_registry() -> dict[str, Any]:
             "qa_deepagent_grep": qa_deepagent_grep,
             "qa_deepagent_ls": qa_deepagent_ls,
         })
+        try:
+            from main.qa_agent.tools.deepagent import qa_bash, qa_exec
+            _TOOL_REGISTRY["qa_bash"] = qa_bash
+            _TOOL_REGISTRY["qa_exec"] = qa_exec
+        except ImportError:
+            pass
+        try:
+            from main.qa_agent.tools.web import web_bug_search
+            _TOOL_REGISTRY["web_bug_search"] = web_bug_search
+        except ImportError:
+            pass
+        try:
+            from main.qa_agent.tools.footprint import qa_footprint_lookup
+            _TOOL_REGISTRY["qa_footprint_lookup"] = qa_footprint_lookup
+        except ImportError:
+            pass
     return _TOOL_REGISTRY
 
 
@@ -78,11 +94,12 @@ def _build_fork_subagent(name: str, fm: dict, body: str) -> dict[str, Any]:
     - 调用时 description → HumanMessage（具体任务）
     - allowed-tools → 工具白名单
     - model → 模型选择
+    - recursion-limit → 从 frontmatter 读取（默认 200）
+    - inherit-parent-prompt → 是否继承通用约束段（默认 false）
     """
     from langchain.agents import create_agent
 
     from main.qa_agent.agents._llm import build_agent_chat_model, qa_agent_tier_model
-    from main.qa_agent.agents._prompt import build_verifier_inherited_sections
 
     model_name = fm.get("model", "opus")
     model_tier = _MODEL_MAP.get(model_name, model_name)
@@ -93,14 +110,21 @@ def _build_fork_subagent(name: str, fm: dict, body: str) -> dict[str, Any]:
         allowed = [t.strip() for t in allowed.split(",")]
     tools = _resolve_tools(allowed)
 
-    full_prompt = build_verifier_inherited_sections() + "\n\n---\n\n" + body
+    # 是否继承通用约束段（verifier 需要，其他 fork skill 可能不需要）
+    if fm.get("inherit-parent-prompt", False):
+        from main.qa_agent.agents._prompt import build_verifier_inherited_sections
+        full_prompt = build_verifier_inherited_sections() + "\n\n---\n\n" + body
+    else:
+        full_prompt = body
+
+    recursion_limit = int(fm.get("recursion-limit", 200))
 
     runnable = create_agent(
         model,
         system_prompt=full_prompt,
         tools=tools,
         name=name,
-    ).with_config({"recursion_limit": 200})
+    ).with_config({"recursion_limit": recursion_limit})
 
     description = fm.get("description", f"Fork skill: {name}")
 

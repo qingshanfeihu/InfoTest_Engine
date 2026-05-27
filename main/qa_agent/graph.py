@@ -97,6 +97,27 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         except Exception:  # noqa: BLE001
             pass
 
+    def _subagent_tags(self, kwargs: dict, base_tags: dict | None = None) -> dict:
+        """从 LangChain callback kwargs 抽 subagent 标识，合并到 base_tags.
+
+        LangChain 默认把 callback 传播给子 chain（subagent）；通过
+        ``metadata.lc_agent_name`` 区分主 / 子事件。
+
+        - ``parent_subagent``: 子 agent 名（如 "review-verification"）
+        - ``parent_tool_use_id``: 主 agent 调 task 工具时的 run_id，
+          所有该 subagent 内部事件挂到这个 id 下，TUI 据此把子事件渲染到
+          对应 SubAgentTaskMessage 容器内。
+        """
+        tags = dict(base_tags or {})
+        meta = kwargs.get("metadata") or {}
+        agent_name = meta.get("lc_agent_name") or ""
+        # main_agent / 空字符串 = 主 agent；其他都是 subagent
+        if agent_name and agent_name not in {"main_agent", ""}:
+            tags["parent_subagent"] = agent_name
+            if getattr(self, "_current_task_tool_use_id", ""):
+                tags["parent_tool_use_id"] = self._current_task_tool_use_id
+        return tags
+
     # --- LangChain callbacks --------------------------------------------------
     def on_chat_model_start(self, *args, **kwargs) -> None:  # noqa: D401, ANN002
         self._chat_idx += 1
@@ -170,28 +191,45 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         except Exception:  # noqa: BLE001
             text = ""
         text = (text or "").strip()
+        # 计算 subagent tag —— LLM 事件也按 subagent 区分
+        sub_tags = self._subagent_tags(kwargs)
+
         # 1. usage 单独发（让 TUI footer 实时累加 token）
         if usage:
-            self._emit_to_bus("llm_end", payload={"name": "usage_only"}, usage=usage)
+            self._emit_to_bus(
+                "llm_end",
+                payload={"name": "usage_only"},
+                tags=sub_tags or None,
+                usage=usage,
+            )
         # 2. thinking block 单独发（TUI 渲染成 ∴ Thinking）
         if thinking_text:
             self._emit_to_bus(
                 "info",
                 payload={"name": "thinking_block", "thinking": thinking_text},
+                tags=sub_tags or None,
             )
         # 3. 中间步骤的 LLM 解释（带 tool_calls 的 thought）
         # - 有文本 + 有 tool_calls：打印 AI 的解释段
         # - 无文本 + 有 tool_calls：打印 ``[Calling tools]`` 占位
-        # - 有文本 + 无 tool_calls：最终答案由 LangGraph finalize 节点的
-        #   ``final_answer`` 写出；TUI 在 ``node_end finalize`` 时投 AIFinalMessage
+        # - 有文本 + 无 tool_calls：最终答案——也 emit 给 TUI 实时显示
+        #   （仿业界 agent 框架流式渲染：每段 LLM text 都直接显示给用户，
+        #    不留到 finalize，让用户看到主 agent 自己的收尾段）
         if has_tool_calls:
             content = text if text else "[Calling tools]"
-            compact = " ".join(content.split())
-            if len(compact) > 600:
-                compact = compact[:600].rstrip() + "…"
             self._emit_to_bus(
                 "llm_end",
-                payload={"name": "thought", "content": compact},
+                payload={"name": "thought", "content": content},
+                tags=sub_tags or None,
+            )
+        elif text:
+            # 无 tool_calls 的最终答案段：emit 一条 final_thought 给 TUI 渲染
+            # （TUI sink 当 AIFinalMessage 显示）。注意：finalize 节点仍可能
+            # 用 subagent ToolMessage 替代 state.final_answer（评审兜底场景）。
+            self._emit_to_bus(
+                "llm_end",
+                payload={"name": "final_thought", "content": text},
+                tags=sub_tags or None,
             )
 
     def on_tool_start(self, serialized, input_str, **kwargs) -> None:  # noqa: D401, ANN001
@@ -201,10 +239,21 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
             name = serialized.get("name", "") or ""
         self._tool_name_stack.append(name)
         cap = 4000 if name in ("write_todos", "task") else 400
+
+        # 主 agent 调 task 工具时记录 run_id 当 parent_tool_use_id；
+        # 之后 subagent 内部事件挂到这个 id 下（仿业界 createProgressMessage 设计）。
+        meta = kwargs.get("metadata") or {}
+        agent_name = meta.get("lc_agent_name") or ""
+        is_main_agent_event = not agent_name or agent_name == "main_agent"
+        if name == "task" and is_main_agent_event:
+            run_id = kwargs.get("run_id")
+            self._current_task_tool_use_id = str(run_id) if run_id else ""
+
+        tags = self._subagent_tags(kwargs, base_tags={"name": name})
         self._emit_to_bus(
             "tool_call",
             payload={"name": name, "input": {"raw": (input_str or "")[:cap]}},
-            tags={"name": name},
+            tags=tags,
         )
 
     def _pop_tool_name(self) -> str:
@@ -234,10 +283,19 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
                 text = str(output)
         else:
             text = output if isinstance(output, str) else str(output)
+
+        # 主 agent 的 task 工具收尾后清空 task tool_use_id
+        meta = kwargs.get("metadata") or {}
+        agent_name = meta.get("lc_agent_name") or ""
+        is_main_agent_event = not agent_name or agent_name == "main_agent"
+        if tool_name == "task" and is_main_agent_event:
+            self._current_task_tool_use_id = ""
+
+        tags = self._subagent_tags(kwargs, base_tags={"name": tool_name})
         self._emit_to_bus(
             "tool_result",
             payload={"name": tool_name, "output": text},
-            tags={"name": tool_name},
+            tags=tags,
         )
 
     def on_tool_error(self, error, **kwargs) -> None:  # noqa: D401, ANN001
@@ -318,23 +376,37 @@ def finalize(state: QaAgentState) -> dict[str, Any]:
 
     通用场景下（gate_status != passed 或没有 verifier ToolMessage）：保持原
     行为，透传 state.final_answer。
+
+    避免重复：如果主 agent 自己已经复述了完整 verifier 内容（含 VERDICT/LEVEL
+    且长度 ≥ 1500 字），认为主 agent 已经把 verifier 输出转述给用户，不再
+    前置 verifier ToolMessage，只用主 agent 的 final_answer。这样 TUI 上
+    用户看到 [TUI 渲染 verifier ToolMessage] + [TUI 渲染主 agent 收尾文本] +
+    [final_answer] 三段不会重复——final_answer 直接就是主 agent 的版本。
     """
     answer = state.get("final_answer") or ""
 
-    # 评审场景兜底：如果硬闸 passed 且有 verifier ToolMessage，
-    # 用 verifier 完整报告替代主 agent 的总结
     if state.get("gate_status") == "passed":
         verifier_content = _extract_subagent_report(
             state.get("messages") or [],
             subagent_type="review-verification",
         )
         if verifier_content:
-            # 主 agent 自己的收尾段（如果有意义）作为 prefix
-            prefix = ""
-            if answer and len(answer) > 50 and "VERDICT" not in answer:
-                # 主 agent 写了实质内容（不是"评审完成"15 字）→ 保留作为 prefix
-                prefix = answer + "\n\n---\n\n"
-            answer = prefix + verifier_content
+            # 检测主 agent 是否已自己复述了完整 verifier 内容
+            agent_already_relayed = (
+                len(answer) >= 1500
+                and "VERDICT" in answer
+                and "LEVEL" in answer
+            )
+            if agent_already_relayed:
+                # 主 agent 自己写了完整复述——不要再前置 verifier，避免双倍内容
+                pass
+            else:
+                # 主 agent 没复述（如 "评审完成" 15 字总结）——工程兜底前置
+                # verifier 完整内容
+                prefix = ""
+                if answer and len(answer) > 50 and "VERDICT" not in answer:
+                    prefix = answer + "\n\n---\n\n"
+                answer = prefix + verifier_content
 
     return {"final_answer": answer}
 

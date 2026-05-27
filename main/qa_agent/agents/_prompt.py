@@ -136,15 +136,15 @@ When you spawn a fresh agent via ``task(subagent_type=..., description=...)``, t
 
 ## After the subagent returns（通用，
 
-When the subagent completes, it returns a single message to you. **The result is NOT directly visible to the user**——you must send a text message to relay/summarize it.
+When the subagent completes, it returns a single message to you. **The subagent's internal process (tool calls, thinking, final output) is already displayed to the user in a collapsible container in the TUI.** The user can expand it to see the full report.
 
-How to relay depends on the subagent's role:
+How to respond depends on the subagent's role:
 
 - **检索 / 调研类 subagent**（如 explore）：subagent 已找到事实，你**复述关键证据**给用户（文件路径 + 行号 + 摘录），可附 1-2 句你的解读。**禁止**只说"调研完成"。
-- **判定 / 评审类 subagent**（如 review-verification）：subagent 输出本身就是 user-facing 报告（系统提示中已声明），**relay verbatim**——逐条 Check + VERDICT + LEVEL 都要在你的最终回复里。**禁止**用"评审完成"代替透传。
+- **判定 / 评审类 subagent**（如 review-verification）：subagent 输出已在容器内展示给用户。**不要复述 verifier 的完整报告**。只写 1-2 句引用 VERDICT + LEVEL + 关键缺口，加上你自己的补充建议。**禁止**把逐条 Check 重新写一遍。
 - **修复 / 行动类 subagent**：subagent 已完成动作，你**报告做了什么 + 关键变化**给用户。
 
-判断准则：用户从你的最终消息里看到的信息量，应当**不少于** subagent 报告里给用户的关键信息量。subagent 报告 7000 字含 10 条 finding，而你的最终消息只有 15 字 "评审完成"——这是失败模式，用户什么都看不到。"""
+判断准则：subagent 的完整输出用户已经能在容器里看到。你的最终消息是**补充和引用**，不是复述。如果你的最终消息跟 subagent 输出内容重复度 > 50%，那就是失败模式——用户看到两遍一样的东西。"""
 
 
 def _when_not_to_use_subagent_section() -> str:

@@ -92,6 +92,9 @@ class TuiSink:
         # 驱动）。
         self._tool_calls_inflight: dict[str, ToolCallMessage] = {}  # by run_id+seq
         self._subagent_tasks_inflight: dict[str, "SubAgentTaskMessage"] = {}  # by tool name
+        # 去重：记录最近 emit 的 final_thought 内容前 200 字，
+        # node_end qa_node 时如果 final_answer 跟它重复则跳过
+        self._last_final_thought_prefix: str = ""
 
     # -- Public sink protocol ------------------------------------------------
 
@@ -143,6 +146,12 @@ class TuiSink:
         payload = event.get("payload") or {}
         tags = event.get("tags") or {}
 
+        # subagent 内部事件（带 parent_subagent tag）→ 挂到容器子树，不在主对话区渲染
+        parent_subagent = tags.get("parent_subagent")
+        if parent_subagent and kind in {"tool_call", "tool_start", "tool_result", "tool_end", "llm_end", "info"}:
+            self._append_to_subagent_container(kind, event)
+            return
+
         if kind == "run_start":
             self._post(IstUiEvent(kind="run_start", extra={"run_id": run_id, "thread_id": payload.get("config", {}).get("thread_id")}))
         elif kind == "run_end":
@@ -152,21 +161,23 @@ class TuiSink:
         elif kind in {"node_start", "node_end"}:
             node = tags.get("node") or tags.get("name") or ""
             self._post(IstUiEvent(kind=kind, extra={"node": node, "run_id": run_id}))
-            # 权威对话结论：必须用 finalize node 的 final_answer，不能用 qa_node。
-            # qa_node 的 final_answer 只是「本轮主 agent 最后一条 AIMessage」——
-            # 评审场景下 graph.finalize() 才把 review-verification 的 ToolMessage
-            # 全文 merge 进来；若在 qa_node_end 就投 AIFinalMessage，用户只能看到
-            # 「评审完成」短总结，看不到逐条 Check + 测试建议（与 graph.py finalize
-            # 注释中的工程兜底初衷一致）。
-            if kind == "node_end" and node == "finalize":
+            # Fallback: agent.invoke 同步调用不发 token stream，
+            # 在 qa_node node_end 时把 final_answer 当一个完整 AIFinalMessage 投出来。
+            # 去重：如果 final_answer 内容跟刚 emit 的 final_thought 重复（前 200 字
+            # 一致），跳过——避免用户看到两次相同内容。
+            if kind == "node_end" and node == "qa_node":
                 final_answer = payload.get("final_answer") or ""
                 if final_answer:
-                    self._post(IstUiEvent(
-                        kind="append",
-                        message=AIFinalMessage(
-                            run_id=run_id, seq=seq, ts=ts, content=final_answer,
-                        ),
-                    ))
+                    prefix = final_answer[:200]
+                    if prefix == self._last_final_thought_prefix:
+                        pass  # 已经通过 final_thought 渲染过了
+                    else:
+                        self._post(IstUiEvent(
+                            kind="append",
+                            message=AIFinalMessage(
+                                run_id=run_id, seq=seq, ts=ts, content=final_answer,
+                            ),
+                        ))
         elif kind == "phase_marker":
             phase = payload.get("phase") or payload.get("event") or ""
             self._post(IstUiEvent(kind="append", message=PhaseMarkerMessage(run_id=run_id, seq=seq, ts=ts, phase=phase)))
@@ -182,7 +193,10 @@ class TuiSink:
             self._post(IstUiEvent(kind="append", message=msg))
         elif kind in {"tool_result", "tool_end"}:
             tool_name = tags.get("name") or ""
-            # 切 SubAgentTaskMessage 状态 running → done（Step 8）
+            # 切 SubAgentTaskMessage 状态 running → done。
+            # subagent ToolMessage 内容截到 500 字摘要（避免与主 agent 复述 +
+            # final_answer 三处重复显示同一份长报告）。完整内容仍在 messages 里，
+            # finalize 节点和 final_answer 通路保证用户能看到完整版。
             sub_task = self._subagent_tasks_inflight.pop(tool_name, None)
             if sub_task is not None:
                 sub_task.status = "done"
@@ -205,6 +219,19 @@ class TuiSink:
             if payload.get("name") == "thought":
                 content = payload.get("content") or ""
                 if content:
+                    self._post(IstUiEvent(
+                        kind="append",
+                        message=AIFinalMessage(run_id=run_id, seq=seq, ts=ts, content=content),
+                    ))
+                return
+            # final_thought：主 agent 收尾段（无 tool_call 的最后一段 LLM text）。
+            # 区别于 thought：用于显示 LLM 自己的总结/收尾文本，让用户看到主
+            # agent 结束工作时说了什么——避免被 finalize 节点的 subagent ToolMessage
+            # 兜底覆盖后用户看不到主 agent 自己的话。
+            if payload.get("name") == "final_thought":
+                content = payload.get("content") or ""
+                if content:
+                    self._last_final_thought_prefix = content[:200]
                     self._post(IstUiEvent(
                         kind="append",
                         message=AIFinalMessage(run_id=run_id, seq=seq, ts=ts, content=content),
@@ -266,6 +293,65 @@ class TuiSink:
             text = payload.get("info_text") or ""
             if text:
                 self._post(IstUiEvent(kind="append", message=InfoMessage(run_id=run_id, seq=seq, ts=ts, text=text)))
+
+    def _append_to_subagent_container(self, kind: str, event: QaAgentEvent) -> None:
+        """把 subagent 内部事件挂到对应 SubAgentTaskMessage.inner_events。
+
+        仿业界 agent 框架 progress 冒泡 + 容器渲染设计：subagent 内部所有
+        LLM/tool 事件不在主对话区渲染为独立消息，而是追加到 SubAgentTaskMessage
+        容器的 inner_events 列表。TUI widget 折叠展示这些子事件。
+
+        事件通过 tags.parent_subagent 识别归属（handler 已打标）。
+        """
+        tags = event.get("tags") or {}
+        payload = event.get("payload") or {}
+        parent_subagent = tags.get("parent_subagent") or ""
+
+        # 找对应的 inflight SubAgentTaskMessage
+        container = self._subagent_tasks_inflight.get("task")
+        if container is None:
+            # 尝试用 parent_subagent 名匹配
+            for _key, msg in self._subagent_tasks_inflight.items():
+                if getattr(msg, "subagent_type", "") == parent_subagent:
+                    container = msg
+                    break
+        if container is None:
+            return
+
+        # 构建简短摘要挂到 inner_events（不是完整 payload，避免内存暴涨）
+        tool_name = tags.get("name") or payload.get("name") or ""
+        if kind in {"tool_call", "tool_start"}:
+            raw_input = (payload.get("input") or {})
+            if isinstance(raw_input, dict):
+                raw_input = raw_input.get("raw", "")
+            summary = f"[tool_call] {tool_name}({str(raw_input)[:80]})"
+        elif kind in {"tool_result", "tool_end"}:
+            output = payload.get("output") or ""
+            out_preview = output[:120] if isinstance(output, str) else str(output)[:120]
+            summary = f"[tool_result] {tool_name} → {out_preview}"
+        elif kind == "llm_end":
+            name = payload.get("name") or ""
+            content = payload.get("content") or ""
+            if name == "thought":
+                summary = f"[thought] {content[:120]}"
+            elif name == "final_thought":
+                summary = f"[output] {content[:200]}"
+            elif name == "usage_only":
+                return  # usage 事件不需要挂容器
+            else:
+                return
+        elif kind == "info":
+            if payload.get("name") == "thinking_block":
+                thinking = payload.get("thinking") or ""
+                summary = f"[thinking] {thinking[:80]}"
+            else:
+                return
+        else:
+            return
+
+        container.inner_events.append(summary)
+        # 每次子事件追加都通知 TUI 刷新容器（进度更新）
+        self._post(IstUiEvent(kind="update_subagent_task", message=container))
 
     def _make_tool_message(self, event: QaAgentEvent) -> IstMessage:
         """根据 ``tool_call.name`` 派发到专属消息子类，未识别则 fallback 到 ToolCallMessage。

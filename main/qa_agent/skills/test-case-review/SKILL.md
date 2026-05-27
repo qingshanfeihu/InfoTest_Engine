@@ -139,9 +139,15 @@ Output per-Check format with VERDICT + LEVEL.
 
 ### 8. 输出最终报告
 
-verifier 的输出本身就是写给用户的最终报告（verifier 系统提示已声明 caller will relay）。把 verifier 的内容 relay 给用户，必须在结尾针对所有问题，按照P0-P7每个级别给出具体详细的测试建议。
+verifier 的输出已通过 subagent 容器实时展示给用户（用户在 TUI 中能看到 verifier 内部的 grep/read_file 过程和最终报告）。**你不需要复述 verifier 的完整报告**。
 
-**Success criteria**: 用户看到 VERDICT、LEVEL 和每条 Check 的内容。
+你只需要写 1-2 句引用 verifier 的 VERDICT 和 LEVEL，加上你自己对关键问题的补充建议。例如：
+
+> verifier 判定 VERDICT: PARTIAL, LEVEL: P3。主要缺口是密文显示验证和已知限制覆盖。建议补充以下测试点：...
+
+**禁止**把 verifier 的逐条 Check 内容重新写一遍——用户已经在 subagent 容器里看到了。
+
+**Success criteria**: 用户看到简短引用 + 你的补充建议（不超过 300 字）。
 
 ### 9. 多 sheet xlsx 并发评审 (when applicable)
 

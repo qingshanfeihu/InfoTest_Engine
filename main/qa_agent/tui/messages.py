@@ -93,13 +93,16 @@ class ToolCallMessage(IstMessage):
 class SubAgentTaskMessage(IstMessage):
     """``task`` tool（deepagents SubAgentMiddleware）的专属渲染。
 
-    显示 subagent_type + description 摘要 + spinner，完成后显示结果长度。
+    显示 subagent_type + description 摘要 + spinner，完成后折叠展开内部事件流。
+    inner_events 存 subagent 内部冒泡的 tool_call/tool_result/thought 事件
+    （通过 parent_subagent tag 识别），TUI widget 渲染时默认折叠，按键展开。
     """
 
     subagent_type: str = ""
     description: str = ""
     result: str = ""
     status: str = "pending"  # pending | running | done | error
+    inner_events: list = field(default_factory=list)
     css_class: ClassVar[str] = "ist-subagent-task"
 
 

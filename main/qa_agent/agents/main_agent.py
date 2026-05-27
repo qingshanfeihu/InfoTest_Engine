@@ -254,18 +254,16 @@ def build_main_agent(**kwargs: Any):
             "model": build_explore_model(),
         }
         subagents_list: list[dict[str, Any]] = [explore_subagent]
-        # review-verification subagent（评审场景的 adversarial verifier）：
-        #
-        # 这个 subagent 给最终 VERDICT + LEVEL，主 agent 不能 self-assign。
-        #
+        # Fork skills 自动发现：扫描 skills/ 目录下 context: fork 的 SKILL.md，
+        # 自动构建 CompiledSubAgent。后续加新 fork skill 只需加文件，不改代码。
         try:
-            from main.qa_agent.agents.semantic_check_agent import (
-                build_review_verification_subagent,
-            )
-            subagents_list.append(build_review_verification_subagent())
-            logger.info("review-verification subagent 已注册 (CompiledSubAgent)")
+            from main.qa_agent.skills.loader import load_fork_skills
+            fork_skills = load_fork_skills()
+            subagents_list.extend(fork_skills)
+            if fork_skills:
+                logger.info("Fork skills 已注册: %s", [s["name"] for s in fork_skills])
         except Exception as exc:  # noqa: BLE001
-            logger.warning("review-verification 注册失败: %s", exc)
+            logger.warning("Fork skills loader 失败: %s", exc)
         subagents_kwarg["subagents"] = subagents_list
         logger.info("Explore sub-agent 已注册 (tools=%s)", [t.name for t in _explore_only_tools])
     except Exception as explore_exc:  # noqa: BLE001

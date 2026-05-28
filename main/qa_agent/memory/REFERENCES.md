@@ -186,7 +186,7 @@ _ToolExclusionMiddleware(
 | L3 写入 | MemoryMiddleware 鼓励 LLM edit_file | 改成 fork agent 写，主 agent 不暴露 edit_file | 用户决策"agent 不显式写" |
 | L1/L2 注入 | 无内置 | 新增 MemoryInjectionMiddleware（仿 PerTurnSkillReminder） | 需要"每轮、user 角色、最后 human msg 之前" 而 MemoryMiddleware 是"system 末尾、首轮加载" |
 | L1 写入 | 无内置 | MemoryWriteMiddleware.after_model 规则抽取，调 backend.edit | —— |
-| 长期 distill | cc-haha 用 fork agent + AutoDream | 我们走 fork agent (B) + cron dream (C) 双轨 | 用户已选 |
+| 长期 distill | Claude Code 用 fork agent + AutoDream | 我们走 fork agent (B) + cron dream (C) 双轨 | 用户已选 |
 | backend | CompositeBackend / StateBackend / StoreBackend | 全部用 deepagents 原生类 | —— |
 | 路径 | `/memories/`（约定）`/working/`（自定） | 一致 | —— |
 | namespace | `lambda rt: (rt.server_info.user.identity, "memories")` | 同款 + try/except 降级 default | rt.server_info 在 langgraph dev 之外可能不存在 |

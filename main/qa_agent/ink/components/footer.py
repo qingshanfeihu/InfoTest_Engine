@@ -46,6 +46,10 @@ class FooterPane:
         self.tokens_used: int = 0
         self.tokens_budget: int = 128_000
         self.model: str = ""
+        self.input_tokens: int = 0
+        self.output_tokens: int = 0
+        self._llm_phase: str = ""  # "input" | "output" | ""
+        self._output_token_count: int = 0  # per-call 流式字符计数
         self._busy_since: float = 0.0
         self._verb: str = ""
         self._timer: threading.Timer | None = None
@@ -67,6 +71,10 @@ class FooterPane:
         tokens_used: int | None = None,
         tokens_budget: int | None = None,
         model: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        llm_phase: str | None = None,
+        output_token_count: int | None = None,
     ) -> None:
         if status is not None:
             self.status = status
@@ -80,6 +88,14 @@ class FooterPane:
             self.tokens_budget = tokens_budget
         if model is not None:
             self.model = model
+        if input_tokens is not None:
+            self.input_tokens = input_tokens
+        if output_tokens is not None:
+            self.output_tokens = output_tokens
+        if llm_phase is not None:
+            self._llm_phase = llm_phase
+        if output_token_count is not None:
+            self._output_token_count = output_token_count
         self._refresh()
 
     def set_search_state(self, query: str | None, match: str | None) -> None:
@@ -161,16 +177,28 @@ class FooterPane:
         if self._timer_running and self._busy_since:
             elapsed = time.time() - self._busy_since
             elapsed_str = _format_elapsed(elapsed)
-            thinking_text = f"✶ {self._verb}… ({elapsed_str} · ↑ {self.tokens_used:,} tokens · {self.model})"
+            if self._llm_phase == "output":
+                thinking_text = f"✶ Generating… ({elapsed_str} · ↓ {self._output_token_count:,} tokens · {self.model})"
+            elif self._llm_phase == "input":
+                thinking_text = f"✶ Processing… ({elapsed_str} · ↑ {self.input_tokens:,} tokens · {self.model})"
+            else:
+                thinking_text = f"✶ {self._verb}… ({elapsed_str} · ↑ {self.input_tokens:,} · ↓ {self.output_tokens:,} tokens · {self.model})"
             status_text = thinking_text
             # Update thinking line above divider
             if self._thinking_cb:
                 self._thinking_cb(thinking_text)
         else:
             parts = [self.status]
-            # 累计消耗（多轮 LLM call 求和），不是上下文窗口占用——
-            # 不展示 budget 比例，避免和模型上下文上限混淆
-            parts.append(f"{self.tokens_used:,} tokens")
+            # 状态行（非工作中）按阶段显示箭头：
+            # - input 阶段（罕见——LLM 尚未回首 token 又被中断/收尾）→ 仅 ↑
+            # - output 阶段（同上，AI 流式中又收尾，例如 token=0 早退）→ 仅 ↓
+            # - 空闲（默认）→ 同时显示 ↑/↓ 总累计
+            if self._llm_phase == "input":
+                parts.append(f"↑ {self.input_tokens:,} tokens")
+            elif self._llm_phase == "output":
+                parts.append(f"↓ {self._output_token_count:,} tokens")
+            else:
+                parts.append(f"↑ {self.input_tokens:,} · ↓ {self.output_tokens:,} tokens")
             if self.model:
                 parts.append(self.model)
             status_text = " · ".join(parts)

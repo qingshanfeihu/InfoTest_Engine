@@ -1,8 +1,8 @@
-"""测试 ``_sandbox.py`` 模块的 CWD 解析层（仿 cc-haha pwd / cwd 选择逻辑）。
+"""测试 ``_sandbox.py`` 模块的 CWD 解析层。
 
 来源：plan Step 5（沙箱接口统一）。
 
-cc-haha 对照：
+参考实现：
 - ``utils/cwd.ts:1-33`` ``pwd()`` —— 简化为 ``_default_cwd()``
 - ``BashTool/pathValidation.ts`` —— 反向变种 ``_resolve_cwd_for_target()``
 """

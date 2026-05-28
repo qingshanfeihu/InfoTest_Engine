@@ -1,8 +1,8 @@
 """Cron consolidation（AutoDream 对齐）：五道闸 + 四阶段。
 
 参考实现：
-- cc-haha src/services/autoDream/（五道闸：功能开关/24h/10min/5sessions/PID锁）
-- cc-haha src/tasks/DreamTask/（四阶段：Orient → Gather → Consolidate → Prune）
+- Claude Code src/services/autoDream/（五道闸：功能开关/24h/10min/5sessions/PID锁）
+- Claude Code src/tasks/DreamTask/（四阶段：Orient → Gather → Consolidate → Prune）
 - 本仓库 middleware.py 的 session counter + fcntl 锁封装
 
 调度方式：
@@ -25,6 +25,89 @@ from main.qa_agent.memory.middleware import read_session_counter, reset_session_
 from main.qa_agent.memory.store import MemoryStore
 
 logger = logging.getLogger(__name__)
+
+_CONSOLIDATE_SYSTEM_PROMPT = "你是 IST-Core 的 Dream 整理助手，输出严格 JSON。"
+
+
+def _dream_llm_http_setup(*, tier: str = "default") -> tuple[Any, str, str, str] | None:
+    """按 ``IST_LLM_PROVIDER`` 解析 HTTP LLM 参数。
+
+    返回 ``(session, api_key, base_url, model)``；无可用 key 时返回 None。
+    ``tier`` 为 ``haiku`` 时用 IST_HAIKU_MODEL，否则用平台默认模型。
+    """
+    try:
+        import requests as _requests
+        from main.qa_agent.agents._llm import (
+            DEFAULT_DASHSCOPE_BASE_URL,
+            DEFAULT_DEEPSEEK_BASE_URL,
+            qa_agent_default_model,
+            qa_agent_tier_model,
+            resolve_llm_api_key,
+            resolve_llm_provider,
+        )
+    except Exception as exc:
+        logger.debug("dream LLM setup import 失败: %s", exc)
+        return None
+
+    api_key = resolve_llm_api_key()
+    if not api_key:
+        logger.debug("dream LLM: no API key (provider=%s)", resolve_llm_provider())
+        return None
+
+    provider = resolve_llm_provider()
+    if provider == "deepseek":
+        base_url = os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL).strip()
+    else:
+        base_url = os.environ.get("DASHSCOPE_BASE_URL", DEFAULT_DASHSCOPE_BASE_URL).strip()
+
+    model = qa_agent_tier_model("haiku") if tier == "haiku" else qa_agent_default_model()
+    return (_requests.Session(), api_key, base_url, model)
+
+
+def build_dream_consolidate_llm():
+    """构建 Dream consolidate（AGENTS.md 蒸馏）用的 ``(prompt) -> str``；无 key 时返回 None。"""
+    setup = _dream_llm_http_setup(tier="default")
+    if setup is None:
+        return None
+
+    try:
+        from main.function_llm import TruncationError, chat_completion
+        from main.qa_agent.agents._llm import resolve_llm_provider
+    except Exception as exc:
+        logger.warning("dream consolidate LLM 初始化失败: %s", exc)
+        return None
+
+    session, api_key, base_url, model = setup
+
+    def _llm_chat(prompt: str) -> str:
+        """适配 DreamTask.consolidate 的 (prompt) -> str 接口。"""
+        import json
+
+        try:
+            result = chat_completion(
+                session,
+                api_key,
+                _CONSOLIDATE_SYSTEM_PROMPT,
+                prompt,
+                model=model,
+                base_url=base_url,
+                max_tokens=4096,
+                temperature=0.1,
+            )
+            return json.dumps(result) if isinstance(result, (dict, list)) else str(result)
+        except TruncationError:
+            logger.warning("consolidate LLM 输出被截断")
+            return "[]"
+        except Exception as exc:
+            logger.warning("consolidate llm_chat 失败: %s", exc)
+            return "[]"
+
+    logger.info(
+        "dream consolidate LLM: model=%s provider=%s",
+        model,
+        resolve_llm_provider(),
+    )
+    return _llm_chat
 
 
 @dataclass
@@ -379,38 +462,26 @@ class DreamTask:
         复用 function_llm.chat_completion，获得 retry + truncation 检测 + cache。
         使用 IST_HAIKU_MODEL（默认 deepseek-v4-flash）。
         """
+        setup = _dream_llm_http_setup(tier="haiku")
+        if setup is None:
+            return None
+
         try:
-            import requests as _requests
-            from main.qa_agent.agents._llm import (
-                qa_agent_tier_model,
-                resolve_llm_api_key,
-                resolve_llm_provider,
-                DEFAULT_DASHSCOPE_BASE_URL,
-                DEFAULT_DEEPSEEK_BASE_URL,
-            )
-            from main.function_llm import chat_completion, TruncationError
+            from main.function_llm import TruncationError, chat_completion
+            from main.qa_agent.agents._llm import resolve_llm_provider
         except Exception as exc:
             logger.debug("footprint LLM 构建失败: %s", exc)
             return None
 
-        api_key = resolve_llm_api_key()
-        if not api_key:
-            logger.debug("footprint: no API key")
-            return None
-
-        model = qa_agent_tier_model("haiku")
-        provider = resolve_llm_provider()
-        if provider == "deepseek":
-            base_url = os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL).strip()
-        else:
-            base_url = os.environ.get("DASHSCOPE_BASE_URL", DEFAULT_DASHSCOPE_BASE_URL).strip()
-
-        session = _requests.Session()
+        session, api_key, base_url, model = setup
 
         def _call(system_prompt: str, user_prompt: str):
             try:
                 return chat_completion(
-                    session, api_key, system_prompt, user_prompt,
+                    session,
+                    api_key,
+                    system_prompt,
+                    user_prompt,
                     model=model,
                     base_url=base_url,
                     max_tokens=4096,
@@ -421,7 +492,7 @@ class DreamTask:
                 logger.warning("footprint LLM 输出被截断，跳过")
                 return {"facts": []}
 
-        logger.info("footprint LLM: model=%s provider=%s", model, provider)
+        logger.info("footprint LLM: model=%s provider=%s", model, resolve_llm_provider())
         return _call
 
     def prune(self, inventory: Inventory) -> int:
@@ -466,7 +537,13 @@ class DreamTask:
         return pruned
 
 
-__all__ = ["DreamReport", "DreamTask", "should_run_dream", "run_dream_with_gates"]
+__all__ = [
+    "DreamReport",
+    "DreamTask",
+    "build_dream_consolidate_llm",
+    "should_run_dream",
+    "run_dream_with_gates",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -489,35 +566,7 @@ def run_dream_with_gates() -> tuple[DreamReport | None, str]:
         backend = build_memory_backend()
         store = MemoryStore(backend, get_default_root())
 
-        try:
-            from main.function_llm import chat_completion
-            import requests
-
-            session = requests.Session()
-            api_key = (os.environ.get("DASHSCOPE_API_KEY") or "").strip()
-
-            def _llm_chat(prompt: str) -> str:
-                """适配 DreamTask.consolidate 的 (prompt) -> str 接口。"""
-                if not api_key:
-                    return "[]"
-                try:
-                    result = chat_completion(
-                        session, api_key,
-                        "你是 IST-Core 的 Dream 整理助手，输出严格 JSON。",
-                        prompt,
-                        max_tokens=4096,
-                        temperature=0.1,
-                    )
-                    import json
-                    return json.dumps(result) if isinstance(result, (dict, list)) else str(result)
-                except Exception as exc:
-                    logger.warning("consolidate llm_chat 失败: %s", exc)
-                    return "[]"
-
-            llm_chat = _llm_chat if api_key else None
-        except Exception as exc:
-            logger.warning("dream LLM 初始化失败: %s", exc)
-            llm_chat = None
+        llm_chat = build_dream_consolidate_llm()
 
         task = DreamTask(store=store, llm_chat=llm_chat)
         report = task.run()

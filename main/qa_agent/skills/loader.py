@@ -1,7 +1,7 @@
 """Skill Loader — 自动发现 SKILL.md 并构建 subagent。
 
-仿 cc-haha 的 skill 发现机制：扫描 skills/ 目录下所有 SKILL.md，
-解析 frontmatter，`context: fork` 的自动构建 CompiledSubAgent。
+扫描 skills/ 目录下所有 SKILL.md，解析 frontmatter，
+`context: fork` 的自动构建 CompiledSubAgent。
 
 后续加新 fork skill 只需要加一个 SKILL.md 文件，不需要改 Python 代码。
 """
@@ -89,7 +89,7 @@ def _resolve_tools(allowed_tools: list[str]) -> list[Any]:
 def _build_fork_subagent(name: str, fm: dict, body: str) -> dict[str, Any]:
     """从 SKILL.md frontmatter + body 构建 CompiledSubAgent dict。
 
-    仿 cc-haha fork 执行流程：
+    fork 执行流程：
     - skill body → system_prompt（行为约束）
     - 调用时 description → HumanMessage（具体任务）
     - allowed-tools → 工具白名单

@@ -1,6 +1,6 @@
 """Output — operation collector for render tree.
 
-Port of cc-haha src/ink/output.ts.
+Port of Claude Code src/ink/output.ts.
 Collects write/blit/clear/clip operations from the render tree,
 then applies them to a Screen buffer.
 """

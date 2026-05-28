@@ -1,7 +1,7 @@
 """Slash 命令：/memory + /remember。
 
 参考实现：
-- cc-haha src/services/memory 的管理动作（list/show/clear/forget）
+- Claude Code src/services/memory 的管理动作（list/show/clear/forget）
 - main/qa_agent/tui/kms_command.py 的子命令分发模式
 - main/qa_agent/tui/slash_commands.py 的 SlashCommandResult 协议
 
@@ -45,7 +45,7 @@ _HELP_TEXT = """/memory subcommands:
 /remember --project <topic> <text>    追加到 long_term/project/<topic>.md
 /remember --reference <topic> <text>  追加到 long_term/reference/<topic>.md
 
-四类语义（仿 cc-haha）：
+四类语义（仿 Claude Code）：
   user (preferences)   用户画像 / 偏好 / 角色
   feedback             反复纠正的反馈
   project              项目动态 / 决策 / 状态
@@ -144,7 +144,7 @@ def _cmd_overview(app: "IstApp") -> SlashCommandResult:
                     long_files.append(f)
 
     # /memories/ 也可能有遗留：现在 store 走的是 backend StoreBackend（InMemory）+ 真实磁盘 long_term/
-    # cc-haha 兼容：实际所有写入都走 long_term/ 子目录
+    # Claude Code 兼容：实际所有写入都走 long_term/ 子目录
     if long_files:
         lines.append("")
         lines.append("Long-term notes:")
@@ -353,7 +353,7 @@ def _peek(path) -> str:
 def _append_to_disk(path, text: str, *, mem_type: str = "user") -> None:
     """append 一段文本到磁盘文件（带 frontmatter 自维护、原子写）。
 
-    mem_type: user / feedback / project / reference（仿 cc-haha 四类语义，写到 frontmatter）。
+    mem_type: user / feedback / project / reference（仿 Claude Code 四类语义，写到 frontmatter）。
     """
     from main.qa_agent.memory.store import MemoryStore
     from datetime import datetime, timezone

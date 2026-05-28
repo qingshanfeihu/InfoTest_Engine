@@ -261,7 +261,7 @@ class IstInkApp:
 
         # Simple, clean welcome — no heavy box
         self._transcript.append_message("")
-        self._transcript.append_message(f"  \x1b[1mInfoTest Engine v1.0.2\x1b[0m")
+        self._transcript.append_message(f"  \x1b[1mInfoTest Engine v1.0.3\x1b[0m")
         self._transcript.append_message(f"  \x1b[2m{model} · {os.getcwd()}\x1b[0m")
         self._transcript.append_message("")
         self._transcript.append_message(f"  \x1b[2m输入自然语言描述测试分析需求，自动调用工具查阅知识库。\x1b[0m")

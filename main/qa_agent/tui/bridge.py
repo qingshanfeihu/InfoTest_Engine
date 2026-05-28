@@ -149,7 +149,7 @@ class GraphBridge:
             except asyncio.CancelledError:
                 self._last_final_state = {}
                 # 通过 reducer 切换 status —— UI 端看到 snapshot.status 变 done 后
-                # 触发完成回调（仿 cc-haha：终态切换走单一渠道）
+                # 触发完成回调（终态切换走单一渠道）
                 self._sink.reducer.set_run_status("done")
                 return
             self._last_final_state = final_state if isinstance(final_state, dict) else {}

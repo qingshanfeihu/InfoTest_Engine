@@ -1,6 +1,6 @@
 """ESC Sequence Parser.
 
-Port of cc-haha src/ink/termio/esc.ts.
+Port of Claude Code src/ink/termio/esc.ts.
 """
 
 from __future__ import annotations

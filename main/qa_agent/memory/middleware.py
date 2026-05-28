@@ -1,6 +1,6 @@
 """Memory injection + write middleware（通用三层架构）。
 
-设计原则（cc-haha + deepagents 调研结论）：
+设计原则（Claude Code + deepagents 调研结论）：
 1. 只记结论不记过程
 2. 注入时做选择（按相关性选条目，不全量塞）
 3. 写入分两路（hot path 任务结束后蒸馏 + cold path 定期合并）
@@ -73,7 +73,7 @@ class MemoryInjectionMiddleware(AgentMiddleware):
         store: MemoryStore facade
         query_extractor: 从 messages 提取检索 query 的回调
         key_resolvers: 从 messages 返回 [(namespace, key)] 直接读取路径的回调
-        max_items: 最多注入条目数（cc-haha 原则：≤5）
+        max_items: 最多注入条目数（Claude Code 原则：≤5）
     """
 
     def __init__(

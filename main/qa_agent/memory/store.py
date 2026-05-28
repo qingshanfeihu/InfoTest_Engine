@@ -223,13 +223,13 @@ class MemoryStore:
             logger.warning("sync AGENTS.md to backend 失败: %s", exc)
 
     # ------------------------------------------------------------------
-    # L2 长期记忆（真实磁盘 memory/long_term/，与 cc-haha 对齐）
+    # L2 长期记忆（真实磁盘 memory/long_term/，与 Claude Code 对齐）
     # ------------------------------------------------------------------
     #
     # 设计变更（2026-05-21）：原 plan 把 long-term 路由到 deepagents StoreBackend
     # （路径 /memories/）。实测发现走 backend.glob/read 在非 langgraph 上下文
     # （TUI slash 命令、dream cron）需要显式 store= 注入，且 InMemoryStore 跨进程
-    # 不持久。统一改用真实磁盘 memory/long_term/，方案与 cc-haha 一致：
+    # 不持久。统一改用真实磁盘 memory/long_term/，方案与 Claude Code 一致：
     # - long_term/preferences.md
     # - long_term/feedback/<topic>.md
     # - long_term/review_conclusions/<bug-id>.md
@@ -241,7 +241,7 @@ class MemoryStore:
     def _normalize_to_long_term(rel: str) -> str:
         """把 /memories/foo.md / memories/foo.md 归一化成 long_term/foo.md。
 
-        历史遗留路径（cc-haha 用 /memories/）保留兼容；新代码统一 long_term/。
+        历史遗留路径（Claude Code 用 /memories/）保留兼容；新代码统一 long_term/。
         """
         text = (rel or "").strip()
         if not text:

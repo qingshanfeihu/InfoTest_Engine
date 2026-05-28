@@ -1,7 +1,7 @@
 """ANSI Control Characters and Escape Sequence Introducers.
 
 Based on ECMA-48 / ANSI X3.64 standards.
-Port of cc-haha src/ink/termio/ansi.ts.
+Port of Claude Code src/ink/termio/ansi.ts.
 """
 
 from __future__ import annotations

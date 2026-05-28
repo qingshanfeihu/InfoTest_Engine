@@ -1,6 +1,6 @@
 """OSC (Operating System Command) sequence generation.
 
-Port of cc-haha src/ink/termio/osc.ts. Three-tier clipboard write:
+Port of Claude Code src/ink/termio/osc.ts. Three-tier clipboard write:
 1. fire-and-forget native tool (pbcopy / wl-copy / xclip / xsel / clip)
 2. tmux load-buffer (in tmux only) — sync, returns DCS-passthrough OSC 52
 3. raw OSC 52 emission to stdout — caller writes the returned string
@@ -44,7 +44,7 @@ ClipboardPath = Literal["native", "tmux-buffer", "osc52"]
 
 
 def get_clipboard_path() -> ClipboardPath:
-    """Determine best clipboard write path. cc-haha gates pbcopy on
+    """Determine best clipboard write path. Claude Code gates pbcopy on
     SSH_CONNECTION (not SSH_TTY) — tmux panes inherit SSH_TTY forever
     after local reattach, but SSH_CONNECTION is in tmux's default
     update-environment set and gets cleared on local attach."""
@@ -175,7 +175,7 @@ def set_clipboard(text: str) -> str:
     """Write text to the system clipboard via the best available path
     and return an OSC 52 sequence the caller should also write to stdout.
 
-    Three layers (matches cc-haha setClipboard):
+    Three layers (matches Claude Code setClipboard):
       1. Local native tool (pbcopy/wl-copy/xclip/xsel/clip) —
          fire-and-forget unless we're over SSH (SSH_CONNECTION set), in
          which case OSC 52 is the right path so we skip native.

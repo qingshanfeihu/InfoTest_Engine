@@ -1,6 +1,6 @@
 """Screen Buffer — double-buffered cell grid with diff engine.
 
-Port of cc-haha src/ink/screen.ts.
+Port of Claude Code src/ink/screen.ts.
 Core data structures: CharPool, StylePool, Screen, diff algorithm.
 """
 
@@ -61,7 +61,7 @@ class StylePool:
         self._styles: list[list[str]] = []
         self._transition_cache: dict[int, str] = {}
         self.none: int = self.intern([])
-        # Selection overlay (cc-haha withSelectionBg). Cleared on
+        # Selection overlay (Claude Code withSelectionBg). Cleared on
         # set_selection_bg() so a theme switch invalidates stale entries.
         self._selection_bg_codes: list[str] = ["\x1b[48;5;238m"]
         self._selection_bg_cache: dict[int, int] = {}
@@ -98,7 +98,7 @@ class StylePool:
         return result
 
     # ------------------------------------------------------------------
-    # Selection overlay — cc-haha withSelectionBg port
+    # Selection overlay — Claude Code withSelectionBg port
     # ------------------------------------------------------------------
 
     def set_selection_bg(self, codes: list[str] | None) -> None:
@@ -118,7 +118,7 @@ class StylePool:
         """Return a style id that REPLACES base_id's bg with the selection
         bg while preserving fg / bold / italic / dim / underline / etc.
 
-        Matches cc-haha's withSelectionBg: filter out any existing bg
+        Matches Claude Code's withSelectionBg: filter out any existing bg
         codes (\\x1b[49m reset, \\x1b[48;... explicit bg) and any inverse
         (\\x1b[27m reset, \\x1b[7m set), then append the selection bg.
         Cache by base_id so on drag the only work per cell is a dict
@@ -130,7 +130,7 @@ class StylePool:
         sel_bg = self._selection_bg_codes
         if not sel_bg:
             # No theme bg configured — fall back to inverse so the overlay
-            # still renders (cc-haha withInverse path).
+            # still renders (Claude Code withInverse path).
             kept = [c for c in self.get(base_id) if c != "\x1b[7m" and c != "\x1b[27m"]
             kept.append("\x1b[7m")
             new_id = self.intern(kept)
@@ -238,7 +238,7 @@ class Screen:
         self.no_select: list[list[bool]] = [
             [False] * width for _ in range(height)
         ]
-        # Per-row soft-wrap continuation marker (cc-haha screen.softWrap).
+        # Per-row soft-wrap continuation marker (Claude Code screen.softWrap).
         # softWrap[r] = N > 0 means row r is a wrap continuation of row r-1
         # AND row r-1's written content ends at absolute col N (exclusive).
         # 0 means row r starts a new logical line. Read by selection's
@@ -289,7 +289,7 @@ class Screen:
     def set_soft_wrap_continuation(self, y: int, content_end_col: int) -> None:
         """Mark row y as a soft-wrap continuation; content_end_col is the
         EXCLUSIVE column where the previous row's written content ends
-        (cc-haha softWrap[y] semantics). Pass 0 to clear."""
+        (Claude Code softWrap[y] semantics). Pass 0 to clear."""
         if 0 <= y < self.height:
             self.soft_wrap_starts_at[y] = max(0, content_end_col)
 
@@ -344,7 +344,7 @@ class Screen:
 def set_cell_style_id(screen: Screen, x: int, y: int, style_id: int) -> None:
     """Replace the style_id of cell (x, y) without touching char/hyperlink/width.
 
-    Port of cc-haha setCellStyleId. Used by apply_selection_overlay to swap
+    Port of Claude Code setCellStyleId. Used by apply_selection_overlay to swap
     in the selection-bg style; the diff engine will pick up the change as
     a normal cell update.
     """

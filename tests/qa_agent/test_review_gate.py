@@ -8,7 +8,7 @@
 5. 重试上限（retry > 2）→ failed 写错误 final_answer
 6. 主 agent 用空 brief 走过场（_looks_like_real_brief 校验失败）→ pending
 
-cc-haha 对照：``hookHelpers.ts:70-83`` registerStructuredOutputEnforcement
+参考实现：``hookHelpers.ts:70-83`` registerStructuredOutputEnforcement
 + ``stopHooks.ts:257-267`` blocking error → userMessage 重路由。
 """
 
@@ -161,12 +161,12 @@ def test_gate_failed_when_retry_exceeds_limit():
 def test_gate_passed_with_short_brief_when_verdict_present():
     """主 agent 用短 brief 调 verifier，verifier 仍然给了 VERDICT —— gate 应放行.
 
-    设计修订（实测对齐 cc-haha simplify.ts 风格）：review_gate 不校验 brief
-    长度——cc-haha 同类设计同样不校验，且实测发现校验门槛会误拒 verifier
+    设计修订（实测对齐参考实现 simplify.ts 风格）：review_gate 不校验 brief
+    长度——参考实现同类设计同样不校验，且实测发现校验门槛会误拒 verifier
     实际成功的调用。review_gate 的职责仅是确认 verifier 真给了 verdict。
 
     短 brief 反偷懒靠主 agent system prompt 的 "Writing the prompt for task
-    calls" 段约束（仿 cc-haha tools/AgentTool/prompt.ts），不靠 review_gate。
+    calls" 段约束（参考 tools/AgentTool/prompt.ts），不靠 review_gate。
     """
     empty_brief = "评审 BUG-121100 cookie 用例"  # 极短 brief
     msgs = [

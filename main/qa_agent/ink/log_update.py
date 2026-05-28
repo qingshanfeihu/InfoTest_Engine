@@ -1,6 +1,6 @@
 """Log Update — convert screen diff to ANSI terminal output.
 
-Port of cc-haha src/ink/log-update.ts.
+Port of Claude Code src/ink/log-update.ts.
 Takes DiffOps from screen.diff_screens() and generates the actual
 ANSI escape sequences to write to stdout.
 """

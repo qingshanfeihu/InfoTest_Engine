@@ -3,10 +3,10 @@
 验证：
 1. ``build_review_verification_subagent()`` 返回正确 CompiledSubAgent dict
 2. ``build_main_agent()`` 后 subagents 列表含 ``review-verification``
-3. prompt 包含 cc-haha verificationAgent 关键约束（"try to break it" /
+3. prompt 包含 verificationAgent 关键约束（"try to break it" /
    verification avoidance / "cannot self-assign" / VERDICT 行）
 
-cc-haha 对照（已读 ``verificationAgent.ts:10-129``）：
+参考实现（已读 ``verificationAgent.ts:10-129``）：
 - ``Your job is not to confirm... it's to try to break it``
 - 强制 OUTPUT FORMAT（Verification command + Output observed）
 - 末尾必须 ``VERDICT: PASS|FAIL|PARTIAL``
@@ -50,27 +50,28 @@ def test_build_review_verification_subagent_returns_compiled_dict(monkeypatch):
     assert "cannot self-assign" in desc_lower or "main agent cannot" in desc_lower
 
 
-def test_review_verification_prompt_contains_cc_haha_anti_laziness_phrases():
-    """prompt 必须含 cc-haha verificationAgent 的反偷懒措辞."""
+def test_review_verification_prompt_contains_anti_laziness_phrases():
+    """prompt 必须含 verificationAgent 的反偷懒措辞."""
     from main.qa_agent.agents import semantic_check_agent
 
     prompt = semantic_check_agent._REVIEW_VERIFICATION_PROMPT
 
-    # cc-haha verificationAgent.ts:10 原文
+    # verificationAgent.ts:10 原文
     assert "try to break it" in prompt
 
-    # cc-haha verificationAgent.ts:12 verification avoidance
+    # verificationAgent.ts:12 verification avoidance
     assert "verification avoidance" in prompt.lower()
 
-    # cc-haha 反偷懒：reading is not verification（可能含换行）
+    # 反偷懒：reading is not verification（可能含换行）
     normalized = " ".join(prompt.lower().split())
     assert "reading is not verification" in normalized
 
-    # cc-haha verificationAgent.ts:81 强制输出格式
-    assert "Verification command" in prompt
-    assert "Output observed" in prompt
+    # 用户可见报告：中文发现项，不暴露工具调用语法
+    assert "证据摘录" in prompt
+    assert "禁止" in prompt and "qa_deepagent_grep" in prompt
+    assert "Verification command" not in prompt or "禁止" in prompt
 
-    # cc-haha verificationAgent.ts:117-127 末尾 verdict 行
+    # verificationAgent.ts:117-127 末尾 verdict 行
     assert "VERDICT:" in prompt
     assert "LEVEL:" in prompt   # InfoTest_Engine 适配：评审场景额外加 P0-P7
 

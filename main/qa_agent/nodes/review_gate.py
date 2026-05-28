@@ -75,7 +75,8 @@ def review_gate(state: dict[str, Any]) -> dict[str, Any]:
         f"[review_gate] You MUST spawn task(subagent_type='review-verification') "
         f"and wait for VERDICT + LEVEL lines before producing the final review. "
         f"Without an explicit VERDICT from the verifier, no review report is "
-        f"allowed. Call task now. (重试 {retry}/2)"
+        f"allowed. After task returns, do NOT call any more tools or add findings. "
+        f"Call task now. (重试 {retry}/2)"
     )
     return {
         "gate_retry_count": retry,

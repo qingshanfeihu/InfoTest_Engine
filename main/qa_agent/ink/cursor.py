@@ -1,6 +1,6 @@
 """Declared cursor — component-level cursor positioning for IME.
 
-Port of cc-haha src/ink/use-declared-cursor.ts.
+Port of Claude Code src/ink/use-declared-cursor.ts.
 Components declare where the terminal cursor should be placed.
 The render loop writes a CUP sequence to position the real cursor there.
 """

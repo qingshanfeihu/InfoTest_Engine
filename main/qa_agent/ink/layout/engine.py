@@ -1,6 +1,6 @@
 """Simplified flexbox layout engine.
 
-Port of cc-haha src/ink/layout/yoga.ts (simplified).
+Port of Claude Code src/ink/layout/yoga.ts (simplified).
 Only supports column/row direction + flex-grow/shrink.
 No external Yoga dependency — pure Python implementation.
 """

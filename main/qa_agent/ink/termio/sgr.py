@@ -1,6 +1,6 @@
 """SGR (Select Graphic Rendition) Parser.
 
-Port of cc-haha src/ink/termio/sgr.ts.
+Port of Claude Code src/ink/termio/sgr.ts.
 Parses SGR parameters and applies them to a TextStyle.
 """
 

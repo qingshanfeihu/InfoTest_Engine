@@ -2,8 +2,7 @@
 
 来源：plan Step 1（memory write 端治理）。
 
-cc-haha 对照（已读 ``forkSubagent.ts:54-58`` + grep ``review.*cache`` 无结果）：
-cc-haha 不存评审结论到 memory；InfoTest_Engine 自创治理。
+参考实现不存评审结论到 memory；InfoTest_Engine 自创治理。
 """
 
 from __future__ import annotations
@@ -49,7 +48,7 @@ def test_finalizer_returns_none_for_p4_review_report(memory_adapter_module):
         )),
     ]
     result = memory_adapter_module.review_finalizer(messages, _StubStore())
-    assert result is None, "评审结论必须不被写入 memory（仿 cc-haha 不存评审结论）"
+    assert result is None, "评审结论必须不被写入 memory（不存评审结论）"
 
 
 def test_finalizer_returns_none_for_empty_messages(memory_adapter_module):

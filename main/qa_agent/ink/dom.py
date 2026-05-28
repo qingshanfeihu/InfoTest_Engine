@@ -1,6 +1,6 @@
 """DOM Tree — lightweight node tree for the Python Ink renderer.
 
-Port of cc-haha src/ink/dom.ts (simplified).
+Port of Claude Code src/ink/dom.ts (simplified).
 No React reconciler — uses a declarative Python component model instead.
 """
 

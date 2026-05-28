@@ -1,6 +1,6 @@
 """Geometry utilities for layout.
 
-Port of cc-haha src/ink/layout/geometry.ts.
+Port of Claude Code src/ink/layout/geometry.ts.
 """
 
 from __future__ import annotations

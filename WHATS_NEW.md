@@ -1,5 +1,14 @@
 # What's New
 
+## 2026-05-27（cc-haha Skill 分层）
+
+### 评审 inline/fork 单源与客户友好 TUI
+
+- **Verifier 单源**：`skills/review-verification/SKILL.md` 为完整 prompt 真源；`semantic_check_agent.py` 瘦身为 shim；运行时仅 `load_fork_skills()` 注册
+- **cc-haha 交付契约**：fork 产出含 VERDICT/LEVEL 的完整报告；main fork 返回后静音（仅「评审完成」），禁止再调工具；`finalize` 不再把 main 补刀 prefix 到 verifier 前
+- **test-case-review**：footprint 前移至交叉验证前；Step 8 静音；多 sheet 分支前置；todo 禁内部实现词
+- **客户友好**：`display_labels.py`（交叉验证 / 评审报告）；`PerTurnSkillReminder` 仅 listing `inline` + `user-invocable: true`；TUI 评审报告默认全文展开
+
 ## 2026-05-27
 
 ### Skill 系统对齐业界标准

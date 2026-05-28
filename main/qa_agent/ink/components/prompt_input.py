@@ -13,12 +13,12 @@ from ..cursor import CursorManager
 from ..dom import DOMElement, DOMNode, NodeType, TextNode, create_element, create_text
 
 
-# cc-haha PASTE_THRESHOLD (utils/imagePaste.ts) — paste over 800 chars or
+# Claude Code PASTE_THRESHOLD (utils/imagePaste.ts) — paste over 800 chars or
 # more than 2 newlines is folded into a [Pasted text #N +K lines] placeholder.
 _PASTE_THRESHOLD = 800
 _PASTE_MAX_LINES = 2
 
-# Reference pattern compatible with cc-haha parseReferences. The "+K lines"
+# Reference pattern compatible with Claude Code parseReferences. The "+K lines"
 # tail is optional so [Pasted text #1] (single-line) also matches.
 _PASTE_REF_RE = re.compile(
     r"\[Pasted text #(\d+)(?: \+\d+ lines)?\]"
@@ -26,7 +26,7 @@ _PASTE_REF_RE = re.compile(
 
 
 def _format_pasted_text_ref(paste_id: int, num_lines: int) -> str:
-    """Match cc-haha formatPastedTextRef: [Pasted text #N] for single-line,
+    """Match Claude Code formatPastedTextRef: [Pasted text #N] for single-line,
     [Pasted text #N +K lines] otherwise. K = newline count (not +1)."""
     if num_lines == 0:
         return f"[Pasted text #{paste_id}]"
@@ -34,7 +34,7 @@ def _format_pasted_text_ref(paste_id: int, num_lines: int) -> str:
 
 
 def _count_newlines(text: str) -> int:
-    """cc-haha getPastedTextRefNumLines: count CR/LF/CRLF as 1 break each.
+    """Claude Code getPastedTextRefNumLines: count CR/LF/CRLF as 1 break each.
     Three-line text "a\\nb\\nc" → 2."""
     return len(re.findall(r"\r\n|\r|\n", text))
 
@@ -166,7 +166,7 @@ class PromptInput:
     def handle_paste(self, text: str) -> None:
         """Handle bracketed paste.
 
-        cc-haha rule: if the paste exceeds PASTE_THRESHOLD chars OR more
+        Claude Code rule: if the paste exceeds PASTE_THRESHOLD chars OR more
         than PASTE_MAX_LINES newlines, store the original text under a
         new id and insert a [Pasted text #N +K lines] placeholder. The
         single-line prompt then stays narrow no matter how much was
@@ -205,7 +205,7 @@ class PromptInput:
         """Replace any [Pasted text #N (+K lines)?] placeholders in text
         with their original content. Reverse-iterate by match offset so
         earlier offsets stay valid after later replacements (mirrors
-        cc-haha expandPastedTextRefs)."""
+        Claude Code expandPastedTextRefs)."""
         if not self._pasted_contents:
             return text
         matches = list(_PASTE_REF_RE.finditer(text))

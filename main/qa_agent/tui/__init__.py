@@ -1,14 +1,17 @@
-"""IST-Core Textual TUI package.
+"""IST-Core TUI package.
 
-Architecture mapping (React/Ink -> Python/Textual):
-  React Component        -> Textual Widget
-  React Context          -> Textual reactive
-  React state hook       -> Widget reactive field
-  Ink event dispatcher   -> Textual Message + post_message
-  Ink ModalScreen        -> Textual ModalScreen
-  Ink frame buffer       -> Textual native screen render
+数据模型：``messages[]`` + ``streamingText`` 单源 reducer。
+
+- ``message_model``: ContentBlock / Message / MessageSnapshot 不可变数据类
+- ``reducer``: QaAgentEvent → MessageSnapshot 翻译器（含双源去重根治）
+- ``sink``: 30 行薄适配器，连接 EventBus 与 reducer
+- ``bridge``: 后台线程跑 LangGraph，订阅 reducer 把快照投到 UI
 """
 
-from main.qa_agent.tui.messages import IstMessage  # re-export for callers
+from main.qa_agent.tui.message_model import (
+    ContentBlock,
+    Message,
+    MessageSnapshot,
+)
 
-__all__ = ["IstMessage"]
+__all__ = ["ContentBlock", "Message", "MessageSnapshot"]

@@ -1,6 +1,6 @@
 """CSI (Control Sequence Introducer) sequence generation.
 
-Port of cc-haha src/ink/termio/csi.ts.
+Port of Claude Code src/ink/termio/csi.ts.
 """
 
 from __future__ import annotations

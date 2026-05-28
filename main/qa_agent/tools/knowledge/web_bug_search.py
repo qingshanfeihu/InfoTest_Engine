@@ -26,7 +26,7 @@ backend 自动识别（按 ticket_id 前缀）：
 
 不做的事（与 web_search 哲学一致）：
 - 不做 ``check_status`` 轮询（同步阻塞）
-- 不做 ``fetch_async`` / job_id（cc-haha ``TaskOutput`` 已弃用）
+- 不做 ``fetch_async`` / job_id（``TaskOutput`` 已弃用）
 - 不做 Qdrant 索引（grep 在几百到几千 ticket 量级足够）
 - 不主动开放 ``--refresh-login`` 子命令给用户（cookie 失效已被自动续期；账号密码异常时返回 login_required 让 agent 提示用户检查 environment）
 """

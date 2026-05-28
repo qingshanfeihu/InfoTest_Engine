@@ -1,6 +1,6 @@
 """Terminal IO — raw mode, capability detection, write to stdout.
 
-Port of cc-haha src/ink/terminal.ts.
+Port of Claude Code src/ink/terminal.ts.
 """
 
 from __future__ import annotations

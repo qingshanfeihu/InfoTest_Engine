@@ -128,7 +128,7 @@ def test_dispatch_version_returns_info_result_with_version():
     result = dispatch_slash_command(p, _mock_app())
     assert isinstance(result, InfoResult)
     assert "infotest" in result.text
-    assert "1.0.2" in result.text
+    assert "1.0.3" in result.text
 
 
 def test_dispatch_resume_without_arg_returns_error():

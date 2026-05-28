@@ -108,8 +108,8 @@ class TestWriteFile:
         result = file_tools.qa_deepagent_write_file.invoke(
             {"path": "deep/nested/file.md", "content": "data"}
         )
-        assert "error" in result
-        assert "parent directory" in result
+        assert "wrote" in result
+        assert (tmp_path / "workspace" / "outputs" / "deep" / "nested" / "file.md").exists()
 
 
 # --- edit_file tests ---

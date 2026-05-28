@@ -87,6 +87,10 @@ def _build_chat_model(provider: str, model_name: str, **kwargs: Any):
     kwargs.setdefault("temperature", 0.0)
     kwargs.setdefault("top_p", 0.5)
     kwargs.setdefault("streaming", True)
+    # 显式开启 stream_usage：langchain-openai 默认仅在 OpenAI 官方端点自动启用，
+    # 走 DeepSeek/DashScope 等第三方 base_url 时不开会导致流式响应里没 usage_metadata，
+    # TUI footer 的 token 实时统计就全是 0。
+    kwargs.setdefault("stream_usage", True)
     kwargs["extra_body"] = extra_body
 
     cls = _get_chat_openai_with_reasoning()
@@ -116,6 +120,7 @@ def build_explore_model(**kwargs: Any):
     kwargs.setdefault("temperature", 0.0)
     kwargs.setdefault("top_p", 0.5)
     kwargs.setdefault("streaming", True)
+    kwargs.setdefault("stream_usage", True)
     extra_body = dict(kwargs.pop("extra_body", None) or {})
     extra_body.setdefault("thinking", {"type": "disabled"})
     kwargs["extra_body"] = extra_body

@@ -1,6 +1,6 @@
 """Keyboard event parsing — terminal input to semantic key events.
 
-Port of cc-haha src/ink/parse-keypress.ts (simplified).
+Port of Claude Code src/ink/parse-keypress.ts (simplified).
 Parses raw terminal input (from tokenizer) into KeyPress events.
 """
 

@@ -1,7 +1,7 @@
 """规则抽取（hot path）+ fork agent 输入格式化。
 
 参考实现：
-- cc-haha src/services/extractMemories/ 的两阶段抽取（规则浓缩 + LLM 升级）
+- Claude Code src/services/extractMemories/ 的两阶段抽取（规则浓缩 + LLM 升级）
 - main/qa_agent/graph._MainAgentProgressHandler 已经能识别 thinking/tool_call/text block
 - 本仓库 graph.py:131-155 的 message content block 解析逻辑
 

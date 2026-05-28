@@ -1,6 +1,6 @@
 """Input Tokenizer - Escape sequence boundary detection.
 
-Port of cc-haha src/ink/termio/tokenize.ts.
+Port of Claude Code src/ink/termio/tokenize.ts.
 Splits terminal input into tokens: text chunks and raw escape sequences.
 """
 

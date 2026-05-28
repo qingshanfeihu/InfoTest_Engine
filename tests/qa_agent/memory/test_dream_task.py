@@ -67,6 +67,34 @@ def test_gather_reads_recent_payloads(populated_store):
 # ---- DreamTask.consolidate -----------------------------------------------
 
 
+def test_build_dream_consolidate_llm_uses_deepseek_provider(monkeypatch):
+    """IST_LLM_PROVIDER=deepseek 时应走 DEEPSEEK_API_KEY，而非仅 DASHSCOPE。"""
+    monkeypatch.setenv("IST_LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-deepseek")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("IST_MODEL", "deepseek-v4-pro")
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+
+    with mock.patch("main.function_llm.chat_completion") as mock_cc:
+        mock_cc.return_value = []
+        llm = dream.build_dream_consolidate_llm()
+        assert llm is not None
+        out = llm('{"action":"skip"}')
+        assert out == "[]"
+        mock_cc.assert_called_once()
+        _session, api_key, system, user = mock_cc.call_args[0]
+        assert api_key == "sk-test-deepseek"
+        assert mock_cc.call_args.kwargs["model"] == "deepseek-v4-pro"
+        assert mock_cc.call_args.kwargs["base_url"] == "https://api.deepseek.com"
+
+
+def test_build_dream_consolidate_llm_none_without_key(monkeypatch):
+    monkeypatch.setenv("IST_LLM_PROVIDER", "deepseek")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    assert dream.build_dream_consolidate_llm() is None
+
+
 def test_consolidate_skips_when_no_llm(populated_store):
     backend, store = populated_store
     store.upsert_long_term("/memories/preferences.md", "- p\n")

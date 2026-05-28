@@ -205,7 +205,7 @@ def test_release_auto_copies_when_dragged():
     text = setc.call_args[0][0]
     # cells 1..5 of " hello world " → "hello"
     assert text == "hello"
-    # Highlight kept after auto-copy (cc-haha clears, we don't).
+    # Highlight kept after auto-copy (we preserve selection after copy).
     assert has_selection(app._app.selection)
     # OSC 52 sequence reached the terminal.
     assert any("FAKE" in w for w in app._app.terminal_writes)

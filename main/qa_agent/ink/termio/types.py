@@ -1,6 +1,6 @@
 """ANSI Parser - Semantic Types.
 
-Port of cc-haha src/ink/termio/types.ts.
+Port of Claude Code src/ink/termio/types.ts.
 These types represent the semantic meaning of ANSI escape sequences.
 """
 

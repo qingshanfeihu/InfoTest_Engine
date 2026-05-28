@@ -60,7 +60,7 @@ def run_ripgrep(
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     _single_thread: bool = False,
 ) -> RipgrepResult:
-    """Run ripgrep and return line-split stdout with cc-haha-like error semantics."""
+    """Run ripgrep and return line-split stdout with structured error semantics."""
     rg = shutil.which("rg")
     if not rg:
         return RipgrepResult(lines=[], unavailable=True, returncode=127)

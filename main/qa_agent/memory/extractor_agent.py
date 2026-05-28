@@ -1,4 +1,4 @@
-"""Fork extractor agent：仿 cc-haha src/services/extractMemories/。
+"""Fork extractor agent：仿 Claude Code src/services/extractMemories/。
 
 设计要点：
 - 与主 agent 共享同一个 CompositeBackend（确保读写一致）

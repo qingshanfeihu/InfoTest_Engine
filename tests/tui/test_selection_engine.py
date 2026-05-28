@@ -1,4 +1,4 @@
-"""Unit tests for the cc-haha-ported selection engine.
+"""Unit tests for the selection engine.
 
 Tests target pure logic (no real terminal / Output / Layout). Each test
 constructs a small Screen + StylePool and exercises selection state.

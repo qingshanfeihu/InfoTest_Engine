@@ -156,7 +156,7 @@ def _cmd_exit(args: str, app: "IstApp") -> SlashCommandResult:
 
 
 def _cmd_version(args: str, app: "IstApp") -> SlashCommandResult:
-    return InfoResult(text="infotest 1.0.2 (IST-Core)")
+    return InfoResult(text="infotest 1.0.3 (IST-Core)")
 
 
 def _cmd_threads(args: str, app: "IstApp") -> SlashCommandResult:

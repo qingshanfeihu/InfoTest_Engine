@@ -1,6 +1,6 @@
 """InkApp — main render loop for the Python Ink renderer.
 
-Port of cc-haha src/ink/ink.tsx (core render loop).
+Port of Claude Code src/ink/ink.tsx (core render loop).
 Ties together: DOM tree, layout, render, screen buffer, diff, terminal IO.
 """
 
@@ -94,7 +94,7 @@ class InkApp:
         self._on_mouse: Callable[[MouseEvent], None] | None = None
 
         # Selection state — exposed so UI components can read / mutate it.
-        # cc-haha keeps a single SelectionState on the Ink instance and
+        # Claude Code keeps a single SelectionState on the Ink instance and
         # apply_selection_overlay reads it during the render pass; we
         # mirror that ownership here.
         self.selection: SelectionState = SelectionState()
@@ -134,7 +134,7 @@ class InkApp:
         self._on_mouse = handler
 
     # ------------------------------------------------------------------
-    # Selection listener pub/sub (cc-haha selectionListeners)
+    # Selection listener pub/sub (Claude Code selectionListeners)
     # ------------------------------------------------------------------
 
     def add_selection_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
@@ -166,7 +166,7 @@ class InkApp:
             init_seq += ENTER_ALT_SCREEN
         init_seq += HIDE_CURSOR + EBP + EFE
         if self._mouse:
-            # Full mouse tracking (1000+1002+1003+1006) — same as cc-haha.
+            # Full mouse tracking (1000+1002+1003+1006) — same as Claude Code.
             # Wheel + click + drag + move events all surface so the
             # custom selection engine can render highlight + copy on
             # release without relying on the terminal's native selection.
@@ -202,7 +202,7 @@ class InkApp:
         """Perform a full render cycle: layout → render → diff → output.
 
         Thread-safe and throttled: multiple rapid calls are coalesced into
-        one actual render at ~16ms intervals (like cc-haha's lodash.throttle).
+        one actual render at ~16ms intervals (like Claude Code's lodash.throttle).
         """
         with self._render_lock:
             now = time.time()
@@ -243,7 +243,7 @@ class InkApp:
 
         # Selection overlay — apply BEFORE diff so highlighted cells are
         # picked up as ordinary cell-style changes by the diff engine.
-        # cc-haha does this in its onRender hook (ink.tsx:544).
+        # Claude Code does this in its onRender hook (ink.tsx:544).
         if has_selection(self.selection):
             apply_selection_overlay(self._curr_screen, self.selection, self._style_pool)
 
@@ -288,7 +288,7 @@ class InkApp:
         ``on_input`` — the high-level handler in IstInkApp does its own
         type-based dispatch under a single render lock. ``on_mouse`` is
         a separate optional hook that mirrors mouse events for callers
-        that prefer a typed callback (kept for symmetry with cc-haha's
+        that prefer a typed callback (kept for symmetry with Claude Code's
         Ink instance API).
         """
         fd = self._terminal.input_fd

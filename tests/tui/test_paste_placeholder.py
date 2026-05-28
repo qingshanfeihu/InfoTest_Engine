@@ -1,4 +1,4 @@
-"""Tests for the cc-haha-style [Pasted text #N +K lines] placeholder."""
+"""Tests for the [Pasted text #N +K lines] placeholder."""
 
 from __future__ import annotations
 

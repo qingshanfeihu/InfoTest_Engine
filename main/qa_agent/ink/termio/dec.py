@@ -1,6 +1,6 @@
 """DEC (Digital Equipment Corporation) Private Mode Sequences.
 
-Port of cc-haha src/ink/termio/dec.ts.
+Port of Claude Code src/ink/termio/dec.ts.
 """
 
 from __future__ import annotations

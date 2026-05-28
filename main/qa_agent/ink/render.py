@@ -1,6 +1,6 @@
 """Render — traverse DOM tree and write to Output/Screen.
 
-Port of cc-haha src/ink/render-node-to-output.ts (simplified).
+Port of Claude Code src/ink/render-node-to-output.ts (simplified).
 Walks the DOM tree, applies layout rects, renders text and borders.
 """
 

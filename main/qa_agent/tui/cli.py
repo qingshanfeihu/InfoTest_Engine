@@ -234,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.version:
         from main.qa_agent.tui import __init__ as _init  # noqa: F401
-        print("infotest 1.0.2 (IST-Core)")
+        print("infotest 1.0.3 (IST-Core)")
         return 0
 
     # -server 子命令：Web Terminal 管理

@@ -1,6 +1,6 @@
 """String width calculation for terminal display.
 
-Port of cc-haha src/ink/stringWidth.ts.
+Port of Claude Code src/ink/stringWidth.ts.
 Handles CJK, emoji, and other double-wide characters.
 """
 

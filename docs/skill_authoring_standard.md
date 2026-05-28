@@ -72,7 +72,8 @@ arguments:                                    # 可选，参数列表
 | `description` | YES | 一句话；含触发关键词 |
 | `allowed-tools` | YES | 列表语法；工具名后可加 path 模式限制（如 `qa_deepagent_grep(qa/*)`） |
 | `when_to_use` | YES | 必须含 `Use when ...` + `Trigger phrases: ...` + `SKIP when: ...` |
-| `context` | NO | `inline`（默认，注入主对话）或 `fork`（独立 subagent） |
+| `context` | NO | `inline`（默认，注入主对话）或 `fork`（独立 subagent，仅经 `task` 调用） |
+| `user-invocable` | NO | `true`（默认，进入 `qa_invoke_skill` listing）或 `false`（fork 专用，不进 listing） |
 | `argument-hint` / `arguments` | NO | 仅在 skill 接受用户参数时用 |
 
 `when_to_use` 是 **CRITICAL** 字段——决定 LLM 何时自动触发这个 skill。`SKIP when` 子句尤其重要，否则通用 QA 会误调。
@@ -207,7 +208,7 @@ class QaAgentState(TypedDict, total=False):
 
 ### SKILL.md 文档风格
 
-- **简洁**：cc-haha simplify Phase 3 风格——4-5 句一个 Step，关键约束一行
+- **简洁**：simplify Phase 3 风格——4-5 句一个 Step，关键约束一行
 - **不暴露实现细节**：不引用具体源码文件名 / 行号
 - **不重复主 agent 顶层约束**：通用反偷懒（Reading is Not Verification / Faithful Reporting）已在 system prompt，SKILL.md 写工作流即可
 
@@ -221,13 +222,13 @@ class QaAgentState(TypedDict, total=False):
 
 ### 9.1 评审类 skill（如 test-case-review）
 
-特征：主 agent 收集证据 → spawn verifier subagent → relay verifier 报告。
+特征：主 agent 收集证据（含 footprint 前置）→ `task` 调交叉验证 fork → **静音**（仅「评审完成」）；用户主阅读面 = fork 的 tool_result。
 
 模板：
-- `context: inline`
-- 含 7-8 个 Steps（读证据 + 调 verifier + 输出报告）
-- 配套的 verifier subagent 在 `agents/<x>_check_agent.py`
-- review_gate 节点拦截"未调 verifier 就出报告"
+- inline skill：`context: inline`，`user-invocable: true`（如 `test-case-review`）
+- fork verifier：`context: fork`，`user-invocable: false`（如 `review-verification`），由 `load_fork_skills()` 注册，**不进** `PerTurnSkillReminder` listing
+- 含 7-8 个 Steps（读证据 + 交叉验证 + 静音收尾）
+- `review_gate` 节点拦截未出 VERDICT；`finalize` 单作者兜底（runner 用 verifier 全文）
 
 ### 9.2 检索 / 综述类 skill（暂无实例）
 
@@ -253,7 +254,7 @@ class QaAgentState(TypedDict, total=False):
 
 1. ✅ 在 `main/qa_agent/skills/<skill-name>/` 创建目录
 2. ✅ 写 SKILL.md：frontmatter（含 when_to_use SKIP 条件）+ Steps（每步 Success criteria）
-3. ✅ 如需 subagent：在 `agents/` 加 `build_<x>_subagent()` + `main_agent.py:218` 注册
+3. ✅ 如需 fork subagent：写 `skills/<fork-name>/SKILL.md`（`context: fork`）+ `load_fork_skills()` 自动注册
 4. ✅ 如需 state 字段：在 `state.py` 加 skill 专项字段
 5. ✅ 如需 gate / finalize 工程兜底：在 `nodes/` + `graph.py:finalize` 扩展
 6. ✅ 测试：`tests/qa_agent/skills/test_<skill_name>_*.py`

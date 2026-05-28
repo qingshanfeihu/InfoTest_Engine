@@ -1,6 +1,6 @@
 """Text selection state for fullscreen mode.
 
-Port of cc-haha src/ink/selection.ts. Keep symbol names + semantics in
+Port of Claude Code src/ink/selection.ts. Keep symbol names + semantics in
 sync so cross-referencing the original TypeScript stays straightforward.
 
 Tracks a linear selection in screen-buffer coordinates (0-indexed col/row).
@@ -48,7 +48,7 @@ class AnchorSpan:
 
 @dataclass(slots=True)
 class SelectionState:
-    """See cc-haha SelectionState — every field carries the same meaning."""
+    """See Claude Code SelectionState — every field carries the same meaning."""
 
     anchor: Point | None = None
     """Where the mouse-down occurred. None when no selection."""
@@ -178,7 +178,7 @@ _WORD_CHAR = re.compile(r"[\w\-/.+~\\]", re.UNICODE)
 
 
 def _char_class(c: str) -> int:
-    """Return 0=whitespace, 1=word-char, 2=other (matches cc-haha)."""
+    """Return 0=whitespace, 1=word-char, 2=other (matches Claude Code)."""
     if c == " " or c == "":
         return 0
     if _WORD_CHAR.match(c):

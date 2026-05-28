@@ -2,7 +2,7 @@
 
 参考实现：
 - deepagents 文档 CompositeBackend(default=StateBackend(), routes={"/memories/": StoreBackend(...)})
-- cc-haha 的 memdir/paths.ts 路径解析
+- Claude Code 的 memdir/paths.ts 路径解析
 - 本仓库 main_agent.py:90-98 原 FilesystemBackend 装配
 
 为什么改用 CompositeBackend 替换原 FilesystemBackend：

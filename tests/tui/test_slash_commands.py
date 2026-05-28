@@ -72,7 +72,7 @@ def test_parse_just_a_slash_returns_none():
 def test_registry_has_expected_builtin_commands():
     names = {cmd.name for cmd in BUILTIN_COMMANDS}
     expected = {
-        "help", "clear", "threads", "resume", "continue", "model",
+        "help", "clear", "threads", "resume", "continue", "model", "style",
         "cost", "compact", "plan", "init", "reset", "memory", "remember",
         "footprint", "version", "exit",
     }

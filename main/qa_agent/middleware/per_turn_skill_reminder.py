@@ -190,6 +190,7 @@ class PerTurnSkillReminderMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         new_messages = self._build_messages_with_reminder(request)
+        new_messages = _inject_output_style(new_messages)
         modified = request.override(messages=new_messages)
         return handler(modified)
 
@@ -203,4 +204,24 @@ class PerTurnSkillReminderMiddleware(AgentMiddleware):
         return await handler(modified)
 
 __all__ = ["PerTurnSkillReminderMiddleware"]
+
+
+def _inject_output_style(messages: list) -> list:
+    """注入 Output Style prompt。
+
+    仅当用户通过 /style 切换到非 default 风格时才注入。
+    注入位置：messages 开头（system-reminder 格式）。
+    """
+    try:
+        from main.qa_agent.output_styles import get_active_style_prompt
+        style_prompt = get_active_style_prompt()
+        if not style_prompt:
+            return messages
+        from langchain_core.messages import HumanMessage
+        style_msg = HumanMessage(
+            content=f"<system-reminder>\n{style_prompt}\n</system-reminder>"
+        )
+        return [style_msg] + messages
+    except Exception:  # noqa: BLE001
+        return messages
 

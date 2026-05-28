@@ -50,15 +50,14 @@ def _to_event_payload(lc_event: dict[str, Any]) -> dict[str, Any]:
     if "input" in data:
         payload["input"] = _safe_str(data["input"])[:500]
     if "output" in data:
-        # 注：node_end 的 output 不截断——TUI 需要完整 final_answer 才能渲染 AI 消息
-        # （agent.invoke 同步调用不发 token stream；TUI 靠 node_end output 兜底）
+        # 注：node_end 的 output 不截断——CLI runner / jsonl_sink 需要完整 state
+        # 才能持久化（agent.invoke 同步调用不发 token stream；CLI runner 直读
+        # state["final_answer"] 兜底）。
+        # **不再抽 final_answer 投递给 TUI**：TUI 已切到 messages[] reducer 单源
+        # 模型，``llm_end name=final_thought`` 是 TUI 唯一渲染入口；node_end 的
+        # final_answer 仅用于 CLI 路径，避免双源去重难题（详见
+        # main/qa_agent/tui/reducer.py 的 docstring）。
         payload["output"] = _safe_str(data["output"])
-        # 顺便把 output 解析的 final_answer 单独抽出来，sink 优先用这个
-        out = data["output"]
-        if isinstance(out, dict):
-            ans = out.get("final_answer")
-            if isinstance(ans, str) and ans.strip():
-                payload["final_answer"] = ans
     return payload
 
 
@@ -94,7 +93,20 @@ async def astream_to_bus(
             usage = None
             data = ev.get("data") or {}
             if "output" in data and hasattr(data["output"], "usage_metadata"):
-                usage = getattr(data["output"], "usage_metadata", None)
+                um = getattr(data["output"], "usage_metadata", None)
+                if isinstance(um, dict):
+                    usage = dict(um)
+                # 合并 DeepSeek 平铺的 cache 字段（usage_metadata 不含）
+                rmeta = getattr(data["output"], "response_metadata", None) or {}
+                raw = rmeta.get("token_usage") or rmeta.get("usage") or {}
+                if isinstance(raw, dict):
+                    if usage is None:
+                        usage = {}
+                    for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
+                        if k in raw and k not in usage:
+                            usage[k] = raw[k]
+                if usage == {}:
+                    usage = None
             payload = _to_event_payload(ev)
             if lc_kind == "on_custom_event":
                 custom_payload = data.get("chunk") or data.get("input") or data.get("output") or {}

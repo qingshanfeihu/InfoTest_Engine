@@ -20,7 +20,8 @@ from typing import Any, Callable
 
 from main.qa_agent.events import EventBus
 from main.qa_agent.streaming import astream_to_bus
-from main.qa_agent.tui.sink import IstUiEvent, TuiSink
+from main.qa_agent.tui.message_model import MessageSnapshot
+from main.qa_agent.tui.sink import TuiSink
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class GraphBridge:
         self,
         *,
         graph_factory: Callable[[], Any],
-        post: Callable[[IstUiEvent], None],
+        post: Callable[[MessageSnapshot], None],
         thread_id: str,
         extra_sinks: list[Callable] | None = None,
     ) -> None:
@@ -60,6 +61,9 @@ class GraphBridge:
         self._cancelled = False
         self._pending_resume: Any = None  # 存放 HIL 决策，由 resume_with 写入
         self._graph: Any = None
+        # bridge 维护最近一次 final_state，供 IstApp 在 run_done 时读取做总结。
+        # MessageSnapshot 本身不包含 LangGraph state，所以这里独立存。
+        self._last_final_state: dict[str, Any] = {}
 
     @property
     def thread_id(self) -> str:
@@ -68,6 +72,12 @@ class GraphBridge:
     @property
     def is_running(self) -> bool:
         return self._worker is not None and self._worker.is_alive()
+
+    @property
+    def last_final_state(self) -> dict[str, Any]:
+        """最近一次 run 的 LangGraph final_state；UI 用它取 final_answer 等
+        非渲染信息（如 CLI 模式总结）。"""
+        return self._last_final_state
 
     def _get_shared_loop(self) -> asyncio.AbstractEventLoop:
         """获取或创建共享的 event loop，避免重复创建导致 Lock 绑定问题。"""
@@ -83,6 +93,7 @@ class GraphBridge:
             return
         self._sink.reset()
         self._cancelled = False
+        self._last_final_state = {}
         self._worker = threading.Thread(
             target=self._run_in_thread,
             args=(initial_state, False),
@@ -136,28 +147,27 @@ class GraphBridge:
             try:
                 final_state = loop.run_until_complete(self._task)
             except asyncio.CancelledError:
-                final_state = {}
-                self._post(IstUiEvent(kind="run_done", extra={
-                    "final_state": final_state,
-                    "thread_id": self._thread_id,
-                    "cancelled": True,
-                }))
+                self._last_final_state = {}
+                # 通过 reducer 切换 status —— UI 端看到 snapshot.status 变 done 后
+                # 触发完成回调（仿 cc-haha：终态切换走单一渠道）
+                self._sink.reducer.set_run_status("done")
                 return
-            self._post(IstUiEvent(kind="run_done", extra={
-                "final_state": final_state,
-                "thread_id": self._thread_id,
-            }))
+            self._last_final_state = final_state if isinstance(final_state, dict) else {}
+            self._sink.reducer.set_run_status("done")
         except Exception as exc:  # noqa: BLE001
             if self._cancelled:
                 # 取消触发的级联异常不当作错误
-                self._post(IstUiEvent(kind="run_done", extra={
-                    "final_state": {},
-                    "thread_id": self._thread_id,
-                    "cancelled": True,
-                }))
+                self._last_final_state = {}
+                self._sink.reducer.set_run_status("done")
             else:
                 logger.exception("GraphBridge worker crashed")
-                self._post(IstUiEvent(kind="run_error", extra={"error": str(exc)}))
+                self._sink.reducer.dispatch({
+                    "kind": "run_error",
+                    "run_id": self._thread_id,
+                    "seq": 0,
+                    "ts": "",
+                    "payload": {"error": str(exc)},
+                })
         finally:
             try:
                 # 清理悬挂任务，避免 "Task was destroyed but it is pending"
@@ -184,7 +194,13 @@ class GraphBridge:
         try:
             from langgraph.types import Command  # langgraph>=1.1
         except ImportError:
-            self._post(IstUiEvent(kind="run_error", extra={"error": "langgraph.types.Command not available"}))
+            self._sink.reducer.dispatch({
+                "kind": "run_error",
+                "run_id": self._thread_id,
+                "seq": 0,
+                "ts": "",
+                "payload": {"error": "langgraph.types.Command not available"},
+            })
             return
 
         self._cancelled = False

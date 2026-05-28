@@ -5,7 +5,7 @@ Replaces the Textual-based IstApp. Uses Python Ink renderer for:
 - Full mouse capture (DEC 1000+1002+1003+1006) with a self-implemented
   selection engine (selection.py) — drag-to-select, double-click word,
   triple-click line, release-copy via OSC 52 + pbcopy/xclip, Ctrl+C
-  re-copy when a selection is active. Same UX as cc-haha.
+  re-copy when a selection is active. Same UX as Claude Code.
 - Efficient incremental screen updates
 """
 
@@ -29,6 +29,68 @@ from main.qa_agent.ink.parse_keypress import (
     MouseEvent,
     PasteEvent,
 )
+
+# ---------------------------------------------------------------------------
+# 工具短名 + 工具特定渲染
+# ---------------------------------------------------------------------------
+
+_TOOL_SHORT_NAMES: dict[str, str] = {
+    "qa_deepagent_read_file": "Read",
+    "qa_deepagent_grep": "Grep",
+    "qa_deepagent_glob": "Glob",
+    "qa_deepagent_ls": "Ls",
+    "qa_deepagent_write_file": "Write",
+    "qa_deepagent_edit_file": "Edit",
+    "qa_bash": "Bash",
+    "qa_exec": "Exec",
+    "qa_invoke_skill": "Skill",
+    "qa_footprint_lookup": "Footprint",
+    "web_bug_search": "BugSearch",
+    "write_todos": "TodoWrite",
+    "task": "Agent",
+}
+
+
+def _tool_short_name(raw: str) -> str:
+    return _TOOL_SHORT_NAMES.get(raw, raw)
+
+
+def _tool_display_arg(name: str, args: dict) -> str:
+    """工具特定参数摘要。"""
+    if not args:
+        return ""
+    if name in ("qa_deepagent_read_file", "qa_deepagent_write_file",
+                "qa_deepagent_edit_file"):
+        path = args.get("file_path") or args.get("path") or ""
+        if isinstance(path, str) and path:
+            parts = path.replace("\\", "/").split("/")
+            return "/".join(parts[-2:]) if len(parts) > 2 else path
+    if name == "qa_deepagent_grep":
+        return str(args.get("pattern") or args.get("query") or "")[:60]
+    if name == "qa_deepagent_glob":
+        return str(args.get("pattern") or "")[:60]
+    if name in ("qa_bash", "qa_exec"):
+        cmd = str(args.get("command") or "")
+        return (cmd[:60] + "…") if len(cmd) > 60 else cmd
+    if name == "qa_invoke_skill":
+        return str(args.get("skill") or "")[:40]
+    first_val = next(iter(args.values()), "")
+    if isinstance(first_val, str) and len(first_val) > 60:
+        return first_val[:60] + "…"
+    return str(first_val) if first_val else ""
+
+
+def _tool_result_summary(name: str, output: str) -> list[str] | None:
+    """工具特定结果摘要。返回 None = 通用截断；返回 list = 摘要替代。"""
+    if name == "qa_deepagent_read_file":
+        n = output.count("\n") + (1 if output and not output.endswith("\n") else 0)
+        return [f"Read \x1b[1m{n}\x1b[0m lines"]
+    if name == "qa_deepagent_glob":
+        matches = [l for l in output.split("\n") if l.strip()]
+        if len(matches) <= 6:
+            return matches or ["(no matches)"]
+        return matches[:5] + [f"\x1b[2m… +{len(matches) - 5} matches\x1b[0m"]
+    return None
 
 
 class IstInkApp:
@@ -311,7 +373,7 @@ class IstInkApp:
 
     def _handle_mouse(self, me: "MouseEvent") -> None:
         """Handle mouse events: wheel scrolls transcript; left button does
-        the cc-haha-style selection (single drag = char, double-click =
+        the Claude-Code-style selection (single drag = char, double-click =
         word, triple-click = line, release auto-copies)."""
         # Translate screen y to a transcript-content row by accounting for
         # the transcript widget's vertical position and current scroll.
@@ -358,7 +420,7 @@ class IstInkApp:
             sel = self._app.selection
             was_dragging = sel.is_dragging
             finish_selection(sel)
-            # Auto-copy on release if a real selection exists. cc-haha
+            # Auto-copy on release if a real selection exists. Claude Code
             # clears after copy, but we keep the highlight so a second
             # Ctrl+C can re-copy without re-dragging.
             if was_dragging and has_selection(sel):
@@ -368,7 +430,7 @@ class IstInkApp:
             return
 
     def _handle_left_press(self, col: int, row: int, *, alt: bool) -> None:
-        """Single / double / triple-click dispatch. cc-haha uses a 300 ms
+        """Single / double / triple-click dispatch. Uses a 300 ms
         same-cell window to escalate click count.
         """
         import time as _time
@@ -382,7 +444,7 @@ class IstInkApp:
             and last[2] == row
         ):
             click_count = last[3] + 1
-        # Cap at 3 — further clicks repeat line selection (cc-haha
+        # Cap at 3 — further clicks repeat line selection (same
         # behavior).
         if click_count > 3:
             click_count = 3
@@ -414,7 +476,7 @@ class IstInkApp:
 
     def _mouse_to_screen_coords(self, x: int, y: int) -> tuple[int, int]:
         """SGR mouse coords are already 0-indexed screen cells (see
-        _parse_sgr_mouse). cc-haha's selection state operates in the same
+        _parse_sgr_mouse). The selection state operates in the same
         coordinate space, so we pass the raw values through. Clamp to the
         current screen bounds to avoid out-of-range indexing during
         edge-of-viewport drags."""
@@ -426,7 +488,7 @@ class IstInkApp:
     def _copy_selection(self, *, clear_after: bool) -> None:
         """Copy the current selection to the clipboard.
 
-        clear_after=True drops the highlight after copying (cc-haha
+        clear_after=True drops the highlight after copying (Claude Code
         copySelection); False keeps it visible so subsequent Ctrl+C can
         re-copy the same range.
         """
@@ -625,7 +687,7 @@ class IstInkApp:
         """Run query through GraphBridge in background thread."""
         from langchain_core.messages import HumanMessage
         from main.qa_agent.tui.bridge import GraphBridge
-        from main.qa_agent.tui.sink import IstUiEvent
+        from main.qa_agent.tui.message_model import MessageSnapshot
 
         if self._bridge is None:
             thread_id = self._thread_id or uuid.uuid4().hex[:12]
@@ -634,7 +696,7 @@ class IstInkApp:
             jsonl_sink = JsonlFileSink(log_dir=Path("logs"))
             self._bridge = GraphBridge(
                 graph_factory=self._build_graph,
-                post=self._on_ui_event,
+                post=self._on_snapshot,
                 thread_id=thread_id,
                 extra_sinks=[jsonl_sink],
             )
@@ -658,13 +720,188 @@ class IstInkApp:
         from main.qa_agent.graph import build_qa_agent_graph
         return build_qa_agent_graph(checkpointer=True)
 
-    def _on_ui_event(self, event: Any) -> None:
-        """Handle UI events from TuiSink (called from bridge thread)."""
-        # bridge worker 是后台线程；DOM 修改必须和 ink-input 线程的按键
-        # 处理串行化，否则会和 _handle_input 同时改 children / TextNode，
-        # 导致一行内 AI 输出和工具输出字符穿插。
+    def _on_snapshot(self, snapshot: Any) -> None:
+        """Handle MessageSnapshot from TuiSink (called from bridge thread).
+
+        适配层：把 MessageSnapshot 翻译成旧 _on_ui_event_locked 的渲染调用。
+        bridge worker 是后台线程；DOM 修改必须和 ink-input 线程串行化。
+        """
         with self._app.lock:
-            self._on_ui_event_locked(event)
+            self._on_snapshot_locked(snapshot)
+
+    def _on_snapshot_locked(self, snapshot: Any) -> None:
+        """Diff snapshot against previous state and render changes."""
+        from main.qa_agent.tui.message_model import (
+            BLOCK_TEXT, BLOCK_TOOL_USE, BLOCK_TOOL_RESULT, BLOCK_THINKING,
+            BLOCK_PHASE_MARKER, BLOCK_EVIDENCE, BLOCK_FINDING,
+        )
+        prev = getattr(self, '_prev_snapshot', None)
+        self._prev_snapshot = snapshot
+
+        # --- streaming text update ---
+        if snapshot.streaming_text is not None:
+            self._flush_pending_tools()
+            rendered = self._render_markdown(snapshot.streaming_text)
+            if self._ai_stream_idx < 0:
+                self._ai_stream_idx = self._transcript.message_count()
+                self._transcript.append_message(f" ⏺ {rendered}")
+            else:
+                self._transcript.update_message_at(
+                    self._ai_stream_idx, f" ⏺ {rendered}"
+                )
+            self._app.render()
+            return
+
+        # --- streaming ended (was streaming, now not) ---
+        if prev and prev.streaming_text is not None and snapshot.streaming_text is None:
+            self._ai_stream_idx = -1
+
+        # --- new messages ---
+        prev_count = len(prev.messages) if prev else 0
+        new_msgs = snapshot.messages[prev_count:]
+        for msg in new_msgs:
+            for block in msg.content:
+                self._render_content_block(block, msg)
+
+        # --- usage update ---
+        if snapshot.usage:
+            input_t = snapshot.usage.get("input_tokens", 0) or 0
+            output_t = snapshot.usage.get("output_tokens", 0) or 0
+            total = snapshot.usage.get("total_tokens", 0) or (input_t + output_t)
+            if total and total != self._tokens_used:
+                self._tokens_used = total
+                self._footer.update(
+                    tokens_used=total,
+                    input_tokens=input_t,
+                    output_tokens=output_t,
+                )
+
+        # --- status change ---
+        if snapshot.status == "done" and (not prev or prev.status != "done"):
+            self._flush_pending_tools()
+            self._is_loading = False
+            self._ai_stream_idx = -1
+            self._footer.update(status="ready")
+
+        elif snapshot.status == "error" and (not prev or prev.status != "error"):
+            self._flush_pending_tools()
+            self._is_loading = False
+            self._ai_stream_idx = -1
+            # 从最后一条 message 找 error 信息
+            if snapshot.messages:
+                last = snapshot.messages[-1]
+                for b in last.content:
+                    if b.type == BLOCK_TEXT and b.text:
+                        self._transcript.append_message(
+                            f" \x1b[31m[error]\x1b[0m {b.text}"
+                        )
+                        break
+            self._footer.update(status="error")
+
+        self._app.render()
+
+    def _render_content_block(self, block: Any, msg: Any) -> None:
+        """Render a single ContentBlock to the transcript."""
+        from main.qa_agent.tui.message_model import (
+            BLOCK_TEXT, BLOCK_TOOL_USE, BLOCK_TOOL_RESULT, BLOCK_THINKING,
+            BLOCK_PHASE_MARKER, BLOCK_EVIDENCE, BLOCK_FINDING,
+        )
+        B = self._BOLD
+        C = self._CYAN
+        D = self._DIM
+        X = self._RESET
+
+        if block.type == BLOCK_TEXT and block.text:
+            self._flush_pending_tools()
+            rendered = self._render_markdown(block.text, final=True)
+            self._ai_stream_idx = -1
+            self._transcript.append_message(f" ⏺ {rendered}")
+
+        elif block.type == BLOCK_THINKING and block.thinking:
+            self._ai_stream_idx = -1
+            if getattr(self, '_tool_outputs_expanded', False):
+                self._transcript.append_message(
+                    f" {D}\x1b[3m∴ {block.thinking.strip()}{X}"
+                )
+            else:
+                self._transcript.append_message(
+                    f" {D}\x1b[3m∴ Thinking{X} {D}(ctrl+o to expand){X}"
+                )
+
+        elif block.type == BLOCK_TOOL_USE:
+            self._ai_stream_idx = -1
+            raw_name = block.name or "tool"
+            args = dict(block.input) if block.input else {}
+            display_name = _tool_short_name(raw_name)
+            first_val = _tool_display_arg(raw_name, args)
+            arg_str = f"({C}{first_val}{X})" if first_val else ""
+            idx = self._transcript.message_count()
+            if block.status == "done":
+                self._transcript.append_message(
+                    f" \x1b[32m⏺\x1b[0m {B}{display_name}{X}{arg_str}"
+                )
+            elif block.status == "error":
+                self._transcript.append_message(
+                    f" \x1b[31m⏺\x1b[0m {B}{display_name}{X}{arg_str}"
+                )
+            else:
+                self._transcript.append_message(
+                    f" \x1b[5;33m⏺\x1b[0m {B}{display_name}{X}{arg_str}"
+                )
+                if not hasattr(self, '_tool_start_stack'):
+                    self._tool_start_stack = []
+                self._tool_start_stack.append((idx, display_name))
+
+        elif block.type == BLOCK_TOOL_RESULT:
+            self._ai_stream_idx = -1
+            if block.output:
+                raw_name = block.name or ""
+                full_lines = block.output.split("\n")
+                start_idx = self._transcript.message_count()
+                expanded = getattr(self, '_tool_outputs_expanded', False)
+                # 工具特定摘要
+                summary = _tool_result_summary(raw_name, block.output)
+                if summary is not None and not expanded:
+                    for line in summary:
+                        self._transcript.append_message(f"   {D}⎿{X} {line}")
+                    display_count = len(summary)
+                elif expanded or len(full_lines) <= 3:
+                    for line in full_lines:
+                        self._transcript.append_message(f"   {D}⎿{X} {line[:100]}")
+                    display_count = len(full_lines)
+                else:
+                    for line in full_lines[:3]:
+                        self._transcript.append_message(f"   {D}⎿{X} {line[:100]}")
+                    self._transcript.append_message(
+                        f"   {D}… +{len(full_lines) - 3} lines (ctrl+o to expand){X}"
+                    )
+                    display_count = 4
+                if not hasattr(self, '_tool_output_blocks'):
+                    self._tool_output_blocks = []
+                self._tool_output_blocks.append({
+                    "start_idx": start_idx,
+                    "full_lines": full_lines,
+                    "display_count": display_count,
+                    "tool_name": raw_name,
+                })
+
+        elif block.type == BLOCK_PHASE_MARKER:
+            phase = block.payload.get("phase", "") if block.payload else ""
+            self._transcript.append_message(f" {B}[{phase}]{X}")
+
+        elif block.type == BLOCK_EVIDENCE:
+            text = block.payload.get("text", "") if block.payload else ""
+            self._transcript.append_message(f"   {D}· evidence: {text[:120]}{X}")
+
+        elif block.type == BLOCK_FINDING:
+            text = block.payload.get("text", "") if block.payload else ""
+            self._transcript.append_message(f"   {B}⚡ finding: {text[:120]}{X}")
+
+        elif block.type == "todo_list":
+            # Plan panel 更新（对齐旧 TodoListMessage 处理）
+            todos = block.payload.get("todos") if block.payload else None
+            if todos and hasattr(self, '_plan_panel'):
+                self._plan_panel.update(todos)
 
     def _on_ui_event_locked(self, event: Any) -> None:
         kind = event.kind
@@ -1064,19 +1301,26 @@ class IstInkApp:
     def _toggle_expand(self) -> None:
         """Toggle expand/collapse all tool output blocks (Ctrl+O)."""
         self._tool_outputs_expanded = not self._tool_outputs_expanded
+        # 持久化 verbose 状态
+        self._persist_verbose()
         if not self._tool_output_blocks:
             return
-        # Process blocks in order; after each replacement, adjust subsequent block indices
         for i, block in enumerate(self._tool_output_blocks):
             start_idx = block["start_idx"]
             full_lines = block["full_lines"]
             old_count = block["display_count"]
+            tool_name = block.get("tool_name", "")
             if self._tool_outputs_expanded:
-                new_lines = [f"   \x1b[2m⎿\x1b[0m {l[:75]}" for l in full_lines]
+                new_lines = [f"   \x1b[2m⎿\x1b[0m {l[:100]}" for l in full_lines]
             else:
-                new_lines = [f"   \x1b[2m⎿\x1b[0m {l[:75]}" for l in full_lines[:5]]
-                if len(full_lines) > 5:
-                    new_lines.append(f"   \x1b[2m… +{len(full_lines) - 5} lines (ctrl+o to expand)\x1b[0m")
+                summary = _tool_result_summary(tool_name, "\n".join(full_lines))
+                if summary is not None:
+                    new_lines = [f"   \x1b[2m⎿\x1b[0m {l}" for l in summary]
+                elif len(full_lines) <= 3:
+                    new_lines = [f"   \x1b[2m⎿\x1b[0m {l[:100]}" for l in full_lines]
+                else:
+                    new_lines = [f"   \x1b[2m⎿\x1b[0m {l[:100]}" for l in full_lines[:3]]
+                    new_lines.append(f"   \x1b[2m… +{len(full_lines) - 3} lines (ctrl+o to expand)\x1b[0m")
             self._transcript.replace_range(start_idx, old_count, new_lines)
             new_count = len(new_lines)
             delta = new_count - old_count
@@ -1086,6 +1330,21 @@ class IstInkApp:
                 for j in range(i + 1, len(self._tool_output_blocks)):
                     self._tool_output_blocks[j]["start_idx"] += delta
         self._app.render()
+
+    def _persist_verbose(self) -> None:
+        """保存 verbose 状态到 ~/.ist/tui_config.json。"""
+        try:
+            import json
+            config_dir = Path.home() / ".ist"
+            config_dir.mkdir(exist_ok=True)
+            config_file = config_dir / "tui_config.json"
+            data = {}
+            if config_file.exists():
+                data = json.loads(config_file.read_text())
+            data["verbose"] = self._tool_outputs_expanded
+            config_file.write_text(json.dumps(data))
+        except Exception:  # noqa: BLE001
+            pass
 
     def _history_up(self) -> None:
         result = self._input_history.up(self._prompt.value)

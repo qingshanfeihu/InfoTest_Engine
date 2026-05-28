@@ -285,6 +285,32 @@ def _cmd_plan(args: str, app: "IstApp") -> SlashCommandResult:
     return InterceptResult(mode="plan")
 
 
+def _cmd_style(args: str, app: "IstApp") -> SlashCommandResult:
+    """切换输出风格。"""
+    from main.qa_agent.output_styles import OUTPUT_STYLES, set_active_style, get_active_style
+
+    name = (args or "").strip().lower()
+    current = get_active_style()
+
+    if not name:
+        lines = ["Output styles:", ""]
+        for key, cfg in OUTPUT_STYLES.items():
+            mark = "● " if key == current else "  "
+            label = cfg.name + (" (current)" if key == current else "")
+            lines.append(f"  {mark}{label} — {cfg.description}")
+        lines.append("")
+        lines.append("Usage: /style <name>")
+        return TextResult(text="\n".join(lines))
+
+    if name not in OUTPUT_STYLES:
+        available = ", ".join(OUTPUT_STYLES.keys())
+        return ErrorResult(text=f"unknown style {name!r}. Available: {available}")
+
+    set_active_style(name)
+    style_cfg = OUTPUT_STYLES[name]
+    return InfoResult(text=f"output style → {style_cfg.name}")
+
+
 def _cmd_init(args: str, app: "IstApp") -> SlashCommandResult:
     return InjectResult(prompt=(
         "请帮我做项目初始化分析：\n"
@@ -341,6 +367,7 @@ BUILTIN_COMMANDS: list[SlashCommand] = [
     SlashCommand("resume",   "Resume specific thread (usage: /resume <tid>)", _cmd_resume),
     SlashCommand("continue", "Resume the most recent thread",                _cmd_continue),
     SlashCommand("model",    "Override LLM model for next turn",             _cmd_model),
+    SlashCommand("style",    "Switch output style (explanatory / learning / default)", _cmd_style),
     SlashCommand("cost",     "Show token usage and call counts",             _cmd_cost),
     SlashCommand("compact",  "Reset token counter (clears transcript)",      _cmd_compact),
     SlashCommand("plan",     "Toggle plan-only mode for next query",         _cmd_plan),

@@ -75,9 +75,6 @@ memory/reviews/
 memory/.dream/
 knowledge/
 
-# 可选前端（pyproject 已 exclude；本地 clone 含 node_modules）
-agent-chat-ui/
-
 # Agent workspace（运行时：上传 / 产出 / 缺陷缓存；仅跟踪 .gitkeep 占位）
 workspace/*
 !workspace/*/

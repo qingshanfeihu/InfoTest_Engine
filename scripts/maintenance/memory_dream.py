@@ -22,9 +22,9 @@ from main.langchain_env import langchain_load_dotenv_if_present, langchain_ensur
 langchain_load_dotenv_if_present()
 langchain_ensure_dashscope_api_key_from_aliases()
 
-from main.qa_agent.memory.dream import DreamTask, build_dream_consolidate_llm, should_run_dream
-from main.qa_agent.memory.backend import build_memory_backend, get_default_root
-from main.qa_agent.memory.store import MemoryStore
+from main.ist_core.memory.dream import DreamTask, build_dream_consolidate_llm, should_run_dream
+from main.ist_core.memory.backend import build_memory_backend, get_default_root
+from main.ist_core.memory.store import MemoryStore
 
 
 def main() -> int:
@@ -41,7 +41,7 @@ def main() -> int:
 
     backend = build_memory_backend()
     store = MemoryStore(backend, get_default_root())
-    # 启动时把磁盘 AGENTS.md 同步到 backend，consolidate 阶段才能读到最新
+    
     try:
         store.sync_agents_md_to_backend()
     except Exception as exc:

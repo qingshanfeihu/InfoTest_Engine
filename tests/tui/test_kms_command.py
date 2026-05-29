@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from main.qa_agent.tui.kms_command import (
+from main.ist_core.tui.kms_command import (
     _dispatch_product,
     _flush_log_to_ui,
     _post_kms_status,
@@ -47,10 +47,10 @@ def test_dispatch_product_update_requires_mineru_only():
 
         os.environ.pop("DASHSCOPE_API_KEY", None)
         os.environ.pop("BAILIAN_API_KEY", None)
-        with patch("main.qa_agent.tui.kms_command._orgin_buckets") as mock_bucket:
+        with patch("main.ist_core.tui.kms_command._orgin_buckets") as mock_bucket:
             mock_bucket.return_value = {"product": ["a.pdf"], "test_case_list": [], "test_strategy": [], "unclassified": []}
-            with patch("main.qa_agent.tui.kms_command._kick_product_update") as mock_kick:
-                from main.qa_agent.tui.slash_commands import InfoResult
+            with patch("main.ist_core.tui.kms_command._kick_product_update") as mock_kick:
+                from main.ist_core.tui.slash_commands import InfoResult
 
                 result = _dispatch_product("update", "", app)
                 assert isinstance(result, InfoResult)
@@ -67,7 +67,7 @@ def test_dispatch_product_update_missing_mineru_token():
 
         os.environ.pop("MINERU_TOKEN", None)
         os.environ.pop("MINERU_API_TOKEN", None)
-        from main.qa_agent.tui.slash_commands import ErrorResult
+        from main.ist_core.tui.slash_commands import ErrorResult
 
         result = _dispatch_product("update", "", app)
         assert isinstance(result, ErrorResult)

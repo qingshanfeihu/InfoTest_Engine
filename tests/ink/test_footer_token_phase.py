@@ -7,12 +7,12 @@ ist_app 的 token 阶段切换已经下沉到 ``MessageReducer``——见
 
 from __future__ import annotations
 
-from main.qa_agent.ink.components.footer import FooterPane
+from main.ist_core.ink.components.footer import FooterPane
 
 
-# ---------------------------------------------------------------------------
-# FooterPane: 状态行 (_timer_running=False) 按 phase 切箭头
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_footer_idle_shows_both_arrows_with_totals():
@@ -24,18 +24,17 @@ def test_footer_idle_shows_both_arrows_with_totals():
     assert "qwen-plus" in line
 
 
-def test_footer_input_phase_only_up_arrow():
+def test_footer_input_phase_keeps_session_summary():
+    """阶段切换已下沉到 MessageReducer / thinking 行；status 行恒显 ↑/↓ 会话累计。"""
     f = FooterPane()
     f.update(status="ready", input_tokens=2000, output_tokens=300, llm_phase="input")
     line = f._status_line.value
-    assert "↑ 2,000 tokens" in line
-    # output 箭头不应出现在 input 阶段
-    assert "↓" not in line
+    assert "↑ 2,000" in line
+    assert "↓ 300" in line
 
 
-def test_footer_output_phase_only_down_arrow_with_streaming_count():
+def test_footer_output_phase_keeps_session_summary():
     f = FooterPane()
-    # 模拟流式中：output_token_count 用估算字符数 / 4
     f.update(
         status="ready",
         input_tokens=1000,
@@ -44,9 +43,8 @@ def test_footer_output_phase_only_down_arrow_with_streaming_count():
         output_token_count=42,
     )
     line = f._status_line.value
-    assert "↓ 42 tokens" in line
-    # input 箭头不应出现在 output 阶段
-    assert "↑" not in line
+    assert "↑ 1,000" in line
+    assert "↓ 200" in line
 
 
 def test_footer_phase_clears_after_finalize():

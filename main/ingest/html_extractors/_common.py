@@ -96,7 +96,7 @@ def extract_ticket_id(text: str) -> str:
     if not m:
         return text.strip().split()[0] if text.strip() else ""
     prefix = m.group(1).upper()
-    # 归一：BZ → BUG；ZENTAO → ZT；REQ 保留
+    
     if prefix == "BZ":
         prefix = "BUG"
     if prefix == "ZENTAO":
@@ -154,7 +154,7 @@ def normalize_resolution(raw: str) -> str:
     for keys, label in mapping:
         if any(k in s for k in keys):
             return label
-    return s  # 未知分类原样返回（便于后续数据分析）
+    return s
 
 
 def parse_int(raw: str | int | None, default: int = 0) -> int:

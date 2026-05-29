@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from main.qa_agent.tui.message_model import (
+from main.ist_core.tui.message_model import (
     BLOCK_EVIDENCE,
     BLOCK_HIL_REQUEST,
     BLOCK_PHASE_MARKER,
@@ -23,7 +23,7 @@ from main.qa_agent.tui.message_model import (
     BLOCK_TOOL_RESULT,
     BLOCK_TOOL_USE,
 )
-from main.qa_agent.tui.reducer import MessageReducer
+from main.ist_core.tui.reducer import MessageReducer
 
 
 def _evt(kind: str, seq: int, **kw):
@@ -92,6 +92,25 @@ def test_thought_with_tool_calls_marker_skipped():
     assert len(snap.messages) == 0
 
 
+def test_llm_phase_input_on_start_output_on_token_cleared_on_end():
+    """llm_start→input；llm_token→output+估算 token；llm_end→清空 phase。"""
+    r = MessageReducer()
+    snaps = []
+    r.subscribe(snaps.append)
+
+    r.dispatch(_evt("llm_start", 1))
+    assert snaps[-1].llm_phase == "input"
+    assert snaps[-1].output_token_count == 0
+
+    r.dispatch(_evt("llm_token", 2, payload={"content": "abcd"}))
+    assert snaps[-1].llm_phase == "output"
+    assert snaps[-1].output_token_count == 1
+
+    r.dispatch(_evt("llm_end", 3, payload={"name": "final_thought", "content": "done"}))
+    assert snaps[-1].llm_phase == ""
+    assert snaps[-1].output_token_count == 0
+
+
 def test_usage_only_accumulates_to_snapshot_usage():
     r = MessageReducer()
     snaps = []
@@ -104,7 +123,7 @@ def test_usage_only_accumulates_to_snapshot_usage():
         "input_tokens": 30, "output_tokens": 10, "total_tokens": 40,
     }))
     assert dict(snaps[-1].usage) == {"input_tokens": 130, "output_tokens": 60, "total_tokens": 190}
-    # usage_only 不入 messages
+    
     assert len(snaps[-1].messages) == 0
 
 
@@ -120,16 +139,16 @@ def test_tool_call_then_tool_result_pairs_by_tool_use_id():
 
     snap = snaps[-1]
     assert len(snap.messages) == 2
-    # 第一条：assistant + tool_use
+    
     assert snap.messages[0].role == "assistant"
     use_block = snap.messages[0].content[0]
     assert use_block.type == BLOCK_TOOL_USE
     assert use_block.name == "qa_grep"
     assert use_block.tool_use_id == "r1:1"
-    # 关键：tool_result 到达后，原 tool_use block 状态切到 done
+    
     assert use_block.status == "done"
 
-    # 第二条：user + tool_result（tool_use_id 配对）
+    
     assert snap.messages[1].role == "user"
     res_block = snap.messages[1].content[0]
     assert res_block.type == BLOCK_TOOL_RESULT
@@ -144,16 +163,16 @@ def test_subagent_inner_event_attaches_parent_tool_use_id():
     snaps = []
     r.subscribe(snaps.append)
 
-    # 主 agent 调 task tool
+    
     r.dispatch(_evt("tool_call", 10, tags={"name": "task"},
                     payload={"name": "task", "input": {"subagent_type": "verifier"}}))
-    # subagent 内部 emit final_thought
+    
     r.dispatch(_evt("llm_end", 11,
                     tags={"parent_subagent": "verifier"},
                     payload={"name": "final_thought", "content": "verifier report"}))
 
     snap = snaps[-1]
-    # 找 verifier 内部那条 message
+    
     verifier_msg = next(m for m in snap.messages if m.subagent_type == "verifier")
     assert verifier_msg.parent_tool_use_id == "r1:10"
     assert verifier_msg.content[0].text == "verifier report"
@@ -240,9 +259,112 @@ def test_messages_tuple_immutable_across_dispatches():
     r.dispatch(_evt("llm_end", 1, payload={"name": "final_thought", "content": "a"}))
     r.dispatch(_evt("llm_end", 2, payload={"name": "final_thought", "content": "b"}))
 
-    # 第一次和第二次的 messages tuple 是不同对象
+    
     assert captured[0] is not captured[1]
     assert len(captured[0]) == 1
     assert len(captured[1]) == 2
-    # tuple 本身不可变，订阅者不能改
+    
     assert isinstance(captured[0], tuple)
+
+
+def _find(snap, seq):
+    """按 uuid 后缀 seq 找 message。"""
+    return next(m for m in snap.messages if m.uuid.endswith(f":{seq}"))
+
+
+def test_nested_fork_pops_stack_via_run_id(monkeypatch):
+    """Plan B 核心：嵌套 fork 下用 lc_tool_run_id 精确配对，fork 结束后栈弹空，
+    fork 之后的 main agent 报告 parent 为空（顶层显示，不被折叠）。
+
+    复现真实日志 run-91b831a3d39a：seq143 QIS 调 fork，内部工具乱序 result 把
+    FIFO 错位，旧逻辑栈永不弹出 → 主报告被错打 parent 折叠隐藏。
+    """
+    import main.ist_core.tui.reducer as reducer
+    monkeypatch.setattr(reducer, "_FORK_SKILLS_CACHE", {"review-verification"})
+
+    r = MessageReducer()
+    snaps = []
+    r.subscribe(snaps.append)
+
+    
+    r.dispatch(_evt("tool_call", 1, tags={"name": "qa_invoke_skill", "lc_tool_run_id": "RID_QIS"},
+                    payload={"name": "qa_invoke_skill",
+                             "input": {"skill": "review-verification", "brief": "x"}}))
+    
+    r.dispatch(_evt("tool_call", 2, tags={"name": "qa_grep", "lc_tool_run_id": "RID_GREP"},
+                    payload={"name": "qa_grep", "input": {"pattern": "foo"}}))
+    r.dispatch(_evt("tool_result", 3, tags={"name": "qa_grep", "lc_tool_run_id": "RID_GREP"},
+                    payload={"name": "qa_grep", "output": "hit"}))
+    
+    r.dispatch(_evt("llm_end", 4, payload={"name": "final_thought", "content": "VERIFIER REPORT"}))
+    
+    r.dispatch(_evt("tool_result", 5, tags={"name": "qa_invoke_skill", "lc_tool_run_id": "RID_QIS"},
+                    payload={"name": "qa_invoke_skill", "output": "VERDICT: PARTIAL\nLEVEL: P3"}))
+    
+    r.dispatch(_evt("llm_end", 6, payload={"name": "final_thought", "content": "MAIN REPORT"}))
+
+    snap = snaps[-1]
+    
+    assert _find(snap, 4).parent_tool_use_id == "r1:1"
+    
+    assert r._subagent_parent_stack == []
+    
+    assert _find(snap, 6).parent_tool_use_id == ""
+
+
+def test_fork_pairing_falls_back_to_fifo_without_run_id(monkeypatch):
+    """向后兼容：事件不带 lc_tool_run_id（CLI / server / 旧日志）→ 回退 FIFO。
+    单层 fork 下 FIFO 仍能正确弹栈（无嵌套错位时 top==pop(0)）。"""
+    import main.ist_core.tui.reducer as reducer
+    monkeypatch.setattr(reducer, "_FORK_SKILLS_CACHE", {"review-verification"})
+
+    r = MessageReducer()
+    snaps = []
+    r.subscribe(snaps.append)
+
+    r.dispatch(_evt("tool_call", 1, tags={"name": "qa_invoke_skill"},
+                    payload={"name": "qa_invoke_skill",
+                             "input": {"skill": "review-verification", "brief": "x"}}))
+    r.dispatch(_evt("tool_result", 2, tags={"name": "qa_invoke_skill"},
+                    payload={"name": "qa_invoke_skill", "output": "VERDICT: PARTIAL\nLEVEL: P3"}))
+    r.dispatch(_evt("llm_end", 3, payload={"name": "final_thought", "content": "MAIN REPORT"}))
+
+    
+    assert r._subagent_parent_stack == []
+    assert _find(snaps[-1], 3).parent_tool_use_id == ""
+
+
+def test_serial_multi_sheet_forks_each_pop_correctly(monkeypatch):
+    """多 sheet：fork 同步阻塞执行（loader.invoke），forks 串行——A 完整结束
+    （tool_result 弹栈）后 B 才开始。验证每个 fork 各自精确弹栈，其间和其后的
+    main agent 报告 parent 正确（fork 内挂 parent、fork 间/后为空）。"""
+    import main.ist_core.tui.reducer as reducer
+    monkeypatch.setattr(reducer, "_FORK_SKILLS_CACHE", {"review-verification"})
+
+    r = MessageReducer()
+    snaps = []
+    r.subscribe(snaps.append)
+
+    def fork(call_seq, res_seq, rid, body_seq):
+        r.dispatch(_evt("tool_call", call_seq,
+                        tags={"name": "qa_invoke_skill", "lc_tool_run_id": rid},
+                        payload={"name": "qa_invoke_skill",
+                                 "input": {"skill": "review-verification", "brief": "x"}}))
+        
+        r.dispatch(_evt("llm_end", body_seq,
+                        payload={"name": "final_thought", "content": "INNER"}))
+        
+        r.dispatch(_evt("tool_result", res_seq,
+                        tags={"name": "qa_invoke_skill", "lc_tool_run_id": rid},
+                        payload={"name": "qa_invoke_skill", "output": "VERDICT: PASS\nLEVEL: P4"}))
+
+    fork(1, 3, "RID_A", 2)
+    
+    assert r._subagent_parent_stack == []
+    fork(4, 6, "RID_B", 5)
+    assert r._subagent_parent_stack == []
+
+    snap = snaps[-1]
+    
+    assert _find(snap, 2).parent_tool_use_id == "r1:1"
+    assert _find(snap, 5).parent_tool_use_id == "r1:4"

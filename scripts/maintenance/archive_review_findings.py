@@ -1,7 +1,7 @@
 """一次性脚本：把历史评审 findings.md archive 到子目录。
 
 背景：
-- ``main/qa_agent/skills/test-case-review/memory_adapter.py:review_finalizer``
+- ``main/ist_core/skills/test-case-review/memory_adapter.py:review_finalizer``
   历史版本会把评审结论（P 级别 + finding 列表）写到
   ``memory/reviews/cases/<case>/findings.md`` +
   ``memory/reviews/tickets/<id>/findings.md``
@@ -34,10 +34,10 @@ from datetime import datetime
 from pathlib import Path
 
 def _project_root() -> Path:
-    """回退查找：脚本所在 → parents 直到含 ``main/qa_agent/`` 目录."""
+    """回退查找：脚本所在 → parents 直到含 ``main/ist_core/`` 目录."""
     p = Path(__file__).resolve()
     for parent in p.parents:
-        if (parent / "main" / "qa_agent").is_dir():
+        if (parent / "main" / "ist_core").is_dir():
             return parent
     return Path.cwd()
 

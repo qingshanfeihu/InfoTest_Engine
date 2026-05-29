@@ -1,5 +1,9 @@
 # What's New
 
+## 2026-05-27（清理）
+
+- **移除 `agent-chat-ui`**：LangChain Next.js 可选前端已从仓库删除；交互统一为 `infotest`（Textual）与 `infotest --server`（Web Terminal :8080）。`ARCHITECTURE.md` §12 标为历史；`CLAUDE.md` 启动说明已更新。
+
 ## 2026-05-27（cc-haha Skill 分层）
 
 ### 评审 inline/fork 单源与客户友好 TUI

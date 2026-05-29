@@ -40,7 +40,7 @@ BASE = "https://mineru.net"
 FILE_URLS_BATCH = f"{BASE}/api/v4/file-urls/batch"
 EXTRACT_RESULTS_BATCH = f"{BASE}/api/v4/extract-results/batch"
 
-# 精准解析支持的扩展名（小写，不含点）
+
 def _load_dotenv_if_present() -> None:
     """加载项目根目录 ``environment``（dotenv 兼容语法；不覆盖已存在的环境变量）。
 
@@ -154,7 +154,7 @@ def _list_input_files(input_dir: Path) -> list[Path]:
     return files
 
 
-# MinerU 单 PDF 上限 200 页；超出则自动切分成 parts 后并入批次
+
 MINERU_PDF_PAGE_LIMIT = 200
 
 
@@ -240,7 +240,7 @@ def _post_batch(
     }
 
     r = session.post(FILE_URLS_BATCH, headers=_headers(token), json=body, timeout=120)
-    # 429 限流重试
+    
     if r.status_code == 429:
         for wait in (10, 20, 40):
             print(f"  ⏳ 429 限流，等待 {wait}s 后重试…", flush=True)
@@ -266,7 +266,7 @@ def _upload_files(
 ) -> None:
     for p, url in zip(file_paths, upload_urls, strict=True):
         data = p.read_bytes()
-        # 文档：上传时不要设置 Content-Type；requests 默认可能带 octet-stream，需去掉以匹配预签名
+        
         req = requests.Request("PUT", url, data=data)
         prep = session.prepare_request(req)
         prep.headers.pop("Content-Type", None)
@@ -643,7 +643,7 @@ def main() -> None:
     used_stems: set[str] = set()
     all_outcomes: list[FileOutcome] = []
 
-    # 缓存跳过：{stem}.mineru.zip 已存在则不调 MinerU API，仅从 zip 解 full.md
+    
     md_dir = _resolve_markdown_dir()
     cached_paths: list[Path] = []
     fresh_paths: list[Path] = []
@@ -690,11 +690,11 @@ def main() -> None:
             print(f"{len(cached_paths)} 个命中缓存，{len(fresh_paths)} 个需调 MinerU API。", flush=True)
         file_paths = fresh_paths
 
-    # MinerU 单 PDF 200 页上限：自动切分 → __part1_p1-200.pdf / __part2_p201-400.pdf ...
+    
     pdf_split_dir = input_dir / "_pdf_splits"
     file_paths = _expand_input_with_pdf_split(file_paths, pdf_split_dir)
 
-    # 若混用 html 与非 html，需分批（少见）
+    
     def split_by_model_version(paths: list[Path]) -> list[list[Path]]:
         buckets: dict[str, list[Path]] = {}
         for p in paths:
@@ -708,13 +708,13 @@ def main() -> None:
 
     for group in batches:
         mv_arg = args.model_version
-        # 对该组使用统一 model_version
+        
         effective_mv = _model_version_for_path(group[0], mv_arg if mv_arg != "auto" else None)
         chunks = _chunk_paths(group, batch_size)
         n_chunks = len(chunks)
 
         for chunk_idx, chunk in enumerate(chunks, start=1):
-            # batch 间延迟，避免 429 限流
+            
             if chunk_idx > 1:
                 time.sleep(5)
             print(
@@ -737,7 +737,7 @@ def main() -> None:
             _upload_files(session, chunk, upload_urls)
             print("上传完成，轮询解析结果…", flush=True)
 
-            # 并发下载 + 解压 + 写盘：同一文件一变 terminal 就立刻 submit。
+            
             by_source_name = {p.name: p for p in chunk}
             download_workers = max(
                 1, int(os.environ.get("MINERU_DOWNLOAD_WORKERS", "4"))

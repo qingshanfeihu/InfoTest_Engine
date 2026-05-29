@@ -34,8 +34,8 @@ OrginCategory = Literal["product", "test_case_list", "test_strategy", "unclassif
 
 class ClassifierResult(TypedDict):
     category: OrginCategory
-    confidence: float          # 0.0-1.0；用户 override 视为 1.0；LLM 失败 0.0
-    reason: str                # 单行人类可读理由
+    confidence: float
+    reason: str
     source: Literal["llm", "cache", "override", "fallback"]
 
 
@@ -65,9 +65,9 @@ _SYSTEM_PROMPT = """\
 """
 
 
-# ---------------------------------------------------------------------------
-# cache + overrides
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def _cache_path() -> Path:
@@ -101,9 +101,9 @@ def _file_signature(file_path: Path) -> tuple[float, int]:
     return (round(st.st_mtime, 3), st.st_size)
 
 
-# ---------------------------------------------------------------------------
-# xlsx hint extractor
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def _extract_xlsx_hints(file_path: Path) -> str:
@@ -140,9 +140,9 @@ def _extract_xlsx_hints(file_path: Path) -> str:
     return "\n".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# LLM call
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def _call_llm(filename: str, hints: str) -> ClassifierResult:
@@ -216,9 +216,9 @@ def _call_llm(filename: str, hints: str) -> ClassifierResult:
     }
 
 
-# ---------------------------------------------------------------------------
-# public API
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def classify_file(file_path: Path | str) -> ClassifierResult:

@@ -10,10 +10,10 @@
 
 from __future__ import annotations
 
-from main.qa_agent.ink.components.prompt_input import PromptInput
-from main.qa_agent.ink.components.transcript import Transcript
-from main.qa_agent.ink.cursor import CursorManager
-from main.qa_agent.ink.parse_keypress import (
+from main.ist_core.ink.components.prompt_input import PromptInput
+from main.ist_core.ink.components.transcript import Transcript
+from main.ist_core.ink.cursor import CursorManager
+from main.ist_core.ink.parse_keypress import (
     InputParser,
     KeyPress,
     MouseEvent,
@@ -24,7 +24,7 @@ def _feed(parser: InputParser, data: str):
     return parser.feed(data)
 
 
-# -- shift+enter 解析 --------------------------------------------------------
+
 
 
 def test_shift_enter_parsed_from_alt_enter_sequence():
@@ -54,13 +54,13 @@ def test_pageup_pagedown_still_parsed():
     assert "pagedown" in keys
 
 
-# -- Paste coalescing without bracketed-paste markers ----------------------
+
 
 
 def test_unbracketed_multi_line_paste_synthesizes_paste_event():
     """Some terminals/multiplexers/SSH paths strip ESC[200~ markers.
     A run of printable + LF should still be coalesced into a PasteEvent."""
-    from main.qa_agent.ink.parse_keypress import PasteEvent
+    from main.ist_core.ink.parse_keypress import PasteEvent
     p = InputParser()
     text = "line1\nline2\nline3\nline4"
     events = _feed(p, text)
@@ -70,7 +70,7 @@ def test_unbracketed_multi_line_paste_synthesizes_paste_event():
 
 
 def test_short_text_run_without_newlines_stays_keypresses():
-    from main.qa_agent.ink.parse_keypress import PasteEvent
+    from main.ist_core.ink.parse_keypress import PasteEvent
     p = InputParser()
     events = _feed(p, "hi")
     assert all(isinstance(e, KeyPress) for e in events)
@@ -78,9 +78,9 @@ def test_short_text_run_without_newlines_stays_keypresses():
 
 
 def test_long_text_run_without_newlines_synthesizes_paste_event():
-    from main.qa_agent.ink.parse_keypress import PasteEvent
+    from main.ist_core.ink.parse_keypress import PasteEvent
     p = InputParser()
-    text = "x" * 100  # >= 64 char threshold
+    text = "x" * 100
     events = _feed(p, text)
     pastes = [e for e in events if isinstance(e, PasteEvent)]
     assert len(pastes) == 1
@@ -99,13 +99,13 @@ def test_single_ctrl_j_stays_keypress_for_shift_enter_in_input():
 
 def test_sgr_wheel_up_parsed_as_mouse_event():
     p = InputParser()
-    # SGR mouse: ESC [ < 64;10;5 M  -> wheel up at col=10 row=5
+    
     events = _feed(p, "\x1b[<64;10;5M")
     mouse = [e for e in events if isinstance(e, MouseEvent)]
     assert len(mouse) == 1
     me = mouse[0]
     assert me.type == "wheel"
-    assert me.button == 0  # 0=up
+    assert me.button == 0
 
 
 def test_sgr_wheel_down_parsed_as_mouse_event():
@@ -114,10 +114,10 @@ def test_sgr_wheel_down_parsed_as_mouse_event():
     mouse = [e for e in events if isinstance(e, MouseEvent)]
     assert len(mouse) == 1
     assert mouse[0].type == "wheel"
-    assert mouse[0].button == 1  # 1=down
+    assert mouse[0].button == 1
 
 
-# -- PromptInput shift+enter ------------------------------------------------
+
 
 
 def test_prompt_input_shift_enter_inserts_newline_marker():
@@ -130,15 +130,15 @@ def test_prompt_input_shift_enter_inserts_newline_marker():
     consumed = pi.handle_key("shift+enter")
     assert consumed is True
     assert pi.value == "hello↵"
-    assert captured == []  # not submitted
+    assert captured == []
 
 
-# -- Transcript scroll + sticky --------------------------------------------
+
 
 
 def test_transcript_scroll_by_disables_sticky_when_user_scrolls_up():
     t = Transcript()
-    # Simulate a layout with a 10-row viewport
+    
     t.node.rect.height = 10
     t.node.rect.width = 80
     for i in range(50):
@@ -147,7 +147,7 @@ def test_transcript_scroll_by_disables_sticky_when_user_scrolls_up():
 
     t.scroll_by(-5)
     assert t.node.sticky_scroll is False
-    assert t.node.scroll_top < 50  # moved up
+    assert t.node.scroll_top < 50
 
 
 def test_transcript_scroll_back_to_bottom_restores_sticky():
@@ -159,7 +159,7 @@ def test_transcript_scroll_back_to_bottom_restores_sticky():
     t.scroll_by(-5)
     assert t.node.sticky_scroll is False
 
-    # Scroll back down a lot — should clamp to bottom and re-enable sticky
+    
     t.scroll_by(1000)
     assert t.node.sticky_scroll is True
 

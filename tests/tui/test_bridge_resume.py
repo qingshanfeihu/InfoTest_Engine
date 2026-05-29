@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 import pytest
 
-from main.qa_agent.tui.bridge import GraphBridge
-from main.qa_agent.tui.message_model import MessageSnapshot
+from main.ist_core.tui.bridge import GraphBridge
+from main.ist_core.tui.message_model import MessageSnapshot
 
 
 def _capture_post(captured: list[MessageSnapshot]):
@@ -52,7 +52,7 @@ def test_bridge_resume_with_uses_langgraph_command_class():
 
     decision = {"approved": True}
 
-    with patch("main.qa_agent.tui.bridge.astream_to_bus", side_effect=fake_astream_to_bus):
+    with patch("main.ist_core.tui.bridge.astream_to_bus", side_effect=fake_astream_to_bus):
         bridge.resume_with(decision)
         if bridge._worker is not None:
             bridge._worker.join(timeout=2.0)
@@ -77,7 +77,7 @@ def test_bridge_resume_with_reaches_done_status():
         thread_id="run-1",
     )
 
-    with patch("main.qa_agent.tui.bridge.astream_to_bus", side_effect=fake_astream):
+    with patch("main.ist_core.tui.bridge.astream_to_bus", side_effect=fake_astream):
         bridge.resume_with({"approved": True})
         if bridge._worker is not None:
             bridge._worker.join(timeout=2.0)
@@ -85,7 +85,7 @@ def test_bridge_resume_with_reaches_done_status():
     assert captured, "post should have been called at least once"
     statuses = [s.status for s in captured]
     assert "done" in statuses, f"expected 'done' in {statuses}"
-    # final_state 通过 bridge.last_final_state 暴露给 IstApp
+    
     assert bridge.last_final_state.get("final_answer") == "resumed-ok"
 
 
@@ -101,7 +101,7 @@ def test_bridge_resume_with_handles_exception_as_error_status():
         thread_id="run-1",
     )
 
-    with patch("main.qa_agent.tui.bridge.astream_to_bus", side_effect=fake_astream):
+    with patch("main.ist_core.tui.bridge.astream_to_bus", side_effect=fake_astream):
         bridge.resume_with({"approved": True})
         if bridge._worker is not None:
             bridge._worker.join(timeout=2.0)

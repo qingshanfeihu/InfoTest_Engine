@@ -59,7 +59,7 @@
 | 项 | 业界标准 | IST-Core | 状态 |
 |---|---|---|---|
 | Frontmatter 字段 | name / description / when_to_use / allowed-tools / context / paths / hooks | name / description / when_to_use / allowed-tools / context | **核心一致**（缺 paths/hooks） |
-| Skill 加载来源 | bundled / managed / user / project / plugin / mcp（6 种） | 单一 `main/qa_agent/skills/` | 简化 |
+| Skill 加载来源 | bundled / managed / user / project / plugin / mcp（6 种） | 单一 `main/ist_core/skills/` | 简化 |
 | Skill listing 注入 | `<system-reminder>` 每轮注入 | ✅ PerTurnSkillReminderMiddleware 同款 | **一致** |
 | listing 字段（name + description + when_to_use） | ✅ | ✅ | **一致** |
 | Inline / Fork 执行 | 显式两种 context | 只走 inline | 简化 |
@@ -164,11 +164,11 @@
 
 | 模块 | 文件 | 业界标准对应 |
 |---|---|---|
-| 主 agent prompt 装配 | `main/qa_agent/agents/_prompt.py` | constants/prompts.ts |
-| 工具沙箱模块 | `main/qa_agent/tools/deepagent/_sandbox.py` | utils/permissions/filesystem.ts |
-| Skill 注入 middleware | `main/qa_agent/middleware/per_turn_skill_reminder.py` | utils/attachments.ts skill_listing |
-| Skill 工具入口 | `main/qa_agent/tools/skills/__init__.py` | tools/SkillTool/SkillTool.ts |
-| Verifier subagent | `main/qa_agent/agents/semantic_check_agent.py` | tools/AgentTool/built-in/verificationAgent.ts |
-| 硬闸节点 | `main/qa_agent/nodes/review_gate.py` | utils/hooks/hookHelpers.ts |
-| 主 graph 装配 | `main/qa_agent/graph.py` | query.ts |
+| 主 agent prompt 装配 | `main/ist_core/agents/_prompt.py` | constants/prompts.ts |
+| 工具沙箱模块 | `main/ist_core/tools/deepagent/_sandbox.py` | utils/permissions/filesystem.ts |
+| Skill 注入 middleware | `main/ist_core/middleware/per_turn_skill_reminder.py` | utils/attachments.ts skill_listing |
+| Skill 工具入口 | `main/ist_core/tools/skills/__init__.py` | tools/SkillTool/SkillTool.ts |
+| Verifier subagent | `main/ist_core/agents/semantic_check_agent.py` | tools/AgentTool/built-in/verificationAgent.ts |
+| 硬闸节点 | `main/ist_core/nodes/review_gate.py` | utils/hooks/hookHelpers.ts |
+| 主 graph 装配 | `main/ist_core/graph.py` | query.ts |
 | Subagent 执行（deepagents 依赖） | `.venv/.../deepagents/middleware/subagents.py` | tools/AgentTool/forkSubagent.ts |

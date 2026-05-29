@@ -1,19 +1,20 @@
 {
-  "_comment": "IST-Core 用户管理。修改后无需重启 server，下次认证时自动生效。",
+  "_comment": "IST-Core Web Terminal 用户管理。复制为 ssh_users.json 后填入真实账号；修改后无需重启 server，下次认证时自动生效。请勿提交 ssh_users.json（已在 .gitignore）。",
+  "_password_hint": "推荐用 password_hash 字段（明文 password 字段仅向后兼容，登录会打 warning）。生成命令：python -c \"from main.ist_core.web_server import hash_password; print(hash_password('你的密码'))\"",
   "users": [
     {
-      "username": "test",
-      "password": "test",
+      "username": "reviewer1",
+      "password_hash": "pbkdf2_sha256$200000$<salt_hex>$<hash_hex>",
       "enabled": true,
       "role": "reviewer",
-      "note": "演示账号"
+      "note": "只读评审账号（无上传权限）"
     },
     {
-      "username": "jyz",
-      "password": "ist2024",
+      "username": "admin1",
+      "password_hash": "pbkdf2_sha256$200000$<salt_hex>$<hash_hex>",
       "enabled": true,
       "role": "admin",
-      "note": "管理员"
+      "note": "管理员（可上传，由 IST_WEB_WRITE_ROLES 控制）"
     }
   ]
 }

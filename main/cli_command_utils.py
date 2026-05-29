@@ -16,13 +16,13 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-# ---------------------------------------------------------------------------
-# 主词提取
-# ---------------------------------------------------------------------------
+
+
+
 
 _SYNTAX_PLACEHOLDER_PREFIXES = ("{", "[", "<", "(")
 
-# 用于判断 cmd 是否含 on/off 切换语义
+
 _ONOFF_SWITCH_RE = re.compile(
     r"[\{\[\<\(]\s*(on\s*\|\s*off|off\s*\|\s*on)\s*[\}\]\>\)]",
     re.IGNORECASE,
@@ -30,8 +30,8 @@ _ONOFF_SWITCH_RE = re.compile(
 
 _VERB_TOKENS = {"on", "off", "enable", "disable"}
 
-# CLI 章节标题/表格常用中文术语，与英文命令主词做弱语义对齐。
-# 仅用于 ``cli_reference`` 的 warning 级上下文兜底，不作为强字面回溯。
+
+
 _COMMAND_CONTEXT_HINTS = {
     "virtual-server": ("虚拟服务",),
     "server-farm": ("服务器组", "服务组"),
@@ -77,9 +77,9 @@ def normalize_syntax_brackets(text: str) -> str:
     return text.translate(mapping)
 
 
-# ---------------------------------------------------------------------------
-# evidence 权威度排序（L5）
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def sort_evidences_by_authority(evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -90,7 +90,7 @@ def sort_evidences_by_authority(evidences: list[dict[str, Any]]) -> list[dict[st
     """
     if not evidences:
         return []
-    # 延迟 import 避免循环依赖
+    
     from main.knowledge_paths import evidence_authority
 
     indexed = list(enumerate(evidences))
@@ -98,9 +98,9 @@ def sort_evidences_by_authority(evidences: list[dict[str, Any]]) -> list[dict[st
     return [ev for _, ev in indexed]
 
 
-# ---------------------------------------------------------------------------
-# evidence substring 校验（L4）
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def command_matches_text(cmd: str, text: str) -> bool:
@@ -218,9 +218,9 @@ def verify_command_against_evidences(
     return bool(traceability.get("matched")), traceability.get("matched_source")
 
 
-# ---------------------------------------------------------------------------
-# reverse_command 对称性（L3 schema 与 L1 生成）
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def has_onoff_switch(cmd: str) -> bool:
@@ -281,16 +281,16 @@ def is_reverse_symmetric(cmd: str, reverse_cmd: str) -> tuple[bool, str | None]:
     switch_values = _extract_switch_values(cmd)
     extra = [t for t in rev_all if t not in cmd_set]
 
-    # 含 {on|off} 占位符 或 裸 on/off 作为 token 均视为有 on/off 切换语义
+    
     onoff = has_onoff_switch(cmd) or "on" in cmd_set or "off" in cmd_set
     has_enable = "enable" in cmd_set
     has_disable = "disable" in cmd_set
 
     for tok in extra:
         if tok in switch_values:
-            continue  # 占位符允许的取值（如 {on|off} 展开的 on/off）
+            continue
         if tok.startswith(_SYNTAX_PLACEHOLDER_PREFIXES):
-            continue  # reverse 中新增的占位符（如 [priority_mode]）视作额外可选参数
+            continue
         if tok not in _VERB_TOKENS:
             return False, f"foreign_token({tok!r})"
         if tok in ("on", "off") and not onoff:
@@ -302,9 +302,9 @@ def is_reverse_symmetric(cmd: str, reverse_cmd: str) -> tuple[bool, str | None]:
     return True, None
 
 
-# ---------------------------------------------------------------------------
-# allowlist 工具（L1 生成侧）
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def feature_command_allowlist(feature: dict[str, Any]) -> list[str]:
@@ -327,12 +327,12 @@ def collect_allowlist_tokens(commands: Iterable[str]) -> list[list[str]]:
     return [extract_command_tokens(c) for c in commands if c]
 
 
-# ---------------------------------------------------------------------------
-# CLI 行检出（生成后后处理）
-# ---------------------------------------------------------------------------
 
 
-# 识别可能的命令行（保留："^\s*<verb> ..." 形式；跳过 markdown 标题/列表符号）
+
+
+
+
 _COMMAND_LINE_RE = re.compile(
     r"^(?P<lead>\s*(?:`{1,3}|!\s*回退:\s*`?|\*\s*回退\*\s*:?\s*`?)?)"
     r"(?P<cmd>[A-Za-z][A-Za-z0-9_\-]*(?:\s+[A-Za-z0-9_\-\{\}\[\]\<\>\(\)\|\.\/\,]+)+)"
@@ -340,7 +340,7 @@ _COMMAND_LINE_RE = re.compile(
 )
 
 
-# CLI 交互提示符前缀：``Demo(config)#``、``AN(config)#``、``Array(config)#`` 等
+
 _CLI_PROMPT_PREFIX_RE = re.compile(
     r"^\s*[A-Za-z][A-Za-z0-9_\-]*\s*(?:\([A-Za-z0-9_\-\s]+\))?\s*[#>]\s*"
 )

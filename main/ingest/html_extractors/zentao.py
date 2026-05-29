@@ -101,7 +101,7 @@ def _zentao_status_map(raw: str) -> str:
 
 _NUM_RE = re.compile(r"#?(\d{2,6})")
 
-# 禅道失败页面信号
+
 _INVALID_ZENTAO_SIGNALS = [
     "没有匹配的结果",
     "无搜索结果",
@@ -128,8 +128,8 @@ def _detect_zentao_invalid(soup) -> str:
         title = title_el.get_text(strip=True).lower()
         if any(t in title for t in ("404", "not found", "无权", "无搜索结果")):
             return f"zentao_title:{title[:60]}"
-    # 搜索结果落在 #mainContent 但只有 "我的工作台" / 空表格 → 视为无效
-    # (搜索失败时禅道会留在原页面，url 仍是 m=my&f=index)
+    
+    
     return ""
 
 
@@ -171,14 +171,14 @@ class ZentaoExtractor:
         raw_id = select_text(soup, cfg.get("ticket_id", []))
         ticket_id = extract_ticket_id(raw_id) or raw_id or "UNKNOWN"
 
-        # 主字段
+        
         title = select_by_th_label(soup, th_labels.get("title", []))
         if not title and raw_id:
             title = re.sub(r"^Bug\s*#?\d+[\s:：]*", "", raw_id).strip() or raw_id
 
-        # 兜底：如果信号词没命中，但解析后 ticket_id=UNKNOWN 且 title 也空，
-        # 说明这页不是真正的详情页（很可能是 PLM dashboard / 搜索回首页）。
-        # 标 invalid_reason 让 chain 知道要 fallthrough。
+        
+        
+        
         if not invalid_reason and ticket_id == "UNKNOWN" and not title:
             invalid_reason = "zentao_no_detail_data"
 
@@ -197,18 +197,18 @@ class ZentaoExtractor:
         steps = select_by_th_label(soup, th_labels.get("steps_to_reproduce", []))
         fix_summary = select_by_th_label(soup, th_labels.get("fix_summary", []))
 
-        # 时间/人员
+        
         reported_by = select_by_th_label(soup, th_labels.get("reported_by", []))
         reported_at = select_by_th_label(soup, th_labels.get("reported_at", []))
         resolved_by = select_by_th_label(soup, th_labels.get("resolved_by", []))
         resolved_at = select_by_th_label(soup, th_labels.get("resolved_at", []))
 
-        # 版本
+        
         affected = select_all_by_th_label(soup, th_labels.get("affected_versions", []))
         fixed_versions = select_all_by_th_label(soup, th_labels.get("fixed_versions", []))
         fixed_commit = select_by_th_label(soup, th_labels.get("fixed_commit", []))
 
-        # 关联
+        
         related_story = select_by_th_label(soup, th_labels.get("related_story", []))
         related_case = select_by_th_label(soup, th_labels.get("related_case_ids", []))
         related_task = select_by_th_label(soup, th_labels.get("related_task_ids", []))
@@ -219,18 +219,18 @@ class ZentaoExtractor:
         related_task_ids = _extract_id_list(related_task, "TASK")
         related_bug_ids = _extract_id_list(related_bug, "ZT")
 
-        # 相关 feature：story 的 id 即是上游 feature 候选
+        
         related_feature_ids: list[str] = []
         for sid in related_story_ids:
             m = _NUM_RE.search(sid)
             if m:
                 related_feature_ids.append(m.group(1))
 
-        # 激活次数
+        
         activated_raw = select_by_th_label(soup, th_labels.get("activated_count", []))
         activated_count = parse_int(activated_raw, 0)
 
-        # 附件
+        
         attachment_urls = select_attrs(soup, cfg.get("attachments", []), "href")
         attachment_names = select_texts(soup, cfg.get("attachments", []))
         attachments = [
@@ -238,7 +238,7 @@ class ZentaoExtractor:
             for i, url in enumerate(attachment_urls)
         ]
 
-        # doc_type
+        
         doc_type = self.doc_type_hint or "bug"
         if ticket_id.upper().startswith(("STORY", "REQ", "PLM")):
             doc_type = "plm_ticket"

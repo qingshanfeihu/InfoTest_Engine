@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from main.qa_agent.ink.screen import (
+from main.ist_core.ink.screen import (
     CELL_NORMAL,
     CELL_SPACER,
     CELL_WIDE,
@@ -20,7 +20,7 @@ from main.qa_agent.ink.screen import (
     StylePool,
     set_cell_style_id,
 )
-from main.qa_agent.ink.selection import (
+from main.ist_core.ink.selection import (
     AnchorSpan,
     Point,
     SelectionState,
@@ -44,9 +44,9 @@ from main.qa_agent.ink.selection import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def _make_screen(text_rows: list[str], width: int | None = None) -> tuple[Screen, StylePool, CharPool]:
@@ -63,16 +63,16 @@ def _make_screen(text_rows: list[str], width: int | None = None) -> tuple[Screen
     return screen, style_pool, char_pool
 
 
-# ---------------------------------------------------------------------------
-# Lifecycle
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_start_selection_clears_focus():
     s = SelectionState()
     start_selection(s, col=4, row=2)
     assert s.anchor == Point(col=4, row=2)
-    assert s.focus is None  # bare click never highlights a cell
+    assert s.focus is None
     assert s.is_dragging is True
     assert has_selection(s) is False
 
@@ -80,9 +80,9 @@ def test_start_selection_clears_focus():
 def test_update_selection_noop_at_anchor():
     s = SelectionState()
     start_selection(s, col=4, row=2)
-    update_selection(s, col=4, row=2)  # sub-pixel tremor
+    update_selection(s, col=4, row=2)
     assert s.focus is None
-    update_selection(s, col=5, row=2)  # real motion
+    update_selection(s, col=5, row=2)
     assert s.focus == Point(col=5, row=2)
 
 
@@ -107,9 +107,9 @@ def test_clear_resets_everything():
     assert s.scrolled_off_above_sw == []
 
 
-# ---------------------------------------------------------------------------
-# Bounds + hit testing
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_selection_bounds_normalizes_reading_order():
@@ -128,11 +128,11 @@ def test_is_cell_selected_corners():
     s.anchor = Point(col=2, row=1)
     s.focus = Point(col=8, row=3)
     assert is_cell_selected(s, 2, 1) is True
-    assert is_cell_selected(s, 1, 1) is False  # before start col on start row
-    assert is_cell_selected(s, 0, 2) is True   # mid row, any col
+    assert is_cell_selected(s, 1, 1) is False
+    assert is_cell_selected(s, 0, 2) is True
     assert is_cell_selected(s, 8, 3) is True
-    assert is_cell_selected(s, 9, 3) is False  # past end col on end row
-    assert is_cell_selected(s, 0, 4) is False  # below end row
+    assert is_cell_selected(s, 9, 3) is False
+    assert is_cell_selected(s, 0, 4) is False
 
 
 def test_has_selection_false_until_focus_set():
@@ -143,15 +143,15 @@ def test_has_selection_false_until_focus_set():
     assert has_selection(s) is True
 
 
-# ---------------------------------------------------------------------------
-# Word / line bounds
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_word_bounds_letter_run():
     """`hello world` — clicking col=2 should select cols 0..4 (`hello`)."""
     screen, _, _ = _make_screen(["hello world"])
-    select_word_at(SelectionState(), screen, 2, 0)  # smoke
+    select_word_at(SelectionState(), screen, 2, 0)
     s = SelectionState()
     select_word_at(s, screen, 2, 0)
     assert s.anchor == Point(col=0, row=0)
@@ -174,14 +174,14 @@ def test_word_bounds_skips_spacer_tail():
     char_pool = CharPool()
     style_pool = StylePool()
     screen = Screen(6, 1, char_pool, style_pool)
-    # "中文" wide = head, spacer, head, spacer (4 cols)
+    
     screen.set_cell(0, 0, char_pool.intern("中"), style_pool.none, 0, CELL_WIDE)
     screen.set_cell(1, 0, char_pool.intern(""), style_pool.none, 0, CELL_SPACER)
     screen.set_cell(2, 0, char_pool.intern("文"), style_pool.none, 0, CELL_WIDE)
     screen.set_cell(3, 0, char_pool.intern(""), style_pool.none, 0, CELL_SPACER)
     screen.set_cell(4, 0, char_pool.intern(" "), style_pool.none, 0, CELL_NORMAL)
     s = SelectionState()
-    # Click on the spacer tail of 中 — should still expand to whole CJK run.
+    
     select_word_at(s, screen, 1, 0)
     assert s.anchor == Point(col=0, row=0)
     assert s.focus == Point(col=3, row=0)
@@ -192,7 +192,7 @@ def test_word_bounds_returns_none_on_no_select():
     screen.mark_no_select(2, 0, 6, 0)
     s = SelectionState()
     select_word_at(s, screen, 4, 0)
-    assert s.anchor is None  # no-op
+    assert s.anchor is None
 
 
 def test_select_line_full_width():
@@ -204,41 +204,41 @@ def test_select_line_full_width():
     assert s.anchor_span is not None and s.anchor_span.kind == "line"
 
 
-# ---------------------------------------------------------------------------
-# Extend (word / line drag)
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_extend_selection_word_forward():
     screen, _, _ = _make_screen(["hello world  foo"])
     s = SelectionState()
-    select_word_at(s, screen, 2, 0)  # selects 'hello'
-    extend_selection(s, screen, 14, 0)  # mouse over 'foo'
-    assert s.anchor == Point(col=0, row=0)   # span.lo
-    assert s.focus == Point(col=15, row=0)   # 'foo' end
+    select_word_at(s, screen, 2, 0)
+    extend_selection(s, screen, 14, 0)
+    assert s.anchor == Point(col=0, row=0)
+    assert s.focus == Point(col=15, row=0)
 
 
 def test_extend_selection_word_backward():
     screen, _, _ = _make_screen(["foo hello world"])
     s = SelectionState()
-    select_word_at(s, screen, 7, 0)  # selects 'hello' (cols 4..8)
-    extend_selection(s, screen, 1, 0)  # mouse over 'foo'
-    assert s.anchor == Point(col=8, row=0)   # span.hi
-    assert s.focus == Point(col=0, row=0)    # 'foo' start
+    select_word_at(s, screen, 7, 0)
+    extend_selection(s, screen, 1, 0)
+    assert s.anchor == Point(col=8, row=0)
+    assert s.focus == Point(col=0, row=0)
 
 
 def test_extend_selection_overlap_returns_anchor_span():
     screen, _, _ = _make_screen(["hello world"])
     s = SelectionState()
     select_word_at(s, screen, 2, 0)
-    extend_selection(s, screen, 3, 0)  # mouse still inside 'hello'
+    extend_selection(s, screen, 3, 0)
     assert s.anchor == Point(col=0, row=0)
     assert s.focus == Point(col=4, row=0)
 
 
-# ---------------------------------------------------------------------------
-# Text extraction (softWrap join + trailing trim)
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_get_selected_text_single_row():
@@ -260,14 +260,14 @@ def test_get_selected_text_trims_trailing_whitespace():
 
 def test_get_selected_text_joins_soft_wrap():
     screen, _, _ = _make_screen(["the quick ", "brown fox "], width=10)
-    # Mark row 1 as a wrap continuation: row 0's content ends at col 10.
+    
     screen.set_soft_wrap_continuation(1, 10)
     s = SelectionState()
     s.anchor = Point(col=0, row=0)
     s.focus = Point(col=8, row=1)
     text = get_selected_text(s, screen)
-    # softWrap → row 0 + row 1 joined directly (no \n inserted)
-    # row 0 keeps its trailing space because content_end > 0 disables trim
+    
+    
     assert text == "the quick brown fox"
 
 
@@ -281,16 +281,16 @@ def test_get_selected_text_multi_row_with_newlines():
 
 def test_get_selected_text_skips_no_select():
     screen, _, _ = _make_screen([" |hello"])
-    screen.mark_no_select(0, 0, 1, 0)  # gutter chars
+    screen.mark_no_select(0, 0, 1, 0)
     s = SelectionState()
     s.anchor = Point(col=0, row=0)
     s.focus = Point(col=6, row=0)
     assert get_selected_text(s, screen) == "hello"
 
 
-# ---------------------------------------------------------------------------
-# Render overlay
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_apply_selection_overlay_changes_style_id():
@@ -302,8 +302,8 @@ def test_apply_selection_overlay_changes_style_id():
     apply_selection_overlay(screen, s, style_pool)
     inside = screen.get_cell(4, 0).style_id
     outside = screen.get_cell(0, 0).style_id
-    assert inside != base  # changed
-    assert outside == base  # unchanged
+    assert inside != base
+    assert outside == base
     assert inside == style_pool.with_selection_bg(base)
 
 
@@ -315,8 +315,8 @@ def test_apply_selection_overlay_skips_no_select():
     s.anchor = Point(col=0, row=0)
     s.focus = Point(col=6, row=0)
     apply_selection_overlay(screen, s, style_pool)
-    assert screen.get_cell(0, 0).style_id == base  # noSelect skipped
-    assert screen.get_cell(4, 0).style_id != base  # 'l' in 'hello' covered
+    assert screen.get_cell(0, 0).style_id == base
+    assert screen.get_cell(4, 0).style_id != base
 
 
 def test_apply_selection_overlay_idempotent():
@@ -329,20 +329,20 @@ def test_apply_selection_overlay_idempotent():
     once = screen.get_cell(2, 0).style_id
     apply_selection_overlay(screen, s, style_pool)
     twice = screen.get_cell(2, 0).style_id
-    # The second pass calls with_selection_bg(once); we want it stable.
-    # The cache-keyed-on-baseId means once → withSelectionBg(once) might
-    # differ if the kept bg sneaks back in. Assert the two-pass result
-    # stays referentially stable (no infinite stacking).
+    
+    
+    
+    
     once_codes = style_pool.get(once)
     twice_codes = style_pool.get(twice)
     assert "\x1b[48;5;238m" in once_codes
-    # The selection bg appears at most once.
+    
     assert sum(1 for c in twice_codes if c == "\x1b[48;5;238m") == 1
 
 
-# ---------------------------------------------------------------------------
-# capture_scrolled_rows
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_capture_scrolled_rows_above_appends_and_resets_anchor_col():
@@ -351,8 +351,8 @@ def test_capture_scrolled_rows_above_appends_and_resets_anchor_col():
     s.anchor = Point(col=2, row=0)
     s.focus = Point(col=4, row=2)
     capture_scrolled_rows(s, screen, 0, 0, side="above")
-    assert s.scrolled_off_above == ["w0"]  # row0 cols 2..9 → "w0" + spaces, trimmed
-    # anchor.col reset to 0 since this captured the start row
+    assert s.scrolled_off_above == ["w0"]
+    
     assert s.anchor == Point(col=0, row=0)
 
 
@@ -363,15 +363,15 @@ def test_capture_scrolled_rows_below_prepends():
     s.focus = Point(col=2, row=2)
     capture_scrolled_rows(s, screen, 2, 2, side="below")
     assert s.scrolled_off_below == ["row"]
-    # End-row anchor (col=2) was below side; this ran with anchor=Point(col=0,row=0)
-    # so anchor_col reset only applies to the side==below branch when anchor.row==end.row.
-    # Here anchor is at start.row, so it stays unchanged.
+    
+    
+    
     assert s.anchor == Point(col=0, row=0)
 
 
-# ---------------------------------------------------------------------------
-# shift_selection / shift_anchor / shift_selection_for_follow
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_shift_selection_clears_when_both_overshoot_above():
@@ -386,12 +386,12 @@ def test_shift_selection_tracks_virtual_row_for_round_trip():
     s = SelectionState()
     s.anchor = Point(col=0, row=1)
     s.focus = Point(col=5, row=4)
-    # First scroll up 3: anchor (row=1) goes to virtual=-2 (clamped 0)
+    
     shift_selection(s, d_row=-3, min_row=0, max_row=10, width=10)
     assert s.anchor == Point(col=0, row=0)
     assert s.virtual_anchor_row == -2
     assert s.focus == Point(col=5, row=1)
-    # Reverse scroll +3 → virtual restores
+    
     shift_selection(s, d_row=3, min_row=0, max_row=10, width=10)
     assert s.anchor == Point(col=0, row=1)
     assert s.virtual_anchor_row is None
@@ -403,7 +403,7 @@ def test_shift_anchor_only_moves_anchor():
     s.focus = Point(col=7, row=8)
     shift_anchor(s, d_row=-2, min_row=0, max_row=10)
     assert s.anchor == Point(col=2, row=3)
-    assert s.focus == Point(col=7, row=8)  # unchanged
+    assert s.focus == Point(col=7, row=8)
 
 
 def test_shift_selection_for_follow_clears_when_both_above_top():
@@ -425,9 +425,9 @@ def test_move_focus_drops_anchor_span_to_char_mode():
     assert s.focus == Point(col=7, row=0)
 
 
-# ---------------------------------------------------------------------------
-# Soft wrap continuation marker on Screen
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_screen_no_select_marker():
@@ -453,19 +453,19 @@ def test_screen_reset_clears_no_select_and_soft_wrap():
     assert screen.is_no_select(0, 0) is False
 
 
-# ---------------------------------------------------------------------------
-# StylePool with_selection_bg
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_with_selection_bg_replaces_existing_bg():
     sp = StylePool()
-    base = sp.intern(["\x1b[48;5;100m", "\x1b[31m"])  # bg + red fg
+    base = sp.intern(["\x1b[48;5;100m", "\x1b[31m"])
     new_id = sp.with_selection_bg(base)
     codes = sp.get(new_id)
-    assert "\x1b[48;5;100m" not in codes  # old bg dropped
-    assert "\x1b[48;5;238m" in codes  # selection bg added
-    assert "\x1b[31m" in codes  # fg preserved
+    assert "\x1b[48;5;100m" not in codes
+    assert "\x1b[48;5;238m" in codes
+    assert "\x1b[31m" in codes
 
 
 def test_with_selection_bg_strips_inverse():
@@ -494,4 +494,4 @@ def test_set_cell_style_id_only_changes_style():
     set_cell_style_id(screen, 1, 0, new_style)
     cell = screen.get_cell(1, 0)
     assert cell.style_id == new_style
-    assert char_pool.get(cell.char_id) == "x"  # char untouched
+    assert char_pool.get(cell.char_id) == "x"

@@ -65,8 +65,8 @@ class LLMCache:
         max_tokens: int,
     ) -> None:
         path = self._path(self._key(model=model, max_tokens=max_tokens, system=system, user=user))
-        # Per-writer tmp suffix avoids Windows EBUSY when multiple concurrent
-        # batches happen to compute the same cache key.
+        
+        
         tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
         with tmp.open("w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False)

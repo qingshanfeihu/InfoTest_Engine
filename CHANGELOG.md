@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.0.4] - 2026-05-29
+
+### 发布前体检修复（安全 + 资源 + 文档）
+
+**Web Terminal 安全加固**（`infotest --server`）：
+- 密码改 PBKDF2-SHA256 哈希存储（`password_hash` 字段），登录走 `hmac.compare_digest` 恒定时间比较；明文 `password` 字段仅向后兼容并打 warning
+- 会话 token 改 `secrets.token_urlsafe`，加 8h 过期（`IST_WEB_SESSION_TTL_SEC`）+ 新增 `/api/logout` 撤销
+- 登录失败按 IP 滑动窗口限流（`IST_WEB_LOGIN_MAX_FAILURES` / `_WINDOW_SEC`，默认 5 次 / 300s）
+- RBAC：上传端点强制 `role ∈ IST_WEB_WRITE_ROLES`（默认仅 admin）；reviewer 只读
+- 上传修复路径遍历（仅取 basename + 解析后二次校验落在 `_SANDBOX` 内）+ 体积上限（`IST_WEB_MAX_UPLOAD_MB`，默认 50）
+- WebSocket 断开时显式 `terminate()`/`kill()` 子进程 + `await gather` 收尾任务，杜绝僵尸进程与 fd 泄漏
+- 前端下载列表改 DOM API 构建（`textContent`），消除文件名 XSS；新增 `ws.onerror`
+- `ssh_users.example.json` 去除可用明文凭据，改 `password_hash` 占位符 + 生成命令说明
+
+**沙箱与资源**：
+- `file_tools` 平台黑名单改大小写不敏感比较，修复 macOS/Windows 大小写变体绕过（`MAIN/`、`Memory/` 等）
+- `cli.py` Web server 子进程 stdout 文件句柄改 try/finally 关闭，修复每次启动泄漏一个 fd
+- TUI `JsonlFileSink` 在 `run()` finally 块显式 `close()`，修复 fd 泄漏
+- `events.py` 默认 EventBus 单例加双检锁，修复多线程下实例覆盖 / 订阅丢失竞态
+
+**文档**：
+- `ARCHITECTURE.md` §8 全量管线命令标 legacy（模块已归档至 `backup/main_legacy/`，不可 `python -m` 调用）
+- 移除 §12.4.2 已删除的 `PreAnalysisInjectionMiddleware` 描述，指向 §13 v2.0 Verification 架构
+- 版本号对齐：`pyproject.toml` / CLI / TUI 统一 1.0.4
+
+详见 `know_issue.md`「2026-05-29 发布前体检」。
+
 ## [1.0.2] - 2026-05-25
 
 ### 破坏性变更：环境变量重命名 `QA_AGENT_*` → `IST_*`
@@ -33,7 +60,7 @@
 
 ### LLM Provider 抽象简化
 
-`main/qa_agent/agents/_llm.py` 重构：
+`main/ist_core/agents/_llm.py` 重构：
 
 - 删除 `_build_anthropic_compat`（百炼 Anthropic 兼容路径，已被 usage metadata bug 绕开）
 - 删除 ChatTongyi fallback 与 `init_chat_model:` 分支（无调用方）

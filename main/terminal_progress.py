@@ -62,7 +62,7 @@ class TerminalProgress:
                 if not self._stopped and not self._paused:
                     self._render()
 
-    # -- context management --------------------------------------------------
+    
 
     def enter(self) -> None:
         _active_progress.set(self)
@@ -78,7 +78,7 @@ class TerminalProgress:
         self.finish()
         self.leave()
 
-    # -- pause / resume (for interleaved print output) -----------------------
+    
 
     def pause(self) -> None:
         with self._lock:
@@ -92,7 +92,7 @@ class TerminalProgress:
             self._paused = False
             self._render()
 
-    # -- update --------------------------------------------------------------
+    
 
     def update(
         self,
@@ -122,7 +122,7 @@ class TerminalProgress:
                 self._detail = detail
             self._render()
 
-    # -- finish --------------------------------------------------------------
+    
 
     def finish(self) -> None:
         self._stopped = True
@@ -135,7 +135,7 @@ class TerminalProgress:
                 sys.stderr.flush()
             self._last_line = ""
 
-    # -- internal rendering (must hold self._lock) ---------------------------
+    
 
     def _render(self) -> None:
         if not self._enabled or self._paused:
@@ -180,9 +180,9 @@ class TerminalProgress:
         self._last_line = line
 
 
-# ---------------------------------------------------------------------------
-# Unified LLM event logging
-# ---------------------------------------------------------------------------
+
+
+
 
 def emit_llm_event(event_type: str, message: str) -> None:
     """Write a formatted LLM diagnostic line to stderr.

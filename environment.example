@@ -82,7 +82,8 @@ IST_REVIEW_DEPTH=standard               # quick | standard | deep
 # =============================================================================
 
 # LangGraph checkpoint（TUI 用 AsyncSqliteSaver，需 pip install aiosqlite）
-IST_SQLITE_PATH=./qa_agent.sqlite
+# 提示：如果是升级用户，可将本地现有的 qa_agent.sqlite 重命名为 ist_core.sqlite 以恢复历史 Session 状态。
+IST_SQLITE_PATH=./ist_core.sqlite
 
 # 可选：Postgres checkpoint（不设时用 IST_SQLITE_PATH，再降级 InMemorySaver）
 # IST_POSTGRES_CHECKPOINT_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
@@ -93,7 +94,7 @@ IST_POSTGRES_CHECKPOINT_SETUP=1
 
 
 # =============================================================================
-# 四、记忆子系统（main/qa_agent/memory/）
+# 四、记忆子系统（main/ist_core/memory/）
 # =============================================================================
 IST_MEMORY_ENABLED=1
 # IST_MEMORY_ROOT=<repo>/memory                 # 默认 repo/memory
@@ -113,8 +114,8 @@ FOOTPRINT_ENABLED=1                             # CLI footprint 知识树（auto
 # =============================================================================
 # 五、产品测试平台 PostgreSQL（任务状态 / trace；可选）
 # =============================================================================
-# 启动：bash scripts/maintenance/postgres_runtime.sh start
-# 初始化：python -m main.qa_agent.runtime.postgres_admin --init --check
+# 可选 PostgreSQL（任务状态 / trace）；按 IST_POSTGRES_DSN 连接。
+# 注：旧 `main.qa_agent.runtime.postgres_admin` 已随包迁移移除；schema 请用平台自带迁移工具初始化。
 IST_POSTGRES_HOST=localhost
 IST_POSTGRES_PORT=6543
 IST_POSTGRES_DB=ultra_agent

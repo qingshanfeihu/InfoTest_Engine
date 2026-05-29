@@ -15,7 +15,7 @@ import textwrap
 
 import pytest
 
-from main.qa_agent.tools.deepagent.exec_tools import (
+from main.ist_core.tools.deepagent.exec_tools import (
     _BASH_DENY_FIRST_TOKEN,
     _validate_bash_command,
     _validate_bash_paths,
@@ -25,9 +25,9 @@ from main.qa_agent.tools.deepagent.exec_tools import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Validation: bash command
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_bash_allowlist_basic_commands_pass():
@@ -99,9 +99,9 @@ def test_bash_empty_command_rejected():
     assert _validate_bash_command("  ")[0] is False
 
 
-# ---------------------------------------------------------------------------
-# Validation: bash path arguments — sandbox enforcement
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_bash_paths_skip_flags():
@@ -123,8 +123,8 @@ def test_bash_paths_reject_absolute_outside_sandbox():
 
 def test_bash_paths_reject_repo_root_platform_dirs():
     """仓库根但沙箱外的路径必须拒绝（需要路径在本地存在才会被检测为路径）。"""
-    # 使用绝对路径确保被识别为路径并被 _resolve_inside_root 拒绝
-    for token in ["../tests/tui/test_exec_tools.py", "../main/qa_agent/agents/_prompt.py"]:
+    
+    for token in ["../tests/tui/test_exec_tools.py", "../main/ist_core/agents/_prompt.py"]:
         ok, reason = _validate_bash_paths(["cat", token])
         assert not ok, f"{token!r} should be rejected"
 
@@ -135,9 +135,9 @@ def test_bash_paths_accept_nonexistent_relative_token():
     assert ok, reason
 
 
-# ---------------------------------------------------------------------------
-# Validation: cp — destination must resolve into workspace/outputs/
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_bash_cp_dest_under_outputs_allowed():
@@ -166,9 +166,9 @@ def test_bash_cp_missing_dest_rejected():
     assert "destination" in reason.lower() or "source" in reason.lower()
 
 
-# ---------------------------------------------------------------------------
-# Validation: python code
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_python_network_denied():
@@ -219,9 +219,9 @@ def test_python_empty_code_rejected():
     assert _validate_python_code("\n  \t\n")[0] is False
 
 
-# ---------------------------------------------------------------------------
-# Behavior: qa_exec subprocess execution
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_qa_exec_runs_simple_print():
@@ -271,9 +271,9 @@ def test_qa_exec_pythonpath_stripped_blocks_main_import():
     """qa_exec 子进程 env 剥离 PYTHONPATH。
     注：editable install 下 import main 仍可能成功（site-packages 有 .pth），
     但生产部署（非 editable）时会失败。此测试仅验证不在 validate 阶段拒绝。"""
-    code = "import main.qa_agent.agents._prompt"
+    code = "import main.ist_core.agents._prompt"
     result = qa_exec.invoke({"code": code, "timeout": 10})
-    # 不再在 validate 阶段拒绝（不以 "error:" 开头）
+    
     assert not result.startswith("error:")
 
 
@@ -285,9 +285,9 @@ def test_qa_exec_cwd_is_agent_root():
     assert "knowledge/data" in result
 
 
-# ---------------------------------------------------------------------------
-# Behavior: qa_bash subprocess execution
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def test_qa_bash_runs_echo():
@@ -307,7 +307,7 @@ def test_qa_bash_rejects_rm():
 
 
 def test_qa_bash_rejects_traversal_path_arg():
-    result = qa_bash.invoke({"command": "cat ../main/qa_agent/agents/_prompt.py", "timeout": 5})
+    result = qa_bash.invoke({"command": "cat ../main/ist_core/agents/_prompt.py", "timeout": 5})
     assert result.startswith("error:")
     assert "traversal" in result.lower() or "rejected" in result.lower()
 
@@ -333,15 +333,15 @@ def test_qa_bash_rejects_absolute_outside_sandbox():
 
 def test_qa_bash_cwd_is_agent_root(tmp_path, monkeypatch):
     """``ls .`` 必须看到 knowledge/data 内容，看不到 main/ tests/ 等仓库根目录。"""
-    # 注：实际仓库的 knowledge/data/ 应有 markdown/ defects/ 子目录
+    
     result = qa_bash.invoke({"command": "ls .", "timeout": 5})
     assert "returncode=0" in result
-    # 沙箱外的目录绝不能出现
+    
     assert "main" not in result.split("--- stdout ---")[1].split("\n")[:5][0] if "--- stdout ---" in result else True
 
 
 def test_get_exec_tools_returns_qa_pair():
-    from main.qa_agent.tools.deepagent.exec_tools import get_exec_tools
+    from main.ist_core.tools.deepagent.exec_tools import get_exec_tools
     tools = list(get_exec_tools())
     names = {t.name for t in tools}
     assert names == {"qa_exec", "qa_bash"}
@@ -354,10 +354,10 @@ def test_qa_exec_xlsx_parse_smoke(tmp_path, monkeypatch):
     """
     import openpyxl
 
-    from main.qa_agent.tools.deepagent import exec_tools as exec_mod
-    from main.qa_agent.tools.deepagent import file_tools
+    from main.ist_core.tools.deepagent import exec_tools as exec_mod
+    from main.ist_core.tools.deepagent import file_tools
 
-    # 把沙箱根指到 tmp_path 下
+    
     sandbox = tmp_path / "knowledge" / "data"
     sandbox.mkdir(parents=True)
     monkeypatch.setattr(file_tools, "_AGENT_ROOT", sandbox)

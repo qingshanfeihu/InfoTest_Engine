@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from main.qa_agent.tui.message_model import (
+from main.ist_core.tui.message_model import (
     BLOCK_TEXT,
     BLOCK_TOOL_RESULT,
     BLOCK_TOOL_USE,
@@ -74,12 +74,12 @@ def test_replace_content_block_returns_new_message():
         predicate=lambda b: b.type == BLOCK_TOOL_USE and b.tool_use_id == "tu-1",
         new_block=new_block,
     )
-    # 不可变：原 msg 状态没变
+    
     assert msg.content[1].status == "running"
     assert new_msg.content[1].status == "done"
-    # 文本块没动
+    
     assert new_msg.content[0].text == "first"
-    # uuid 等保留
+    
     assert new_msg.uuid == msg.uuid
 
 

@@ -25,50 +25,50 @@ class DefectTicket(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    # 失败页面识别：抓回的 HTML 是 "Bug not found" / "无权访问" / 搜索无结果时
-    #   extractor 会把 ticket_id 设为 ``UNKNOWN`` 并/或 title 为空 → ``is_valid_detail`` 返回 False
+    
+    
     invalid_reason: str = ""
 
-    # --- 基础 ---
+    
     ticket_id: str
     title: str = ""
     module: str = ""
-    product: str = ""                      # 所属产品（禅道），比 module 粒度大
-    severity: str = "low"                  # low|mid|high|critical
-    priority: str = ""                     # P1-P5 / 1-4 / 原文
-    status: str = "open"                   # open|fixed|triage
-    resolution: str = ""                   # 解决方案类型：fixed|duplicate|not_repro|by_design|wont_fix|external|postponed
+    product: str = ""
+    severity: str = "low"
+    priority: str = ""
+    status: str = "open"
+    resolution: str = ""
     description: str = ""
     steps_to_reproduce: str = ""
     fix_summary: str = ""
 
-    # --- 时间与人员 ---
+    
     reported_by: str = ""
-    reported_at: str = ""                  # ISO8601 或原始字符串
+    reported_at: str = ""
     resolved_by: str = ""
     resolved_at: str = ""
 
-    # --- 版本与代码 ---
+    
     affected_versions: list[str] = Field(default_factory=list)
-    fixed_versions: list[str] = Field(default_factory=list)   # 禅道"修复版本"
+    fixed_versions: list[str] = Field(default_factory=list)
     fixed_commit: str = ""
 
-    # --- 关联 ---
+    
     related_feature_ids: list[str] = Field(default_factory=list)
-    related_case_ids: list[str] = Field(default_factory=list)   # 禅道"相关用例"
-    related_story_ids: list[str] = Field(default_factory=list)  # 禅道"相关需求"
-    related_task_ids: list[str] = Field(default_factory=list)   # 禅道"相关任务"
-    related_bug_ids: list[str] = Field(default_factory=list)    # Depends on / Blocks / 相关 bug
+    related_case_ids: list[str] = Field(default_factory=list)
+    related_story_ids: list[str] = Field(default_factory=list)
+    related_task_ids: list[str] = Field(default_factory=list)
+    related_bug_ids: list[str] = Field(default_factory=list)
 
-    # --- 其它指标 ---
-    activated_count: int = 0               # 禅道"激活次数"；Bugzilla 无，默认 0
+    
+    activated_count: int = 0
     comments_count: int = 0
 
     attachments: list[Attachment] = Field(default_factory=list)
 
-    # --- 元数据 ---
+    
     backend: str = ""
-    doc_type: str = "bug"                  # bug | plm_ticket
+    doc_type: str = "bug"
     source_html_path: str = ""
     html_sha256: str = ""
     captured_at: str = ""

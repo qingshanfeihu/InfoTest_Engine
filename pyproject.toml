@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "infotest-engine"
-version = "1.0.3"
+version = "1.0.4"
 description = "InfoTest Engine — IST-Core test analysis platform"
 requires-python = ">=3.11"
 readme = "README.md"
 dynamic = ["dependencies"]
 
 [project.scripts]
-infotest = "main.qa_agent.tui.cli:main"
+infotest = "main.ist_core.tui.cli:main"
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
@@ -19,7 +19,7 @@ dependencies = {file = ["requirements.txt"]}
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["main*", "scripts*"]
-exclude = ["tests*", "agent-chat-ui*", "knowledge*", "logs*", "tmp*", "review_inputs*", "docs*"]
+exclude = ["tests*", "knowledge*", "logs*", "tmp*", "review_inputs*", "docs*"]
 
 [tool.setuptools.package-data]
-"main.qa_agent.tui" = ["*.tcss"]
+"main.ist_core.tui" = ["*.tcss"]

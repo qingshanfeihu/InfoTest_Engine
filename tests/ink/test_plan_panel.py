@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from main.qa_agent.ink.components.plan_panel import PlanPanel
+from main.ist_core.ink.components.plan_panel import PlanPanel
 
 
 def _texts(panel: PlanPanel) -> list[str]:
@@ -32,10 +32,10 @@ def test_update_sets_height() -> None:
         {"status": "in_progress", "content": "step 2"},
         {"status": "pending", "content": "step 3"},
     ])
-    # 标题 1 行 + 3 项 todos
-    assert panel.node.style.height == 4
+    # 布局：top_gap + title + N rows + bottom_gap = N + 3
+    assert panel.node.style.height == 6
     assert panel.is_visible is True
-    assert len(panel.node.children) == 4
+    assert len(panel.node.children) == 6
 
 
 def test_clear_resets() -> None:
@@ -59,9 +59,9 @@ def test_status_icons(status: str, glyph: str, ansi: str) -> None:
     panel = PlanPanel()
     panel.update([{"status": status, "content": "x"}])
     rows = _texts(panel)
-    # rows[0] 是标题，rows[1] 是第一项 todo
-    assert glyph in rows[1]
-    assert ansi in rows[1]
+    # rows: [top_gap "", title, row1, bottom_gap ""] → 第一条 todo 在 index 2
+    assert glyph in rows[2]
+    assert ansi in rows[2]
 
 
 def test_content_truncated_to_70() -> None:
@@ -69,8 +69,8 @@ def test_content_truncated_to_70() -> None:
     long = "a" * 200
     panel.update([{"status": "pending", "content": long}])
     rows = _texts(panel)
-    # rows[1] 形如 "   ○ aaaa..."，截断后正文最多 70 个 a
-    assert rows[1].count("a") == 70
+
+    assert rows[2].count("a") == 70
 
 
 def test_update_replaces_previous_rows() -> None:
@@ -81,7 +81,8 @@ def test_update_replaces_previous_rows() -> None:
         {"status": "pending", "content": "old B"},
     ])
     panel.update([{"status": "completed", "content": "new only"}])
-    assert panel.node.style.height == 2
+    # 单条 todo：top_gap + title + 1 row + bottom_gap = 4
+    assert panel.node.style.height == 4
     rows = _texts(panel)
     assert any("new only" in r for r in rows)
     assert not any("old A" in r or "old B" in r for r in rows)

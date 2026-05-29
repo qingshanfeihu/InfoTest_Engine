@@ -28,28 +28,28 @@ KNOWLEDGE_ROOT = PROJECT_ROOT / "knowledge"
 KNOWLEDGE_DATA_ROOT = KNOWLEDGE_ROOT / "data"
 KNOWLEDGE_INTERMEDIATE = KNOWLEDGE_ROOT / ".intermediate"
 
-# Agent 可见区
+
 KNOWLEDGE_ORGIN = KNOWLEDGE_DATA_ROOT / "orgin"
 
-# Agent 直读的 markdown 输出（KMS 简化管线产物）
+
 KNOWLEDGE_MARKDOWN = KNOWLEDGE_DATA_ROOT / "markdown"
 KNOWLEDGE_MARKDOWN_PRODUCT = KNOWLEDGE_MARKDOWN / "product"
 KNOWLEDGE_MARKDOWN_QA = KNOWLEDGE_MARKDOWN / "qa"
 
-# Workspace（agent 工作区，与知识库分离）
+
 WORKSPACE_ROOT = PROJECT_ROOT / "workspace"
 WORKSPACE_INPUTS = WORKSPACE_ROOT / "inputs"
 WORKSPACE_OUTPUTS = WORKSPACE_ROOT / "outputs"
 WORKSPACE_DEFECTS = WORKSPACE_ROOT / "defects"
 
-# Agent 不可见区（由 /kms 命令维护的中间产物）
+
 KNOWLEDGE_MINERU = KNOWLEDGE_INTERMEDIATE / "mineru"
 
 CACHE_JSON = KNOWLEDGE_INTERMEDIATE / ".cache.json"
 
-# ---------------------------------------------------------------------------
-# 源文档权威度（L5）
-# ---------------------------------------------------------------------------
+
+
+
 
 _SOURCE_AUTHORITY_RULES: list[tuple[re.Pattern[str], int]] = [
     (re.compile(r"^cli_", re.IGNORECASE), 100),

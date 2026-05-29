@@ -22,9 +22,9 @@ from main.knowledge_paths import KNOWLEDGE_INTERMEDIATE, WORKSPACE_DEFECTS
 
 logger = logging.getLogger(__name__)
 
-# v2 路径（2026-05-19 重组）：
-#   原始 HTML 落 .intermediate/（agent 不可见）
-#   cleaned JSON 落 knowledge/data/defects/（agent 可见，最终位置）
+
+
+
 RAW_ROOT = KNOWLEDGE_INTERMEDIATE / "defect_raw"
 CLEAN_ROOT = WORKSPACE_DEFECTS
 

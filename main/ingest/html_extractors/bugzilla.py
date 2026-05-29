@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 _DESCRIPTION_MIN_CHARS = 40
 _DESCRIPTION_COMMENT_LIMIT = 3
 
-# Bugzilla 模板中 version 字段常以 `Keyword: v1 v2 v3` 嵌在 description / fix_summary
-# 文本块里（不是独立 HTML 元素），CSS selector 抓不到时按这些关键词正则补抓。
+
+
 _VERSION_LINE_KEYWORDS: dict[str, tuple[str, ...]] = {
     "affected": ("Affected Release", "Affected Version", "Affected in", "影响版本", "影响范围"),
     "fixed": ("Fixed in", "Fixed Release", "Fixed Version", "修复版本", "已修复版本"),
@@ -50,7 +50,7 @@ def _extract_versions_from_text(text: str, keys: tuple[str, ...]) -> list[str]:
             return [p for p in parts if p and len(p) <= 40]
     return []
 
-# Bugzilla 失败页面信号（任一命中 → invalid_reason 置上）
+
 _INVALID_BUGZILLA_SIGNALS = [
     "you are not authorized to access bug",
     "there is no bug with the id",
@@ -94,18 +94,18 @@ def _bugzilla_description_fallback(soup, sel: dict) -> str:
     return primary or merged
 
 
-# ----------------------------------------------------------------------------
-# 修复说明（fix_summary）通用匹配方案
-# ----------------------------------------------------------------------------
-# bugzilla 上 dev 填修复信息的"模板"comment，几乎必有这几组结构化键：
-#   - 修复详情     Fixed Details: / Fix Details: / 修复方案 / Solution:
-#   - 根因         Root Cause:    / 根本原因 / 根因
-#   - 触发条件     Condition of Occurrence / 发生条件 / 复现条件
-#   - 影响范围     Affected Release / Affected Version / 影响版本
-#   - 测试建议     Testing Suggestions / 测试建议 / 验证建议
-# 每组算 1 分（同组多个变体只记一次），score ≥ 2 才采纳；
-# 同分按文本长度降序，避免 commit-log 偶发匹配 1 个键被误抓。
-# ----------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
 _FIX_TEMPLATE_KEY_GROUPS: list[tuple[str, ...]] = [
     ("fixed details:", "fix details:", "修复详情", "修复方案", "solution:"),
     ("root cause:", "根本原因", "根因:", "根因："),
@@ -126,13 +126,13 @@ def _score_fix_template(text: str) -> int:
 
 
 def _bugzilla_fix_summary_fallback(soup, sel: dict) -> str:
-    # 1) selector 直接命中（保留兼容旧站点 css 习惯，含显式标记如 bz_fix class）
+    
     primary = select_text(soup, sel.get("fix_summary", []))
     if primary:
         return primary
 
-    # 2) 通用打分：扫所有 comment，挑模板键命中数最高且 ≥ 阈值的那条
-    candidates: list[tuple[int, int, str]] = []  # (score, length, text)
+    
+    candidates: list[tuple[int, int, str]] = []
     for el in soup.select("pre.bz_comment_text, div.bz_comment_text"):
         text = el.get_text(" ", strip=True)
         if not text:
@@ -141,11 +141,11 @@ def _bugzilla_fix_summary_fallback(soup, sel: dict) -> str:
         if score >= _FIX_TEMPLATE_MIN_SCORE:
             candidates.append((score, len(text), text))
     if candidates:
-        # score 降序，长度降序（同分取最长，避免短摘要）
+        
         candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
         return candidates[0][2]
 
-    # 3) 旧的 keyword fallback（兜底；多数情况已被 2) 覆盖）
+    
     keywords = [k.lower() for k in (sel.get("fix_summary_keywords") or [])]
     if not keywords:
         return primary or ""
@@ -171,7 +171,7 @@ def _bugzilla_related_bug_ids(soup, sel: dict) -> list[str]:
             if val not in seen:
                 seen.add(val)
                 ids.append(val)
-    # 额外扫 href
+    
     for link_sel in sel.get("related_bug_ids", []):
         for el in soup.select(link_sel):
             href = el.get("href") or ""
@@ -200,7 +200,7 @@ class BugzillaExtractor:
         self.version = sel.get("version") or self.version
         soup = make_soup(html)
 
-        # 提前检测失败页面：节省后续 select_text 调用
+        
         invalid_reason = _detect_bugzilla_invalid(soup)
 
         raw_id = select_text(soup, sel.get("ticket_id", []))
@@ -227,7 +227,7 @@ class BugzillaExtractor:
         fixed_versions = select_texts(soup, sel.get("fixed_versions", []))
         fixed_commit = select_text(soup, sel.get("fixed_commit", []))
 
-        # 文本块 fallback：CSS selector 抓不到时从 description / fix_summary 正则补抓
+        
         if not affected:
             affected = _extract_versions_from_text(
                 f"{description}\n{fix_summary}", _VERSION_LINE_KEYWORDS["affected"]

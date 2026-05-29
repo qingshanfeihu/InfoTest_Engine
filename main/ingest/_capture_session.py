@@ -33,9 +33,9 @@ from urllib.parse import quote_plus
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# 常量（可被环境变量覆盖）
-# ---------------------------------------------------------------------------
+
+
+
 
 
 PORTAL_LOGIN_URLS = [
@@ -46,24 +46,24 @@ PORTAL_LOGIN_URLS = [
     "https://menhu.infosec.com.cn/login/d2VsY29tZQ/bWFpbg?tempNo=2",
 ]
 
-#: Bugzilla 直连首页（作为 WebVPN 代理失败时的 fallback）
+
 BUGZILLA_DIRECT_HOME = (
     os.environ.get("BUGZILLA_BASE_URL") or "http://bugzilla.arraynetworks.com.cn/bugzilla"
 ).rstrip("/")
 
-#: Bugzilla WebVPN 代理首页
+
 BUGZILLA_PROXY_HOME = (
     os.environ.get("BUGZILLA_PROXY_URL")
     or "https://portal.infosec.com.cn/prx/000/http/bugzilla.arraynetworks.com.cn:80/bugzilla"
 ).rstrip("/")
 
-#: 禅道 PLM WebVPN 代理首页
+
 PLM_PROXY_HOME = (
     os.environ.get("PLM_PROXY_URL")
     or "https://portal.infosec.com.cn/prx/000/https/plm.infosec.com.cn/index.php?m=my&f=index"
 )
 
-#: 禅道 PLM 直连首页（当你已经在内网，不走门户）
+
 PLM_DIRECT_HOME = (
     os.environ.get("ZENTAO_BASE_URL") or "https://plm.infosec.com.cn"
 ).rstrip("/")
@@ -76,9 +76,9 @@ LOGIN_RETRY = int(os.environ.get("LOGIN_RETRY") or "5")
 CAPTCHA_CHARSET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
-# ---------------------------------------------------------------------------
-# 基础 Playwright 工具
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def is_valid_url(raw_url: str | None) -> bool:
@@ -114,9 +114,9 @@ def find_first_locator(page, selectors: Iterable[str]):
     return None
 
 
-# ---------------------------------------------------------------------------
-# 验证码 OCR
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def _normalize_captcha_text(raw_text: str) -> str:
@@ -187,9 +187,9 @@ def solve_captcha_with_ocr(image_bytes: bytes, ocr_models: list | None = None) -
     return voted, candidates
 
 
-# ---------------------------------------------------------------------------
-# 登录（门户统一）
-# ---------------------------------------------------------------------------
+
+
+
 
 
 _LOGIN_PASSWORD_SELECTORS = [
@@ -270,10 +270,10 @@ def looks_like_login_page(page) -> bool:
     2. URL 含 ``/login/`` / ``signin`` → True；``sso`` 仅在页面文本也像登录页时成立
     3. title 含登录类关键字（"登录" / "sign in"）→ True
     """
-    # 0) portal-ready 短路：URL 里 /login/welcome/main 这种 SSO 落地页 title
-    # 也含"信安单点登录系统"，会被下面的 URL/title 启发误判。先看真实 DOM 标记。
-    # 给 hydrate 一点点时间（最多 2s）：headless / networkidle 后 SPA 的 markers
-    # 偶尔会比 navigation 完成晚几百 ms 出现。
+    
+    
+    
+    
     try:
         page.wait_for_function(
             "() => Boolean(document.querySelector('#currentuser')) "
@@ -284,20 +284,20 @@ def looks_like_login_page(page) -> bool:
     except Exception:  # noqa: BLE001
         pass
 
-    # 0.5) content-URL 短路：Bugzilla 详情 / PLM 详情等页面是已登录状态的真实
-    # 内容页。Bugzilla 详情底部有一个 "Login" 迷你登录条（footer mini-login form），
-    # 会让下面"找到 password input"分支误判为登录页。先按 URL 形态识别真实详情页。
+    
+    
+    
     url_raw = page.url or ""
     content_url_tokens = (
-        "show_bug.cgi",        # bugzilla 详情
-        "buglist.cgi",         # bugzilla 列表
-        "/zentao/bug-view-",   # 禅道 bug 详情
-        "/zentao/story-view-", # 禅道 story 详情
+        "show_bug.cgi",
+        "buglist.cgi",
+        "/zentao/bug-view-",
+        "/zentao/story-view-",
     )
     if any(tok in url_raw.lower() for tok in content_url_tokens):
         return False
 
-    # 1) password 控件
+    
     try:
         if find_first_locator(page, _LOGIN_PASSWORD_SELECTORS) is not None:
             logger.debug("looks_like_login_page: password input matched url=%s", url_raw)
@@ -305,7 +305,7 @@ def looks_like_login_page(page) -> bool:
     except Exception:  # noqa: BLE001
         pass
 
-    # 2) URL token
+    
     url = (page.url or "").lower()
     if any(tok in url for tok in ("/login/", "signin")):
         logger.debug("looks_like_login_page: URL token matched url=%s", page.url)
@@ -323,7 +323,7 @@ def looks_like_login_page(page) -> bool:
             logger.debug("looks_like_login_page: SSO login marker matched url=%s", page.url)
             return True
 
-    # 3) title
+    
     try:
         title = (page.title() or "").lower()
     except Exception:  # noqa: BLE001
@@ -332,10 +332,10 @@ def looks_like_login_page(page) -> bool:
         logger.debug("looks_like_login_page: title token matched title=%r", title)
         return True
 
-    # 注：旧版还有第 4 条"body 出现登录词 且 portal 未就绪"分支，已删除。
-    # 真实业务页面（Bugzilla 详情、PLM 列表等）的导航 / footer 经常含有"登录"
-    # "退出"等链接文字，会让此分支误判为登录页（实测 BUG-121100 详情命中）。
-    # 当前 1-3 三层启发 + 函数顶部的 portal-ready 短路已足以覆盖真实登录页。
+    
+    
+    
+    
 
     return False
 
@@ -389,12 +389,12 @@ def login_with_captcha(
 
         logger.info("自动登录尝试 %d/%d", attempt, LOGIN_RETRY)
 
-        # 关键：每次 attempt 都重新解析 locator。第一次提交失败后页面可能局部
-        # 重渲染（错误提示插入 / form 节点替换 / alert popup），上一轮的 Locator
-        # 句柄可能再也匹配不到 single element，从而 `.fill()` 卡 30s timeout。
-        # 先尝试关闭 alert 并等页面稳定，再 re-find；找不到则 reload 整页。
+        
+        
+        
+        
         if attempt > 1:
-            # 关闭可能存在的 alert / dialog（"验证码错误" 之类）
+            
             try:
                 page.keyboard.press("Enter")
             except Exception:  # noqa: BLE001
@@ -407,14 +407,14 @@ def login_with_captcha(
             user_loc = find_first_locator(page, _LOGIN_USER_SELECTORS)
             pass_loc = find_first_locator(page, _LOGIN_PASSWORD_SELECTORS)
             if user_loc is None or pass_loc is None:
-                # 可能 alert popup 阻挡 / SPA 局部销毁，回退到整页 reload
+                
                 logger.info("attempt %d 找不到登录表单，尝试整页 reload", attempt)
                 try:
                     page.reload(wait_until="domcontentloaded", timeout=15000)
                     page.wait_for_timeout(1000)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("reload 失败: %s", exc)
-                # reload 后 SPA 可能还在 hydrate；显式 wait 一下任意 user selector
+                
                 try:
                     page.wait_for_selector(
                         ",".join(_LOGIN_USER_SELECTORS), timeout=10000, state="visible"
@@ -466,7 +466,7 @@ def login_with_captcha(
                 if len(code_text) >= CAPTCHA_LEN_MIN:
                     code_loc.fill(code_text)
                     break
-                # OCR 失败：点验证码刷新
+                
                 try:
                     captcha_img_loc.click()
                 except Exception:  # noqa: BLE001
@@ -518,9 +518,9 @@ def login_with_captcha(
     return False
 
 
-# ---------------------------------------------------------------------------
-# 门户就绪
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def wait_for_portal_ready(page, *, timeout_ms: int = 20000) -> bool:
@@ -548,9 +548,9 @@ def wait_for_portal_ready(page, *, timeout_ms: int = 20000) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Bugzilla 侧
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def build_bugzilla_detail_urls(bug_id: str) -> list[str]:
@@ -580,9 +580,9 @@ def find_bugzilla_page(context, fallback_page):
     return fallback_page
 
 
-# ---------------------------------------------------------------------------
-# 禅道 / PLM 侧
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def looks_like_sso_failure(page) -> bool:
@@ -622,7 +622,7 @@ def open_plm_home(page, context, *, plm_home_url: str | None = None):
 
     wait_for_portal_ready(page)
 
-    # 优先点门户真实入口
+    
     portal_entry = _find_visible_plm_entry(page)
     if portal_entry is not None:
         logger.info("通过门户 PLM 入口进入")
@@ -752,9 +752,9 @@ def _strip_bug_prefix(ticket_id: str) -> str:
     return m2.group(1) if m2 else s
 
 
-# ---------------------------------------------------------------------------
-# 登录 + 导航：对外统一入口
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def ensure_portal_logged_in(
@@ -773,9 +773,9 @@ def ensure_portal_logged_in(
     """
     for url in PORTAL_LOGIN_URLS:
         try:
-            # 用 networkidle 等待 cookie-driven 的 SSO 重定向链结束（login → /login/welcome/main）。
-            # domcontentloaded 会在第一次 DOM 解析就返回，让后续 looks_like_login_page
-            # 看到瞬态的 login URL 而误判。
+            
+            
+            
             page.goto(url, wait_until="networkidle", timeout=20000)
             break
         except Exception as exc:  # noqa: BLE001
@@ -786,10 +786,10 @@ def ensure_portal_logged_in(
             except Exception:  # noqa: BLE001
                 continue
 
-    # 关键：goto 用 domcontentloaded 会在第一次 DOM 解析就返回，但门户对带 cookie
-    # 的请求会有一个二次 SSO 跳转到 ``/login/welcome/main``。如果立刻判
-    # ``looks_like_login_page`` 会看到原始 login URL → 误判为未登录 → 重新跑
-    # captcha。这里 race-wait：等 portal-ready 标记或登录表单中任意先出现的。
+    
+    
+    
+    
     try:
         page.wait_for_function(
             """() => Boolean(document.querySelector('#currentuser'))
@@ -848,29 +848,29 @@ def get_portal_credentials(prefix: str = "") -> tuple[str, str]:
 
 
 __all__ = [
-    # 基础工具
+    
     "is_valid_url",
     "wait_for_valid_url",
     "safe_title",
     "find_first_locator",
-    # 验证码
+    
     "solve_captcha_with_ocr",
-    # 登录
+    
     "looks_like_login_page",
     "login_with_captcha",
     "ensure_portal_logged_in",
     "get_portal_credentials",
-    # Bugzilla
+    
     "build_bugzilla_detail_urls",
     "build_bugzilla_home_urls",
     "find_bugzilla_page",
-    # 禅道
+    
     "wait_for_portal_ready",
     "open_plm_home",
     "goto_bug_from_plm_home",
     "goto_story_from_plm_home",
     "looks_like_sso_failure",
-    # 常量
+    
     "BUGZILLA_PROXY_HOME",
     "BUGZILLA_DIRECT_HOME",
     "PLM_PROXY_HOME",

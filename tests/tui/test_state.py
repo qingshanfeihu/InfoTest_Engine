@@ -1,6 +1,6 @@
 """Stage 1 TuiState smoke tests."""
 
-from main.qa_agent.tui.state import TuiState
+from main.ist_core.tui.state import TuiState
 
 
 def test_default_state():
@@ -18,7 +18,7 @@ def test_reset_run_keeps_thread_id_and_budget():
     s.reset_run(run_id="r2")
     assert s.thread_id == "t1"
     assert s.tokens_budget == 100
-    assert s.tokens_used == 42  # token usage 跨 run 累积
+    assert s.tokens_used == 42
     assert s.run_id == "r2"
     assert s.llm_calls == 0 and s.tool_calls == 0
     assert s.log_tail == []

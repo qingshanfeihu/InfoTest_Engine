@@ -174,7 +174,7 @@ CLI 验证流程（每条 APV 命令必须走完）：
 **SLB virtual server 未指定类型时，默认类型为 http，只有当前主要功能模块为 SLB 时才进行推断，否则禁止根据当前模块类型推断**（如 SDNS 模块 → `slb virtual dns` 是错误的）。
 
 - D 列有内容的主步骤行 → 创建 SLB virtual server：`slb virtual http "v1" <VIP_IP> 80 arp 0`（类型固定 http，端口固定 80，arp 固定 0）
-- D 列为空的补充行 → 创建当前模块引用该 VIP 的命令（如 `sdns listener <VIP_IP> <port>`）
+- D 列为空的补充行 → 创建当前模块引用该 VIP 的命令（如 `sdns listener <VIP_IP>`）
 - VIP IP 从 `cross_module_deps` 中获取，禁止复用设备物理 IP 作为 VIP
 
 **Success criteria**: 跨模块依赖行的 G 列可追溯到对应模块的 CLI 文档，SLB virtual server 类型为 http

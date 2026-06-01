@@ -35,7 +35,7 @@ InfoTest_Engine 知识库分桶：
 - ``knowledge/data/markdown/product/`` 是产品定义（CLI / spec）
 - ``knowledge/data/markdown/qa/`` 是测试资产（Test List / Strategy）
 
-不允许从 ``qa/Test List_*.md`` 推导产品语义。确认 IC/RC/EC 算法、CLI 参数行为时，必须读 ``product/`` 下的文档。
+不允许从 ``qa/Test List_*.md`` 推导产品语义。确认各个缩写及具体算法、CLI 参数行为时，必须读 ``product/`` 下的文档。
 
 ## Verification strategy
 

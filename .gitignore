@@ -83,6 +83,8 @@ workspace/*/*
 
 # 本地开发笔记（不进版本库）
 测试评审skill开发tips.md
+docs/context_reuse_vs_cc_haha.md
+docs/prompt_gap_vs_cc_haha.md
 
 # Claude
 .claude/

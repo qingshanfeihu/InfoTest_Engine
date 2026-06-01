@@ -73,7 +73,7 @@ memory/working/
 memory/long_term/
 memory/reviews/
 memory/.dream/
-knowledge/
+/knowledge/
 
 # Agent workspace（运行时：上传 / 产出 / 缺陷缓存；仅跟踪 .gitkeep 占位）
 workspace/*

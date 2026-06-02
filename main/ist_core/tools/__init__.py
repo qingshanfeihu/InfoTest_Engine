@@ -14,6 +14,7 @@ from main.ist_core.tools.deepagent import (
     qa_deepagent_write_file,
 )
 from main.ist_core.tools.deepagent.exec_tools import qa_bash, qa_exec
+from main.ist_core.tools.device import qa_ssh
 
 __all__ = [
     "qa_deepagent_edit_file",
@@ -24,4 +25,5 @@ __all__ = [
     "qa_deepagent_write_file",
     "qa_bash",
     "qa_exec",
+    "qa_ssh",
 ]

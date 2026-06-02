@@ -14,6 +14,7 @@ allowed-tools:
   - qa_deepagent_ls
   - qa_exec
   - qa_bash
+  - qa_ssh
 effort: medium
 ---
 
@@ -33,7 +34,7 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 - 配置下发时，前一条失败不准继续执行后续命令
 - SSH 凭据不准硬编码，用 qa_ask_user 或环境变量获取
 - 连接超时/失败最多重试 3 次，超过标注「设备不可达」
-- SSH 执行模板见 `reference/ssh_template.md`，封装实现见 `scripts/apv_ssh_client.py`
+- SSH 执行模板见 `main/ist_core/skills/device-verify/reference/ssh_template.md`，封装实现见 `main/ist_core/skills/device-verify/scripts/apv_ssh_client.py`
 
 ## 高危命令黑名单
 
@@ -97,9 +98,9 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 ### 4. SSH 执行
 
-**Execution**: Direct（qa_exec + paramiko）或 [human]（qa_ask_user 手动）
+**Execution**: Direct（qa_ssh）或 [human]（qa_ask_user 手动）
 
-用 `reference/ssh_template.md` 中的模板或 `scripts/apv_ssh_client.py` 封装类执行。
+优先用 `qa_ssh` 工具直接 SSH 到设备执行命令（受安全闸门保护）。如果 `qa_ssh` 不可用（如 paramiko 未安装或设备不可达），则降级为 qa_ask_user 请用户手动执行。手动执行时参考 `main/ist_core/skills/device-verify/reference/ssh_template.md` 中的模板。
 
 **只读验证**：在 enable 模式下依次执行 show 命令，收集所有输出。
 

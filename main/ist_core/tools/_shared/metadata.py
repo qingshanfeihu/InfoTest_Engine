@@ -78,8 +78,13 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": None,
         "intent": "exec",
     },
-    
-    
+    "qa_ssh": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "exec",
+    },
+
     "web_bug_search": {
         "read_only": False,
         "concurrency_safe": False,

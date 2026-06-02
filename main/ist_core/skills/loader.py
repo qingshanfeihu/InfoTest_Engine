@@ -54,6 +54,11 @@ def _get_tool_registry() -> dict[str, Any]:
         except ImportError:
             pass
         try:
+            from main.ist_core.tools.device import qa_ssh
+            _TOOL_REGISTRY["qa_ssh"] = qa_ssh
+        except ImportError:
+            pass
+        try:
             from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
 
             _TOOL_REGISTRY["web_bug_search"] = web_bug_search

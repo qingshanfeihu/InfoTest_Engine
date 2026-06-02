@@ -63,7 +63,12 @@ def qa_restapi(
     Auth: Basic (REST API credentials, NOT SSH credentials)
     Body: ``{"cmd": "<cli command>"}``
 
-    ``command`` can contain ``\\n`` for interactive commands::
+    **IMPORTANT**: REST API executes commands directly — no enable/config mode
+    needed. Do NOT prepend ``enable\\n`` or ``enable\\nconfig\\n``. Just send
+    the actual command, e.g. ``"show slb virtual all"`` or
+    ``"slb virtual http v1 172.16.34.100 80 arp 0"``.
+
+    ``command`` can contain ``\\n`` for interactive commands (e.g. confirmations)::
 
         "ssl activate certificate 54_vhost\\nYES\\n"
 

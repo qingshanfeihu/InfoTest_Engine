@@ -19,8 +19,6 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import List
-
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -204,6 +202,17 @@ def qa_ssh(
 ) -> str:
     """SSH to an APV device and execute a CLI command under strict safety controls.
 
+    **PREREQUISITE** — before calling this tool, you MUST grep
+    ``knowledge/data/markdown/product/cli_*_commands.md`` to confirm the exact
+    command name and syntax. The device runs InfosecOS, NOT Cisco IOS.
+
+    Data may live on the device, but COMMAND SYNTAX lives in the CLI manual.
+    "I need to check the device for X" is NOT an excuse to guess a command
+    name — grep the manual first for the correct show/list/display command,
+    then use it. Common WRONG guesses: ``show ip interface brief``,
+    ``show interface vlan``, ``show running-config interface``.
+    All of these are Cisco commands that do not exist on InfosecOS — they will fail and waste turns.
+
     Safety gates applied in order:
     1. Target IP must exist in the known network topology.
     2. The command must not contain shell metacharacters (no pipes, redirects,
@@ -220,12 +229,13 @@ def qa_ssh(
     arguments: ``APV_USERNAME``, ``APV_PASSWORD``, ``APV_ENABLE_PASSWORD``.
 
     Use this tool for:
-    - Read-only device check: ``host="172.16.34.70" command="show slb virtual"``
+    - Read-only device check: ``host="172.16.34.70" command="show slb virtual all"``
     - Safe config deploy: ``host="172.16.34.70" command="slb virtual http v1 172.16.34.100 80 arp 0" mode="config"``
 
     Args:
         host: Target device IP address (must exist in network topology).
-        command: Single CLI command to execute (no pipes/chains).
+        command: Single CLI command to execute (no pipes/chains). Connection
+            to the same host is kept alive across calls for speed.
         username: SSH username (falls back to APV_USERNAME env var, then "admin").
         password: SSH password (falls back to APV_PASSWORD env var, then "admin").
         enable_password: Enable-mode password (env APV_ENABLE_PASSWORD, default "").

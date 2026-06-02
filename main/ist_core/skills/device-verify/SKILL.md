@@ -15,6 +15,7 @@ allowed-tools:
   - qa_exec
   - qa_bash
   - qa_ssh
+  - qa_restapi
 effort: medium
 ---
 
@@ -31,6 +32,8 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 ## Principles
 
 - **高危命令一律拒绝**，不准下发，不准静默跳过（详见下方黑名单）
+- **CLI 手册优先于设备试错**：任何命令（含 show）必须先 grep `knowledge/data/markdown/product/cli_*_commands.md` 查语法。严禁在设备上用错误命令试探——设备不是命令发现工具，手册才是唯一权威
+- **禁止假设命令名**：设备运行 InfosecOS，不是 Cisco IOS。不要用 `show ip interface brief`、`show vlan`、`show interface` 等 Cisco 风格命令名，必须从 CLI 手册中查找 InfosecOS 的正确命令
 - 配置下发时，前一条失败不准继续执行后续命令
 - SSH 凭据不准硬编码，用 qa_ask_user 或环境变量获取
 - 连接超时/失败最多重试 3 次，超过标注「设备不可达」
@@ -75,44 +78,43 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 **Execution**: Direct
 
-**只读验证**：根据验证目标查询 CLI 手册生成对应 show 命令。常见映射：
+**⚠️ 强制步骤：所有命令（包括 show 和 config）必须先查 CLI 手册再执行。**
 
-| 验证目标 | show 命令 |
-|---------|----------|
-| 虚拟服务 | `show slb virtual` |
-| 后台服务组 | `show slb group` |
-| 后台服务状态 | `show slb real` |
+先 grep `knowledge/data/markdown/product/cli_*_commands.md` 确认命令的**完整名称和参数**。下表是已验证的正确命令——**必须使用表格中的精确命令，禁止简化**（如用 `show slb group` 代替 `show slb group method` 会遗漏关键信息）：
+
+| 验证目标 | 正确命令（必须用完整形式） |
+|---------|-------------------------|
+| 虚拟服务 | `show slb virtual all` |
+| 后台服务组 | `show slb group method` |
+| 后台服务状态 | `show slb real all` |
 | 健康检查 | `show slb health` |
 | SDNS listener | `show sdns listener` |
-| SDNS host | `show sdns host` |
-| 分区配置 | `show segment` |
+| SDNS host | `show sdns host name` |
+| 分区配置 | `show segment config` |
 | HA 状态 | `show ha status` |
-| 运行配置 | `show running-config` |
+| 运行配置 | `show running` |
 
-每条命令标注预期结果。
+**禁止行为**：表格中 `show slb group method` 是完整的正确命令——不要写成 `show slb group`（缺 method）、`show slb virtual`（缺 all）、`show slb real`（缺 all）。如果你不确定某一行的完整命令，grep 手册确认后再执行。
 
-**配置下发**：将 Step 2 标记为 safe 的命令按依赖排序，确认执行顺序。
+**配置下发**：先查 CLI 手册确认每条命令的完整语法和参数约束（同 config-answer 的 CLI 验证流程），再将 Step 2 标记为 safe 的命令按依赖排序。
 
-**Success criteria**: 只读验证：每条 show 命令有对应预期结果；配置下发：safe 命令清单 + 执行顺序明确
+**Rules**: 禁止猜测命令，所有命令必须在 cli 手册中能找到
+**Success criteria**: 每条命令可追溯到 CLI 手册中的定义
 **Artifacts**: show_commands_with_expected（只读） / deploy_command_sequence（下发）
 
-### 4. SSH 执行
+### 4. 执行命令
 
-**Execution**: Direct（qa_ssh）或 [human]（qa_ask_user 手动）
+**Execution**: Direct（qa_restapi 优先 → qa_ssh 降级）或 [human]（qa_ask_user 手动）
 
-优先用 `qa_ssh` 工具直接 SSH 到设备执行命令（受安全闸门保护）。如果 `qa_ssh` 不可用（如 paramiko 未安装或设备不可达），则降级为 qa_ask_user 请用户手动执行。手动执行时参考 `main/ist_core/skills/device-verify/reference/ssh_template.md` 中的模板。
+**优先级**：`qa_restapi` > `qa_ssh` > 手动执行
 
-**只读验证**：在 enable 模式下依次执行 show 命令，收集所有输出。
-
-**配置下发**：
-- enable → config terminal → 逐条执行配置命令
-- 每条检查输出中的错误标记（`% invalid`、`^`、`error` 等）
-- 单条失败 → 立即停止，报告失败命令和错误输出，不执行后续命令
-- 全部完成 → exit 退出 config 模式
+1. **首选 `qa_restapi`**：REST API 最快（单次 HTTP round-trip），无 SSH 握手开销，支持 `\n` 交互式命令。show 和 config 命令统一 POST 即可，无需区分模式
+2. **降级 `qa_ssh`**：REST API 不可用（连接失败/401/设备不支持）时使用 SSH
+3. **兜底人工**：以上都不可用时 qa_ask_user 请用户手动执行，参考 `main/ist_core/skills/device-verify/reference/ssh_template.md`
 
 **Human checkpoint**: 配置下发前，确认用户已知晓将修改设备配置（列出目标设备 + 待下发命令清单）
 
-**Rules**: 配置下发时前一条失败不准继续
+**Rules**: 配置下发时前一条失败不准继续；先 REST API 再 SSH 的顺序不可颠倒
 **Success criteria**: 所有命令执行完成，输出已收集（或遇到首个错误中止）
 **Artifacts**: execution_results
 

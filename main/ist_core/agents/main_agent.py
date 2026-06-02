@@ -18,7 +18,7 @@ from main.ist_core.tools.deepagent import (
     qa_deepagent_write_file,
 )
 from main.ist_core.tools.deepagent.exec_tools import qa_bash, qa_exec
-from main.ist_core.tools.device import qa_ssh
+from main.ist_core.tools.device import qa_restapi, qa_ssh
 from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
 from main.ist_core.tools.skills import qa_invoke_skill
@@ -39,6 +39,7 @@ def _default_generic_tools() -> list[Any]:
         qa_exec,
         qa_bash,
         qa_ssh,
+        qa_restapi,
 
         web_bug_search,
         

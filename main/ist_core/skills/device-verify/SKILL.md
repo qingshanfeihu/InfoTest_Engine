@@ -31,6 +31,7 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 ## Principles
 
+- **执行优先用 qa_restapi 而非 qa_ssh**：REST API 比 SSH 快得多（单次 HTTP 调用 vs shell 交互），且无需 enable/config 模式。SSH 仅作为 REST API 不可用时的降级方案
 - **高危命令一律拒绝**，不准下发，不准静默跳过（详见下方黑名单）
 - **CLI 手册优先于设备试错**：任何命令（含 show）必须先 grep `knowledge/data/markdown/product/cli_*_commands.md` 查语法。严禁在设备上用错误命令试探——设备不是命令发现工具，手册才是唯一权威
 - **禁止假设命令名**：设备运行 InfosecOS，不是 Cisco IOS。不要用 `show ip interface brief`、`show vlan`、`show interface` 等 Cisco 风格命令名，必须从 CLI 手册中查找 InfosecOS 的正确命令
@@ -51,7 +52,7 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 **全局清除**：`clear config`
 
-**白名单（允许下发）**：SLB（slb virtual/real/group/health/translate/persist/policy）、SDNS（sdns host/listener/service/pool/on/off）、分区（segment name/user/interface/enable/disable/nat/vlan/ha）、SSL、HA（ha group/node/link）、系统（hostname/ntp/syslog/snmp/log on/off）、单个对象删除（`no slb virtual http <name>` 等）、持久化（`write memory`、`write segment file/memory`）
+**白名单（允许下发）**：SLB（slb virtual/real/group/health/translate/persist/policy）、SDNS（sdns host/listener/service/pool/on/off）、分区（segment name/user/interface/enable/disable/nat/vlan/ha）、SSL、HA（ha group/node/link）、系统（hostname/ntp/syslog/snmp/log on/off）、单个对象删除/清除（`no slb`、`clear slb`、`no sdns`、`clear sdns`、`no segment`、`clear segment`、`no ssl`、`clear ssl` 前缀均允许）、持久化（`write memory`、`write segment file/memory`）
 
 ## Steps
 
@@ -131,11 +132,11 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 **Execution**: Direct
 
-**写内存（按需）**：用户要求持久化时执行 `write memory` 或 `write segment memory`。未要求时跳过，避免覆盖设备上已有的未保存配置。
+**默认不保存**：配置下发后**不**执行 `write memory`。除非用户明确要求"保存配置"或"持久化"，否则跳过。避免覆盖设备上已有的未保存配置。
 
-**验证下发结果**：执行对应 show 命令确认配置已生效。
+**验证下发结果**：执行对应 show 命令确认配置已生效。验证通过即完成任务，不需额外保存步骤。
 
-**Success criteria**: 配置已生效确认 + 下发结果汇总完整
+**Success criteria**: 配置已生效确认 + 下发结果汇总完整（无需保存）
 **Artifacts**: deploy_summary
 
 ### 7. 输出报告

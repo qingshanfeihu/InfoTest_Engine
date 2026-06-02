@@ -93,9 +93,11 @@ _SAFE_CONFIG_PREFIXES: tuple[str, ...] = (
     "ha group", "ha node", "ha link",
     # System (safe subset)
     "hostname", "ntp", "syslog", "snmp", "log on", "log off",
-    # Single-object deletion
-    "no slb virtual", "no slb real", "no slb group",
-    "no slb health", "no sdns", "no segment",
+    # Object deletion / clear
+    "no slb", "clear slb",
+    "no sdns", "clear sdns",
+    "no segment", "clear segment",
+    "no ssl", "clear ssl",
     # Persistence
     "write memory", "write segment file", "write segment memory",
 )
@@ -201,6 +203,11 @@ def qa_ssh(
     command_timeout: int = _DEFAULT_COMMAND_TIMEOUT,
 ) -> str:
     """SSH to an APV device and execute a CLI command under strict safety controls.
+
+    **PREFER qa_restapi instead.** REST API is faster (single HTTP call, no
+    shell interaction). Only use this tool when qa_restapi is unavailable
+    (connection refused, HTTP 401, or device doesn't support REST API).
+    SSH is the fallback — not the first choice.
 
     **PREREQUISITE** — before calling this tool, you MUST grep
     ``knowledge/data/markdown/product/cli_*_commands.md`` to confirm the exact

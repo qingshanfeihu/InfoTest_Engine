@@ -77,29 +77,21 @@ _READ_ONLY_PREFIXES: tuple[str, ...] = (
 # ── Allowed config command prefixes (safe subset) ────────────────────────
 
 _SAFE_CONFIG_PREFIXES: tuple[str, ...] = (
-    # SLB
-    "slb virtual", "slb real", "slb group", "slb health",
-    "slb translate", "slb persist", "slb policy",
-    # SDNS
-    "sdns host", "sdns listener", "sdns service", "sdns pool",
-    "sdns on", "sdns off",
-    # Segment
-    "segment name", "segment user", "segment interface",
-    "segment enable", "segment disable", "segment nat",
-    "segment vlan", "segment ha",
-    # SSL
-    "ssl",
-    # HA
-    "ha group", "ha node", "ha link",
-    # System (safe subset)
-    "hostname", "ntp", "syslog", "snmp", "log on", "log off",
-    # Object deletion / clear
+    # Core service modules — all sub-commands covered by module prefix.
+    # Dangerous exceptions (system reboot/shutdown, ip address, etc.)
+    # are caught by _HIGH_RISK_COMMANDS blacklist before whitelist check.
+    "slb", "sdns", "segment", "ssl", "ha",
+    # System (safe subset; dangerous entries blocked by blacklist)
+    "hostname", "ntp", "syslog", "snmp",
+    "log", "system",
+    # Persistence
+    "write memory", "write segment",
+    # Deletion / clear — prefix match covers all sub-resources
     "no slb", "clear slb",
     "no sdns", "clear sdns",
     "no segment", "clear segment",
     "no ssl", "clear ssl",
-    # Persistence
-    "write memory", "write segment file", "write segment memory",
+    "no ha", "clear ha",
 )
 
 # ── IP validation cache ──────────────────────────────────────────────────

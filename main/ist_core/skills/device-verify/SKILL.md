@@ -52,7 +52,7 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 **全局清除**：`clear config`
 
-**白名单（允许下发）**：SLB（slb virtual/real/group/health/translate/persist/policy）、SDNS（sdns host/listener/service/pool/on/off）、分区（segment name/user/interface/enable/disable/nat/vlan/ha）、SSL、HA（ha group/node/link）、系统（hostname/ntp/syslog/snmp/log on/off）、单个对象删除/清除（`no slb`、`clear slb`、`no sdns`、`clear sdns`、`no segment`、`clear segment`、`no ssl`、`clear ssl` 前缀均允许）、持久化（`write memory`、`write segment file/memory`）
+**白名单（允许下发）**：SLB 全模块（slb *）、SDNS 全模块（sdns *）、分区（segment *）、SSL、HA 全模块（ha *）、系统安全子集（hostname/ntp/syslog/snmp/log/system *——危险命令如 system reboot/shutdown 由黑名单拦截）、删除/清除（no slb/clear slb/no sdns/clear sdns/no segment/clear segment/no ssl/clear ssl/no ha/clear ha 前缀均允许）、持久化（write memory/write segment）
 
 ## Steps
 

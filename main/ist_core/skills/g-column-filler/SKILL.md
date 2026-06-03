@@ -29,23 +29,35 @@ $ARGUMENTS
 
 ## E/F 列速查
 
-| E 列 | F 列 | G 列应填 |
-|------|------|---------|
-| `APV*` | — | CLI 命令，参数严禁推断，必须走 CLI 验证流程 |
-| `APV` | `execute` | 从 `knowledge/data/auto_env/execute_action` 查找，严禁自行编造 |
-| `check_point` | `found` | 应匹配到的标识符。前一行通常是 test_env 或 APV show——验证上一行的操作结果 |
-| `check_point` | `not_found` | 应不存在的标识符。典型模式：正向 found → 改配置 → not_found（反向测试） |
-| `check_point` | `found times` | 只写数字（如 `3`） |
-| `test_env` | — | Linux 命令行（dig、curl、ping 等） |
-| `time` | `sleep` | 等待秒数（纯数字，不带单位） |
+**⚠️ 填写每条 G 列前，必须先查此表对号入座。禁止凭感觉或跳步。**
 
-F=`cmd_config` 时需判断 create / modify / show：下一行 check_point+found → show；否则配置命令。回看前面 G 列，资源已出现 → modify，首次出现 → create。
+| E 列 | F 列 | G 列必须填 | 常见错误 |
+|------|------|-----------|---------|
+| `APV*` | — | CLI 命令（参数必须从 CLI 手册提取，严禁推断） | 凭记忆写参数、跳过 CLI 验证流程 |
+| `APV` | `execute` | 从 `execute_action` 查找的命令，严禁自行编造 | 自己编一个看着像的命令 |
+| `check_point` | `found` | 可精确匹配的内容（格式由**前一行**决定，不是自己决定） | D列写"配置添加成功"就填裸IP |
+| `check_point` | `not_found` | 应不存在的标识符，格式同 found | 填描述性文字 |
+| `check_point` | `found times` | **只写数字**（如 `3`），不加任何其他文字 | 写成 `3 times` |
+| `test_env` | — | Linux 命令行（dig/curl/ping 等），参数从前面 APV 行提取 | 编造端口号、加 `-6` 标志 |
+| `time` | `sleep` | 纯数字（如 `5`），**不带单位不带引号** | 写成 `5s`、`sleep 5` |
+
+**F=`cmd_config` 决策树**（按顺序判断，不跳步）：
+1. 看**下一行**的 E：下一行是 `check_point` + F=`found` → **show 命令**（展示配置结果）
+2. 否则 → 配置命令
+3. 回看**前面 G 列**中该资源是否已出现 → 已出现=modify，首次出现=create
 
 ## Principles
 
 - CLI 文档是 APV 命令的**唯一权威来源**——语法、参数顺序、必选/可选、取值范围、默认值全部以文档为准
 - 基础配置必须是**完整的服务配置**，而非仅包含被测特性本身
 - **IP/端口必须从上游数据严格引用**：IP 从 device_ip_map 或 topology_rag.md 精确取值；端口从基础配置行或前面 APV 行提取，禁止凭记忆写默认端口
+- **D 列上下文引用推断**：当 D 列出现「同一个」「另一个」「不同的」「同上」「同前」「新增」「第二个」「第三个」等指代词时，**必须回看前面已填写行的 G 列内容来推断本行 G 列**：
+  - 「同一个 XXX」→ 复用前面行中 XXX 的资源名/IP/端口（完全相同）
+  - 「另一个 YYY」→ 使用与前面不同的值（从可用资源池中选取不同的，如 topology 中另一台服务器 IP、另一个端口号）
+  - 「不同的 ZZZ」→ 与「另一个」同理，选取不同值
+  - 「同上」「同前」→ 完全复制前面行 G 列内容
+  - 「新增第N个」→ 在前面已创建资源的基础上，创建第 N 个同类型资源（命名递增，参数独立）
+  - **判断前提**：先确定 D 列指代的是哪种资源（listener/real server/pool/VIP 等），再决定复用还是替换哪个参数
 - 参数在 code_format.json 中找不到明确定义 → 标记「未生成」
 - **check_point 前置检查**：填 check_point 前必须先看前一行的 E 列和 G 列。前一行是 APV show/config → check_point 写 CLI 完整输出格式（如 SLB: `slb virtual http "v1" 172.16.34.100 80`），**绝对禁止裸 IP**。前一行是 test_env + D 列含「访问成功」→ check_point 填**后端服务器 响应内容或IP**（不是 DNS/VIP 的 IP）。只有前一行是 test_env（Linux 命令）且 D 列含「访问成功」时才写客户端侧的响应格式。**最容易犯的两个错误**：①看到 D 列「配置添加成功」就填裸 IP（前一行是 APV 时必须填 CLI 完整输出格式）；②看到 D 列「访问成功」就填 DNS/VIP 的 IP（应根据访问类型填后端服务器 响应内容或IP）。此规则适用所有模块
 
@@ -71,9 +83,13 @@ F=`cmd_config` 时需判断 create / modify / show：下一行 check_point+found
 
 **域名/端口提取规则**：从后续所有行中提取域名（如 `autotest.com`）和端口号（如 `53`、`80`），这些值必须在基础配置行中出现对应的创建命令。如果后续行中首次出现了访问某域名，基础配置行或该访问行之前的配置行必须有创建该域名的命令。**禁止**在后续行凭空出现一个基础配置行或该访问行之前的配置行未创建的域名访问。
 
-#### 1b. 确定模块并查 CLI 手册
+#### 1b. 确定模块并查文档
 
-用 `module_keywords` 确定 CLI 手册范围。优先 grep `cli_*_commands.md`（纯文本）；兜底 grep `cli_*part*.code_format.json` 的 `markdown` 字段。对 1a 清单中的每种资源类型，找到对应的 add/create/set 命令语法。
+用 `module_keywords` 确定范围。**搜索优先级**：
+
+1. **首选** grep `knowledge/data/markdown/product/app_*.code_format.json`，查找该业务的**完整配置示例**。app 文档含可直接使用的示例序列（如 SLB 的 virtual server + real server + group + health check 完整创建流程）。找到后修改 IP/端口/名称即可
+2. 主力 grep `cli_*_commands.md`（纯文本），对 1a 清单中的每种资源类型找到对应的 add/create/set 命令语法
+3. 兜底 grep `cli_*part*.code_format.json` 的 `markdown` 字段
 
 #### 1c. 逐资源生成创建命令
 
@@ -110,14 +126,12 @@ F=`cmd_config` 时需判断 create / modify / show：下一行 check_point+found
 
 对基础配置行之外 E=check_point 的行，G 列填写脚本可精确匹配的内容，禁止描述性文字。
 
-**决定 G 列格式的不是 D 列文字，而是前一行的 E 列和 G 列**。按下表从上到下匹配（第一条命中即停止），**适用所有模块**：
+**决定 G 列格式的不只是 D 列文字，还依靠前一行的 E 列和 G 列**。按下表从上到下匹配（第一条命中即停止），**适用所有模块**：
 
-| 优先级 | 前一行特征 | G 列格式 | 示例（多模块） |
-|-------|-----------|---------|-------------|
-| **1（最高）** | 前一行 E=APV，G 列为 show/list/display 命令 | 该 show 命令的 CLI 完整输出格式 | SLB: `slb virtual http "v1" 172.16.34.100 80`；SDNS: `sdns listener 172.16.34.70`；HA: `ha group status HA active` |
-| **2** | 前一行 E=APV，G 列为配置命令（非 show）| CLI 完整输出格式 | SLB: `slb real tcp "rs1" 172.16.35.231 80`；FW: `fw rule 10 permit` |
-| **3** | 前一行 E=test_env，D 含「访问成功」| 后端服务器 IP 或响应内容 | `172.16.35.231` |
-| **4** | 前一行 E=test_env（所有其他情况——含「dig」「curl」「ping」「访问」或 D 为空）| 该工具的标准输出格式，**不可留空** | dig: `SERVER: 172.16.34.70#53`；curl: `HTTP/1.1 200 OK`；ping: `64 bytes from` |
+| 优先级       | 前一行特征 | G 列格式 | 示例（多模块）                                                                                                          |
+|-----------|-----------|---------|------------------------------------------------------------------------------------------------------------------|
+| **1（最高）** | 前一行 E=APV，G 列为 show 命令 | 该 show 命令的 CLI 完整输出格式 | SLB: `slb virtual http "v1" 172.16.34.100 80`；SDNS: `sdns listener 172.16.34.70`；HA: `ha group status HA active` |
+| **2**     | 前一行 E=test_env（所有其他情况——含「dig」「curl」「ping」「访问」）| 该工具的标准输出格式，**不可留空** | dig: `A\s+172.16.35.231`；curl: `HTTP/1.1 200 OK`；ping: `64 bytes from`                                           |
 
 **Rules**:
 - **⚠ 前面是 APV show 命令时，check_point 必须写 CLI 完整输出格式**：如果本行 check_point 的**前一行是 APV 且其 G 列为 show/list/display 查看命令**，则本行值**必须**匹配该 show 命令的 CLI 输出完整格式（如 `sdns listener 172.16.34.70`），**绝对不允许只填裸 IP**。回看上一行即可判断。
@@ -125,7 +139,7 @@ F=`cmd_config` 时需判断 create / modify / show：下一行 check_point+found
 - **check_point 必须体现本组测试焦点**：回看本组第一个有 D 列的行，提取测试焦点（端口/协议/IP 类型/超时值/状态码等），确保 check_point 包含该焦点的对应值。不同模块的测试焦点不同，但判断逻辑一致
 - **最容易犯的两个错误**：
   - 看到 D 列「配置添加成功」就填裸 IP → 错误。前一行是 APV 时必须填 CLI 完整输出格式
-  - 看到 D 列「访问成功」就填 DNS/VIP 的 IP → 错误。"访问成功"验证的是**后端可达性**，填写内容 必须是后端服务器的 响应或IP（如 `172.16.35.231`），不是 DNS listener 的 IP（如 `172.16.34.70`）
+  - 看到 D 列「访问成功」就填 DNS/VIP 的 IP → 错误。"访问成功"验证的是**后端可达性**，填写内容 必须是后端服务器的 响应（如 `HTTP/1.1 200 OK` ）或IP（如 `172.16.35.231`），不是访问的目标IP（如 VS 或 sdns listener 的ip）
 
 **Success criteria**: 每条 check_point 可被脚本精确匹配，且反映本组测试焦点
 
@@ -139,7 +153,7 @@ F=`cmd_config` 时需判断 create / modify / show：下一行 check_point+found
 
 ### 2c. time (when applicable)
 
-F=sleep 时填数字。配置生效 5~10；服务重启 30~60；无法确定默认 `5`。
+F=sleep 时填数字。根据当前测试的功能配置和cli对此功能的描述推断；无法确定默认 `5`。
 
 **Success criteria**: 每条 time 值有合理依据
 
@@ -163,7 +177,7 @@ CLI 验证流程（每条 APV 命令必须走完）：
 5. 逐参数填写：必选→必须出现；可选不影响→省略；可选影响→值从合法取值中选取；顺序与文档一致
 6. 任何参数找不到明确定义 → 禁止填入，标记「未生成」
 
-**Rules**: 禁止凭拓扑 IP 推断、凭命令名相似推断、画蛇添足写默认值。**Listener 端口只在 D 列明确提到时才附加——包括默认 DNS 端口 53 也不例外。** D 列只写协议类型（如「协议-IPV4」「协议-IPV6」「IP类型-port ip」「tcp/udp」）而无具体端口号 → 不附加任何端口。D 列写了具体端口号（如「port-10001」）→ 才附加该端口。Listener IP 未指定时用设备第一个 IPv4。**D 列含「系统ip」→ 使用当前模块设备的第一个 IPv4，不是其他设备的 IP。** 传输协议类 D 列（仅含 tcp/udp）→ 配置标准 listener（不带端口）。
+**Rules**: 禁止凭拓扑 IP 推断、凭命令名相似推断、画蛇添足写默认值。 
 
 **Success criteria**: 每条 APV 命令的所有参数可追溯到文档定义，或标记「未生成」
 
@@ -174,7 +188,6 @@ CLI 验证流程（每条 APV 命令必须走完）：
 **SLB virtual server 未指定类型时，默认类型为 http，只有当前主要功能模块为 SLB 时才进行推断，否则禁止根据当前模块类型推断**（如 SDNS 模块 → `slb virtual dns` 是错误的）。
 
 - D 列有内容的主步骤行 → 创建 SLB virtual server：`slb virtual http "v1" <VIP_IP> 80 arp 0`（类型固定 http，端口固定 80，arp 固定 0）
-- D 列为空的补充行 → 创建当前模块引用该 VIP 的命令（如 `sdns listener <VIP_IP>`）
 - VIP IP 从 `cross_module_deps` 中获取，禁止复用设备物理 IP 作为 VIP
 
 **Success criteria**: 跨模块依赖行的 G 列可追溯到对应模块的 CLI 文档，SLB virtual server 类型为 http

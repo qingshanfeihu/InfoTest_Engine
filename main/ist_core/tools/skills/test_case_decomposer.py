@@ -156,8 +156,8 @@ def _pick_listener_ip(module: str, step_text: str) -> str:
 # 已注入前置的模块（同级模块只注入一次）
 _INJECTED_PREREQ: set[str] = set()
 
-# 已注入依赖的 case（每个 case 的依赖只注入一次）
-_INJECTED_DEPS: set[int] = set()
+# 已注入依赖的 group+dep_key（同 group 内同依赖只注入一次，跨 case 共享）
+_INJECTED_DEPS: set[tuple] = set()
 
 
 def _detect_module_and_group(module: str, steps_text: str) -> tuple[str, str]:
@@ -294,12 +294,72 @@ def _has_check_marker(text: str) -> bool:
     """检查 step 文本是否包含 [checkN] 标记。"""
     return bool(_CHECK_MARKER_RE.search(text))
 
+
+def _match_expected_by_check(step_text: str, expected: list[str]) -> str:
+    """根据 step 文本中的 [checkN] 编号匹配对应的预期结果。
+
+    有编号则精确匹配（[check1]→"配置添加成功"），无编号取第一个。
+    """
+    check_match = re.search(r'\[check(\d*)\]', step_text, re.IGNORECASE)
+    if check_match:
+        check_num = check_match.group(1)
+        marker = f'[check{check_num}]' if check_num else '[check'
+        for e in expected:
+            if marker.lower() in e.lower():
+                return _CHECK_MARKER_RE.sub('', e).strip()
+    # 兜底：取第一个预期结果
+    for e in expected:
+        clean = _CHECK_MARKER_RE.sub('', e).strip()
+        if clean:
+            return clean
+    return expected[0] if expected else ""
+
+
+def _split_numbered_sub_steps(text: str) -> list[str] | None:
+    """检测并拆分合并的步骤。
+
+    覆盖三种模式：
+    1. 编号子步骤：1.配置xxx\\n2.使用dig请求tcp [check1]
+    2. 单行多个编号：1.配置xxx 2.使用dig请求tcp
+    3. \\n分隔的配置+客户端动作：在bapv上配置sdns\\ndig访问aapv tcp
+
+    拆分后剥离编号前缀（如 "3.10s后再次请求"→"10s后再次请求"），避免编号
+    干扰下游的时间检测/actor分类。
+    """
+    _STRIP_NUM_PREFIX = re.compile(r'^\d+[\.\、\)]\s*')
+    if not text:
+        return None
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    if len(lines) >= 2:
+        # 模式1：编号子步骤
+        numbered = [l for l in lines if re.match(r'\d+[\.\、\)]', l)]
+        if len(numbered) >= 2 and len(numbered) >= len(lines) * 0.6:
+            return [_STRIP_NUM_PREFIX.sub('', l) for l in lines]
+        # 模式3：\\n分隔的配置+客户端动作（如"在bapv上配置sdns\\ndig访问aapv"）
+        _CONFIG_SIG = r'配置|添加|删除|修改|设置|启用|禁用|开启|关闭|no\s|sdns\s|slb\s|ha\s|fw\s|listener|host\s|pool\s|service\s|zone\s'
+        _CLIENT_SIG = r'dig\s|ping\s|curl\s|wget\s|发包|打流量|访问|请求|客户端|tcpdump|telnet|nc\s|nslookup'
+        has_config = any(re.search(_CONFIG_SIG, l, re.IGNORECASE) for l in lines)
+        has_client = any(re.search(_CLIENT_SIG, l, re.IGNORECASE) for l in lines)
+        if has_config and has_client:
+            config_lines = [l for l in lines if re.search(_CONFIG_SIG, l, re.IGNORECASE)]
+            client_lines = [l for l in lines if re.search(_CLIENT_SIG, l, re.IGNORECASE)]
+            if config_lines and client_lines:
+                return lines
+    # 模式2：单行但含多个编号子步骤
+    parts = re.split(r'(?=\d+[\.\、\)])', text)
+    parts = [p.strip() for p in parts if p.strip()]
+    numbered_parts = [p for p in parts if re.match(r'\d+[\.\、\)]', p)]
+    if len(numbered_parts) >= 2:
+        return [_STRIP_NUM_PREFIX.sub('', p) for p in parts]
+    return None
+
+
 # Action 推断规则：actor + step 意图 → action
 ACTION_RULES: dict[str, list[tuple[str, str, str]]] = {
     'APV_0': [
         (r'reboot|重启|升级|降级', 'execute', '特权操作(脱离config模式)'),
         (r'write\s|保存|save', 'cmd_config', '保存配置命令'),
-        (r'(?=.*(?:sdns|slb|firewall|route))(?=.*(?:配置|添加|创建|设置|删除|启用)).*(?:sdns|slb|firewall|route).*(?:sdns|slb|firewall|route)', 'cmds_config', '多条配置命令'),
+        (r'(?=.*(?:sdns|slb|firewall|route))(?=.*(?:配置|添加|创建|设置|删除|启用)).*[,;、].*(?:sdns|slb|firewall|route)', 'cmd_config', '配置命令(含多模块引用)'),
         (r'初始化|基础环境|基础配置|前置|setup', 'cmds_config', '多条初始化命令'),
         (r'(?:配置|添加|创建|设置|删除|no\s|启用|开启|关闭|show|查看).{0,30}(?:sdns|slb|firewall|route|ip|port|vip|listener|host|service|pool|policy|group|real|virtual)', 'cmd_config', '单条配置命令'),
         (r'show|查看|检查|显示', 'cmd_config', '查看命令'),
@@ -743,8 +803,8 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
         # Also check expected text for dependency keywords
         deps_check_text = all_steps_text + " " + " ".join(expected)
         for dep_key, dep_steps in _FEATURE_DEPENDENCIES.items():
-            if dep_key in deps_check_text.lower() and case_id not in _INJECTED_DEPS:
-                _INJECTED_DEPS.add(case_id)
+            if dep_key in deps_check_text.lower() and (group_name, dep_key) not in _INJECTED_DEPS:
+                _INJECTED_DEPS.add((group_name, dep_key))
                 for ds in dep_steps:
                     # Customize show hint based on module
                     hint = ds.get("hint", "")
@@ -782,6 +842,16 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
         # 4. Case description + steps
         # 用例描述优先用 extracted JSON 的 description 字段（脑图 priority=2 节点文本）
         case_desc = case.get("description", "") or (steps[0][:60] if steps else module.split(" > ")[-1])
+
+        # ── 拆分编号子步骤：有人把多个步骤写到一块，用 1. 2. 3. 分隔 ──
+        _flat_steps: list[str] = []
+        for s in steps:
+            split_s = _split_numbered_sub_steps(s.strip())
+            if split_s:
+                _flat_steps.extend(split_s)
+            else:
+                _flat_steps.append(s)
+        steps = _flat_steps
 
         # Decompose each step
         for i, step_text in enumerate(steps):
@@ -906,14 +976,7 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                         c_counter += 1
 
                     # 注入 check_point
-                    exp_text = ""
-                    for e in expected:
-                        clean_e = re.sub(r'\[check\d*\]', '', e).strip()
-                        if clean_e:
-                            exp_text = clean_e
-                            break
-                    if not exp_text and expected:
-                        exp_text = expected[0]
+                    exp_text = _match_expected_by_check(text, expected)
 
                     check_action = "found"
                     if any(kw in (exp_text or "") for kw in ["失败", "不能", "无法", "不支持", "错误", "未被保存", "未生效", "不存在", "不命中"]):
@@ -934,6 +997,8 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
             action, action_desc = _infer_action(actor, clean_text)
             g_fill = _infer_g_fill(actor, clean_text, bool(expected))
 
+            skip_entry = False
+
             # If step is already a raw CLI command, keep as standalone step (don't merge into init)
             if _CLI_CMD_RE.match(clean_text):
                 actor = "APV_0"
@@ -947,7 +1012,8 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                     "data": clean_text.strip(),
                 })
                 c_counter += 1
-                continue
+                skip_entry = True
+                # Fall through — has_check block below still needs to process [checkN] markers
 
             # Detect prerequisites for this step
             has_prereq = any(
@@ -972,7 +1038,7 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                 (len(clean_text) < 5 and actor == "check_point" and not has_check)
             )
 
-            if not is_pure_expected and clean_text:
+            if not is_pure_expected and clean_text and not skip_entry:
                 entry: dict[str, Any] = {
                     "c": c_counter,
                     "actor": actor,
@@ -987,14 +1053,7 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                     entry["hint"] = _build_hint(actor, action, enriched_describe, clean_text)
                 elif g_fill == G_FILL_INFER:
                     if actor == "check_point":
-                        exp_text = ""
-                        for e in expected:
-                            clean_e = re.sub(r'\[check\d*\]', '', e).strip()
-                            if clean_e:
-                                exp_text = clean_e
-                                break
-                        if not exp_text and expected:
-                            exp_text = expected[0]
+                        exp_text = _match_expected_by_check(text, expected)
                         prev = decomposed_steps[-1] if decomposed_steps else None
                         entry["infer_from"] = _build_check_infer_from(
                             exp_text or clean_text, prev
@@ -1031,51 +1090,47 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                 decomposed_steps.append(entry)
                 c_counter += 1
 
-                # If step had [check] marker, add a separate check_point row
-                if has_check and actor != "check_point":
-                    exp_text = ""
-                    for e in expected:
-                        clean_e = re.sub(r'\[check\d*\]', '', e).strip()
-                        if clean_e:
-                            exp_text = clean_e
-                            break
+            # If step had [check] marker, add a separate check_point row
+            # (outside entry creation block — also fires for CLI_CMD_RE steps that set skip_entry)
+            if has_check and actor != "check_point":
+                exp_text = _match_expected_by_check(text, expected)
 
-                    check_action = "found"
-                    # Determine check action from expected result + step context
-                    if any(kw in (exp_text or "") for kw in ["失败", "不能", "无法", "不支持", "错误", "未被保存", "未生效", "不存在", "不命中"]):
-                        check_action = "not_found"
-                    # Delete/remove steps: verify the thing is GONE
-                    if any(kw in clean_text for kw in ["删除", "no ", "移除", "清除", "清空"]):
-                        check_action = "not_found"
+                check_action = "found"
+                # Determine check action from expected result + step context
+                if any(kw in (exp_text or "") for kw in ["失败", "不能", "无法", "不支持", "错误", "未被保存", "未生效", "不存在", "不命中"]):
+                    check_action = "not_found"
+                # Delete/remove steps: verify the thing is GONE
+                if any(kw in clean_text for kw in ["删除", "no ", "移除", "清除", "清空"]):
+                    check_action = "not_found"
 
-                    prev = decomposed_steps[-1] if decomposed_steps else None
-                    exp_text_final = exp_text or f"验证{clean_text[:30]}"
+                prev = decomposed_steps[-1] if decomposed_steps else None
+                exp_text_final = exp_text or f"验证{clean_text[:30]}"
 
-                    # check_point 前注入验证步骤（通用：设备用 show，客户端已有动作）
-                    verify_actor, verify_hint = _infer_verify_hint(
-                        decomposed_steps, module, exp_text_final
-                    )
-                    if verify_actor and verify_hint:
-                        decomposed_steps.append({
-                            "c": c_counter, "actor": verify_actor, "action": "cmd_config",
-                            "describe": f"{verify_actor} 查看验证配置: 查看配置确认变更生效",
-                            "g_fill": G_FILL_PDF, "hint": verify_hint,
-                        })
-                        c_counter += 1
-                        prev = decomposed_steps[-1]
-
-                    # Enriched describe for check_point
-                    check_describe = f"断言应出现: {exp_text_final}" if check_action == "found" else f"断言不应出现: {exp_text_final}"
-                    check_entry: dict[str, Any] = {
-                        "c": c_counter,
-                        "actor": "check_point",
-                        "action": check_action,
-                        "describe": check_describe,
-                        "g_fill": G_FILL_INFER,
-                        "infer_from": _build_check_infer_from(exp_text_final, prev),
-                    }
-                    decomposed_steps.append(check_entry)
+                # check_point 前注入验证步骤（通用：设备用 show，客户端已有动作）
+                verify_actor, verify_hint = _infer_verify_hint(
+                    decomposed_steps, module, exp_text_final
+                )
+                if verify_actor and verify_hint:
+                    decomposed_steps.append({
+                        "c": c_counter, "actor": verify_actor, "action": "cmd_config",
+                        "describe": f"{verify_actor} 查看验证配置: 查看配置确认变更生效",
+                        "g_fill": G_FILL_PDF, "hint": verify_hint,
+                    })
                     c_counter += 1
+                    prev = decomposed_steps[-1]
+
+                # Enriched describe for check_point
+                check_describe = f"断言应出现: {exp_text_final}" if check_action == "found" else f"断言不应出现: {exp_text_final}"
+                check_entry: dict[str, Any] = {
+                    "c": c_counter,
+                    "actor": "check_point",
+                    "action": check_action,
+                    "describe": check_describe,
+                    "g_fill": G_FILL_INFER,
+                    "infer_from": _build_check_infer_from(exp_text_final, prev),
+                }
+                decomposed_steps.append(check_entry)
+                c_counter += 1
 
         # 5. 结构+内容双驱动创建 check_point
         _NEG_KW = ["失败", "不能", "无法", "不支持", "错误", "不可以使用", "不可以", "未被保存", "未生效", "不存在", "不命中"]
@@ -1096,6 +1151,10 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                 for exp_text in step_exp_map[str_idx]:
                     exp_clean = re.sub(r'\[check\d*\]', '', exp_text).strip()
                     if not exp_clean:
+                        continue
+                    # Skip if already covered by has_check injection (avoid duplicates)
+                    if any(s.get("actor") == "check_point" and exp_clean[:20] in s.get("describe", "")
+                           for s in decomposed_steps):
                         continue
                     ca = "not_found" if any(kw in exp_clean for kw in _NEG_KW) else "found"
                     cd = f"断言应出现: {exp_clean}" if ca == "found" else f"断言不应出现: {exp_clean}"
@@ -1141,6 +1200,16 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                 "describe": cd, "g_fill": G_FILL_INFER,
                 "infer_from": _build_check_infer_from(exp_clean, prev),
             })
+
+        # Final C renumbering: after 5a/5b inject steps in the middle,
+        # C values may be out of order. Renumber based on list position.
+        # C=1 is reserved for file-level shared prerequisites (only first case
+        # in each group). Non-first cases start from C=2 so their first step
+        # isn't mistaken for a shared init when the xlsx generator skips C=1.
+        has_init = any(ds.get("c") == 1 for ds in decomposed_steps)
+        start_c = 1 if has_init else 2
+        for i, ds in enumerate(decomposed_steps, start_c):
+            ds["c"] = i
 
         # Build case result
         case_result: dict[str, Any] = {

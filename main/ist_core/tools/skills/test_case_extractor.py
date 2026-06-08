@@ -335,7 +335,11 @@ def qa_extract_test_cases(file_path: str) -> str:
 
                     # ── 叶子节点：末位是检查点，非末位是步骤 ──
                     elif is_last:
-                        expected.append(ct)
+                        _, child_expected = _split_steps_and_expected(ct)
+                        if child_expected:
+                            expected.extend(child_expected)
+                        else:
+                            expected.append(ct)
                     else:
                         child_steps, child_expected = _split_steps_and_expected(ct)
                         if child_steps:
@@ -360,9 +364,25 @@ def qa_extract_test_cases(file_path: str) -> str:
                     if e not in all_expected:
                         all_expected.append(e)
 
-                # Deduplicate while preserving order
+                # Deduplicate while preserving order.
+                # Also remap step_expected_map indices to match deduped steps.
                 seen = set()
-                steps = [s for s in steps if not (s in seen or seen.add(s))]  # type: ignore[func-returns-value]
+                old_to_new: dict[int, int] = {}
+                new_steps: list[str] = []
+                for i, s in enumerate(steps):
+                    if s in seen:
+                        continue
+                    old_to_new[i] = len(new_steps)
+                    seen.add(s)
+                    new_steps.append(s)
+                steps = new_steps
+                # Remap step_expected indices
+                if step_expected_map:
+                    remapped: dict[int, list[str]] = {}
+                    for old_idx, exps in step_expected_map.items():
+                        if old_idx in old_to_new:
+                            remapped[old_to_new[old_idx]] = exps
+                    step_expected_map = remapped
                 seen.clear()
                 expected = [e for e in expected if not (e in seen or seen.add(e))]  # type: ignore[func-returns-value]
 

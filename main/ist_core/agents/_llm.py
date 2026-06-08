@@ -40,6 +40,7 @@ def resolve_llm_api_key() -> str:
     return (
         os.environ.get("DASHSCOPE_API_KEY")
         or os.environ.get("BAILIAN_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
         or ""
     ).strip()
 
@@ -82,14 +83,16 @@ def _build_chat_model(provider: str, model_name: str, **kwargs: Any):
         
         
         
-        extra_body.setdefault("enable_thinking", True)
+        if provider == "dashscope":
+            extra_body.setdefault("enable_thinking", True)
 
     kwargs.setdefault("temperature", 0.0)
     kwargs.setdefault("top_p", 0.5)
     kwargs.setdefault("streaming", True)
-    
-    
-    
+    kwargs.setdefault("max_tokens", 4096)
+
+
+
     kwargs.setdefault("stream_usage", True)
     kwargs["extra_body"] = extra_body
 

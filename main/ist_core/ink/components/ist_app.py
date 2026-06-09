@@ -936,10 +936,14 @@ class IstInkApp:
             self._flush_pending_tools()
             self._is_loading = False
             self._ai_stream_idx = -1
-            
+
             if self._plan_panel.is_visible:
                 self._plan_panel.mark_all_done()
             self._footer.update(status="ready", llm_phase="", output_token_count=0)
+            # 回合结束：检测 outputs 新文件，发 OSC 通知 Web 前端刷新下载面板。
+            # 这是每轮真正的完成信号（snapshot.status done）；diff 后更新快照，
+            # 故与其他完成路径重复调用也幂等（第二次 new_files 为空）。
+            self._notify_new_outputs()
 
         elif snapshot.status == "error" and (not prev or prev.status != "error"):
             self._flush_pending_tools()

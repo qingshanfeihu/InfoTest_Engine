@@ -57,7 +57,6 @@ _PLATFORM_DENIED_TOP_LEVEL = {
     "main",
     "tests",
     "scripts",
-    "agent-chat-ui",
     
     ".venv",
     ".venv311",

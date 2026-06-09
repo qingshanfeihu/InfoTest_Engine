@@ -1,6 +1,10 @@
 ---
 name: config-automation
-description: IP替换工具。将LLM生成的配置示例中的示例IP(10.x/192.168.x)替换为自动化环境真实IP并生成验证脚本。TRIGGER when LLM已经生成了包含示例IP的网络配置，需要替换为环境真实IP时调用。触发场景：LLM给出配置示例后、用户要求替换IP、配置中包含10.x或192.168.x等示例地址。SKIP when 用户只询问命令用法、理论说明、不涉及具体配置IP替换。
+description: IP替换工具。把LLM已生成的网络配置里的示例IP(10.x/192.168.x)替换为自动化环境真实IP并生成验证脚本。
+when_to_use: |
+  Use when LLM 已给出含示例IP的配置、用户要求替换为环境真实IP。
+  Trigger phrases: 替换IP, 真实IP, 自动化环境, 10.x/192.168.x 配置
+  SKIP when: 用户只问命令用法、理论说明、不涉及具体配置IP替换。
 allowed-tools: qa_deepagent_read_file qa_deepagent_write_file qa_deepagent_grep qa_deepagent_ls
 ---
 

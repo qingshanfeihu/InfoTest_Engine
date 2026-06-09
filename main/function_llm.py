@@ -1,7 +1,8 @@
 """
-DashScope qwen-plus chat completions client with structured JSON output.
+OpenAI 兼容 chat completions client with structured JSON output.
 
-Uses the OpenAI-compatible endpoint; requires DASHSCOPE_API_KEY.
+调用方传入 ``base_url`` + ``api_key``（OpenAI 协议端点：mimo / dashscope 兼容口 /
+deepseek 等）。``base_url`` 缺省时回退到 DashScope 兼容地址（历史默认）。
 """
 
 from __future__ import annotations

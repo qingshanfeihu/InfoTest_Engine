@@ -109,7 +109,7 @@ def _safe_env() -> dict[str, str]:
 
     keep_keys = {
         "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE",
-        "DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "DEEPSEEK_API_KEY", "MINERU_TOKEN",
+        "OPENAI_API_KEY", "OPENAI_BASE_URL", "MINERU_TOKEN",
         "NO_PROGRESS",
         "TERM",
     }

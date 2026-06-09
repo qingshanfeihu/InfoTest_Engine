@@ -22,6 +22,7 @@ from main.ist_core.tools.device import qa_restapi, qa_ssh
 from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
 from main.ist_core.tools.skills import qa_invoke_skill
+from main.ist_core.tools.ask_user import qa_ask_user
 
 logger = logging.getLogger(__name__)
 
@@ -42,15 +43,15 @@ def _default_generic_tools() -> list[Any]:
         qa_restapi,
 
         web_bug_search,
-        
+
         qa_footprint_lookup,
-        
-        
+
+
         qa_invoke_skill,
-        
-        
-        
-        
+
+        qa_ask_user,
+
+
     ]
 
 def build_main_agent(**kwargs: Any):

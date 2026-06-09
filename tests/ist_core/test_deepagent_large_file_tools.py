@@ -167,7 +167,6 @@ def test_absolute_path_outside_sandbox_rejected(tmp_path, monkeypatch):
         "main",
         "tests",
         "scripts",
-        "agent-chat-ui",
         ".venv",
         ".venv311",
         ".git",

@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -41,6 +42,14 @@ Do not invoke a skill that is already running.
 </system-reminder>"""
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+# 渐进披露预算（仿 Claude Code）：
+# - 单条 description 截断上限（字符）
+# - 全局 listing 字符预算；溢出时把溢出的 skill 降级为 name-only（仅列名，不列描述）
+# 均可经 env 覆盖。
+_PER_SKILL_DESC_CAP = int(os.environ.get("IST_SKILL_DESC_CAP", "200"))
+_LISTING_CHAR_BUDGET = int(os.environ.get("IST_SKILL_LISTING_BUDGET", "1200"))
+
 
 def _parse_skill_frontmatter(skill_md_path: Path) -> dict[str, str] | None:
     """简易 SKILL.md frontmatter 解析（提取 name / description / when_to_use，
@@ -147,21 +156,42 @@ def _load_skills_from_dir(skills_dir: Path) -> list[dict[str, str]]:
             out.append(meta)
     return out
 
+def _truncate(text: str, cap: int) -> str:
+    """按字符截断，超出加省略号。"""
+    text = (text or "").strip()
+    if cap > 0 and len(text) > cap:
+        return text[: max(0, cap - 1)].rstrip() + "…"
+    return text
+
+
 def _format_skill_list(skills_metadata: list[dict[str, str]]) -> str:
+    """渲染常驻 skill listing（L1 元数据层）。
+
+    渐进披露三道闸：
+    1. 每条 description 截断到 _PER_SKILL_DESC_CAP 字符
+    2. when_to_use（trigger/SKIP 细则）**不进常驻 listing**——触发该 skill 后
+       才从 SKILL.md body 读到，避免每轮重发长触发条件
+    3. 全局 _LISTING_CHAR_BUDGET 字符预算：按顺序累加，超预算的 skill 降级为
+       name-only（仅列名，不列描述），保证 listing 不随 skill 数量线性膨胀
+    """
     if not skills_metadata:
         return "(no skills loaded)"
-    lines = []
+    lines: list[str] = []
+    used = 0
     for skill in skills_metadata:
         name = skill.get("name", "")
-        description = skill.get("description", "")
-        when_to_use = skill.get("when_to_use", "")
-        lines.append(f"- **{name}**: {description}")
-        if when_to_use:
-            
-            
-            
-            lines.append(f"  _When to use_: {when_to_use}")
+        description = _truncate(skill.get("description", ""), _PER_SKILL_DESC_CAP)
+        if description:
+            entry = f"- **{name}**: {description}"
+        else:
+            entry = f"- **{name}**"
+        # 全局预算闸：超预算则降级为 name-only
+        if _LISTING_CHAR_BUDGET > 0 and used + len(entry) > _LISTING_CHAR_BUDGET:
+            entry = f"- **{name}**"
+        used += len(entry)
+        lines.append(entry)
     return "\n".join(lines)
+
 
 def _has_recent_reminder(messages: list) -> bool:
     """检查是否最近 4 条消息内已有 skill reminder（避免重复堆积）"""

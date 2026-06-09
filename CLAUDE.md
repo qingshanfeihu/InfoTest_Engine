@@ -8,9 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目目标
 
-本项目展示名为 **InfoTest Engine**，agent 核心展示名为 **IST-Core**。代码包路径升级为 `main.ist_core`，而编译和通信 graph id 保留为 `qa_agent` 指针以兼顾已有外部 API 连接；环境变量已统一迁移到 `IST_*` 前缀（vendor 专有 key 如 `DASHSCOPE_*` / `DEEPSEEK_*` / `MINERU_*` 不变）。
+本项目展示名为 **InfoTest Engine**，agent 核心展示名为 **IST-Core**。代码包路径升级为 `main.ist_core`，而编译和通信 graph id 保留为 `qa_agent` 指针以兼顾已有外部 API 连接；环境变量已统一迁移到 `IST_*` 前缀（vendor 专有 key 如 `OPENAI_*` / `DEEPSEEK_*` / `MINERU_*` 不变）。
 
-InfoTest Engine 把技术文档（网络 / IPv6 / HTTP/2 / 网关配置指南等）和测试用例（xlsx）转成 markdown 落地，让 IST-Core agent 用 `read_file` / `grep` / `ls` / `write_file` / `edit_file` 直读直写，配合可切换的 LLM provider（默认 deepseek-v4-pro，可切 dashscope qwen 系）提供测试评审、测试资产理解能力。
+InfoTest Engine 把技术文档（网络 / IPv6 / HTTP/2 / 网关配置指南等）和测试用例（xlsx）转成 markdown 落地，让 IST-Core agent 用 `read_file` / `grep` / `ls` / `write_file` / `edit_file` 直读直写，配合可切换的 LLM provider（默认走 `OPENAI_*` 通用兼容端点，示例为小米 MiMo mimo-v2.5-pro；可切 DeepSeek 原生端点）提供测试评审、测试资产理解能力。
 
 **架构原则（2026-05-20 简化收口）**：不再做 LLM 特征抽取 / Qdrant 向量索引 / RAG 检索。orgin/ 文档只做两件事：①KMS 分桶；②转 markdown 直出。
 
@@ -43,7 +43,7 @@ langgraph dev --no-browser --port 2024           # 可选：LangGraph dev server
 
 ## 关键架构决策
 
-- **不要 Qdrant**：实测 IST-Core agent 用 `read_file` / `grep` / `ls` + qwen3.6-plus 已满足业务需求，不再需要向量检索（详见 `todolist.md` 第 1 节）。
+- **不要 Qdrant**：实测 IST-Core agent 用 `read_file` / `grep` / `ls` + 评审模型已满足业务需求，不再需要向量检索（详见 `todolist.md` 第 1 节）。
 - **KMS 分桶**：`main/kms_classifier.py` 用 LLM 把 `knowledge/data/orgin/` 文件分到 `product` / `test_case_list` / `test_strategy` / `unclassified`。三层兜底：用户覆盖（`knowledge/.classifier_overrides.json`）→ 文件级缓存（`knowledge/.intermediate/.classifier_cache.json`，按 filename+mtime+size）→ LLM 判定。
 - **markdown 直出**：
   - `mineru_batch_export.py` 解析 PDF / docx / pptx，从 zip 里把 `full.md` 写到 `knowledge/data/markdown/{product|qa}/{stem}.md`（由 `KMS_OUTPUT_BUCKET` env 决定）。
@@ -59,7 +59,7 @@ langgraph dev --no-browser --port 2024           # 可选：LangGraph dev server
 
 详见 `todolist.md`。两件事：
 
-1. **评审主链路走 IST_LLM_PROVIDER + IST_MODEL**（dashscope qwen-plus 或 deepseek-v4-pro）。统一通过 `_build_chat_model` 走 OpenAI 兼容端点（DashScope OpenAI compat / DeepSeek native）。Anthropic 兼容路径已移除。
+1. **评审主链路走 IST_MODEL**（示例 mimo-v2.5-pro）。统一通过 `_build_chat_model` 走 OpenAI 兼容端点：`OPENAI_BASE_URL` + `OPENAI_API_KEY`，不再做 provider 分支。换厂商（含 DeepSeek 原生口 / DashScope 兼容口 / 自建网关）只改 `OPENAI_BASE_URL` + key + `IST_MODEL`。Anthropic 兼容路径已移除。
 2. **追加最小 Review Prompt**（证据纪律 + 评审基线 + 输出结构）。详见 todolist 第 2.2 节。
 
 不做：Excel 专用 parser、`qa_invoke_reviewer`、hierarchical reviewer、`ReviewResult` schema、Qdrant 检索、`qa_search_*` 工具组等。需要时由实际失败样本或产品需求触发。
@@ -107,7 +107,7 @@ main/ist_core/tools/
 | L1 工作记忆 | `memory/working/<thread_id>.md` | reminder 末尾（每轮）| `MemoryWriteMiddleware.after_model` 规则抽取 | 真实磁盘 |
 | L2 长期记忆 | `memory/long_term/{preferences,feedback,project,reference}` | reminder（关键词 top-k=3）| `/remember` 显式 + `MemoryWriteMiddleware` distill 触发 fork agent | 真实磁盘 |
 | L3 项目指令 | `memory/AGENTS.md` | system prompt（启动时由 deepagents `MemoryMiddleware`）| dream task LLM 蒸馏 / 手工 | 真实磁盘（git 跟踪） |
-| **Footprint** | `knowledge/footprints/{leaf,trunk,branch}/*.json` | reminder（自动注入 top-k=2）+ `qa_footprint_lookup` tool | dream consolidate LLM 提取 → router + merger | 真实磁盘 JSON |
+| **Footprint** | `knowledge/footprints/nodes/*.json`（扁平目录，文件名=feature_id 点分命令前缀；leaf/trunk/branch 是 JSON 内 `level` 字段，非物理子目录）| reminder（自动注入 top-k=2）+ `qa_footprint_lookup` tool | dream consolidate LLM 提取 → router + merger | 真实磁盘 JSON |
 
 **关键模块**：
 
@@ -124,8 +124,9 @@ main/ist_core/tools/
 
 按 CLI 命令前缀组织的产品/测试知识树。每个节点是一个 JSON 文件，包含从对话中验证过的事实（CLI 语法、决策规则、行为说明、已知缺陷）。
 
-- **数据来源**：dream consolidate 阶段用 LLM (`IST_HAIKU_MODEL`，默认 deepseek-v4-flash) 从 working memory 中提取，每文件一次调用，结果走 `function_llm.chat_completion` 缓存
-- **路由规则**：剥离 `no/show/clear` 操作前缀 → 命令 token 化 → 按公共前缀分组（≥2 token=leaf；同模块多功能=trunk；跨模块=branch）；无 CLI 命令的 fact 直接丢弃，不污染功能树
+- **物理结构**：`knowledge/footprints/nodes/<feature_id>.json` 扁平目录，文件名即点分命令前缀（如 `slb.group.member.json`）。节点 schema（v3）字段：`feature_id` / `level`（leaf/trunk/branch）/ `cli.commands[]` / `decision_rules[]` / `behaviors[]` / `known_issues[]` / `children[]`（子节点构成树）/ `version_scope` / `footprint_meta`（`verified_count` + `source_threads` + `created_at`）。每条事实带 `fact_key` + 内容 + `evidence`（`source_file` + `quoted_text` 可溯源）。branch/trunk 多为索引空壳，实际事实集中在 leaf。
+- **数据来源**：dream consolidate 阶段用 LLM (`IST_HAIKU_MODEL`，默认 mimo-v2.5) 从 working memory 中提取，每文件一次调用，结果走 `function_llm.chat_completion` 缓存
+- **路由规则**：剥离 `no/show/clear` 操作前缀 → 命令 token 化 → 按公共前缀分组写入 `level` 字段（≥2 token=leaf；同模块多功能=trunk；跨模块=branch，均为逻辑分层非物理目录）；无 CLI 命令的 fact 直接丢弃，不污染功能树
 - **检索路径**：`MemoryInjectionMiddleware` 自动注入（自然语言查询） + `qa_footprint_lookup` tool（agent 主动按命令名精确查询）
 - **TUI 入口**：`/footprint` 总览、`/footprint show <command>`、`/footprint search <query>`、`/footprint stats`、`/footprint list [level]`
 - **关键 env**：`FOOTPRINT_ENABLED=1`（开关）、`IST_HAIKU_MODEL`（提取模型）
@@ -159,8 +160,8 @@ main/ist_core/tools/
 
 ## Token 安全
 
-- `MINERU_TOKEN`、`DASHSCOPE_API_KEY` 通过项目根目录 `environment` 文件注入（`KEY=value`）
-- `kms_classifier` 缺 `DASHSCOPE_API_KEY` 时返回 `unclassified`（不污染 mineru 链）
+- `MINERU_TOKEN`、`OPENAI_API_KEY`（或 `DEEPSEEK_API_KEY`）通过项目根目录 `environment` 文件注入（`KEY=value`）
+- `kms_classifier` 缺 `OPENAI_API_KEY` 时返回 `unclassified`（不污染 mineru 链）；分类走主链路同一 provider（`OPENAI_*`）+ haiku tier 模型
 - `environment` 已在 `.gitignore`；模板为 `environment.example`
 - 禁止在代码、注释、日志中打印 Token 或 API Key
 
@@ -181,5 +182,5 @@ main/ist_core/tools/
 - Python 3.11+（`deepagents>=0.5.3` 强约束），`requests`，`python-dotenv`，`langchain` ≥ 1.2.15，`langgraph` ≥ 1.1
 - 推荐用 `py -3.11 -m venv .venv311` 建本地虚拟环境；激活后 `pip install -r requirements.txt`
 - MinerU 精准解析 API（`https://mineru.net/api/v4/`）—— 仅用于 PDF / docx → markdown
-- DashScope OpenAI 兼容端点：chat（`qwen-plus` 用于 KMS 分类，`qwen3.6-plus` 用于评审）
+- OpenAI 兼容端点（默认走 `OPENAI_*`，示例小米 MiMo `mimo-v2.5-pro` 评审 / `mimo-v2-flash` haiku tier 含 KMS 分类）；可切 DeepSeek 原生端点
 - 不再依赖 Qdrant / podman；移除了 `langchain-qdrant` / `qdrant-client`

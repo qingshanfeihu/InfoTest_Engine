@@ -146,14 +146,12 @@ def _extract_xlsx_hints(file_path: Path) -> str:
 
 
 def _call_llm(filename: str, hints: str) -> ClassifierResult:
-    api_key = (os.environ.get("DASHSCOPE_API_KEY")
-               or os.environ.get("BAILIAN_API_KEY")
-               or "").strip()
+    api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
     if not api_key:
         return {
             "category": "unclassified",
             "confidence": 0.0,
-            "reason": "DASHSCOPE_API_KEY missing",
+            "reason": "OPENAI_API_KEY missing",
             "source": "fallback",
         }
 
@@ -168,6 +166,19 @@ def _call_llm(filename: str, hints: str) -> ClassifierResult:
             "source": "fallback",
         }
 
+    # base_url / model 跟随 agent 主链路 provider（OPENAI 兼容端点）。
+    # 分类是轻任务，用 haiku tier 模型；缺省落 function_llm 默认。
+    try:
+        from main.ist_core.agents._llm import (  # noqa: PLC0415
+            ist_core_tier_model,
+            resolve_llm_base_url,
+        )
+        base_url = resolve_llm_base_url()
+        model = ist_core_tier_model("haiku")
+    except Exception:  # noqa: BLE001
+        base_url = None
+        model = None
+
     user_prompt = (
         f"文件名: {filename}\n"
         f"扩展名: {Path(filename).suffix.lower()}\n"
@@ -181,6 +192,8 @@ def _call_llm(filename: str, hints: str) -> ClassifierResult:
                 session, api_key,
                 system_prompt=_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
+                model=model,
+                base_url=base_url,
                 max_tokens=256,
                 temperature=0.0,
                 top_p=0.1,

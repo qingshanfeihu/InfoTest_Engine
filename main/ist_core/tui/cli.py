@@ -288,6 +288,15 @@ def main(argv: list[str] | None = None) -> int:
         initial_query=initial_text,
         task_type=task_type,
     )
+
+    # 进程内自调度 dream：TUI 常驻进程不依赖系统 crontab。
+    # 受五道闸约束（24h 节流 + PID 锁），后台守护线程，不阻塞启动、失败静默。
+    try:
+        from main.ist_core.memory.dream import maybe_trigger_dream_async
+        maybe_trigger_dream_async()
+    except Exception:  # noqa: BLE001
+        pass
+
     app.run()
     return 0
 

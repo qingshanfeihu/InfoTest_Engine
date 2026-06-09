@@ -29,6 +29,29 @@ logger = logging.getLogger(__name__)
 _CONSOLIDATE_SYSTEM_PROMPT = "你是 IST-Core 的 Dream 整理助手，输出严格 JSON。"
 
 
+def _coerce_decisions(parsed: Any) -> list[dict]:
+    """把 consolidate LLM 返回归一化成动作 dict 列表。
+
+    端点开了 ``response_format: json_object``，模型只能返回顶层对象（不可能返回
+    顶层数组），所以这里要兼容多种形态：
+
+    - ``{"decisions": [...]}`` —— 约定格式，取 decisions
+    - ``{"action": "..."}`` —— 模型直接返回单个动作，包成单元素列表
+    - ``[...]`` —— 万一模型/解析给了列表，直接用
+    - 其他 —— 空列表（视为无操作）
+    """
+    if isinstance(parsed, list):
+        return [d for d in parsed if isinstance(d, dict)]
+    if isinstance(parsed, dict):
+        inner = parsed.get("decisions")
+        if isinstance(inner, list):
+            return [d for d in inner if isinstance(d, dict)]
+        if "action" in parsed:
+            return [parsed]
+    return []
+
+
+
 def _load_existing_facts(footprint_dir: Path) -> dict[str, dict[str, list]]:
     """扫描现有 footprint 树，按 feature_id 索引出 fact_key + 内容样例。
 
@@ -94,7 +117,7 @@ def _load_existing_facts(footprint_dir: Path) -> dict[str, dict[str, list]]:
 
 
 def _dream_llm_http_setup(*, tier: str = "default") -> tuple[Any, str, str, str] | None:
-    """按 ``IST_LLM_PROVIDER`` 解析 HTTP LLM 参数。
+    """解析 OpenAI 兼容 HTTP LLM 参数。
 
     返回 ``(session, api_key, base_url, model)``；无可用 key 时返回 None。
     ``tier`` 为 ``haiku`` 时用 IST_HAIKU_MODEL，否则用平台默认模型。
@@ -102,12 +125,10 @@ def _dream_llm_http_setup(*, tier: str = "default") -> tuple[Any, str, str, str]
     try:
         import requests as _requests
         from main.ist_core.agents._llm import (
-            DEFAULT_DASHSCOPE_BASE_URL,
-            DEFAULT_DEEPSEEK_BASE_URL,
             ist_core_default_model,
             ist_core_tier_model,
             resolve_llm_api_key,
-            resolve_llm_provider,
+            resolve_llm_base_url,
         )
     except Exception as exc:
         logger.debug("dream LLM setup import 失败: %s", exc)
@@ -115,14 +136,10 @@ def _dream_llm_http_setup(*, tier: str = "default") -> tuple[Any, str, str, str]
 
     api_key = resolve_llm_api_key()
     if not api_key:
-        logger.debug("dream LLM: no API key (provider=%s)", resolve_llm_provider())
+        logger.debug("dream LLM: no OPENAI_API_KEY")
         return None
 
-    provider = resolve_llm_provider()
-    if provider == "deepseek":
-        base_url = os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL).strip()
-    else:
-        base_url = os.environ.get("DASHSCOPE_BASE_URL", DEFAULT_DASHSCOPE_BASE_URL).strip()
+    base_url = resolve_llm_base_url()
 
     model = ist_core_tier_model("haiku") if tier == "haiku" else ist_core_default_model()
     return (_requests.Session(), api_key, base_url, model)
@@ -136,7 +153,6 @@ def build_dream_consolidate_llm():
 
     try:
         from main.function_llm import TruncationError, chat_completion
-        from main.ist_core.agents._llm import resolve_llm_provider
     except Exception as exc:
         logger.warning("dream consolidate LLM 初始化失败: %s", exc)
         return None
@@ -166,11 +182,7 @@ def build_dream_consolidate_llm():
             logger.warning("consolidate llm_chat 失败: %s", exc)
             return "[]"
 
-    logger.info(
-        "dream consolidate LLM: model=%s provider=%s",
-        model,
-        resolve_llm_provider(),
-    )
+    logger.info("dream consolidate LLM: model=%s", model)
     return _llm_chat
 
 
@@ -428,18 +440,19 @@ class DreamTask:
             f"```\n{agents_md}\n```\n\n"
             "长期记忆摘要：\n"
             f"```\n{combined}\n```\n\n"
-            "请输出 JSON 列表：\n"
-            '[{"action":"skip"} 或 {"action":"append_agents_md","content":"新增行"} '
-            '或 {"action":"merge","source":"路径","target":"路径","reason":"原因"}]\n'
-            "只输出 JSON，不要其他文字。如果无操作，输出 []\n"
+            '请输出 JSON 对象，形如 {"decisions": [...]}，其中 decisions 是动作列表，'
+            "每个动作为以下之一：\n"
+            '  {"action":"skip"}\n'
+            '  {"action":"append_agents_md","content":"新增行"}\n'
+            '  {"action":"merge","source":"路径","target":"路径","reason":"原因"}\n'
+            '只输出 JSON 对象，不要其他文字。如果无操作，输出 {"decisions": []}\n'
         )
 
         try:
             result = self._llm(prompt)
             import json
-            decisions = json.loads(result) if isinstance(result, str) else result
-            if not isinstance(decisions, list):
-                return ["skip: LLM returned non-list"]
+            parsed = json.loads(result) if isinstance(result, str) else result
+            decisions = _coerce_decisions(parsed)
         except Exception as exc:
             logger.warning("consolidate LLM 失败: %s", exc)
             return [f"error: {exc}"]
@@ -546,7 +559,6 @@ class DreamTask:
 
         try:
             from main.function_llm import TruncationError, chat_completion
-            from main.ist_core.agents._llm import resolve_llm_provider
         except Exception as exc:
             logger.debug("footprint LLM 构建失败: %s", exc)
             return None
@@ -570,7 +582,7 @@ class DreamTask:
                 logger.warning("footprint LLM 输出被截断，跳过")
                 return {"facts": []}
 
-        logger.info("footprint LLM: model=%s provider=%s", model, resolve_llm_provider())
+        logger.info("footprint LLM: model=%s", model)
         return _call
 
     def prune(self, inventory: Inventory) -> int:
@@ -621,6 +633,7 @@ __all__ = [
     "build_dream_consolidate_llm",
     "should_run_dream",
     "run_dream_with_gates",
+    "maybe_trigger_dream_async",
 ]
 
 
@@ -651,9 +664,51 @@ def run_dream_with_gates() -> tuple[DreamReport | None, str]:
         return report, "ok"
     except Exception as exc:
         logger.exception("run_dream_with_gates 失败: %s", exc)
-        
+
         try:
             _release_pid_lock()
         except Exception:
             pass
         return None, f"setup failed: {exc}"
+
+
+# 进程内自调度：守护线程后台跑一次 run_dream_with_gates。
+# 适用于「TUI 进程常驻、不依赖系统 crontab」的场景——五道闸（24h 节流 + PID 锁）
+# 保证一天最多跑一次，且不会与 cron / 其他进程并发。
+_INPROC_DREAM_STARTED = False
+
+
+def maybe_trigger_dream_async() -> bool:
+    """在后台守护线程触发一次 dream（受五道闸约束）。
+
+    - 进程内只起一次线程（``_INPROC_DREAM_STARTED`` 幂等）
+    - 守护线程：绝不阻塞主流程 / 不阻止进程退出
+    - 全异常静默：dream 失败不影响 TUI
+    - 闸门拒绝（24h 内已跑 / 不足 5 sessions 等）是正常路径，仅 debug 日志
+
+    返回是否真正起了线程（已起过或被 env 关闭则 False）。
+    """
+    global _INPROC_DREAM_STARTED
+    if _INPROC_DREAM_STARTED:
+        return False
+    if (os.environ.get("IST_DREAM_ENABLED") or "1").strip() == "0":
+        return False
+    if (os.environ.get("IST_DREAM_INPROC") or "1").strip() == "0":
+        return False
+    _INPROC_DREAM_STARTED = True
+
+    import threading
+
+    def _worker() -> None:
+        try:
+            report, reason = run_dream_with_gates()
+            if report is not None:
+                logger.info("[dream] in-process run done: %s", report)
+            else:
+                logger.debug("[dream] in-process skip: %s", reason)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[dream] in-process trigger failed: %s", exc)
+
+    t = threading.Thread(target=_worker, name="ist-dream-inproc", daemon=True)
+    t.start()
+    return True

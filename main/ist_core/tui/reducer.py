@@ -30,6 +30,7 @@ from typing import Any, Callable, Mapping
 
 from main.ist_core.events import IstCoreEvent
 from main.ist_core.tui.message_model import (
+    BLOCK_ASK_USER,
     BLOCK_EVIDENCE,
     BLOCK_FINDING,
     BLOCK_HIL_DECISION,
@@ -235,6 +236,8 @@ class MessageReducer:
             self._on_hil_request(event)
         elif kind == "hil_response":
             self._on_hil_response(event)
+        elif kind == "ask_user_request":
+            self._on_ask_user_request(event)
         
 
     
@@ -521,6 +524,30 @@ class MessageReducer:
         seq = event.get("seq") or 0
         ts = event.get("ts") or ""
         block = make_payload_block(BLOCK_HIL_DECISION, dict(payload))
+        msg = make_system_message(
+            uuid=make_uuid(run_id, seq),
+            content=block,
+            timestamp=ts,
+        )
+        self._messages.append(msg)
+
+    def _on_ask_user_request(self, event: IstCoreEvent) -> None:
+        """qa_ask_user 发起交互式问答：生成一条 ask_user 块供 UI 渲染选项。
+
+        payload 含 ``question_id`` + ``questions``（schema 见 tools/ask_user）。
+        UI 据 question_id 在用户选完后回调 ``submit_answers``。
+        """
+        payload = event.get("payload") or {}
+        run_id = event.get("run_id") or ""
+        seq = event.get("seq") or 0
+        ts = event.get("ts") or ""
+        block = make_payload_block(
+            BLOCK_ASK_USER,
+            {
+                "question_id": payload.get("question_id", ""),
+                "questions": payload.get("questions", []),
+            },
+        )
         msg = make_system_message(
             uuid=make_uuid(run_id, seq),
             content=block,

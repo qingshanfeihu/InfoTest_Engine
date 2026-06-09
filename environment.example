@@ -9,21 +9,10 @@
 # 一、API 凭证（按厂商分组）
 # =============================================================================
 
-# ---- DashScope / 阿里云百炼 ------------------------------------------------
-# 用途：qwen 系列 chat（KMS 分类、memory dream、可选评审主链路）
-# 申请：https://bailian.console.aliyun.com/?tab=model#/api-key
-DASHSCOPE_API_KEY=
-# 同一把 Key 的别名（与 DASHSCOPE_API_KEY 二选一）
-# BAILIAN_API_KEY=
-# 可选：自定义兼容端点（一般留空走默认 OpenAI 兼容地址）
-# DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-
-
-# ---- DeepSeek -------------------------------------------------------------
-# 用途：deepseek-v4-pro 评审主链路、deepseek-v4-flash explore / haiku tier
-# 申请：https://platform.deepseek.com/api_keys
-DEEPSEEK_API_KEY=
-# DEEPSEEK_BASE_URL=https://api.deepseek.com
+# ---- OpenAI 兼容端点--------------------------------------
+# OPENAI_API_KEY=
+# 可选：自定义兼容端点根
+# OPENAI_BASE_URL=
 
 
 # ---- MinerU --------------------------------------------------------------
@@ -40,41 +29,25 @@ LANGSMITH_TRACING=false
 # =============================================================================
 # 二、模型路由（IST-Core 评审主链路 + 三档 tier）
 #
-# 设计：dashscope / deepseek 两个 provider 平等并列。启用方式 = 把目标 provider
-# 那一组取消注释，另一组整组保留注释作为参考。tier 是按任务复杂度分档的
-# 模型映射，opus = 评审 / 推理，sonnet = QA / 文档问答，haiku = explore / 路由。
+# 设计：provider 二选一。缺省 / 非 deepseek 值 → 通用 OpenAI 兼容端点（OPENAI_*）；
+# deepseek → DeepSeek 原生端点（DEEPSEEK_*）。tier 是按任务复杂度分档的模型映射，
+# opus = 评审 / 推理，sonnet = QA / 文档问答，haiku = explore / 路由 / KMS 分类。
 # =============================================================================
 
-# ---- 选项 A：DashScope qwen ------------------------------------------------
-IST_LLM_PROVIDER=dashscope
-IST_MODEL=qwen-plus
-IST_REVIEW_MODEL=qwen-plus
-IST_OPUS_MODEL=qwen3.6-plus
-IST_SONNET_MODEL=qwen-plus
-IST_HAIKU_MODEL=qwen-turbo
-IST_ALLOWED_MODELS=qwen-plus,qwen3.6-plus,qwen-turbo
+# ---- 选项 A：OpenAI 兼容端点（默认，示例为小米 MiMo）----------------------
+IST_LLM_PROVIDER=openai
+IST_MODEL=mimo-v2.5-pro
+IST_OPUS_MODEL=mimo-v2.5-pro
+IST_SONNET_MODEL=mimo-v2.5-pro
+IST_HAIKU_MODEL=mimo-v2.5
+IST_ALLOWED_MODELS=mimo-v2.5-pro,mimo-v2.5
 
-
-# ---- 选项 B：DeepSeek （启用时把上面 A 整组注释）---------------------------
-# DeepSeek 优势（相对 qwen3.6-plus）：
-#   - tool_choice="required" 原生支持 → SubAgent / Pydantic 结构化输出可靠
-#   - 自动 prompt cache（前缀匹配，命中价 1/50）
-#   - reasoning_content 字段名跟 qwen 一致 → ChatOpenAIWithReasoning 直接复用
-# 痛点：deepseek-reasoner 不支持 function calling，主 agent 不可用。
-#
-# IST_LLM_PROVIDER=deepseek
-# IST_MODEL=deepseek-v4-pro
-# IST_REVIEW_MODEL=deepseek-v4-pro
-# IST_OPUS_MODEL=deepseek-v4-pro
-# IST_SONNET_MODEL=deepseek-v4-pro
-# IST_HAIKU_MODEL=deepseek-v4-flash
-# IST_ALLOWED_MODELS=deepseek-v4-pro,deepseek-v4-flash,deepseek-chat
 
 
 # ---- 评审通用 -------------------------------------------------------------
 IST_REVIEW_DEPTH=standard               # quick | standard | deep
 # IST_INTERRUPT_ON=web_bug_search,qa_exec   # 调试时强制人工 interrupt 的工具
-# IST_DEBUG_PAYLOAD=1                       # 打印 deepseek payload 大小 + reasoning_content 注入数
+# IST_DEBUG_PAYLOAD=1                       # 打印 payload 大小 + reasoning_content 注入数
 
 
 # =============================================================================
@@ -165,3 +138,15 @@ PLAYWRIGHT_STATE_DIR=knowledge/.intermediate/defect_raw/_state
 # KMS_UPDATE_TIMEOUT_SEC=7200
 # KMS_LOG_POLL_INTERVAL_SEC=2
 # NO_PROGRESS=1                                  # 非 TTY 环境禁用进度条
+
+
+# =============================================================================
+# 八、设备验证（device-verify skill / scripts/apv_ssh_client.py SSH 连接）
+#
+# create_ssh_client_from_env() 从这里集中取值。未配置 IP/用户名/密码时直接
+# 报错，不再回退到内置默认设备或弱口令。凭据勿提交（本文件已在 .gitignore）。
+# =============================================================================
+# APV_DEVICE_IP=172.16.34.70                     # 目标设备 IP（拓扑 APV0 示例）
+# APV_USERNAME=admin                             # SSH 用户名
+# APV_PASSWORD=                                  # SSH 密码（填真实值，勿留弱口令）
+# APV_SSH_PORT=22                                # SSH 端口（默认 22）

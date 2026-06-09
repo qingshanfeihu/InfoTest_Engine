@@ -47,6 +47,8 @@ BLOCK_TODO_LIST = "todo_list"
 BLOCK_HIL_REQUEST = "hil_request"
 BLOCK_HIL_DECISION = "hil_decision"
 
+BLOCK_ASK_USER = "ask_user"
+
 
 @dataclass(frozen=True)
 class ContentBlock:
@@ -290,6 +292,7 @@ __all__ = [
     "BLOCK_TODO_LIST",
     "BLOCK_HIL_REQUEST",
     "BLOCK_HIL_DECISION",
+    "BLOCK_ASK_USER",
     "make_uuid",
     "make_text_block",
     "make_thinking_block",

@@ -153,6 +153,9 @@ class IstInkApp:
         
         self._plan_panel = PlanPanel()
 
+        from main.ist_core.ink.components.ask_user_panel import AskUserPanel
+        self._ask_user_panel = AskUserPanel()
+
         
         self._thinking_line = create_element(NodeType.BOX)
         self._thinking_line.style.height = 0
@@ -181,6 +184,7 @@ class IstInkApp:
         
         self._app.root.append_child(self._transcript.node)
         self._app.root.append_child(self._plan_panel.node)
+        self._app.root.append_child(self._ask_user_panel.node)
         self._app.root.append_child(self._thinking_line)
         self._app.root.append_child(self._divider_top)
         self._app.root.append_child(self._prompt.node)
@@ -206,6 +210,8 @@ class IstInkApp:
         self._last_thinking_text: str = ""
         self._tool_output_blocks: list[dict] = []
         self._load_tui_config()
+        # qa_ask_user 交互式问答的活跃会话（None=非问答模式）
+        self._ask_user: Any = None
         
         
         
@@ -329,7 +335,28 @@ class IstInkApp:
         """Handle keyboard events."""
         import time as _time
 
-        
+        # qa_ask_user 问答模式：拦截按键到会话（Other 文本输入态除外，
+        # 那时放行给 PromptInput 收文本，enter/esc 在此处理提交/取消）。
+        if getattr(self, "_ask_user", None) is not None:
+            if self._ask_user.in_other_input:
+                if kp.key in ("return", "enter"):
+                    text = self._prompt.value
+                    self._prompt.clear()
+                    self._ask_user.submit_other_text(text)
+                    self._app.render()
+                    return
+                if kp.key == "escape":
+                    self._prompt.clear()
+                    self._ask_user.cancel_other_input()
+                    return
+                consumed = self._prompt.handle_key(kp.key, kp.char)
+                if consumed:
+                    self._app.render()
+                return
+            if self._ask_user.handle_key(kp.key, kp.char):
+                return
+
+
         if self._input_history.in_search_mode:
             if self._handle_search_key(kp):
                 return
@@ -761,6 +788,8 @@ class IstInkApp:
         self._last_thinking_idx = -1
         self._suppress_thinking_until_done = False
         self._subagent_inner_summaries = {}
+        # B2：新 run 清空 tool_use 行号映射，避免旧行号污染本轮插入定位
+        self._tool_use_row = {}
         self._transcript.append_message("")
         self._bridge.start(initial_state)
 
@@ -860,6 +889,63 @@ class IstInkApp:
 
         self._app.render()
 
+    def _place_result_lines(self, tool_use_id: str, lines: list[str]) -> int:
+        """B2：把结果行放到对应 tool_use 行的「结果区」末尾，返回起始行号。
+
+        - 找到该 tool_use 的 ⏺ 行号，结果插到它下方已有结果行之后
+          （同一 tool 多段结果按序，且不串到下一个 tool 的 ⏺ 之前）。
+        - 找不到对应行（无 tuid / 已被偏移丢失）→ 兜底 append 末尾。
+        """
+        row_map = getattr(self, "_tool_use_row", {})
+        anchor = row_map.get(tool_use_id, -1) if tool_use_id else -1
+        if anchor < 0:
+            # 兜底：append 末尾（行为同改造前）
+            at = self._transcript.message_count()
+            for ln in lines:
+                self._transcript.append_message(ln)
+            return at
+        # 插入点 = anchor 行下方，跳过该 tool 已插入的结果行（⎿ / … 开头），
+        # 但遇到下一个 ⏺ 行就停（不串到别的 tool）
+        insert_at = anchor + 1
+        msgs = self._transcript._messages
+        while insert_at < len(msgs):
+            stripped = msgs[insert_at].lstrip()
+            if stripped.startswith("⎿") or "⎿" in msgs[insert_at] or stripped.startswith("…"):
+                insert_at += 1
+            else:
+                break
+        self._insert_result_lines(insert_at, lines)
+        return insert_at
+
+    def _insert_result_lines(self, at_idx: int, lines: list[str]) -> None:
+        """B2：在 at_idx 处插入结果行，并统一偏移所有 ≥ at_idx 的行索引状态。
+
+        把 tool_result 的 ⎿ 行插到对应 tool_use 行下方（而非 append 末尾），
+        使并行工具的每个 ⏺ 下面紧跟自己的结果。集中处理偏移，避免索引漂移。
+        """
+        n = len(lines)
+        if n <= 0:
+            return
+        self._transcript.replace_range(at_idx, 0, lines)  # count=0 → 纯插入
+        # 统一偏移所有受影响的行索引状态
+        if getattr(self, "_ai_stream_idx", -1) >= at_idx:
+            self._ai_stream_idx += n
+        if getattr(self, "_last_thinking_idx", -1) >= at_idx:
+            self._last_thinking_idx += n
+        if hasattr(self, "_tool_use_row"):
+            for k, v in self._tool_use_row.items():
+                if v >= at_idx:
+                    self._tool_use_row[k] = v + n
+        if hasattr(self, "_tool_start_stack"):
+            self._tool_start_stack = [
+                (i + n if i >= at_idx else i, name)
+                for (i, name) in self._tool_start_stack
+            ]
+        if hasattr(self, "_tool_output_blocks"):
+            for blk in self._tool_output_blocks:
+                if blk.get("start_idx", -1) >= at_idx:
+                    blk["start_idx"] += n
+
     def _render_content_block(self, block: Any, msg: Any) -> None:
         """Render a single ContentBlock to the transcript."""
         from main.ist_core.tui.message_model import (
@@ -887,14 +973,13 @@ class IstInkApp:
             self._transcript.append_message(f" ⏺ {rendered}")
 
         elif block.type == BLOCK_THINKING and block.thinking:
-            
+
             if getattr(self, '_suppress_thinking_until_done', False):
                 return
             self._ai_stream_idx = -1
-            
-            prev_idx = getattr(self, '_last_thinking_idx', -1)
-            if prev_idx >= 0:
-                self._transcript.replace_range(prev_idx, 1, [])
+            # 每条 thinking 独立 append（reducer 已按独立 message + uuid 管理）。
+            # 不再删除上一条 thinking 行——thinking 之间几乎必夹 tool_use，
+            # 旧的 replace_range 删除会误删/错位后续行，导致 thinking 显示消失。
             if self._thinking_expanded:
                 self._transcript.append_message(
                     f" {D}\x1b[3m∴ {block.thinking.strip()}{X}"
@@ -903,14 +988,19 @@ class IstInkApp:
                 self._transcript.append_message(
                     f" {D}\x1b[3m∴ Thinking{X} {D}(ctrl+t to expand){X}"
                 )
+            # 记录最后一条 thinking 的行号 + 全文，供 ctrl+t 展开/折叠切换
             self._last_thinking_idx = self._transcript.message_count() - 1
             self._last_thinking_text = block.thinking.strip()
 
         elif block.type == BLOCK_TOOL_USE:
             self._ai_stream_idx = -1
             raw_name = block.name or "tool"
-            
+
             if raw_name == "write_todos":
+                return
+            # qa_ask_user 的交互与结果完全由 ask_user 面板负责，
+            # 不渲染标准工具行（避免重复 + 暴露内部工具名/参数）。
+            if raw_name == "qa_ask_user":
                 return
             args = dict(block.input) if block.input else {}
             display_name = _tool_short_name(raw_name)
@@ -939,47 +1029,48 @@ class IstInkApp:
                 if not hasattr(self, '_tool_start_stack'):
                     self._tool_start_stack = []
                 self._tool_start_stack.append((idx, display_full))
+            # B2：记录 tool_use_id → ⏺ 行号，供 tool_result 归位插到其下方
+            tuid = getattr(block, "tool_use_id", "") or ""
+            if tuid:
+                if not hasattr(self, "_tool_use_row"):
+                    self._tool_use_row = {}
+                self._tool_use_row[tuid] = idx
 
         elif block.type == BLOCK_TOOL_RESULT:
             self._ai_stream_idx = -1
+            # qa_ask_user 结果由 ask_user 面板的完成提示负责，跳过标准结果行
+            if (block.name or "") == "qa_ask_user":
+                return
             if block.output:
                 raw_name = block.name or ""
-                
-                
-                
-                
+                tuid = getattr(block, "tool_use_id", "") or ""
+                # fork skill (verifier) 完成：折叠为单行 Done
                 if (
                     raw_name == "qa_invoke_skill"
                     and "VERDICT:" in block.output
                     and "LEVEL:" in block.output
                 ):
-                    
-                    
                     self._suppress_thinking_until_done = True
-                    self._transcript.append_message(
-                        f"   {D}⎿{X} {D}Done (Agent completed){X}"
+                    self._place_result_lines(
+                        tuid, [f"   {D}⎿{X} {D}Done (Agent completed){X}"]
                     )
                     return
                 full_lines = block.output.split("\n")
-                start_idx = self._transcript.message_count()
                 expanded = getattr(self, '_tool_outputs_expanded', False)
-                
+
                 summary = _tool_result_summary(raw_name, block.output)
                 if summary is not None and not expanded:
-                    for line in summary:
-                        self._transcript.append_message(f"   {D}⎿{X} {line}")
-                    display_count = len(summary)
+                    result_lines = [f"   {D}⎿{X} {line}" for line in summary]
                 elif expanded or len(full_lines) <= 3:
-                    for line in full_lines:
-                        self._transcript.append_message(f"   {D}⎿{X} {line[:100]}")
-                    display_count = len(full_lines)
+                    result_lines = [f"   {D}⎿{X} {line[:100]}" for line in full_lines]
                 else:
-                    for line in full_lines[:3]:
-                        self._transcript.append_message(f"   {D}⎿{X} {line[:100]}")
-                    self._transcript.append_message(
+                    result_lines = [f"   {D}⎿{X} {line[:100]}" for line in full_lines[:3]]
+                    result_lines.append(
                         f"   {D}… +{len(full_lines) - 3} lines (ctrl+o to expand){X}"
                     )
-                    display_count = 4
+                display_count = len(result_lines)
+                # B2：把结果插到对应 tool_use 行下方（并行工具结果归位）
+                start_idx = self._place_result_lines(tuid, result_lines)
                 if not hasattr(self, '_tool_output_blocks'):
                     self._tool_output_blocks = []
                 self._tool_output_blocks.append({
@@ -1002,10 +1093,54 @@ class IstInkApp:
             self._transcript.append_message(f"   {B}⚡ finding: {text[:120]}{X}")
 
         elif block.type == "todo_list":
-            
+
             todos = block.payload.get("todos") if block.payload else None
             if todos and hasattr(self, '_plan_panel'):
                 self._plan_panel.update(todos)
+
+        elif block.type == "ask_user":
+            payload = dict(block.payload) if block.payload else {}
+            self._begin_ask_user(
+                payload.get("question_id", ""),
+                list(payload.get("questions", [])),
+            )
+
+    def _begin_ask_user(self, question_id: str, questions: list) -> None:
+        """进入 qa_ask_user 交互式问答模式（渲染到固定面板，不入 transcript）。"""
+        if not question_id or not questions:
+            return
+        from main.ist_core.ink.components.ask_user_view import AskUserSession
+        self._ask_user = AskUserSession(
+            question_id,
+            questions,
+            render=self._render_ask_user,
+            on_finish=self._finish_ask_user,
+        )
+        self._render_ask_user()
+
+    def _render_ask_user(self) -> None:
+        """把当前问答会话整列重渲染到固定面板（不随 transcript 滚动）。"""
+        if self._ask_user is None:
+            self._ask_user_panel.clear()
+            self._app.render()
+            return
+        self._ask_user_panel.update(self._ask_user.render_lines())
+        self._app.render()
+
+    def _finish_ask_user(self) -> None:
+        """问答结束（提交/取消）：清面板，在 transcript 留一行简洁结果。"""
+        session = self._ask_user
+        self._ask_user = None
+        self._ask_user_panel.clear()
+        # A3：留完成提示，让用户/对话历史看到选择结果（仿 cc-haha）
+        try:
+            if session is not None:
+                summary = session.result_summary()
+                if summary:
+                    self._transcript.append_message(summary)
+        except Exception:  # noqa: BLE001
+            pass
+        self._app.render()
 
     def _render_subagent_inner_block(self, block: Any, parent_id: str) -> None:
         """fork subagent 内部 ContentBlock 折叠成 ⎿ 进度行（接 snapshot 路径）。

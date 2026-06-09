@@ -1,10 +1,10 @@
 """Agent 层 LLM 工厂.
 
-按 ``IST_LLM_PROVIDER`` 选 dashscope / deepseek，统一通过 ChatOpenAI 兼容端点调用。
-两个 provider 主要差异：
-- base_url / api_key 来源
-- extra_body：dashscope 启用 ``enable_thinking``；deepseek 用 ``reasoning_effort=max``
-- 共享 ``ChatOpenAIWithReasoning`` 子类，处理 ``reasoning_content`` 双向 patch
+统一走 OpenAI 兼容端点（``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``）——任何 OpenAI
+协议端点皆可：小米 MiMo / DeepSeek 原生口 / DashScope 兼容口 / 自建网关。不再做
+provider 分支：要换厂商只改 ``OPENAI_BASE_URL`` + key + ``IST_MODEL``。
+共享 ``ChatOpenAIWithReasoning`` 子类，处理 ``reasoning_content`` 双向 patch
+（思考模式 multi-turn tool_call 要求回填历史 reasoning_content）。
 """
 
 from __future__ import annotations
@@ -16,116 +16,108 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEFAULT_IST_MODEL = "qwen-plus"
+DEFAULT_OPENAI_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
+DEFAULT_IST_MODEL = "mimo-v2.5-pro"
+DEFAULT_HAIKU_MODEL = "mimo-v2.5"
+
+# 默认请求超时 / 重试。streaming 模式下端点中途 stall 时，没有 timeout
+# 会无限挂（TUI 永远转圈、无报错）。可用 env 覆盖。
+DEFAULT_REQUEST_TIMEOUT = 120.0
+DEFAULT_MAX_RETRIES = 2
 
 
-def resolve_llm_provider() -> str:
-    """统一的 LLM 供应商标识符（dashscope / deepseek）.
+def _resolve_timeout_retries() -> tuple[float, int]:
+    """从 env 解析 (request_timeout 秒, max_retries)；非法值回退默认。"""
+    try:
+        timeout = float(os.environ.get("IST_LLM_TIMEOUT") or DEFAULT_REQUEST_TIMEOUT)
+    except (TypeError, ValueError):
+        timeout = DEFAULT_REQUEST_TIMEOUT
+    try:
+        retries = int(os.environ.get("IST_LLM_MAX_RETRIES") or DEFAULT_MAX_RETRIES)
+    except (TypeError, ValueError):
+        retries = DEFAULT_MAX_RETRIES
+    return timeout, retries
 
-    按 ``IST_LLM_PROVIDER`` env 决定；缺省 / 未识别值 → ``dashscope``.
-    """
-    return (os.environ.get("IST_LLM_PROVIDER") or "dashscope").strip().lower()
+
+def resolve_llm_base_url() -> str:
+    """OpenAI 兼容 API 根；留空走默认 MiMo CN 集群。"""
+    return (os.environ.get("OPENAI_BASE_URL") or DEFAULT_OPENAI_BASE_URL).strip()
 
 
 def resolve_llm_api_key() -> str:
-    """按 ``IST_LLM_PROVIDER`` 决定查哪个 API key.
-
-    - ``deepseek`` → ``DEEPSEEK_API_KEY``
-    - 其他（含 ``dashscope`` / 缺省）→ ``DASHSCOPE_API_KEY`` / ``BAILIAN_API_KEY``
-    """
-    if resolve_llm_provider() == "deepseek":
-        return (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
-    return (
-        os.environ.get("DASHSCOPE_API_KEY")
-        or os.environ.get("BAILIAN_API_KEY")
-        or ""
-    ).strip()
+    """OpenAI 兼容 API key（``OPENAI_API_KEY``）。"""
+    return (os.environ.get("OPENAI_API_KEY") or "").strip()
 
 
-def _build_chat_model(provider: str, model_name: str, **kwargs: Any):
-    """统一的 ChatOpenAI 工厂，按 provider 决定 base_url / api_key / extra_body。"""
+def _resolve_endpoint() -> tuple[str, str]:
+    """解析 ``(base_url, api_key)``；无 key 时 raise。单一事实源。"""
+    base_url = resolve_llm_base_url()
+    api_key = resolve_llm_api_key()
+    if not api_key:
+        raise RuntimeError("需要 OPENAI_API_KEY（OpenAI 兼容端点）")
+    return base_url, api_key
+
+
+def _build_chat_model(model_name: str, **kwargs: Any):
+    """统一的 ChatOpenAI 工厂（OpenAI 兼容端点）。"""
     try:
         from langchain_openai import ChatOpenAI  # noqa: F401  type: ignore[import-not-found]
     except ImportError as exc:
         raise RuntimeError("LLM 工厂需要 `pip install langchain-openai`") from exc
 
     extra_body = dict(kwargs.pop("extra_body", None) or {})
-
-    if provider == "deepseek":
-        base_url = (os.environ.get("DEEPSEEK_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL).strip()
-        api_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
-        if not api_key:
-            raise RuntimeError("provider=deepseek 需要 DEEPSEEK_API_KEY")
-        
-        
-        
-        extra_body.setdefault("reasoning_effort", "max")
-    else:
-        
-        base_url = (
-            os.environ.get("DASHSCOPE_BASE_URL")
-            or os.environ.get("OPENAI_BASE_URL")
-            or DEFAULT_DASHSCOPE_BASE_URL
-        ).strip()
-        api_key = (
-            os.environ.get("DASHSCOPE_API_KEY")
-            or os.environ.get("BAILIAN_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or ""
-        ).strip()
-        if not api_key:
-            raise RuntimeError(
-                "provider=dashscope 需要 DASHSCOPE_API_KEY / BAILIAN_API_KEY / OPENAI_API_KEY 之一"
-            )
-        
-        
-        
-        extra_body.setdefault("enable_thinking", True)
+    base_url, api_key = _resolve_endpoint()
 
     kwargs.setdefault("temperature", 0.0)
     kwargs.setdefault("top_p", 0.5)
     kwargs.setdefault("streaming", True)
-    
-    
-    
     kwargs.setdefault("stream_usage", True)
+    timeout, retries = _resolve_timeout_retries()
+    kwargs.setdefault("request_timeout", timeout)
+    kwargs.setdefault("max_retries", retries)
     kwargs["extra_body"] = extra_body
 
     cls = _get_chat_openai_with_reasoning()
-    logger.info("使用 %s 兼容端点: model=%s base_url=%s", provider, model_name, base_url)
+    logger.info(
+        "LLM: model=%s base_url=%s timeout=%ss retries=%s",
+        model_name, base_url, timeout, retries,
+    )
     return cls(model=model_name, base_url=base_url, api_key=api_key, **kwargs)
 
 
 def build_agent_chat_model(**kwargs: Any):
-    """主 LLM 工厂。按 ``IST_LLM_PROVIDER`` + ``IST_MODEL`` 路由。"""
-    provider = resolve_llm_provider()
+    """主 LLM 工厂。模型取 ``IST_MODEL``。"""
     model_name = (
         kwargs.pop("model", None)
         or os.environ.get("IST_MODEL")
         or DEFAULT_IST_MODEL
     ).strip()
-    return _build_chat_model(provider, model_name, **kwargs)
+    return _build_chat_model(model_name, **kwargs)
 
 
 def build_explore_model(**kwargs: Any):
-    """Explore sub-agent：deepseek-v4-flash, thinking=disabled, 快速低成本检索。"""
-    model_name = os.environ.get("IST_HAIKU_MODEL", "deepseek-v4-flash").strip()
-    base_url = (os.environ.get("DEEPSEEK_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL).strip()
-    api_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
-    if not api_key:
-        raise RuntimeError("Explore model 需要 DEEPSEEK_API_KEY")
+    """Explore sub-agent：haiku tier 模型，快速低成本检索。
+
+    走 OpenAI 兼容端点；模型取 ``IST_HAIKU_MODEL``。
+    """
+    model_name = (os.environ.get("IST_HAIKU_MODEL") or DEFAULT_HAIKU_MODEL).strip()
+    base_url, api_key = _resolve_endpoint()
 
     kwargs.setdefault("temperature", 0.0)
     kwargs.setdefault("top_p", 0.5)
     kwargs.setdefault("streaming", True)
     kwargs.setdefault("stream_usage", True)
+    timeout, retries = _resolve_timeout_retries()
+    kwargs.setdefault("request_timeout", timeout)
+    kwargs.setdefault("max_retries", retries)
     extra_body = dict(kwargs.pop("extra_body", None) or {})
-    extra_body.setdefault("thinking", {"type": "disabled"})
     kwargs["extra_body"] = extra_body
 
     cls = _get_chat_openai_with_reasoning()
+    logger.info(
+        "Explore model: model=%s base_url=%s timeout=%ss retries=%s",
+        model_name, base_url, timeout, retries,
+    )
     return cls(
         model=model_name,
         base_url=base_url,

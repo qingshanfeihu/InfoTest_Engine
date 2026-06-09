@@ -41,14 +41,9 @@ def _ensure_env() -> None:
     except Exception:  # noqa: BLE001
         pass
 
-    provider = (os.environ.get("IST_LLM_PROVIDER") or "dashscope").strip().lower()
     missing: list[str] = []
-    if provider == "deepseek":
-        if not (os.environ.get("DEEPSEEK_API_KEY") or "").strip():
-            missing.append("DEEPSEEK_API_KEY")
-    else:
-        if not (os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("BAILIAN_API_KEY") or "").strip():
-            missing.append("DASHSCOPE_API_KEY / BAILIAN_API_KEY")
+    if not (os.environ.get("OPENAI_API_KEY") or "").strip():
+        missing.append("OPENAI_API_KEY")
     if missing:
         print(
             f"❌ 缺少环境变量: {', '.join(missing)}\n"

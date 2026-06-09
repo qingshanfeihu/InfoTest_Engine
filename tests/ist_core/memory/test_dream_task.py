@@ -67,13 +67,12 @@ def test_gather_reads_recent_payloads(populated_store):
 
 
 
-def test_build_dream_consolidate_llm_uses_deepseek_provider(monkeypatch):
-    """IST_LLM_PROVIDER=deepseek 时应走 DEEPSEEK_API_KEY，而非仅 DASHSCOPE。"""
-    monkeypatch.setenv("IST_LLM_PROVIDER", "deepseek")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-deepseek")
-    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+def test_build_dream_consolidate_llm_uses_openai_compat_endpoint(monkeypatch):
+    """统一走 OpenAI 兼容端点：用 OPENAI_API_KEY / OPENAI_BASE_URL / IST_MODEL。"""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.deepseek.com")
     monkeypatch.setenv("IST_MODEL", "deepseek-v4-pro")
-    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.delenv("IST_REVIEW_MODEL", raising=False)
 
     with mock.patch("main.function_llm.chat_completion") as mock_cc:
         mock_cc.return_value = []
@@ -83,15 +82,13 @@ def test_build_dream_consolidate_llm_uses_deepseek_provider(monkeypatch):
         assert out == "[]"
         mock_cc.assert_called_once()
         _session, api_key, system, user = mock_cc.call_args[0]
-        assert api_key == "sk-test-deepseek"
+        assert api_key == "sk-test-openai"
         assert mock_cc.call_args.kwargs["model"] == "deepseek-v4-pro"
         assert mock_cc.call_args.kwargs["base_url"] == "https://api.deepseek.com"
 
 
 def test_build_dream_consolidate_llm_none_without_key(monkeypatch):
-    monkeypatch.setenv("IST_LLM_PROVIDER", "deepseek")
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     assert dream.build_dream_consolidate_llm() is None
 
 
@@ -110,9 +107,9 @@ def test_consolidate_appends_to_agents_md(populated_store):
     backend, store = populated_store
     store.upsert_long_term("/memories/preferences.md", "- p\n")
 
-    
+    # 真实端点开 response_format=json_object，只能返回顶层对象 {"decisions": [...]}
     def fake_llm(prompt: str) -> str:
-        return '[{"action":"append_agents_md","content":"- 新规则 from dream"}]'
+        return '{"decisions":[{"action":"append_agents_md","content":"- 新规则 from dream"}]}'
 
     task = dream.DreamTask(store=store, llm_chat=fake_llm)
     inv = task.orient()
@@ -121,6 +118,19 @@ def test_consolidate_appends_to_agents_md(populated_store):
     assert any("append_agents_md" in d for d in decisions)
     new_agents = (task._store.agents_md_disk_path()).read_text(encoding="utf-8")
     assert "新规则 from dream" in new_agents
+
+
+def test_coerce_decisions_handles_json_object_shapes():
+    """response_format=json_object 下模型只能返回对象，归一化要兼容多种形态。"""
+    assert dream._coerce_decisions({"decisions": [{"action": "skip"}]}) == [{"action": "skip"}]
+    # 模型直接返回单个动作对象
+    assert dream._coerce_decisions({"action": "skip"}) == [{"action": "skip"}]
+    # 顶层 list 兜底
+    assert dream._coerce_decisions([{"action": "skip"}]) == [{"action": "skip"}]
+    # 无关 / 非法形态 → 空（视为无操作）
+    assert dream._coerce_decisions({"foo": "bar"}) == []
+    assert dream._coerce_decisions("not json") == []
+    assert dream._coerce_decisions({"decisions": "notlist"}) == []
 
 
 def test_consolidate_handles_invalid_llm_output(populated_store):

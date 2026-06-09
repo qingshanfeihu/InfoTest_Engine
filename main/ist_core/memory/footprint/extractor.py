@@ -49,13 +49,11 @@ _SYSTEM_PROMPT = """\
 
 ## 字段填写规则（按 fact_kind 二选一，其他字段留空字符串/空数组）
 
-- **cli_command**: 必填 `cli_syntax`（**只写命令本身**，禁止包含描述句、引号、中文标点、"用于"、"语法为"）。例: `http rewrite body {on|off}`、`slb mode ircookie <mode> [group_name] [passwd]`
-  - **优先用规范语法行而非使用示例行**。文档里同一命令常有两种形态：规范定义 `ha synconfig bootup {on|off}`（带 `{}`/`<>`/`[]` 记法）和使用示例 `ha synconfig bootup on`（选定了具体值）。**cli_syntax 填规范形态**，把可选值写成 `{on|off}`，不要把示例里选定的 `on` 当成命令的一部分。
-  - **参数值不是命令路径**。`on`/`off`/选定的 mode 名/具体 IP 等是参数取值，只出现在 cli_syntax 的记法里（`{on|off}`），绝不作为独立的命令 token。
-  - 若命令带**命名参数**（占位符 `<param>` / `[param]`，且原文有参数表或参数说明），填 `parameters` 数组，每个参数一个对象。`name`（参数名，**必填**，用作去重键）。其余字段**按原文如实给出、有什么填什么**，常见的有 `type` / `required` / `default` / `value_range`（取值范围/枚举/长度限制）/ `desc`（用途），但不限于这些——原文若给了别的约束（单位、依赖、示例）也照填，字段名自拟
-  - 纯枚举开关（如 `{on|off}`）直接写在 cli_syntax 里即可，`parameters` 留空 `[]`
-  - 原文没有参数表就留空 `[]`，**不要编造参数，不要为了填字段而猜测取值范围**
-  - **同一命令的 no/show/clear/配置 是不同的 cli_command 各自提取**：`slb real http <rs>`、`no slb real http`、`show slb real http` 是三条命令，cli_syntax 各填完整原文，它们会自动归到同一节点
+- **cli_command**: 必填 `cli_syntax` = 这条命令的**完整调用签名**——命令主体 + 全部参数，按正确顺序，用记法表示参数（必填 `<param>`、可选 `[param]`、枚举 `{a|b}`）。只写命令本身，禁止描述句、引号、中文标点、"用于"/"语法为"。
+  - 签名应**完整且规范**。文档对同一命令的呈现常不完整：标题行可能只列命令主体加个别参数，真正的参数集要结合紧随的参数表/说明才完整；同一命令也常并存规范定义（`ha synconfig bootup {on|off}`）和使用示例（`ha synconfig bootup on`）。综合这些信息还原出完整规范签名，而不是照抄某一行残片或把示例里选定的具体值当命令的一部分。
+  - 参数值不是命令路径。`on`/`off`/mode 名/具体 IP 等是参数取值，只出现在记法里（`{on|off}`），绝不作为独立命令 token。
+  - 命令若带命名参数且原文有参数表/参数说明，填 `parameters` 数组（每参数一对象，`name` 必填作去重键；其余字段按原文如实给，常见 `type`/`required`/`default`/`value_range`/`desc`，不限于此）。纯枚举开关（`{on|off}`）直接写进 cli_syntax 即可、`parameters` 留空。原文没有参数信息就留空 `[]`，不要编造或猜测取值范围。
+  - **同一命令的 no/show/clear/配置 是不同的 cli_command 各自提取**：`slb real http <rs>`、`no slb real http`、`show slb real http` 是三条命令，cli_syntax 各填完整签名，它们会自动归到同一节点
 - **decision_rule**: `condition`（触发条件）+ `decision`（结论/默认值/限制）**两边都必填**。如果原文没有明确"条件 → 结论"两段，**改用 behavior**。
 - **behavior**: 必填 `content`（一句话功能行为）。**注意：behavior 必须是某条 CLI 命令的行为说明**。如果内容是架构概念/设计术语/项目代号（如"Ustack 是 XX 堆栈的代号"），它**不是 CLI 命令也不是命令行为，不要提取为 fact**——产品知识树只收 CLI 命令及其相关事实，不收架构名词解释
 - **known_issue**: 必填 `issue_id`（BUG-XXXXX 格式）+ **必填 `issue_title`**。`issue_title` 直接照抄 `web_bug_search` 返回的 `title` 字段原文，**一字不改、不要概括、不要留空**。可选 `affected_versions`
@@ -64,6 +62,8 @@ _SYSTEM_PROMPT = """\
 
 - `evidence_file`: cli/rule/behavior 必填。这条事实在哪个产品文档中能查到。必须是真实路径（如 `knowledge/data/markdown/product/cli__part2_p201-400.md`），从 tool 调用的 path 参数中获取，不要凭空构造
 - `evidence_quote`: cli/rule/behavior 必填。**必须是 evidence_file 里的原文片段**，未经任何改写、合并、概括。merger 会用 grep 验证：如果 evidence_quote 在 evidence_file 里 grep 不到，整条 fact 会被丢弃
+  - 取**最能直接证明这条事实的那段原文**，而不是任意能 grep 到的文字。对 cli_command，引命令定义/语法呈现的那一行（哪怕它在文档里是残缺形态）；对 decision_rule/behavior，引陈述该规则或行为的那句。不要用章节标题、泛泛的导语或不相关的旁支句来充数。
+  - cli_syntax 与 evidence_quote 角色不同：cli_syntax 是你综合还原的完整签名，evidence_quote 是文档里支撑它的原始呈现，两者不必逐字相同。
 - **known_issue 类型不需要 evidence_file / evidence_quote**：有 issue_id 就够了。BUG 数据来自 web_bug_search API 而非磁盘文件，无需提供文件路径
 - 对于 cli/rule/behavior：如果原文找不到对应字面证据，宁可不提取这条 fact，也不要为了凑结构化用自己的话改写
 

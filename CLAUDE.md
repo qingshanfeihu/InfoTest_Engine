@@ -53,6 +53,8 @@ langgraph dev --no-browser --port 2024           # 可选：LangGraph dev server
   - **强制机制**：`file_tools.py` 实现 `_agent_roots()` 多根沙箱（knowledge/data + workspace + IST_SESSION_DIR + IST_USER_DIR），`_resolve_inside_root` 三闸（traversal → 平台黑名单 → 多根白名单），`_resolve_writable_path` 四闸（traversal → 黑名单 → workspace 根 → outputs 子目录白名单）。修改 these 常量等于修改 agent 沙箱范围，需经安全评审。
   - 回归测试：`tests/ist_core/test_deepagent_large_file_tools.py`（读）+ `test_deepagent_write_tools.py`（写）+ `test_deepagent_multi_root_sandbox.py`（多根）
 - **运行时产物**：`runtime/` 目录收纳 `logs/`、`conversation_history/`、`large_tool_results/`、`users/`，均在 `_PLATFORM_DENIED_TOP_LEVEL` 黑名单中。
+- **死循环护栏**（`middleware/loop_guard.py`）：`LoopGuardMiddleware` 在 `wrap_model_call` 检测 agent 原地空转——最近 `IST_LOOP_WINDOW`（默认 8）个工具调用的滑动窗口里，同一 `(tool+args)` 指纹频次 ≥`IST_LOOP_DUP_THRESHOLD`（默认 3，能抓 A/B/A/B 交替）、空结果数 ≥`IST_LOOP_EMPTY_THRESHOLD`（默认 4）、或本轮 tool_call 超 `IST_LOOP_SOFT_BUDGET`（默认 25）——注入收敛 reminder（不写回 state）。`IST_LOOP_GUARD_ENABLED=0` 可关。配套：主 agent prompt 的 `Don't Spin` 反空转 section（fork subagent 经 `build_verifier_inherited_sections` 继承）。
+- **Web 上传/下载结构化信号**：Web Terminal 经 PTY 桥接 spawn TUI 子进程。上传/下载不走文本流靠正则猜，而走自定义 OSC 序列（文件名 base64，任意字符无损）：上传 `ESC]7001;...`（前端 ws → `web_server` 包 OSC → ink `parse_keypress` 识别 `UploadEvent` → 插入 `inputs/<file>`）；下载 `ESC]7002;...`（agent 写 `workspace/outputs/` → `run_done` diff 新文件 → ink `write_passthrough` 发 OSC → 前端 `registerOscHandler` 刷新下载面板 + 角标）。本地 TUI 手敲文件名走 `input_preprocessor` 兜底。
 
 ## 评审能力（最小方案）
 
@@ -99,7 +101,7 @@ main/ist_core/tools/
 
 ## 记忆子系统（`main/ist_core/memory/`）
 
-三层架构（仿 Claude Code auto memory + deepagents memory 设计）+ **Footprint 知识树**（autodream 增强）：
+三层架构（auto memory + deepagents memory 设计）+ **Footprint 知识树**（autodream 增强）：
 
 | 层 | 路径 | 注入位置 | 写入触发 | 持久化 |
 |---|---|---|---|---|
@@ -113,7 +115,7 @@ main/ist_core/tools/
 - `backend.py` — `CompositeBackend` + `_user_namespace` factory + InMemory/SQLite/Postgres store
 - `store.py` — `MemoryStore` facade + 三闸路径校验（traversal / 平台黑名单 / 子目录白名单）+ frontmatter 解析（仿 SKILL.md 风格，yaml-free）；`read_footprints()` / `lookup_footprint()` 走 FootprintIndex
 - `middleware.py` — `MemoryInjectionMiddleware`（每轮把 L1 工作记忆 + L2 长期记忆 + Footprint 拼成 `<memory-context>` HumanMessage 注入到 user query 之前）+ `MemoryWriteMiddleware`（after_model 调 `extract_working_entry` 写 L1 + `_should_distill` 判定后触发 fork agent 蒸馏 L1→L2；同时保留 finalizer 路径供评审场景用）
-- `extractor.py` / `extractor_agent.py` — fork agent（仿 cc-haha extractMemories：5 turn 上限 + 互斥锁 + 受限工具）+ `run_extractor_async` 后台线程入口
+- `extractor.py` / `extractor_agent.py` — fork agent（extractMemories 模式：5 turn 上限 + 互斥锁 + 受限工具）+ `run_extractor_async` 后台线程入口
 - `dream.py` — DreamTask 五道闸（功能开关 / 24h / 10min / ≥5sessions / fcntl PID 锁）+ 四阶段（Orient → Gather → Consolidate → Prune）；consolidate 同时跑 footprint 提取（haiku tier 模型，逐文件 LLM 调用）和 AGENTS.md 蒸馏；prune 阶段把 >7 天 working 移到 `working/.archive/`，long_term 加 `archived: true` 标记
 - `dream_graph.py` — 包成 LangGraph，注册到 `langgraph.json::memory_dream`
 - `scripts/maintenance/memory_dream.py` — 系统 cron 入口
@@ -133,7 +135,7 @@ main/ist_core/tools/
 **TUI 集成**：
 - `/memory` — 总览 / 查看 / 清除（list / show / clear / status）
 - `/remember <text>` — 显式追加偏好（默认 user 类）
-- `/remember --feedback|--project|--reference <topic> <text>` — 仿 cc-haha 四类
+- `/remember --feedback|--project|--reference <topic> <text>` — 四类记忆
 - `/footprint` — Footprint 知识树查看 / 搜索 / 统计
 - 底栏 dreaming 指示：`💭 dreaming` / `✓ memory consolidated`（检测 `memory/.dream/running.pid` 与 `last_run`）
 

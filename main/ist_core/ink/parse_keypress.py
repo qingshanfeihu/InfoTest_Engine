@@ -5,10 +5,14 @@ Parses raw terminal input (from tokenizer) into KeyPress events.
 
 from __future__ import annotations
 
+import base64
+import logging
 from dataclasses import dataclass, field
 from typing import Literal
 
 from .termio.tokenize import Token, Tokenizer
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -40,7 +44,19 @@ class PasteEvent:
     text: str = ""
 
 
-InputEvent = KeyPress | MouseEvent | PasteEvent
+@dataclass(slots=True)
+class UploadEvent:
+    """Out-of-band file-upload signal.
+
+    Web Terminal 上传文件后，前端经 ws 发结构化 upload 消息，web_server 把它
+    包成自定义 OSC 序列 ``ESC ] 7001 ; <base64(filename)> BEL`` 写进 PTY，
+    本解析器识别后产出该事件。文件名走 base64 → 不受空格 / 引号 / 中文 / 分隔符
+    干扰，彻底替代"在自由文本里用正则猜文件名"的脆弱方案。
+    """
+    filename: str = ""
+
+
+InputEvent = KeyPress | MouseEvent | PasteEvent | UploadEvent
 
 
 
@@ -61,6 +77,10 @@ _SS3_KEYS: dict[str, str] = {
 
 PASTE_START = "\x1b[200~"
 PASTE_END = "\x1b[201~"
+
+# 自定义 OSC 上传信号：ESC ] 7001 ; <base64(utf-8 filename)> (BEL | ESC \)
+# 7001 是私有 OSC 码（标准 OSC 用 0-9/52 等，7001 不与之冲突）。
+_OSC_UPLOAD_CODE = "7001"
 
 
 class InputParser:
@@ -225,18 +245,47 @@ def _parse_char(ch: str) -> KeyPress:
     return KeyPress(key=ch, char=ch)
 
 
+def _parse_osc(body: str) -> InputEvent | None:
+    """Parse an OSC sequence body (after ``ESC ]``).
+
+    只识别自定义上传信号 ``7001;<base64>``（终止符 BEL / ST 已被 tokenizer 剥离，
+    但保险起见这里再 strip 一次）。其他 OSC（标题设置等）忽略，返回 None。
+    """
+    # 去掉可能残留的终止符 BEL(\x07) 或 ST(\x1b\\)
+    body = body.rstrip("\x07")
+    if body.endswith("\x1b\\"):
+        body = body[:-2]
+
+    code, sep, payload = body.partition(";")
+    if not sep or code != _OSC_UPLOAD_CODE:
+        return None
+    try:
+        filename = base64.b64decode(payload.encode("ascii")).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        logger.warning("OSC upload payload 解码失败，忽略")
+        return None
+    filename = filename.strip()
+    if not filename:
+        return None
+    return UploadEvent(filename=filename)
+
+
 def _parse_sequence(seq: str) -> InputEvent | None:
     """Parse an escape sequence into an InputEvent."""
     if not seq.startswith("\x1b"):
         return None
 
-    
+
     if seq == PASTE_START:
         return None
 
     rest = seq[1:]
 
-    
+    # OSC 上传信号：ESC ] 7001 ; <base64> (BEL | ESC \)
+    if rest.startswith("]"):
+        return _parse_osc(rest[1:])
+
+
     if rest.startswith("["):
         return _parse_csi(rest[1:])
 

@@ -60,6 +60,28 @@ _CONVERTIBLE_SUFFIXES = {".xlsx", ".xls"}
 _COPYABLE_SUFFIXES = {".md", ".txt", ".json", ".csv", ".pdf", ".docx", ".conf", ".cfg", ".ini", ".yaml", ".yml", ".xml", ".log"}
 
 
+# 裸文件名匹配：用户上传文件后，前端只把"裸文件名"（如 bigip.conf）发进对话框，
+# 不带 workspace/inputs/ 前缀。这类 token 不被 _PATH_PATTERNS（只认带目录分隔符
+# 的路径）捕获，导致 agent 收不到"文件在哪"的信号、转而向用户追问。
+# 这里单独识别 <name>.<known_suffix> 形态的裸名，若该文件已落在 workspace/inputs/，
+# 改写为沙箱相对路径并给出 ⬆ 提示。
+#
+# 字符类用显式 ASCII + CJK 统一表意文字（一-鿿），不用 \w——\w 在
+# Unicode 下含 CJK，会让 lookahead 把文件名后紧跟的中文当成单词延续而漏判。
+# 设计要点：
+#   - 文件名段允许 CJK + 内部点分（app.config.json / 网关配置指南.pdf / a.b.txt）
+#   - lookbehind 挡 名字字符 / \ . —— 防路径中段（inputs/foo.conf）和点分中段误切
+#   - lookahead 只挡 ASCII 名字字符 / . / - —— CJK 文本可紧跟（bigip.conf请翻译），
+#     同时挡住 foo.confbar / bigip.conf-v2 这类 ASCII 延续与连字符后缀变体
+_BARE_NAME_CHARS = r"A-Za-z0-9_一-鿿\-"
+_BARE_FILENAME_RE = re.compile(
+    rf'(?<![{_BARE_NAME_CHARS}/\\.])'
+    rf'([{_BARE_NAME_CHARS}]+(?:\.[{_BARE_NAME_CHARS}]+)*\.{_KNOWN_SUFFIXES})'
+    rf'(?![A-Za-z0-9_.\-])',
+    re.IGNORECASE,
+)
+
+
 def _expand_path(raw: str) -> Path | None:
     """展开路径（~ 展开），返回 Path 或 None（不存在时）。"""
     try:
@@ -102,6 +124,22 @@ def _find_by_basename(raw: str) -> Path | None:
         candidate = candidate_dir / basename
         if candidate.is_file():
             return candidate
+    return None
+
+
+def _locate_in_inbox(bare_name: str) -> Path | None:
+    """裸文件名 → workspace/inputs/ 下的实际文件。
+
+    优先精确命中；xlsx/xls 上传后会被转成同名 .md（见 _convert_xlsx），
+    所以 foo.xlsx 找不到时回退查 foo.md。
+    """
+    direct = _DEFAULT_INBOX / bare_name
+    if direct.is_file():
+        return direct
+    if Path(bare_name).suffix.lower() in _CONVERTIBLE_SUFFIXES:
+        converted = _DEFAULT_INBOX / f"{Path(bare_name).stem}.md"
+        if converted.is_file():
+            return converted
     return None
 
 
@@ -234,7 +272,25 @@ def preprocess_file_paths(
             processed.append(f"{path.name} → {sandbox_rel}")
             seen_spans.add(span)
 
-    
+    # 裸文件名兜底：在 path 处理后的 `modified` 上扫描（与替换目标同一坐标系），
+    # 自右向左按 span 切片替换，避免先改左侧导致后续 span 错位。
+    # Web 上传（前端只发裸名）+ TUI 直接打文件名两种场景的主路径。
+    for match in reversed(list(_BARE_FILENAME_RE.finditer(modified))):
+        bare = match.group(1)
+        located = _locate_in_inbox(bare)
+        if located is None:
+            continue
+        try:
+            sandbox_rel = located.resolve().relative_to(_WORKSPACE.resolve()).as_posix()
+        except ValueError:
+            continue
+        if bare == sandbox_rel:
+            continue
+        span = match.span()
+        modified = modified[: span[0]] + sandbox_rel + modified[span[1] :]
+        processed.append(f"{bare} → {sandbox_rel}")
+
+
     if need_upload and not processed:
         filenames = ", ".join(fn for _, fn in need_upload)
         return text, f"⬆ NEED_UPLOAD:{filenames}"

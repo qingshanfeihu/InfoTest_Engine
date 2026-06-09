@@ -252,4 +252,3 @@ grep `cli__part*.md`，找到相关命令的完整参数表，确认参数间依
 
 - 编写规范：`docs/skill_authoring_standard.md`
 - 评审类完整实现：`main/ist_core/skills/test-case-review/SKILL.md`
-- 外部设计规范：cc-haha Skills 系统使用指南 + 实现原理

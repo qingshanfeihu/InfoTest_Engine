@@ -1,5 +1,13 @@
 # What's New
 
+## 未发布（死循环护栏 + 上传/下载结构化信号）
+
+### 死循环护栏
+新增 `LoopGuardMiddleware`：检测 agent 原地空转（最近窗口内重复同一工具调用 / 连续空结果 / 超 tool_call 软预算），注入收敛 reminder 引导改变策略或如实收敛。基于滑动窗口频次，能抓住 A/B/A/B 交替空转。主 agent prompt 加 `Don't Spin` 反空转约束（fork subagent 继承），`config-answer` skill 的"退回重查"加上界防无限重搜。env：`IST_LOOP_GUARD_ENABLED` / `IST_LOOP_DUP_THRESHOLD` / `IST_LOOP_EMPTY_THRESHOLD` / `IST_LOOP_SOFT_BUDGET` / `IST_LOOP_WINDOW`。
+
+### Web 上传/下载结构化带外信号
+不再把上传文件名当文本塞进终端流靠正则猜。上传走自定义 OSC 序列（文件名 base64，含空格/中文/特殊字符无损）：前端结构化 ws 消息 → web_server 包 OSC `7001` → ink 解析为 `UploadEvent` → 精确插入 `inputs/<file>`。下载对称：agent 写 `workspace/outputs/` 后回合结束发 OSC `7002` → 前端自动刷新下载面板 + 按钮红色角标，不再需要用户盲点。
+
 ## 2026-06-09（v1.0.5：架构收口 + 记忆修复 + 交互 + 清理）
 
 ### 统一 OpenAI 兼容端点
@@ -14,7 +22,7 @@
 - consolidate 适配 `json_object`（返回 `{"decisions":[...]}` + `_coerce_decisions`），AGENTS.md 蒸馏不再空转。
 - footprint extractor prompt 原则化（cli_syntax 还原完整调用签名）。
 
-### qa_ask_user 交互式问答（对齐 cc-haha）
+### qa_ask_user 交互式问答
 工具注册 + events/reducer 链路 + `ask_user_panel` 固定面板（选项不随对话滚走）+ 选中着色 + 完成提示 + 多题 `←→`/`Tab` 双向导航；抑制标准工具行不暴露内部名。
 
 ### TUI 渲染修复
@@ -28,12 +36,12 @@
 
 - **移除 `agent-chat-ui`**：LangChain Next.js 可选前端已从仓库删除；交互统一为 `infotest`（Textual）与 `infotest --server`（Web Terminal :8080）。`ARCHITECTURE.md` §12 标为历史；`CLAUDE.md` 启动说明已更新。
 
-## 2026-05-27（cc-haha Skill 分层）
+## 2026-05-27（Skill 分层）
 
 ### 评审 inline/fork 单源与客户友好 TUI
 
 - **Verifier 单源**：`skills/review-verification/SKILL.md` 为完整 prompt 真源；`semantic_check_agent.py` 瘦身为 shim；运行时仅 `load_fork_skills()` 注册
-- **cc-haha 交付契约**：fork 产出含 VERDICT/LEVEL 的完整报告；main fork 返回后静音（仅「评审完成」），禁止再调工具；`finalize` 不再把 main 补刀 prefix 到 verifier 前
+- **交付契约**：fork 产出含 VERDICT/LEVEL 的完整报告；main fork 返回后静音（仅「评审完成」），禁止再调工具；`finalize` 不再把 main 补刀 prefix 到 verifier 前
 - **test-case-review**：footprint 前移至交叉验证前；Step 8 静音；多 sheet 分支前置；todo 禁内部实现词
 - **客户友好**：`display_labels.py`（交叉验证 / 评审报告）；`PerTurnSkillReminder` 仅 listing `inline` + `user-invocable: true`；TUI 评审报告默认全文展开
 
@@ -41,7 +49,7 @@
 
 ### Skill 系统对齐业界标准
 
-完成测试评审 skill 与业界 agent 框架（Claude Code 风格）的全面对齐改造，覆盖通用 agent 行为、tools 使用、skill 注入三个层面。详见 `todolist.md` 第 9 节。
+完成测试评审 skill 与业界 agent 框架的全面对齐改造，覆盖通用 agent 行为、tools 使用、skill 注入三个层面。详见 `todolist.md` 第 9 节。
 
 **核心修订**：
 

@@ -156,6 +156,16 @@ def build_main_agent(**kwargs: Any):
         except Exception as exc:  # noqa: BLE001
             logger.info("PerTurnSkillReminderMiddleware 不可用: %s", exc)
 
+
+
+
+        try:
+            from main.ist_core.middleware.loop_guard import LoopGuardMiddleware
+
+            middleware.append(LoopGuardMiddleware())
+        except Exception as exc:  # noqa: BLE001
+            logger.info("LoopGuardMiddleware 不可用: %s", exc)
+
         
         
         

@@ -197,6 +197,20 @@ class InkApp:
         self._terminal.write(cleanup)
         self._terminal.restore()
 
+    def write_passthrough(self, data: str) -> None:
+        """Write a raw out-of-band control sequence straight to the terminal.
+
+        For sequences that occupy no screen cells and don't move the cursor
+        (e.g. custom OSC signals to the host/Web frontend). Held under the
+        render lock so it never interleaves mid-frame with a diff flush.
+        Does not participate in screen diffing — purely passes through the PTY.
+        """
+        with self._render_lock:
+            try:
+                self._terminal.write(data)
+            except Exception:  # noqa: BLE001
+                pass
+
     def render(self) -> None:
         """Perform a full render cycle: layout → render → diff → output.
 
@@ -207,7 +221,7 @@ class InkApp:
             now = time.time()
             elapsed = now - self._last_render_time
             if elapsed < 0.016:
-                
+
                 if not self._render_pending:
                     self._render_pending = True
                     threading.Timer(0.016 - elapsed, self._do_render).start()

@@ -33,7 +33,7 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 - **执行优先用 qa_restapi 而非 qa_ssh**：REST API 比 SSH 快得多（单次 HTTP 调用 vs shell 交互），且无需 enable/config 模式。SSH 仅作为 REST API 不可用时的降级方案
 - **高危命令一律拒绝**，不准下发，不准静默跳过（详见下方黑名单）
-- **CLI 手册优先于设备试错**：任何命令（含 show）必须先 grep `knowledge/data/markdown/product/cli_*_commands.md` 查语法。严禁在设备上用错误命令试探——设备不是命令发现工具，手册才是唯一权威
+- **CLI 手册优先于设备试错**：任何命令（含 show）必须先 grep `knowledge/data/markdown/product/cli__part*.md` 或 `cli_74__part*.md` 查语法。严禁在设备上用错误命令试探——设备不是命令发现工具，手册才是唯一权威
 - **禁止假设命令名**：设备运行 InfosecOS，不是 Cisco IOS。不要用 `show ip interface brief`、`show vlan`、`show interface` 等 Cisco 风格命令名，必须从 CLI 手册中查找 InfosecOS 的正确命令
 - 配置下发时，前一条失败不准继续执行后续命令
 - SSH 凭据不准硬编码，用 qa_ask_user 或环境变量获取
@@ -81,7 +81,7 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 **⚠️ 强制步骤：所有命令（包括 show 和 config）必须先查 CLI 手册再执行。**
 
-先 grep `knowledge/data/markdown/product/cli_*_commands.md` 确认命令的**完整名称和参数**。下表是已验证的正确命令——**必须使用表格中的精确命令，禁止简化**（如用 `show slb group` 代替 `show slb group method` 会遗漏关键信息）：
+先 grep `knowledge/data/markdown/product/cli__part*.md` 或 `cli_74__part*.md` 确认命令的**完整名称和参数**。下表是已验证的正确命令——**必须使用表格中的精确命令，禁止简化**（如用 `show slb group` 代替 `show slb group method` 会遗漏关键信息）：
 
 | 验证目标 | 正确命令（必须用完整形式） |
 |---------|-------------------------|

@@ -43,7 +43,7 @@ Do not invoke a skill that is already running.
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
-# 渐进披露预算（仿 Claude Code）：
+# 渐进披露预算：
 # - 单条 description 截断上限（字符）
 # - 全局 listing 字符预算；溢出时把溢出的 skill 降级为 name-only（仅列名，不列描述）
 # 均可经 env 覆盖。

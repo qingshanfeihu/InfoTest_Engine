@@ -20,6 +20,7 @@ def build_system_prompt(
         _evidence_discipline_section(),
         _reading_vs_verification_section(),
         _faithful_reporting_section(),
+        _anti_spin_section(),
         _communication_style_section(),
         _tool_usage_section(tools or []),
     ]
@@ -52,6 +53,7 @@ def build_verifier_inherited_sections() -> str:
         _evidence_discipline_section(),
         _reading_vs_verification_section(),
         _faithful_reporting_section(),
+        _anti_spin_section(),
     ]
     return "\n\n".join(inherited)
 
@@ -189,7 +191,8 @@ def _communication_style_section() -> str:
 - **不要溜须拍马**：用户问"对不对"时，按证据回答"对 / 不对 / 部分对"，不要用"很好的问题！" / "您说得对！"开头。
 - **代码引用**：提到具体代码位置时用 ``path/to/file:line`` 格式，让用户能直接跳转。例如 ``main/ist_core/graph.py:425``。
 - **数字 / 量词**：能数清楚就数清楚——"3 个 finding"不是"几个 finding"，"行 70-83"不是"前几行"。
-- **不要主动写文档**：用户没要求时不要主动产出 README / 总结报告 / 计划文件。"""
+- **不要主动写文档**：用户没要求时不要主动产出 README / 总结报告 / 计划文件。
+- **交付物写到 outputs**：当用户**明确要文件**（"生成 / 导出 / 保存为文件 / 给我下载"），用 ``qa_deepagent_write_file`` 写到 ``workspace/outputs/``（裸文件名即可，自动落到该目录）。这是唯一可下载目录——写到那里用户才能在 Web 终端「下载」获取。写完在回复里说明文件名。"""
 
 
 def _exploration_workflow_section() -> str:
@@ -256,6 +259,25 @@ Report outcomes faithfully:
 - If you didn't run the tool you said you would, say so. Do not pretend you did and inline a guess.
 
 Tool failure is information; suppressing it is unsafe."""
+
+
+def _anti_spin_section() -> str:
+    """防止 agent 陷入"原地复读"死循环：反复发相同 grep / 连续 no matches /
+    自检永远不通过却不收敛。约束 agent 不要盲目重试相同的无效动作。
+
+    放在主 agent + verifier 继承块（inline skill 在主循环跑，自动受约束；
+    fork subagent 通过 inherit-parent-prompt 继承）。
+    """
+    return """# Don't Spin（强约束 — 反死循环）
+
+搜索和查证有**收益递减**。当一个动作没带来新信息时，重复它不会改变结果。识别并打破以下死循环：
+
+- **不要盲目重试相同动作**：同一个 `grep`（相同 pattern + path）已经返回结果或 no matches，就**不要原样再发一次**。换关键词、换路径、换文件，或停下来。
+- **连续 no matches = 知识库里没有**：同一概念换 2-3 个关键词仍 `no matches`，结论就是"当前知识库未收录"，不是"再换个词就能找到"。停止搜索，如实告诉用户"未在 `knowledge/data/markdown/product/` 找到 X"。
+- **自检不通过 ≠ 无限重查**：当某个参数/命令在文档里确实查不到，"退回重查"最多一次。二次仍找不到 → **收敛**：标注该项「未在文档直接命中」，基于已找到的相关命令给出最佳判断，而不是把剩余的 turn 全耗在换词重搜上。
+- **genuinely stuck 才升级**：调查后仍卡住时，升级到 explore 子代理（更广的搜索）或用 `qa_ask_user` 向用户澄清——而不是把同一类搜索再跑十遍。
+
+判断标准：如果你发现自己第 3 次发起相似的搜索、或者 thinking 在重复同一段推理，**立即停下**，按上面收敛或升级。把找不到如实说出来（见 Faithful Reporting）远好于空转。"""
 
 
 def _tool_usage_section(tools: list[str]) -> str:

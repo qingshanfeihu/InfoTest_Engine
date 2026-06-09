@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### 死循环护栏 + 上传/下载结构化信号 + 文档去外部来源引用
+
+**死循环护栏（LoopGuardMiddleware）**：
+- 新增 `main/ist_core/middleware/loop_guard.py`：`wrap_model_call` 注入收敛 reminder（不写回 state）。基于**最近 N 个工具调用的滑动窗口频次**检测（`IST_LOOP_WINDOW`，默认 8）——能抓住 A/B/A/B 交替空转，不止连续重复；模型改变行为后窗口自然复位。三类触发：窗口内同一 `(tool+args)` 指纹 ≥`IST_LOOP_DUP_THRESHOLD`（默认 3）、窗口内空结果 ≥`IST_LOOP_EMPTY_THRESHOLD`（默认 4）、本轮 tool_call 超 `IST_LOOP_SOFT_BUDGET`（默认 25）。`IST_LOOP_GUARD_ENABLED=0` 可关
+- 挂载于主 agent（`main_agent.py`），inline skill 在主循环执行时自动受约束
+- 主 agent prompt 新增 `Don't Spin` 反空转 section（`_prompt.py`），同时进 `build_verifier_inherited_sections` 让 fork subagent 继承
+- `config-answer` SKILL.md：Step 3a/3b 的"退回重查"加上界（最多一次），二次找不到则标注 `[未在文档直接命中]` 收敛，不再无限重搜
+- `_last_human_index` 前缀匹配带属性的 `<system-reminder`（修窗口起点错位）；`_is_empty_result` 加 200 字符护栏（长结果含"未找到"字样不误判为空）
+
+**Web 上传/下载结构化带外信号（OSC）**：
+- 根因：原方案把上传文件名当键盘字节塞进 PTY 文本流，下游靠正则猜——文件名含空格/中文/特殊字符时不可靠。Web Terminal 经 PTY 桥接 spawn TUI 子进程，输入/输出都走该通道
+- **上传**：前端发结构化 `{type:"upload"}` ws 消息 → `web_server` 包成自定义 OSC `ESC]7001;<base64(filename)>BEL` → ink 解析器（`parse_keypress.py`）识别为 `UploadEvent` → `ist_app` 把 `inputs/<file>` 精确插入输入框。文件名走 base64，任何字符无损
+- **下载**：agent 写文件到 `workspace/outputs/` 后，回合结束（`run_done`）diff 出新文件 → ink app `write_passthrough` 发 OSC `7002` → 前端 `registerOscHandler` 自动刷新下载面板 + 按钮红色角标。补 agent prompt 交付契约（要文件时写 outputs 才能下载）
+- 保留 `input_preprocessor` 裸名正则（含 CJK + 点分文件名识别）作为本地 TUI 手敲文件名的兜底
+
+**文档去外部来源引用**：
+- 移除代码注释 / 文档中把外部参考实现当设计来源的字样，改为通用描述（保留 `CLAUDE.md` 文件名等功能性引用）
+
+**测试**：新增 `test_loop_guard.py`（11）+ `test_input_preprocessor_bare_filename.py`（10）+ `test_osc_upload.py`（12）+ `test_download_notify.py`（4）
+
 ## [1.0.5] - 2026-06-09
 
 ### LLM 架构收口 + 记忆子系统修复 + 交互能力 + 仓库清理
@@ -9,7 +31,7 @@
 - 换厂商（DeepSeek 原生口 / DashScope 兼容口 / 自建网关）只改 `OPENAI_BASE_URL` + key + `IST_MODEL`
 - env 校验只认 `OPENAI_API_KEY`；示例模型小米 MiMo `mimo-v2.5-pro`（评审）/ `mimo-v2.5`（haiku tier）
 
-**Skill 渐进披露**（对齐 Claude Code）：
+**Skill 渐进披露**：
 - `per_turn_skill_reminder` 加单条 description 截断（`IST_SKILL_DESC_CAP`，默认 200）+ 全局 listing 预算（`IST_SKILL_LISTING_BUDGET`，默认 1200）+ 溢出降级为 name-only；常驻 listing 从 ~3.5KB 降到 ~734 字符
 - `when_to_use` 移出常驻 listing（触发后才从 SKILL.md body 读）；config-automation description 瘦身
 
@@ -19,14 +41,14 @@
 - consolidate 适配 `response_format: json_object`：prompt 改输出 `{"decisions":[...]}` + `_coerce_decisions` 兼容多形态，AGENTS.md 蒸馏不再空转
 - footprint extractor prompt 原则化（cli_syntax 还原完整调用签名，不照抄残缺标题行）
 
-**qa_ask_user 交互式问答**（对齐 cc-haha）：
+**qa_ask_user 交互式问答**：
 - 工具注册 + `events`/`reducer`/`message_model` 链路 + `ask_user_view` 会话状态机
 - `ask_user_panel` 固定面板（仿 PlanPanel，选项不随对话滚走）+ 选中行着色 + 答完完成提示 + 多题 `←→`/`Tab` 双向导航
 - 抑制 qa_ask_user 标准工具行，不暴露内部工具名/参数
 
 **TUI 渲染修复**：
 - think 块展开消失：去掉 thinking 渲染的 `replace_range` 误删逻辑（thinking 间夹 tool_use 时误删后续行）
-- 并行工具结果归位：按 `tool_use_id` 把 `⎿` 结果插到对应 `⏺` 行下方（对齐 cc-haha toolUseID 分组）
+- 并行工具结果归位：按 `tool_use_id` 把 `⎿` 结果插到对应 `⏺` 行下方（toolUseID 分组）
 
 **仓库清理**：
 - 删除 `backup/`（1.6G 历史归档）、`logs/`、`ist_core.sqlite*` checkpoint、`__pycache__`/`.DS_Store`/空目录等运行时产物

@@ -229,7 +229,8 @@ async def list_files(token: str = ""):
         return {"files": []}
     files = []
     for f in sorted(_OUTPUTS.iterdir()):
-        if f.is_file():
+        # 跳过隐藏文件（.gitkeep 等占位/元数据），不作为可下载产物列出
+        if f.is_file() and not f.name.startswith("."):
             files.append({"name": f.name, "size": f.stat().st_size})
     return {"files": files}
 

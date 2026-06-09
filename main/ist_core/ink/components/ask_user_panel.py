@@ -2,7 +2,7 @@
 
 仿 PlanPanel：qa_ask_user 触发时，IstInkApp 把 AskUserSession 的渲染行整块
 塞进本面板（独立 Box 节点），**不再 append 到 transcript**——所以问答选项不会
-随对话滚走，始终固定在输入框上方（对齐 cc-haha 的底部 permission dialog 位置）。
+随对话滚走，始终固定在输入框上方（底部 permission dialog 位置）。
 
 渲染内容由 AskUserSession.render_lines() 提供（含 ANSI 着色 / 高亮 / 选中态）。
 面板只负责把这些行整列重渲染到固定区，状态机逻辑全在 AskUserSession。

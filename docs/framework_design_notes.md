@@ -4,7 +4,7 @@
 
 ## 一、架构总体差异
 
-| 维度 | 业界标准（Claude Code 类） | IST-Core 当前 | 类型 |
+| 维度 | 业界标准框架 | IST-Core 当前 | 类型 |
 |---|---|---|---|
 | 核心循环 | AsyncGenerator 状态机（`while + state = next`） | LangGraph StateGraph + deepagents ReAct | **架构差异** |
 | 工具执行时机 | 流式中即时执行（StreamingToolExecutor） | LangChain 标准（等模型完整响应） | 架构差异 |

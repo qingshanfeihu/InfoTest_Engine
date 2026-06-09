@@ -228,7 +228,7 @@ class AskUserSession:
             self._render()
 
     def result_summary(self) -> str:
-        """A3：问答结束后给 transcript 的一行完成提示（仿 cc-haha）。"""
+        """A3：问答结束后给 transcript 的一行完成提示。"""
         answered = {
             q.get("question", ""): self._answer_text_for(i)
             for i, q in enumerate(self._questions)

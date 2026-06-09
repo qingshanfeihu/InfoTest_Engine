@@ -58,7 +58,7 @@ $ARGUMENTS
   - 「同上」「同前」→ 完全复制前面行 G 列内容
   - 「新增第N个」→ 在前面已创建资源的基础上，创建第 N 个同类型资源（命名递增，参数独立）
   - **判断前提**：先确定 D 列指代的是哪种资源（listener/real server/pool/VIP 等），再决定复用还是替换哪个参数
-- 参数在 cli_*_commands.md 和 app_*.md 中找不到明确定义 → 标记「未生成」
+- 参数在 CLI 手册 md 分片或 code_format.json 中找不到明确定义 → 标记「未生成」
 - **check_point 前置检查**：填 check_point 前必须先看前一行的 E 列和 G 列。前一行是 APV show/config → check_point 写 CLI 完整输出格式（如 SLB: `slb virtual http "v1" 172.16.34.100 80`），**绝对禁止裸 IP**。前一行是 test_env + D 列含「访问成功」→ check_point 填**后端服务器 响应内容或IP**（不是 DNS/VIP 的 IP）。只有前一行是 test_env（Linux 命令）且 D 列含「访问成功」时才写客户端侧的响应格式。**最容易犯的两个错误**：①看到 D 列「配置添加成功」就填裸 IP（前一行是 APV 时必须填 CLI 完整输出格式）；②看到 D 列「访问成功」就填 DNS/VIP 的 IP（应根据访问类型填后端服务器 响应内容或IP）。此规则适用所有模块
 
 ## Steps
@@ -87,8 +87,9 @@ $ARGUMENTS
 
 用 `module_keywords` 确定范围。**搜索优先级**：
 
-1. **首选** grep `knowledge/data/markdown/product/app_*.md`，查找该业务的**完整配置示例**。app 配置指南含可直接使用的示例序列（如 SLB 的 virtual server + real server + group + health check）。找到后修改 IP/端口/名称即可
-2. 主力 grep `cli_*_commands.md`，对 1a 清单中的每种资源类型找到对应的 add/create/set 命令语法和对应参数取值范围
+1. **首选** grep `knowledge/data/markdown/product/app__part*.md`、`app_21__part*.md` 或 `ePolicy用户指南.md`，查找该业务的**完整配置示例**（如 SLB 的 virtual server + real server + group + health check 完整创建流程）。找到后修改 IP/端口/名称即可
+2. 主力 grep `knowledge/data/markdown/product/cli__part*.md`、`cli_74__part*.md`（纯文本 CLI 手册分片），对 1a 清单中的每种资源类型找到对应的 add/create/set 命令语法
+3. 兜底 grep `knowledge/.intermediate/mineru/cli_*part*.code_format.json` 的 `markdown` 字段
 
 #### 1c. 逐资源生成创建命令
 
@@ -168,12 +169,12 @@ F=sleep 时填数字。根据当前测试的功能配置和cli对此功能的描
 
 ### 2e. APV 通用 (when applicable)
 
-搜索范围：`knowledge/data/markdown/product/*.md`。
+两级查找：优先 grep `cli__part*.md` / `cli_74__part*.md` → 兜底 `knowledge/.intermediate/mineru/cli_*part*.code_format.json`。
 
 CLI 验证流程（每条 APV 命令必须走完）：
-1. 在 commands.md 中用第一关键字 grep 定位语法骨架
+1. 在 `cli__part*.md` 中用第一关键字 grep 定位语法骨架（命中章节标题或命令行示例）
 2. `qa_footprint_lookup("<命令前缀>")` 查决策规则/已知缺陷
-3. read_file 精读命令所在小节，提取合法取值/默认值/约束
+3. read_file 同一 md 分片中该命令所在段落（上下各扩 20–40 行），提取合法取值/默认值/约束；需要完整配置示例时 read_file `ePolicy用户指南.md` 或 `app__part*.md` 对应章节
 4. 提取语法：必选参数（无 `[ ]`）、可选参数（`[param]`）、**逐参数提取约束**（手册中出现「取值必须为」「取值范围」「允许值」「可选值」等说明时，必须原样记录，绝不能凭感觉缩略或忽略）、默认值
 5. 逐参数填写：必选→必须出现；可选不影响→省略；可选影响→**值必须严格在步骤 4 记录的约束范围内**；顺序与文档一致。手册写「取值必须为 1/2/3」就不能填 0 或 4；写「必须为 IP 地址格式」就不能填域名；写「必须为已创建的 xxx 名称」就必须引用前面已创建的资源名
 6. 任何参数找不到明确定义 → 禁止填入，标记「未生成」

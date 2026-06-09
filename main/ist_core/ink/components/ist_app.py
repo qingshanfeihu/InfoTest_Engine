@@ -28,6 +28,7 @@ from main.ist_core.ink.parse_keypress import (
     KeyPress,
     MouseEvent,
     PasteEvent,
+    UploadEvent,
 )
 
 
@@ -205,6 +206,7 @@ class IstInkApp:
         self._last_ctrl_c: float = 0.0
         self._tokens_used: int = 0
         self._run_start_time: float = 0.0
+        self._outputs_snapshot: set[str] = set()
         self._tool_outputs_expanded: bool = False
         self._thinking_expanded: bool = False
         self._last_thinking_text: str = ""
@@ -330,6 +332,71 @@ class IstInkApp:
             elif isinstance(event, PasteEvent):
                 self._prompt.handle_paste(event.text)
                 self._app.render()
+            elif isinstance(event, UploadEvent):
+                self._handle_upload(event)
+
+    def _handle_upload(self, event: UploadEvent) -> None:
+        """处理带外上传信号（Web Terminal 上传文件经 OSC 序列传入）。
+
+        文件已由 web_server 落到 workspace/inputs/<filename>。这里把它的沙箱
+        相对路径插入输入框（光标处），用户可继续补充指令再提交。agent 收到的
+        是确定的 `inputs/<filename>` 路径，无需任何正则猜测。
+        """
+        filename = (event.filename or "").strip()
+        if not filename:
+            return
+        # 仅取 basename 防御（前端已是 basename，双保险挡 OSC payload 注入路径）
+        import os as _os
+        safe = _os.path.basename(filename.replace("\\", "/"))
+        if not safe or safe in (".", ".."):
+            return
+        ref = f"inputs/{safe}"
+        # 插入到输入框：已有内容则加空格分隔，避免和用户已敲的字粘连
+        existing = self._prompt.value
+        if existing and not existing.endswith((" ", "\n")):
+            self._prompt.handle_paste(" " + ref + " ")
+        else:
+            self._prompt.handle_paste(ref + " ")
+        self._transcript.append_message(
+            f"  \x1b[2m⬆ 已上传 {safe} → {ref}\x1b[0m"
+        )
+        self._app.render()
+
+    @staticmethod
+    def _outputs_dir() -> Path:
+        return Path(__file__).resolve().parents[4] / "workspace" / "outputs"
+
+    def _snapshot_outputs(self) -> set[str]:
+        """快照 workspace/outputs/ 当前文件集合（用于 run 前后 diff 出新产物）。"""
+        d = self._outputs_dir()
+        try:
+            return {f.name for f in d.iterdir() if f.is_file() and not f.name.startswith(".")}
+        except OSError:
+            return set()
+
+    def _notify_new_outputs(self) -> None:
+        """agent 回合结束后：检测 outputs 新文件，经 OSC 信号通知 Web 前端刷新下载面板。
+
+        与上传方向对称：写文件这件事发生在 agent 工具层（与渲染解耦），所以在
+        回合结束的渲染线程里做 diff + 发信号。OSC 7002 不占屏幕单元，穿过 PTY
+        被前端识别。本地 TUI 收到该 OSC 会被 ink 解析器忽略（无害）。
+        """
+        try:
+            current = self._snapshot_outputs()
+            new_files = current - self._outputs_snapshot
+            self._outputs_snapshot = current
+            if not new_files:
+                return
+            import base64 as _b64
+            for name in sorted(new_files):
+                b64 = _b64.b64encode(name.encode("utf-8")).decode("ascii")
+                self._app.write_passthrough(f"\x1b]7002;{b64}\x07")
+            names = "、".join(sorted(new_files))
+            self._transcript.append_message(
+                f"  \x1b[2m⬇ 已生成 {names} → 可点「下载」获取\x1b[0m"
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _handle_key(self, kp: KeyPress) -> None:
         """Handle keyboard events."""
@@ -731,6 +798,8 @@ class IstInkApp:
         self._footer.update(status="esc to interrupt")
         self._is_loading = True
         self._run_start_time = __import__('time').time()
+        # 快照 outputs 基线，回合结束时 diff 出 agent 新生成的可下载文件
+        self._outputs_snapshot = self._snapshot_outputs()
         self._app.render()
 
         
@@ -1132,7 +1201,7 @@ class IstInkApp:
         session = self._ask_user
         self._ask_user = None
         self._ask_user_panel.clear()
-        # A3：留完成提示，让用户/对话历史看到选择结果（仿 cc-haha）
+        # A3：留完成提示，让用户/对话历史看到选择结果
         try:
             if session is not None:
                 summary = session.result_summary()
@@ -1247,6 +1316,7 @@ class IstInkApp:
                 )
             self._footer.update(status="ready", tokens_used=self._tokens_used)
             self._tool_output_blocks.clear()
+            self._notify_new_outputs()
             self._app.render()
 
         elif kind == "run_error":

@@ -44,7 +44,7 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
   <div id="toolbar">
     <input type="file" id="fileInput" hidden>
     <button class="upload-btn" onclick="document.getElementById('fileInput').click()">📎 上传文件</button>
-    <button class="upload-btn" onclick="showDownloads()">📥 下载</button>
+    <button class="upload-btn" id="downloadBtn" onclick="showDownloads()">📥 下载<span id="dlBadge" style="display:none;background:#f7768e;color:#1a1b26;border-radius:8px;padding:0 5px;margin-left:4px;font-size:0.75rem;font-weight:bold;"></span></button>
     <span class="status" id="uploadStatus"></span>
     <div id="downloadPanel"></div>
   </div>
@@ -83,6 +83,16 @@ function initTerminal() {
   term.loadAddon(fitAddon);
   term.open(document.getElementById('terminal'));
   fitAddon.fit();
+
+  // 带外下载信号：agent 生成文件后，TUI 发 OSC 7002;<base64(filename)>。
+  // xterm 的 OSC handler 截获它（不显示任何字符），自动刷新下载面板 + 角标。
+  term.parser.registerOscHandler(7002, (payload) => {
+    try {
+      const name = decodeURIComponent(escape(atob(payload)));
+      onNewOutputFile(name);
+    } catch (e) { /* 忽略畸形 payload */ }
+    return true; // 已处理，xterm 不再把它当普通输出
+  });
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws/terminal`);
@@ -127,9 +137,10 @@ document.getElementById('fileInput')?.addEventListener('change', async (e) => {
     if (d.path) {
       const shown = d.filename || file.name;
       document.getElementById('uploadStatus').textContent = '✓ ' + shown;
-      // 只把文件名打进对话框（不带 workspace/inputs/ 路径）；
-      // agent 侧 file_tools 已登记 inputs 为解析根，裸名可定位。
-      if (ws && ws.readyState === 1) ws.send(new Blob([shown]));
+      // 带外上传信号：发结构化 JSON（type:"upload"），由 web_server 包成 OSC
+      // 序列传给 TUI 的 ink 解析器识别为 UploadEvent。文件名走结构化字段而非
+      // 混进键盘输入，agent 100% 可靠定位，无需下游正则猜测。
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({type:'upload', filename: shown}));
     } else {
       document.getElementById('uploadStatus').textContent = '上传失败';
     }
@@ -155,7 +166,7 @@ document.getElementById('termPage')?.addEventListener('drop', async (e) => {
     if (d.path) {
       const shown = d.filename || file.name;
       document.getElementById('uploadStatus').textContent = '✓ ' + shown;
-      if (ws && ws.readyState === 1) ws.send(new Blob([shown]));
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({type:'upload', filename: shown}));
     } else {
       document.getElementById('uploadStatus').textContent = '上传失败';
     }
@@ -167,11 +178,32 @@ document.getElementById('termPage')?.addEventListener('drop', async (e) => {
 document.getElementById('password')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 
 // 下载功能
+let _pendingDownloads = 0;
+
+// agent 生成新文件时（OSC 7002）：累加角标 + 弹一条状态。若下载面板正开着则即时刷新。
+function onNewOutputFile(name) {
+  _pendingDownloads += 1;
+  const badge = document.getElementById('dlBadge');
+  if (badge) { badge.textContent = _pendingDownloads; badge.style.display = 'inline-block'; }
+  document.getElementById('uploadStatus').textContent = '⬇ 新文件: ' + name;
+  const panel = document.getElementById('downloadPanel');
+  if (panel && panel.style.display === 'block') { refreshDownloads(); }
+}
+
 async function showDownloads() {
   const panel = document.getElementById('downloadPanel');
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
-  panel.innerHTML = '<div class="dl-empty">加载中...</div>';
+  // 打开即清空角标
+  _pendingDownloads = 0;
+  const badge = document.getElementById('dlBadge');
+  if (badge) { badge.style.display = 'none'; }
   panel.style.display = 'block';
+  await refreshDownloads();
+}
+
+async function refreshDownloads() {
+  const panel = document.getElementById('downloadPanel');
+  panel.innerHTML = '<div class="dl-empty">加载中...</div>';
   try {
     const r = await fetch('/api/files?token=' + encodeURIComponent(token));
     const d = await r.json();

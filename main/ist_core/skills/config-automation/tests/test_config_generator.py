@@ -32,9 +32,10 @@ def run_test(config_type, config_text):
     print('='*70)
     
     skill_dir = Path(__file__).parent.parent
-    topology_path = skill_dir.parent.parent / 'network_topology_rag.md'
+    project_root = Path(__file__).resolve().parents[5]
+    topology_path = project_root / "knowledge" / "data" / "auto_env" / "network_topology_rag.md"
     modules_dir = skill_dir / 'modules'
-    output_dir = skill_dir.parent.parent / 'outputs'
+    output_dir = project_root / "workspace" / "outputs" / "config_automation_test"
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -78,7 +79,7 @@ def main():
     
     print("\n" + "="*70)
     print("所有测试完成!")
-    print(f"输出文件已保存到: {Path(__file__).parent.parent.parent.parent / 'outputs'}")
+    print(f"输出文件已保存到: {Path(__file__).resolve().parents[5] / 'workspace' / 'outputs' / 'config_automation_test'}")
 
 if __name__ == '__main__':
     main()

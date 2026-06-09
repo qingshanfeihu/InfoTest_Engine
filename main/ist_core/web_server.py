@@ -12,6 +12,7 @@ xterm.js 前端 + WebSocket PTY 后端：
 from __future__ import annotations
 
 import asyncio
+import base64
 import fcntl
 import hashlib
 import hmac
@@ -322,6 +323,18 @@ async def ws_terminal(websocket: WebSocket):
                                     os.kill(proc.pid, signal.SIGWINCH)
                             elif d.get("type") == "input":
                                 os.write(master_fd, d["data"].encode("utf-8"))
+                            elif d.get("type") == "upload":
+                                # 带外上传信号：文件名 base64 后包成自定义 OSC 序列
+                                # ESC ] 7001 ; <base64> BEL，由 TUI 的 ink 解析器
+                                # 识别为 UploadEvent。不混进键盘输入文本流，杜绝下游
+                                # 用正则在自由文本里猜文件名。
+                                fname = (d.get("filename") or "").strip()
+                                if fname:
+                                    b64 = base64.b64encode(
+                                        fname.encode("utf-8")
+                                    ).decode("ascii")
+                                    osc = f"\x1b]7001;{b64}\x07"
+                                    os.write(master_fd, osc.encode("ascii"))
                         except (json.JSONDecodeError, KeyError):
                             os.write(master_fd, msg["text"].encode("utf-8"))
                 elif msg["type"] == "websocket.disconnect":

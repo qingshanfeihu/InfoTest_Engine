@@ -47,12 +47,12 @@ effort: high
 
 ### 1. 读取用例 D/E/F 列
 
-**Execution**: Direct（qa_exec + main/ist_core/skills/automated-g-column-filling/scripts/read_xlsx_rows.py）
+**Execution**: Direct（qa_exec + main/ist_core/skills/automated-G-column-filling/scripts/read_xlsx_rows.py）
 
 qa_exec 运行 read_xlsx_rows.py 读取 D/E/F 列。跳过 C='0'、D/E/F 全空、E 和 F 均为空的元数据行。返回 JSON 含行号→{D,E,F,G} 映射。
 
 ```bash
-python main/ist_core/skills/automated-g-column-filling/scripts/read_xlsx_rows.py <相对路径>.xlsx
+python main/ist_core/skills/automated-G-column-filling/scripts/read_xlsx_rows.py <相对路径>.xlsx
 ```
 
 **Success criteria**: 能列出所有数据行的行号和 D/E/F/G 内容
@@ -113,7 +113,7 @@ e_column_types: <每行 E 列分类>
 
 ### 5. 写入 G 列并输出汇总
 
-**Execution**: Direct（qa_exec + main/ist_core/skills/automated-g-column-filling/scripts/write_g_column.py）
+**Execution**: Direct（qa_exec + main/ist_core/skills/automated-G-column-filling/scripts/write_g_column.py）
 
 qa_exec 运行 write_g_column.py 写入 G 列。已有内容的行自动跳过。输出到 `workspace/outputs/filled_<原名>.xlsx`。脚本内置保护：拒绝源路径=输出路径的情况。
 

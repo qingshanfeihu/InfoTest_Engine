@@ -979,7 +979,7 @@ architecture sidecar schema v2 只对 root feature 生成，字段包含 `subsys
 
 ## 13. v2.0 Verification 架构（2026-05-27 落地）
 
-测试评审 skill 完整对齐业界 agent 框架（Claude Code 风格）的 verification 架构，覆盖通用 agent 行为 + skill 系统 + subagent 协作三个层面。
+测试评审 skill 完整对齐业界 agent 框架的 verification 架构，覆盖通用 agent 行为 + skill 系统 + subagent 协作三个层面。
 
 ### 13.1 设计原则分层
 

@@ -120,3 +120,54 @@ def test_snapshot_updates_after_notify(tmp_path, monkeypatch):
     app._app.passthrough.clear()
     app._notify_new_outputs()
     assert app._app.passthrough == []
+
+
+def test_notify_fires_on_snapshot_done_transition(tmp_path, monkeypatch):
+    """回归：notify 必须挂在 snapshot status running→done 转换上（_on_snapshot_locked），
+    而非 bridge 从不发送的 run_done 事件。实测发现的真 bug：原先只挂 run_done →
+    下载提醒永不触发。
+
+    构造最小 snapshot 驱动 _on_snapshot_locked，断言：
+    - running→done 转换 + 有新文件 → 发 OSC 7002
+    - running→running（未完成）→ 不发
+    """
+    from main.ist_core.tui.message_model import MessageSnapshot
+
+    outputs = tmp_path / "outputs"
+    outputs.mkdir()
+    app = _bare_app(outputs)
+    _patch_outputs_dir(app, monkeypatch, outputs)
+
+    # 补齐 _on_snapshot_locked 依赖的最小组件
+    class _StubFooter:
+        def update(self, **kw): pass
+
+    class _StubPlanPanel:
+        is_visible = False
+        def mark_all_done(self): pass
+
+    app._footer = _StubFooter()
+    app._plan_panel = _StubPlanPanel()
+    app._prev_snapshot = None
+    app._ai_stream_idx = -1
+    app._tokens_used = 0
+    app._is_loading = True
+    app._flush_pending_tools = lambda: None
+
+    # 基线快照（空 outputs）
+    app._outputs_snapshot = app._snapshot_outputs()
+
+    def snap(status):
+        return MessageSnapshot(messages=(), streaming_text=None, status=status)
+
+    # 第一帧：running（agent 还在跑）→ 不应触发
+    app._on_snapshot_locked(snap("running"))
+    assert app._app.passthrough == []
+
+    # agent 写了文件
+    (outputs / "result.md").write_text("done", encoding="utf-8")
+
+    # running→done 转换 → 应发 OSC 7002
+    app._on_snapshot_locked(snap("done"))
+    assert len(app._app.passthrough) == 1
+    assert _decode_osc(app._app.passthrough[0]) == "result.md"

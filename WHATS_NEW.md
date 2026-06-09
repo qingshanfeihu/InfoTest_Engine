@@ -1,5 +1,29 @@
 # What's New
 
+## 2026-06-09（v1.0.5：架构收口 + 记忆修复 + 交互 + 清理）
+
+### 统一 OpenAI 兼容端点
+移除 `IST_LLM_PROVIDER` 的 dashscope/deepseek 分支，`_llm.py` / `runner.py` / `function_llm.py` / `kms_classifier.py` / `exec_tools.py` 统一走 `OPENAI_BASE_URL` + `OPENAI_API_KEY`。换厂商只改 base_url + key + `IST_MODEL`。示例模型小米 MiMo `mimo-v2.5-pro`。
+
+### Skill 渐进披露
+`per_turn_skill_reminder` 加单条 description 截断 + 全局 listing 预算 + 溢出降级；常驻 listing ~3.5KB → ~734 字符。`when_to_use` 移出常驻 listing。
+
+### 记忆子系统（dream）修复
+- 进程内自调度 `maybe_trigger_dream_async`，不再依赖 crontab（`IST_DREAM_INPROC=0` 可关）。
+- `IST_HAIKU_MODEL` 坏模型 `mimo-v2-flash` → `mimo-v2.5`，footprint 提取恢复（实测落地 22 节点）。
+- consolidate 适配 `json_object`（返回 `{"decisions":[...]}` + `_coerce_decisions`），AGENTS.md 蒸馏不再空转。
+- footprint extractor prompt 原则化（cli_syntax 还原完整调用签名）。
+
+### qa_ask_user 交互式问答（对齐 cc-haha）
+工具注册 + events/reducer 链路 + `ask_user_panel` 固定面板（选项不随对话滚走）+ 选中着色 + 完成提示 + 多题 `←→`/`Tab` 双向导航；抑制标准工具行不暴露内部名。
+
+### TUI 渲染修复
+- think 块展开消失：去掉 thinking 渲染的 `replace_range` 误删逻辑。
+- 并行工具结果归位：按 `tool_use_id` 把结果插到对应 `⏺` 行下方。
+
+### 仓库清理
+删除 `backup/`（1.6G）、`logs/`、`ist_core.sqlite*`、`__pycache__`/`.DS_Store`/空目录；文档全量更新对齐统一 OpenAI 架构，移除 backup 悬空引用。
+
 ## 2026-05-27（清理）
 
 - **移除 `agent-chat-ui`**：LangChain Next.js 可选前端已从仓库删除；交互统一为 `infotest`（Textual）与 `infotest --server`（Web Terminal :8080）。`ARCHITECTURE.md` §12 标为历史；`CLAUDE.md` 启动说明已更新。

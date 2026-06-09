@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.version:
         from main.ist_core.tui import __init__ as _init  # noqa: F401
-        print("infotest 1.0.4 (IST-Core)")
+        print("infotest 1.0.5 (IST-Core)")
         return 0
 
     

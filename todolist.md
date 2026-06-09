@@ -2,6 +2,12 @@
 
 更新时间：2026-05-20
 
+> **现状说明（2026-06-09）**：本文档是 2026-05-20 的最小评审能力规划，记录设计脉络。其中具体落地已演进，以当前代码与 `CLAUDE.md` 为准：
+> - 评审模型不再是 `qwen3.6-plus`，统一走 OpenAI 兼容端点（`IST_MODEL`，示例 `mimo-v2.5-pro`）；无 `anthropic:` / provider 分支。
+> - 证据来源里的 `backup/knowledge` 已随仓库清理移除；当前证据走 `knowledge/data/` + `workspace/`。
+> - 评审已不止「最小 Review Prompt」：现有完整的 inline/fork 评审 skill（`test-list-review` + `review-verification` verifier）。
+> 以下为历史规划原文，保留作设计参考。
+
 ## 1. 最终收口
 
 当前不按旧版测试评审工具链迁移。Cookie 121100 实测后，结论收缩为：

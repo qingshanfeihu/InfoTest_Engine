@@ -29,13 +29,14 @@ LANGSMITH_TRACING=false
 # =============================================================================
 # 二、模型路由（IST-Core 评审主链路 + 三档 tier）
 #
-# 设计：provider 二选一。缺省 / 非 deepseek 值 → 通用 OpenAI 兼容端点（OPENAI_*）；
-# deepseek → DeepSeek 原生端点（DEEPSEEK_*）。tier 是按任务复杂度分档的模型映射，
-# opus = 评审 / 推理，sonnet = QA / 文档问答，haiku = explore / 路由 / KMS 分类。
+# 统一走 OpenAI 兼容端点（OPENAI_BASE_URL + OPENAI_API_KEY，见上）——任何 OpenAI
+# 协议端点皆可：小米 MiMo / DeepSeek 原生口 / DashScope 兼容口 / 自建网关。换厂商
+# 只改 OPENAI_BASE_URL + key + 下方模型名，无 provider 分支。
+# tier 按任务复杂度分档：opus = 评审 / 推理，sonnet = QA / 文档问答，
+# haiku = explore / 路由 / KMS 分类 / footprint 提取（须填端点真实存在的模型）。
 # =============================================================================
 
-# ---- 选项 A：OpenAI 兼容端点（默认，示例为小米 MiMo）----------------------
-IST_LLM_PROVIDER=openai
+# 示例为小米 MiMo CN 集群
 IST_MODEL=mimo-v2.5-pro
 IST_OPUS_MODEL=mimo-v2.5-pro
 IST_SONNET_MODEL=mimo-v2.5-pro

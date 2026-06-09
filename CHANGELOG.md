@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.0.5] - 2026-06-09
+
+### LLM 架构收口 + 记忆子系统修复 + 交互能力 + 仓库清理
+
+**LLM 统一 OpenAI 兼容端点**（移除 provider 分支）：
+- `_llm.py` / `runner.py` / `function_llm.py` / `kms_classifier.py` / `exec_tools.py` 统一走 `OPENAI_BASE_URL` + `OPENAI_API_KEY`，删除 `IST_LLM_PROVIDER` 的 dashscope/deepseek 分支与 `resolve_llm_provider`
+- 换厂商（DeepSeek 原生口 / DashScope 兼容口 / 自建网关）只改 `OPENAI_BASE_URL` + key + `IST_MODEL`
+- env 校验只认 `OPENAI_API_KEY`；示例模型小米 MiMo `mimo-v2.5-pro`（评审）/ `mimo-v2.5`（haiku tier）
+
+**Skill 渐进披露**（对齐 Claude Code）：
+- `per_turn_skill_reminder` 加单条 description 截断（`IST_SKILL_DESC_CAP`，默认 200）+ 全局 listing 预算（`IST_SKILL_LISTING_BUDGET`，默认 1200）+ 溢出降级为 name-only；常驻 listing 从 ~3.5KB 降到 ~734 字符
+- `when_to_use` 移出常驻 listing（触发后才从 SKILL.md body 读）；config-automation description 瘦身
+
+**记忆子系统（dream）修复**：
+- 进程内自调度 `maybe_trigger_dream_async`：TUI 启动后台守护线程跑一次（受五道闸约束），不再依赖系统 crontab；`IST_DREAM_INPROC=0` 可关
+- `IST_HAIKU_MODEL` 坏模型 `mimo-v2-flash`（端点不存在）→ `mimo-v2.5`，footprint 提取恢复
+- consolidate 适配 `response_format: json_object`：prompt 改输出 `{"decisions":[...]}` + `_coerce_decisions` 兼容多形态，AGENTS.md 蒸馏不再空转
+- footprint extractor prompt 原则化（cli_syntax 还原完整调用签名，不照抄残缺标题行）
+
+**qa_ask_user 交互式问答**（对齐 cc-haha）：
+- 工具注册 + `events`/`reducer`/`message_model` 链路 + `ask_user_view` 会话状态机
+- `ask_user_panel` 固定面板（仿 PlanPanel，选项不随对话滚走）+ 选中行着色 + 答完完成提示 + 多题 `←→`/`Tab` 双向导航
+- 抑制 qa_ask_user 标准工具行，不暴露内部工具名/参数
+
+**TUI 渲染修复**：
+- think 块展开消失：去掉 thinking 渲染的 `replace_range` 误删逻辑（thinking 间夹 tool_use 时误删后续行）
+- 并行工具结果归位：按 `tool_use_id` 把 `⎿` 结果插到对应 `⏺` 行下方（对齐 cc-haha toolUseID 分组）
+
+**仓库清理**：
+- 删除 `backup/`（1.6G 历史归档）、`logs/`、`ist_core.sqlite*` checkpoint、`__pycache__`/`.DS_Store`/空目录等运行时产物
+- 文档全量更新：README / ARCHITECTURE / know_issue / todolist / WHATS_NEW 对齐统一 OpenAI 架构，移除 backup 悬空引用
+
+详见 `WHATS_NEW.md`。
+
 ## [1.0.4] - 2026-05-29
 
 ### 发布前体检修复（安全 + 资源 + 文档）

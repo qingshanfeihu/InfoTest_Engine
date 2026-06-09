@@ -14,7 +14,10 @@ def read_rows(xlsx_path: str) -> dict:
     header_row = None
     for r in range(1, min(ws.max_row or 0, 100) + 1):
         a, b, c = (str(ws.cell(r, i).value or '').strip() for i in (1, 2, 3))
-        if a == '自动化ID' and b == '优先级' and c == '语句类型':
+        # 兼容两种表头格式：标准自动化模板 和 decomposed xlsx
+        abc = a + b + c
+        if ('自动化ID' in a and '优先级' in b and '语句类型' in c) or \
+           ('autoid' in a.lower() and '优先级' in b):
             header_row = r
             break
 

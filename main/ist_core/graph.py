@@ -382,16 +382,16 @@ def qa_node(state: IstCoreState, config: RunnableConfig | None = None) -> dict[s
     if config is None:
         merged_config: RunnableConfig = {
             "callbacks": [handler],
-            "recursion_limit": 100,
+            "recursion_limit": 300,
         }
     else:
         existing_cbs = list(config.get("callbacks") or [])
         merged_config = {
             **config,
             "callbacks": existing_cbs + [handler],
-            
-            
-            "recursion_limit": max(config.get("recursion_limit") or 0, 100),
+
+
+            "recursion_limit": max(config.get("recursion_limit") or 0, 300),
         }
 
     try:

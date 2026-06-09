@@ -23,6 +23,10 @@ from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
 from main.ist_core.tools.skills import qa_invoke_skill
 from main.ist_core.tools.ask_user import qa_ask_user
+from main.ist_core.tools.skills.test_case_extractor import qa_extract_test_cases
+from main.ist_core.tools.skills.test_case_decomposer import qa_decompose_test_cases
+from main.ist_core.tools.skills.inject_init_and_deps import qa_inject_init_and_deps
+from main.ist_core.tools.skills.test_case_xlsx_generator import qa_generate_test_case_xlsx
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +55,10 @@ def _default_generic_tools() -> list[Any]:
 
         qa_ask_user,
 
+        qa_extract_test_cases,
+        qa_decompose_test_cases,
+        qa_inject_init_and_deps,
+        qa_generate_test_case_xlsx,
 
     ]
 

@@ -75,8 +75,23 @@ class APVSSHClient:
                 pass
             self.ssh = None
 
-    def _read_until_prompt(self, initial_wait: float = 1.0, max_wait: float = 0) -> str:
-        """读取输出直到检测到提示符或超时，自动处理 --More-- 分页"""
+    # 设备等待输入密码时的提示符
+    _PASSWORD_PATTERNS = [
+        r'[Pp]assword:\s*$',
+        r'[Ee]nable password:\s*$',
+    ]
+
+    def _read_until_prompt(
+        self,
+        initial_wait: float = 1.0,
+        max_wait: float = 0,
+        extra_patterns: Optional[List[str]] = None,
+    ) -> str:
+        """读取输出直到检测到提示符或超时，自动处理 --More-- 分页
+
+        Args:
+            extra_patterns: 额外的匹配模式（如密码提示符），匹配后立即停止读取。
+        """
         if max_wait <= 0:
             max_wait = self.command_timeout
         output = ""
@@ -93,6 +108,10 @@ class APVSSHClient:
                     time.sleep(0.3)
                     continue
                 stripped = output.rstrip()
+                # 检查额外模式（密码提示等）
+                if extra_patterns:
+                    if any(re.search(p, stripped) for p in extra_patterns):
+                        break
                 if any(re.search(p + r'\s*$', stripped) for p in self.PROMPT_PATTERNS):
                     break
             else:
@@ -118,9 +137,26 @@ class APVSSHClient:
 
     def enter_enable_mode(self, password: str = "") -> str:
         """进入 enable 模式"""
-        output = self.send_command("enable", wait=2.0)
+        if not self.shell:
+            raise RuntimeError("SSH shell 未连接")
+
+        # 清空待读数据
+        while self.shell.recv_ready():
+            self.shell.recv(65535)
+
+        # 发送 enable，等待密码提示或 CLI 提示符
+        self.shell.send("enable\n")
+        output = self._read_until_prompt(
+            initial_wait=1.5,
+            extra_patterns=self._PASSWORD_PATTERNS,
+        )
+
         if "assword" in output.lower():
-            output = self.send_command(password, wait=2.0)
+            # 设备要求输入 enable 密码
+            time.sleep(0.3)
+            self.shell.send((password or "") + "\n")
+            output = self._read_until_prompt(initial_wait=1.5)
+
         if re.search(r'[\w\-]+#\s*$', output.rstrip()):
             return output
         if "denied" in output.lower() or "failed" in output.lower():

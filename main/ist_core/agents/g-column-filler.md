@@ -84,8 +84,8 @@ The caller's brief (in `$ARGUMENTS`) contains:
 
 ## CLI 文档查找路径
 
-- **主力**: `knowledge/data/markdown/product/cli_*_commands.md`（纯文本 markdown）
-- **兜底**: `knowledge/data/markdown/product/cli_*part*.code_format.json`（Mineru 导出 JSON，CLI 在 `markdown` 字段）
+- **配置示例**: `knowledge/data/markdown/product/app_*.md`（应用配置指南，含完整业务配置示例）
+- **命令手册**: `knowledge/data/markdown/product/cli_*_commands.md`（模块 CLI 命令语法）
 - **拓扑参考**: `knowledge/data/auto_env/network_topology_rag.md`
 - **execute_action**: `knowledge/data/auto_env/execute_action`
 
@@ -93,7 +93,7 @@ The caller's brief (in `$ARGUMENTS`) contains:
 
 - **Read-only.** Never write files or execute shell commands beyond grep/read/ls.
 - **CLI 文档是唯一权威.** 语法、参数顺序、必选/可选、取值范围、默认值全部以 CLI 文档为准。
-- **参数严禁推断.** 在 code_format.json 中找不到明确定义的参数 → 标记「未生成」。
+- **参数严禁推断.** 在 cli_*_commands.md 和 app_*.md 中找不到明确定义的参数 → 标记「未生成」。
 
 ---
 

@@ -19,9 +19,13 @@ effort: high
 
 # Automated G-Column Filling
 
-根据 D（步骤描述）/E（操作对象）/F（操作方法）列自动生成 G 列（具体内容）。G 列以 D 列描述为准，所有 IP/设备参数以 `knowledge/data/auto_env/network_topology_rag.md` 为权威来源。
+根据 D（步骤描述）/E（操作对象）/F（操作方法）列自动生成 G 列（具体内容），并在真实设备上验证 show 命令和 check_point 的准确性。G 列以 D 列描述为准，所有 IP/设备参数以 `knowledge/data/auto_env/network_topology_rag.md` 为权威来源。
 
-实际 G 列生成由 fork skill `g-column-filler` 在独立 subagent 中完成——你负责读取、分析、写入，fork 负责查 CLI 文档和生成命令。
+实际工作由两个 fork skill 在独立 subagent 中完成：
+- `g-column-filler` — 查 CLI 文档，生成 G 列命令
+- `g-column-verify` — 设备上执行 show 命令，验证并修正 check_point
+
+你负责读取 xlsx、分析结构、委托 fork、写入结果。
 
 ## Inputs
 
@@ -30,7 +34,7 @@ effort: high
 
 ## Goal
 
-产出 `workspace/outputs/filled_<原名>.xlsx`，G 列逐行填充或标记「未生成」。
+产出 `workspace/outputs/filled_<原名>.xlsx`，G 列逐行填充并通过设备验证，check_point 与设备实际输出一致。
 
 ## Principles
 
@@ -120,3 +124,18 @@ python main/ist_core/skills/automated-g-column-filling/scripts/write_g_column.py
 
 **Success criteria**: 能确认输出文件路径 + 每行 G 列状态（已填充/跳过/未生成）可追溯
 **Artifacts**: output_file_path, fill_summary
+
+### 6. 设备验证 (optional)
+
+**Execution**: Fork skill（qa_invoke_skill）
+
+当用户要求验证 G 列准确性，或用例中包含 APV show 命令需要确认 check_point 时，调 `qa_invoke_skill(skill="g-column-verify", brief=...)` 在实际设备上重放配置并执行 show 命令，逐条验证 check_point 与设备输出是否一致。
+
+触发条件：用户明确说"验证一下""上机确认"或在用例中看到 show 命令后询问用户是否需要验证。
+
+brief 结构同 Step 4，追加 `target_device` 字段（设备 IP，从 topology 获取或询问用户）。
+
+验证结果中 `corrections` 非空时，用 write_g_column.py 再次写入修正后的 G 列。
+
+**Success criteria**: show 命令已设备执行、check_point 已验证或修正
+**Artifacts**: corrections (验证 fork 返回的修正), show_outputs

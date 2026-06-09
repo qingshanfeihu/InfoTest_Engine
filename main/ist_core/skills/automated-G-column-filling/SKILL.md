@@ -38,7 +38,8 @@ effort: high
 
 ## Principles
 
-- xlsx 必须用 qa_exec + openpyxl 读写，输出加 `filled_` 前缀，禁止覆盖原文件
+- xlsx 必须用 qa_exec + openpyxl 读写，输出到 `workspace/outputs/` 加 `filled_` 前缀，禁止覆盖原文件
+- **xlsx_path 必须指向 `workspace/inputs/` 下的源文件**，脚本会自动输出到 `workspace/outputs/filled_<原名>.xlsx`，不要传输出文件路径
 - 所有 IP/设备参数以 network_topology_rag.md 为权威来源
 - CLI 命令生成全部委托给 fork——你不要自行生成 APV 命令
 
@@ -114,10 +115,12 @@ e_column_types: <每行 E 列分类>
 
 **Execution**: Direct（qa_exec + main/ist_core/skills/automated-g-column-filling/scripts/write_g_column.py）
 
-qa_exec 运行 write_g_column.py 写入 G 列。已有内容的行自动跳过。输出到 `workspace/outputs/filled_<原名>.xlsx`。
+qa_exec 运行 write_g_column.py 写入 G 列。已有内容的行自动跳过。输出到 `workspace/outputs/filled_<原名>.xlsx`。脚本内置保护：拒绝源路径=输出路径的情况。
+
+**⚠️ xlsx_path 参数必须是 `workspace/inputs/` 下的源文件路径**，脚本会自动输出到 `workspace/outputs/`。
 
 ```bash
-python main/ist_core/skills/automated-g-column-filling/scripts/write_g_column.py <原文件相对路径>.xlsx '<g_updates JSON>'
+python main/ist_core/skills/automated-g-column-filling/scripts/write_g_column.py workspace/inputs/<文件名>.xlsx '<g_updates JSON>'
 ```
 
 执行完成后输出汇总：原文件/输出文件路径、总数据行数/基础配置行行号、已填充 N 行/跳过 N 行/未生成 N 行（列出未生成行号和原因，来自 fork 返回的 `unfilled`）。
@@ -135,7 +138,11 @@ python main/ist_core/skills/automated-g-column-filling/scripts/write_g_column.py
 
 brief 结构同 Step 4，追加 `target_device` 字段（设备 IP，从 topology 获取或询问用户）。
 
-验证结果中 `corrections` 非空时，用 write_g_column.py 再次写入修正后的 G 列。
+验证结果中 `corrections` 非空时，用 write_g_column.py 将修正写入 **Step 5 生成的 filled 文件**（不是源文件），使用 `--overwrite` 覆盖已有内容：
+
+```bash
+python main/ist_core/skills/automated-g-column-filling/scripts/write_g_column.py workspace/outputs/filled_<原名>.xlsx '<corrections JSON>' --overwrite
+```
 
 **Success criteria**: show 命令已设备执行、check_point 已验证或修正
 **Artifacts**: corrections (验证 fork 返回的修正), show_outputs

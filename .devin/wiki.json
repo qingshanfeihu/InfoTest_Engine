@@ -1,0 +1,302 @@
+The content has been copied to your clipboard. Please paste it here to complete the file creation.{
+  "repo_notes": [
+    {
+      "content": ""
+    }
+  ],
+  "pages": [
+    {
+      "title": "InfoTest Engine — Overview",
+      "purpose": "High-level introduction to the InfoTest Engine (IST-Core): what it does, its key architectural pillars, directory layout, 和 how the major subsystems relate. Links to all child sections for deeper reading.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Getting Started & Configuration",
+      "purpose": "Step-by-step guide for setting up the project: cloning, installing dependencies, configuring the `environment` file, choosing an LLM provider (DashScope vs DeepSeek), 和 running the agent for the first time.",
+      "parent": "InfoTest Engine — Overview",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Repository Structure & Directory Layout",
+      "purpose": "Explains the top-level directory layout: `main/`, `knowledge/`, `workspace/`, `scripts/`, `tests/`, 和 `memory/`. Describes the purpose of each area and the strict separation between agent-visible and agent-invisible data.",
+      "parent": "InfoTest Engine — Overview",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Core Agent Architecture",
+      "purpose": "Overview of the IST-Core agent: the LangGraph StateGraph, the main agent factory, LLM abstraction, 和 how all pieces compose into a working QA agent. Links to child pages for each major sub-component.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "LangGraph State Graph & Execution Flow",
+      "purpose": "Deep dive into `graph.py`: the `build_qa_agent_graph` factory, the `normalize_input → qa_node → finalize` pipeline, checkpointer options (Postgres/SQLite/InMemory), 和 the `_MainAgentProgressHandler` telemetry bridge.",
+      "parent": "Core Agent Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Main Agent Factory & Middleware Stack",
+      "purpose": "Covers `build_main_agent` in `main_agent.py`: toolset assembly, `deepagents` graph configuration, the middleware stack (SummarizationMiddleware, SkillsMiddleware, PerTurnSkillReminderMiddleware, MemoryInjectionMiddleware, MemoryWriteMiddleware), 和 the Explore sub-agent.",
+      "parent": "Core Agent Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "LLM Abstraction & Model Tiers",
+      "purpose": "Explains `_llm.py`: the `ChatOpenAIWithReasoning` class, DashScope and DeepSeek provider routing, the three-tier model strategy (opus/sonnet/haiku), reasoning/thinking content patching, 和 known issues with thinking mode.",
+      "parent": "Core Agent Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "System Prompt & Skills Framework",
+      "purpose": "Documents `_prompt.py` and the Skills system: how `build_system_prompt` constructs agent instructions, the `SKILL.md` mechanism, the `test-case-review` skill's six-step Reading Chain, P0–P7 grading scale, and the Self-Review Gate. Also covers the skill authoring standard (`docs/skill_authoring_standard.md`), frontmatter fields, step annotation semantics, and the skill migration guide.",
+      "parent": "Core Agent Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Semantic Check & Sanity Validation",
+      "purpose": "Covers `semantic_check_agent.py` and the `qa_sanity_check` tool: how the agent validates its own reasoning before producing a final report, the evidence-loop check, and the hallucination prevention mechanism. Also covers the `review-verifier` sub-agent and the Review Gate node.",
+      "parent": "Core Agent Architecture",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Agent Toolset",
+      "purpose": "Overview of all tools available to the IST-Core agent, organized by category. Explains the TOOL_METADATA registry, concurrency safety, read-only flags, and fallback chains. Links to child pages for each tool group.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Filesystem Tools (qa_deepagent_*)",
+      "purpose": "Deep dive into `file_tools.py`: the four-gate sandbox security model, path resolution priority, read tools (ls, glob, grep, read_file), write tools (write_file, edit_file), ripgrep integration, structural readers for XLSX/DOCX, pagination logic, and binary detection. Also covers the `docs/file_sandbox.md` design document.",
+      "parent": "Agent Toolset",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Execution Tools (qa_exec & qa_bash)",
+      "purpose": "Covers `exec_tools.py`: the Python sandbox (`qa_exec`) and Bash sandbox (`qa_bash`), whitelist enforcement, working directory locking to `knowledge/data/`, concurrency safety constraints, and test coverage.",
+      "parent": "Agent Toolset",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Knowledge & Search Tools",
+      "purpose": "Covers `web_bug_search` (Playwright-based defect ticket retrieval), `qa_footprint_lookup` (footprint knowledge tree search), and the `qa_ask_user` Human-in-the-Loop tool. Explains fallback chains and concurrency constraints.",
+      "parent": "Agent Toolset",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Device Interaction Tools (qa_ssh & qa_restapi)",
+      "purpose": "Covers the two device-facing tools: `qa_ssh` (SSH-based command execution via `APVSSHClient` with six safety gates, topology validation, and mode-based whitelisting) and `qa_restapi` (REST API-based command dispatch for InfosecOS APV devices). Explains credential resolution, the safety gate philosophy, and the dynamic skill loading pattern.",
+      "parent": "Agent Toolset",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Memory & Knowledge Persistence",
+      "purpose": "Overview of the three-tier memory architecture (L1 Working, L2 Long-term, L3 AGENTS.md), the Footprint Knowledge Tree, and the Dream maintenance cycle. Links to child pages for each subsystem.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Memory Backend & Middleware",
+      "purpose": "Details `backend.py`, `middleware.py`, and `store.py`: the CompositeBackend routing (StateBackend for L1, StoreBackend for L2), MemoryInjectionMiddleware, MemoryWriteMiddleware, distillation triggers, session counters, and DSN-based store configuration.",
+      "parent": "Memory & Knowledge Persistence",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Footprint Knowledge Tree",
+      "purpose": "Deep dive into the `footprint/` subsystem: the extract→route→merge pipeline, hierarchical levels (root/branch/trunk/leaf), fact slots (cli.commands, decision_rules, known_issues), the FootprintIndex singleton, fuzzy search scoring, and the `/footprint` TUI command. Also covers the `docs/footprint.md` decision-point contract.",
+      "parent": "Memory & Knowledge Persistence",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Dream Task & Memory Distillation",
+      "purpose": "Explains the Dream maintenance cycle: `dream.py` and `dream_graph.py`, the four phases (Orient/Gather/Consolidate/Prune), PID lock for mutual exclusion, the `memory_dream.py` cron script, and how L1 working memory is distilled into L2/L3 and Footprints.",
+      "parent": "Memory & Knowledge Persistence",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Knowledge Management System (KMS)",
+      "purpose": "Overview of the KMS pipeline: ingesting raw documents from `knowledge/data/orgin/`, classifying them, transforming to Markdown, and making them agent-visible. Links to child pages for classification, MinerU export, and defect ingestion.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Document Classification & KMS Pipeline",
+      "purpose": "Covers `kms_classifier.py`: the three-tier classification (override → cache → LLM), bucket categories (product/test_case_list/test_strategy/unclassified), the `source_authority` ranking system, and the `/kms` TUI slash commands. Also covers the `docs/kms_pipeline.md` design rationale for abandoning Qdrant/RAG in favor of direct Markdown reads.",
+      "parent": "Knowledge Management System (KMS)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "MinerU Batch Export & XLSX Conversion",
+      "purpose": "Details `mineru_batch_export.py`: the full MinerU API lifecycle (cache check → PDF splitting → batch upload → polling → ZIP extraction → binary embedding), `xlsx_to_markdown.py` for direct Excel conversion, environment variables, and error/exit code handling.",
+      "parent": "Knowledge Management System (KMS)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Defect Ingestion (Bugzilla / ZenTao)",
+      "purpose": "Covers `main/ingest/`: the Playwright-based defect fetcher (`defect_fetch.py`), HTML extractors for Bugzilla/ZenTao/PLM, `defect_parse.py`, the `web_bug_search` tool's on-demand fetch path, WebVPN/captcha handling, and the `workspace/defects/` cache.",
+      "parent": "Knowledge Management System (KMS)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Skills Catalogue",
+      "purpose": "Overview of all built-in skills available to the IST-Core agent: their purpose, trigger phrases, allowed tools, and execution context (inline vs. fork). Explains the skill loader, the SKILL.md frontmatter contract, and how skills are discovered and injected. Links to child pages for each skill group.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Test Review Skills (test-list-review & review-verification)",
+      "purpose": "Covers the `test-list-review` skill (six-step reading chain, P0–P7 grading, evidence discipline, todo-first workflow) and the `review-verification` fork skill (adversarial verification, VERDICT/LEVEL output, anti-laziness constraints, Review Gate integration). Explains how the two skills form a dual-agent verification loop.",
+      "parent": "Skills Catalogue",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Test Case Pipeline Skills (decompose-test-cases & G-Column Filling)",
+      "purpose": "Covers the full test case generation pipeline: `decompose-test-cases` skill (extract→decompose→generate xlsx→fill G-column), `automated-G-column-filling` orchestration skill, `g-column-filler` fork skill (CLI command generation from D/E/F columns), and `g-column-verify` fork skill (hardware-in-the-loop validation). Explains the `read_xlsx_rows.py` and `write_g_column.py` helper scripts.",
+      "parent": "Skills Catalogue",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Device Interaction Skills (device-verify & config-answer)",
+      "purpose": "Covers the `device-verify` skill (read-only verification and configuration deployment on InfosecOS APV devices, tiered execution via REST API → SSH → manual, stop-on-error policy) and the `config-answer` skill (APV CLI configuration generation and vendor translation, document-first architecture, six-point self-inspection). Also covers the `config-automation` skill and its Python modules (SLB/SDNS module generators, topology parser, IP mapper).",
+      "parent": "Skills Catalogue",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Terminal User Interface (TUI)",
+      "purpose": "Overview of the interactive terminal interface: the Ink rendering engine, GraphBridge concurrency model, event pipeline, 和 slash command system. Links to child pages for each TUI layer."，
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Ink Rendering Engine",
+      "purpose": "Deep dive into the `ink/` package: `InkApp` virtual DOM, double-buffered rendering, flexbox layout engine, raw terminal mode, mouse capture, selection engine (drag/double-click/triple-click), ANSI/CSI/SGR/OSC terminal I/O primitives, 和 the Markdown renderer (streaming vs. final).",
+      "parent": "Terminal User Interface (TUI)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "GraphBridge & Event Pipeline",
+      "purpose": "Covers `bridge.py` and `sink.py`: the GraphBridge threading model (shared asyncio loop, daemon threads), HIL resume protocol, TuiSink event translation, token throttling (80ms), TOOL_NAME_TO_MESSAGE dispatch table, IstMessage hierarchy, 和 the IstUiEvent envelope.",
+      "parent": "Terminal User Interface (TUI)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "CLI, Slash Commands & TUI State",
+      "purpose": "Documents `cli.py` and `slash_commands.py`: the `infotest` CLI entrypoint, print mode vs. interactive TUI, thread management (--resume/--continue), web server lifecycle, the slash command registry pattern, all built-in commands (/model, /compact, /plan, /memory, /footprint, /kms, /reset), 和 TuiState.",
+      "parent": "Terminal User Interface (TUI)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    }
+  ]
+}

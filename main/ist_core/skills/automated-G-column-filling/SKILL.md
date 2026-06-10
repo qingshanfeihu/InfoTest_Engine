@@ -38,7 +38,7 @@ effort: high
 
 ## Principles
 
-- xlsx 必须用 qa_exec + openpyxl 读写，输出到 `workspace/outputs/` 加 `filled_` 前缀，禁止覆盖原文件
+- xlsx 写入必须用 `write_g_column.py` 脚本——**禁止自行构造输出文件名**。脚本自动将文件名加 `filled_` 前缀输出到 `workspace/outputs/`（如 `sdns_listener.xlsx` → `filled_sdns_listener.xlsx`）。
 - **xlsx_path 必须指向 `workspace/inputs/` 下的源文件**，脚本会自动输出到 `workspace/outputs/filled_<原名>.xlsx`，不要传输出文件路径
 - 所有 IP/设备参数以 network_topology_rag.md 为权威来源
 - CLI 命令生成全部委托给 fork——你不要自行生成 APV 命令

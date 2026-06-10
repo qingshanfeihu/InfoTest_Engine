@@ -36,7 +36,7 @@ $ARGUMENTS
 | `APV*` | — | CLI 命令（参数必须从 CLI 手册提取，严禁推断） | 凭记忆写参数、跳过 CLI 验证流程 |
 | `APV` | `execute` | 从 `execute_action` 查找的命令，严禁自行编造 | 自己编一个看着像的命令 |
 | `check_point` | `found` | 可精确匹配的内容（格式由**前一行**决定，不是自己决定） | D列写"配置添加成功"就填裸IP |
-| `check_point` | `not_found` | 应不存在的标识符，格式同 found | 填描述性文字 |
+| `check_point` | `not_found` | 前一行 show 的输出中**不应出现**该内容。格式同 found（写预期不出现的标识符），但含义相反 | 与 found 同组（紧邻且测试同一资源）时内容相同，属于正常；不同组时应从上下文推断 |
 | `check_point` | `found times` | **只写数字**（如 `3`），不加任何其他文字 | 写成 `3 times` |
 | `test_env` | — | Linux 命令行（dig/curl/ping 等），参数从前面 APV 行提取 | 编造端口号、加 `-6` 标志 |
 | `time` | `sleep` | 纯数字（如 `5`），**不带单位不带引号** | 写成 `5s`、`sleep 5` |
@@ -59,7 +59,7 @@ $ARGUMENTS
   - 「新增第N个」→ 在前面已创建资源的基础上，创建第 N 个同类型资源（命名递增，参数独立）
   - **判断前提**：先确定 D 列指代的是哪种资源（listener/real server/pool/VIP 等），再决定复用还是替换哪个参数
 - 参数在 CLI 手册 md 分片或 code_format.json 中找不到明确定义 → 标记「未生成」
-- **check_point 前置检查**：填 check_point 前必须先看前一行的 E 列和 G 列。前一行是 APV show/config → check_point 写 CLI 完整输出格式（如 SLB: `slb virtual http "v1" 172.16.34.100 80`），**绝对禁止裸 IP**。前一行是 test_env + D 列含「访问成功」→ check_point 填**后端服务器 响应内容或IP**（不是 DNS/VIP 的 IP）。只有前一行是 test_env（Linux 命令）且 D 列含「访问成功」时才写客户端侧的响应格式。**最容易犯的两个错误**：①看到 D 列「配置添加成功」就填裸 IP（前一行是 APV 时必须填 CLI 完整输出格式）；②看到 D 列「访问成功」就填 DNS/VIP 的 IP（应根据访问类型填后端服务器 响应内容或IP）。此规则适用所有模块
+- **check_point 前置检查**：填 check_point 前必须先看前一行的 E 列和 G 列。前一行是 APV show/config → check_point 写 CLI 完整输出格式（如 SLB: `slb virtual http "v1" 172.16.34.100 80`），**绝对禁止裸 IP**。前一行是 test_env + D 列含「访问成功」→ check_point 填**后端服务器 响应内容或IP**（不是 DNS/VIP 的 IP）。只有前一行是 test_env（Linux 命令）且 D 列含「访问成功」时才写客户端侧的响应格式。**最容易犯的两个错误**：①看到 D 列「配置添加成功」就填裸 IP（前一行是 APV 时必须填 CLI 完整输出格式）；②看到 D 列「访问成功」就填 DNS/VIP 的 IP（应根据访问类型填后端服务器 响应内容或IP）。**found 和 not_found 的区别**：found = 预期该标识符在输出中存在；not_found = 预期该标识符在输出中不存在。两者格式相同但含义相反——found 和 not_found 紧邻时通常是同一资源的正反验证（先配置→found，再修改→not_found），内容相同是正确的，不要误判为错误。
 
 ## Steps
 
@@ -101,12 +101,11 @@ $ARGUMENTS
 
 **常见模块的服务栈参考**（基础配置至少需覆盖该模块服务栈的全部层级）：
 
-| 模块 | 服务栈层级（从底向上） | 最少命令数 |
-|------|---------------------|-----------|
-| SDNS | sdns on → host → service → pool → listener | ≥4 |
+| 模块 | 服务栈层级（从底向上）                                         | 最少命令数 |
+|------|-----------------------------------------------------|-----------|
+| SDNS | sdns on → host → service → pool → listener          | ≥4 |
 | SLB | virtual server → real server → group → health check | ≥3 |
-| HA | ha group → ha config → ha track | ≥3 |
-| FW | fw enable → fw zone → fw rule → fw policy | ≥3 |
+| HA | ha unit → ha group → ha fip                         | ≥3 |
 
 **硬性门槛**：如果生成的基础配置命令数少于该模块的最少命令数，说明遗漏了服务栈的某层，必须回到 1a 重新盘点。
 

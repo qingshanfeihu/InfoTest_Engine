@@ -31,14 +31,11 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import HumanMessage
 
 _SKILL_LISTING_TEMPLATE = """<system-reminder>
-The following skills are available for use with the qa_invoke_skill tool:
+Available skills (use qa_invoke_skill to invoke):
 
 {skill_list}
 
-When a skill's description matches the user's current request, this is a BLOCKING REQUIREMENT: invoke the relevant qa_invoke_skill tool BEFORE generating any other response or calling any other tool about the task.
-
-NEVER mention a skill without actually calling qa_invoke_skill.
-Do not invoke a skill that is already running.
+RULE: If any skill matches, your FIRST tool_call MUST be qa_invoke_skill. Pass the user's raw question as the brief — the skill handles all file reading, document lookup, and answer generation internally. Do NOT read files or search before invoking the skill.
 </system-reminder>"""
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -181,7 +178,18 @@ def _format_skill_list(skills_metadata: list[dict[str, str]]) -> str:
     for skill in skills_metadata:
         name = skill.get("name", "")
         description = _truncate(skill.get("description", ""), _PER_SKILL_DESC_CAP)
-        if description:
+        when = skill.get("when_to_use", "")
+        # Extract trigger keywords from when_to_use
+        triggers = ""
+        if when:
+            for line in when.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("Trigger phrases:") or stripped.startswith("Trigger keywords"):
+                    triggers = stripped.split(":", 1)[1].strip()
+                    break
+        if description and triggers:
+            entry = f"- **{name}**: {description} [触发: {triggers}]"
+        elif description:
             entry = f"- **{name}**: {description}"
         else:
             entry = f"- **{name}**"

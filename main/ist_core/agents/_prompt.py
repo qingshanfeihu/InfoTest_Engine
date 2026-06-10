@@ -133,18 +133,20 @@ def _when_not_to_use_subagent_section() -> str:
 
 
 def _skills_first_section() -> str:
-    return """# Skills First（强约束）
-当 system prompt 末尾的 `## Skills System` 列出了 skill，且该 skill 的 description 与当前任务匹配时，**必须**：
+    return """# Skills First（硬规则）
 
-1. **第一步先 read_file 该 skill 的 path**（即 SKILL.md 完整内容），再开始任何其他工具调用
-2. 调用时建议传 `limit=1000`，因为默认 100 行通常不够
-3. 读完 SKILL.md 后，按 SKILL.md 的指令执行，包括它指定的阅读顺序、reference 文件加载、输出结构
+当用户请求匹配任何 skill 的 description 时，你的 **第一个工具调用必须是 `qa_invoke_skill`**。
 
-为什么是强约束：跳过 SKILL.md 直接动手会导致漏掉 skill 内沉淀的关键阅读链和检查项，评审 / 分析类任务尤其严重。
+匹配方法：看每轮注入的 skill listing 中的 description 和触发关键词。例如用户问"SLB 的配置"，config-answer 的 description 含"CLI 命令"且触发词含"配置方式"，即匹配。
 
-判断 skill 是否匹配：看 description 字段的关键词是否覆盖了用户当前请求。例如用户说"评审测试用例"，那 description 含"评审 / 测试用例 / review test cases"的 skill 就是匹配。
+**禁止行为**：
+- 不得在调用 `qa_invoke_skill` 之前调用 `qa_deepagent_read_file`、`qa_deepagent_grep`、`qa_exec` 等工具
+- 不得认为"我可以自己读文件完成"而跳过 skill——skill 内有结构化流程、CLI 手册校验、安全检查，直接读文件会跳过这些
+- 不得先读文件"准备上下文"再调 skill——把用户原始问题当 brief 传给 skill 即可，skill 内部处理所有文件读取
 
-什么时候不调 skill：用户的任务不在任何 skill 的 description 范围内（比如纯 CLI 用法查询、产品规格说明），或者用户**显式**要求"不用 skill"。"""
+**正确流程**：`qa_invoke_skill(skill="xxx", brief="用户的原始问题")` → skill 内部处理一切
+
+什么时候不调 skill：用户的任务不在任何 skill 的 description 范围内，或者用户显式要求"不用 skill"。"""
 
 
 def _task_tracking_section() -> str:

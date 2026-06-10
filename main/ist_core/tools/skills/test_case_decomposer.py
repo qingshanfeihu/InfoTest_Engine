@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import random
 import re
 from pathlib import Path
@@ -14,7 +16,155 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+logger = logging.getLogger(__name__)
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
+_KEYWORDS_MD = Path(__file__).parent / "decomposer_keywords.md"
+
+
+# ==========================================================================
+# 关键词配置解析
+# ==========================================================================
+
+def _extract_backtick_patterns(text: str) -> list[str]:
+    """从文本中提取反引号中的模式。"""
+    return [m.group(1) for m in re.finditer(r'`([^`]+)`', text)]
+
+
+def _extract_keywords_from_cell(text: str) -> list[str]:
+    """从单元格中提取关键词（反引号分隔或顿号分隔）。"""
+    backtick = _extract_backtick_patterns(text)
+    if backtick:
+        return backtick
+    return [k.strip() for k in text.split("、") if k.strip()]
+
+
+def _parse_md_table(text: str) -> list[dict[str, str]]:
+    """解析 markdown 表格，返回列表。"""
+    rows = []
+    lines = text.strip().split("\n")
+    headers = []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("---"):
+            continue
+        if "|" in line:
+            cells = [c.strip() for c in line.split("|") if c.strip()]
+            if not headers:
+                headers = cells
+            elif len(cells) >= 2:
+                row = {}
+                for i, h in enumerate(headers):
+                    if i < len(cells):
+                        row[h] = cells[i]
+                rows.append(row)
+    return rows
+
+
+def _load_keywords_from_md() -> dict[str, Any]:
+    """从 decomposer_keywords.md 加载关键词配置。"""
+    content = _KEYWORDS_MD.read_text(encoding="utf-8")
+    result = {
+        "phase_type_rules": [],
+        "actor_rules": [],
+        "action_rules": {},
+        "neg_keywords": [],
+        "assert_keywords": [],
+    }
+
+    sections = re.split(r'^## \d+\.\s+', content, flags=re.MULTILINE)
+
+    for section in sections:
+        if not section.strip():
+            continue
+        lines = section.strip().split("\n")
+        title = lines[0].strip() if lines else ""
+
+        # 0. Phase + Type 推断关键词
+        if "Phase + Type" in title:
+            current_phase = None
+            current_type = None
+            current_actor = None
+            for line in lines:
+                if "Setup phase" in line and "device_config" in line:
+                    current_phase, current_type, current_actor = "Setup", "device_config", "APV_0"
+                elif "Trigger phase" in line and "client_action" in line:
+                    current_phase, current_type, current_actor = "Trigger", "client_action", "test_env"
+                elif "Verify phase" in line and "capture_verify" in line:
+                    current_phase, current_type, current_actor = "Verify", "capture_verify", "APV_0"
+                elif "Verify phase" in line and "device_query" in line:
+                    current_phase, current_type, current_actor = "Verify", "device_query", "APV_0"
+                elif current_phase and "|" in line and "关键词" not in line and "---" not in line:
+                    cells = [c.strip() for c in line.split("|") if c.strip()]
+                    if len(cells) >= 1 and cells[0] not in ("关键词模式", "-------"):
+                        patterns = _extract_keywords_from_cell(cells[0])
+                        if patterns:
+                            combined = "|".join(patterns)
+                            result["phase_type_rules"].append((combined, current_phase, current_type, current_actor))
+
+        # 1. Actor 分类关键词
+        elif "Actor 分类" in title:
+            for row in _parse_md_table("\n".join(lines)):
+                kw_cell = row.get("关键词模式", "")
+                actor = row.get("Actor", "")
+                if kw_cell and actor and actor not in ("Actor", "-------"):
+                    patterns = _extract_keywords_from_cell(kw_cell)
+                    combined = "|".join(patterns)
+                    if combined:
+                        result["actor_rules"].append((combined, actor))
+
+        # 2. Action 推断关键词
+        elif "Action 推断" in title:
+            current_actor = None
+            for line in lines:
+                if "APV_0 的 Action" in line:
+                    current_actor = "APV_0"
+                elif "APV_1 的 Action" in line:
+                    current_actor = "APV_1"
+                elif "test_env 的 Action" in line:
+                    current_actor = "test_env"
+                elif "check_point 的 Action" in line:
+                    current_actor = "check_point"
+                elif current_actor and "|" in line and "关键词" not in line and "---" not in line:
+                    cells = [c.strip() for c in line.split("|") if c.strip()]
+                    if len(cells) >= 2 and cells[0] not in ("关键词模式", "-------"):
+                        patterns = _extract_keywords_from_cell(cells[0])
+                        action = cells[1].strip()
+                        if patterns and action:
+                            if current_actor not in result["action_rules"]:
+                                result["action_rules"][current_actor] = []
+                            combined = "|".join(patterns)
+                            result["action_rules"][current_actor].append((combined, action))
+
+        # 8. check_point 判断关键词
+        elif "check_point 判断" in title:
+            in_neg = False
+            in_assert = False
+            for line in lines:
+                if "负向断言" in line:
+                    in_neg = True
+                    in_assert = False
+                elif "正向断言" in line:
+                    in_neg = False
+                    in_assert = True
+                elif line.strip().startswith("```") or line.strip().startswith("---"):
+                    continue
+                elif in_neg and line.strip() and not line.strip().startswith("#"):
+                    kws = [k.strip() for k in line.split("、") if k.strip() and k.strip() != "---"]
+                    result["neg_keywords"].extend(kws)
+                elif in_assert and line.strip() and not line.strip().startswith("#"):
+                    kws = [k.strip() for k in line.split("、") if k.strip() and k.strip() != "---"]
+                    result["assert_keywords"].extend(kws)
+
+    return result
+
+
+# 加载配置
+_keywords_config = _load_keywords_from_md()
+
+# check_point 判断关键词：从 decomposer_keywords.md 加载
+_NEG_KW = _keywords_config.get("neg_keywords", [])
+_ASSERT_KW = _keywords_config.get("assert_keywords", [])
 
 # ==========================================================================
 # apv_action.py 高位动作映射（步骤描述匹配到 → F 列直接用关键字，G 列留空）
@@ -223,18 +373,18 @@ G_FILL_PDF = "llm_pdf"       # LLM 查 PDF 手册拿精确 CLI 命令
 G_FILL_INFER = "llm_infer"   # LLM 根据上下文推断，无需 PDF
 G_FILL_DIRECT = "direct"     # 直接填，固定值
 
-# Actor 识别规则：step 文本匹配 → actor
-# 注意：顺序重要！更具体的配置/客户端模式优先，check 兜底
+# Actor 识别规则：从 decomposer_keywords.md 加载
+# 格式：[(regex_pattern, actor), ...]
+_ACTOR_RULES_FROM_MD = _keywords_config.get("actor_rules", [])
 ACTOR_RULES: list[tuple[str, str, str]] = [
-    # (regex pattern, actor, description)
-    (r'客户端.*(?:dig|ping|curl|wget|访问|请求|发包)|(?:dig|ping|curl|wget|发包)\s', 'test_env', '客户端工具'),
-    (r'备机|APV_1|apv1|apv_1|standby|slave|peer', 'APV_1', '备机'),
-    (r'(?:配置|添加|创建|设置|删除|no\s)(?!.*(?:成功|失败|正常|异常))|^(?!.*check).*(?:sdns|slb|firewall|route|interface|vlan|bond|ha\s|ipsec|ike|tunnel|bgp|ospf)', 'APV_0', '设备配置'),
-    (r'show\s|查看|write\s|reboot|重启|启用|开启|关闭|clear\s|保存|save|(?:主机|APV_0|apv0|apv_0)', 'APV_0', '设备操作'),
-    (r'dig|ping|curl|wget|访问|请求|发包|打流量|客户端|client', 'test_env', '客户端/测试环境'),
-    (r'check\d*\]|$|预期|验证|断言|应当|应该|成功|失败|正常|异常', 'check_point', '断言检查点'),
+    (pattern, actor, f"从配置文件加载: {actor}")
+    for pattern, actor in _ACTOR_RULES_FROM_MD
 ]
 ACTOR_DEFAULT = 'APV_0'
+
+# Action 推断规则：从 decomposer_keywords.md 加载
+# 格式：{actor: [(regex_pattern, action), ...]}
+_ACTION_RULES_FROM_MD = _keywords_config.get("action_rules", {})
 
 # Step 文本预处理：分离 [check] 标记
 _CHECK_MARKER_RE = re.compile(r'\s*\[check\d*\]\s*', re.IGNORECASE)
@@ -315,6 +465,68 @@ def _match_expected_by_check(step_text: str, expected: list[str]) -> str:
     return expected[0] if expected else ""
 
 
+def _split_compound_actions(text: str) -> list[str] | None:
+    """拆分复合动作步骤。
+
+    识别并拆分用逗号、顿号、"并且"、"然后"连接的多个独立动作。
+
+    示例：
+    "配置vh1协议为TLSv1.1，创建sdns service sdnsdc1 43.43.43.9将其与hc1绑定,rs配置为双向认证，并且发送certificate request报文"
+    → ["配置vh1协议为TLSv1.1", "创建sdns service sdnsdc1 43.43.43.9将其与hc1绑定",
+       "rs配置为双向认证", "发送certificate request报文"]
+    """
+    if not text:
+        return None
+
+    # 配置/触发动作关键词（这些动作应该被拆分为独立步骤）
+    _CONFIG_TRIGGER_START = (
+        r'(?:配置|创建|添加|新增|设置|删除|启用|禁用|开启|关闭|导入|导出|绑定|解绑|'
+        r'激活|取消激活|修改|重启|保存|发送|抓包|'
+        r'客户端|dig\s|ping\s|curl\s|wget\s|tcpdump|debug\s|trace\s|show\s|'
+        r'rs\s|再次|将|把|使)'
+    )
+
+    # 验证动作关键词（这些动作通常是前一个动作的延续，不单独拆分）
+    _VERIFY_START = r'(?:查看|验证|检查|确认|显示|查询|断言|预期)'
+
+    # 分隔符：逗号、顿号、"并且"、"然后"、"同时"
+    _SEPARATOR = r'[,，、]\s*(?:并且|然后|同时)?\s*|(?:并且|然后|同时)\s*'
+
+    # 按分隔符拆分
+    parts = re.split(_SEPARATOR, text)
+    parts = [p.strip() for p in parts if p.strip()]
+
+    if len(parts) < 2:
+        return None
+
+    # 检查每个部分是否应该被拆分
+    action_parts = []
+    for part in parts:
+        if re.match(_CONFIG_TRIGGER_START, part, re.IGNORECASE):
+            # 配置/触发动作，拆分为独立步骤
+            action_parts.append(part)
+        elif re.match(_VERIFY_START, part, re.IGNORECASE):
+            # 验证动作，检查前一个动作是否是触发动作
+            if action_parts and re.search(r'(?:发送|请求|访问|dig|ping|curl|发包)', action_parts[-1], re.IGNORECASE):
+                # 前一个动作是触发动作，验证动作作为延续
+                action_parts[-1] += "，" + part
+            else:
+                # 前一个动作不是触发动作，拆分为独立步骤
+                action_parts.append(part)
+        elif action_parts:
+            # 其他情况，作为前一个动作的延续
+            action_parts[-1] += "，" + part
+        else:
+            # 第一个部分不是动作关键词，整个不拆分
+            return None
+
+    # 只有当拆分出 2 个以上动作时才返回
+    if len(action_parts) >= 2:
+        return action_parts
+
+    return None
+
+
 def _split_numbered_sub_steps(text: str) -> list[str] | None:
     """检测并拆分合并的步骤。
 
@@ -346,39 +558,76 @@ def _split_numbered_sub_steps(text: str) -> list[str] | None:
             if config_lines and client_lines:
                 return lines
     # 模式2：单行但含多个编号子步骤
-    parts = re.split(r'(?=\d+[\.\、\)])', text)
+    # 先排除 IP 地址（如 43.43.43.9），避免误拆
+    _IP_PATTERN = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}')
+    # 移除 IP 地址后再检测编号
+    text_no_ip = _IP_PATTERN.sub('IP_PLACEHOLDER', text)
+    parts = re.split(r'(?=\d+[\.\、\)])', text_no_ip)
     parts = [p.strip() for p in parts if p.strip()]
     numbered_parts = [p for p in parts if re.match(r'\d+[\.\、\)]', p)]
     if len(numbered_parts) >= 2:
-        return [_STRIP_NUM_PREFIX.sub('', p) for p in parts]
+        # 有编号子步骤，但需要恢复 IP 地址
+        # 重新对原文进行拆分，但只在非 IP 位置拆分
+        result_parts = []
+        current = text
+        for np in numbered_parts:
+            # 找到编号在原文中的位置（跳过 IP 中的数字）
+            idx = current.find(np)
+            if idx > 0:
+                result_parts.append(current[:idx])
+            current = current[idx:] if idx >= 0 else current
+        if current:
+            result_parts.append(current)
+        return [_STRIP_NUM_PREFIX.sub('', p).strip() for p in result_parts if p.strip()]
     return None
 
 
-# Action 推断规则：actor + step 意图 → action
-ACTION_RULES: dict[str, list[tuple[str, str, str]]] = {
-    'APV_0': [
-        (r'reboot|重启|升级|降级', 'execute', '特权操作(脱离config模式)'),
-        (r'write\s|保存|save', 'cmd_config', '保存配置命令'),
-        (r'(?=.*(?:sdns|slb|firewall|route))(?=.*(?:配置|添加|创建|设置|删除|启用)).*[,;、].*(?:sdns|slb|firewall|route)', 'cmd_config', '配置命令(含多模块引用)'),
-        (r'初始化|基础环境|基础配置|前置|setup', 'cmds_config', '多条初始化命令'),
-        (r'(?:配置|添加|创建|设置|删除|no\s|启用|开启|关闭|show|查看).{0,30}(?:sdns|slb|firewall|route|ip|port|vip|listener|host|service|pool|policy|group|real|virtual)', 'cmd_config', '单条配置命令'),
-        (r'show|查看|检查|显示', 'cmd_config', '查看命令'),
-    ],
-    'APV_1': [
-        (r'show|查看|检查|显示', 'cmd_config', '查看命令'),
-        (r'配置|添加|创建|设置|删除', 'cmd_config', '单条配置命令'),
-    ],
-    'test_env': [
-        (r'ping', 'clientc', 'ping测试'),
-        (r'curl|wget|http', 'clientc', 'HTTP请求'),
-        (r'dig|nslookup|dns', 'routera', 'DNS查询'),
-        (r'发包|syn| flood|压力|stress|压测|循环|多次|for\s|while\s|seq\s', 'clientc', '发包/压力测试'),
-    ],
-    'check_point': [
-        (r'失败|错误|不能|无法|不支持|丢|不包含|不存在|不应', 'not_found', '负向断言'),
-        (r'成功|正常|可以|能够|应该|包含|存在|正确', 'found', '正向断言'),
-    ],
-}
+# ==========================================================================
+# Phase + Type 框架
+# ==========================================================================
+
+# Phase（阶段）：Setup / Trigger / Verify
+PHASE_SETUP = "Setup"        # 配置阶段，顺序执行
+PHASE_TRIGGER = "Trigger"    # 触发阶段，执行测试动作
+PHASE_VERIFY = "Verify"      # 验证阶段，必须有 expected
+
+# Type（类型）：步骤类型
+TYPE_DEVICE_CONFIG = "device_config"      # 在设备上下发配置
+TYPE_CLIENT_ACTION = "client_action"      # 客户端发包/请求
+TYPE_CAPTURE_VERIFY = "capture_verify"    # 抓包/日志/命令行验证
+TYPE_DEVICE_QUERY = "device_query"        # 在设备上查询状态
+
+# Phase + Type 推断规则：从 decomposer_keywords.md 加载
+# 格式：[(pattern, phase, type, actor)]
+_PHASE_TYPE_RULES_FROM_MD = _keywords_config.get("phase_type_rules", [])
+_PHASE_TYPE_RULES: list[tuple[str, str, str, str]] = [
+    (pattern, phase, type_, actor)
+    for pattern, phase, type_, actor in _PHASE_TYPE_RULES_FROM_MD
+]
+
+
+def _infer_phase_type(text: str, is_expected: bool = False) -> tuple[str, str, str]:
+    """推断步骤的 phase 和 type。返回 (phase, type, actor)。"""
+    text_lower = text.lower()
+
+    # 如果是 expected，直接归为 Verify phase
+    if is_expected:
+        return PHASE_VERIFY, TYPE_CAPTURE_VERIFY, "check_point"
+
+    # 按规则匹配
+    for pattern, phase, type_, actor in _PHASE_TYPE_RULES:
+        if re.search(pattern, text_lower):
+            return phase, type_, actor
+
+    # 默认：Setup phase, device_config
+    return PHASE_SETUP, TYPE_DEVICE_CONFIG, "APV_0"
+
+
+# Action 推断规则：从 decomposer_keywords.md 加载（保留兼容）
+# 格式：{actor: [(regex_pattern, action, description), ...]}
+ACTION_RULES: dict[str, list[tuple[str, str, str]]] = {}
+for actor, rules in _ACTION_RULES_FROM_MD.items():
+    ACTION_RULES[actor] = [(pattern, action, f"从配置文件加载: {action}") for pattern, action in rules]
 ACTION_DEFAULT: dict[str, str] = {
     'APV_0': 'cmd_config',
     'APV_1': 'cmd_config',
@@ -579,12 +828,10 @@ def _build_prereq_hint(prereq_text: str, module: str = "") -> str:
 
 
 def _infer_verify_hint(prev_steps: list[dict], module: str, check_desc: str) -> tuple[str | None, str | None]:
-    """推断 check_point 前的验证步骤 hint。返回 (actor, hint) 或 (None, None)。
+    """@deprecated 职责已移至主 agent（SKILL.md Step 2.5 LLM 推断）。
 
-    规则：
-    - 前面的步骤是设备配置 → 注入 show 命令验证设备状态
-    - 前面的步骤是客户端动作 → 客户端动作本身就是验证，不需要额外注入
-    - 前面的步骤有其他 hint → 从 hint 推断 show 命令
+    此函数仅处理 show 命令，不处理 trigger（dig/ping/curl），已被主 agent
+    LLM 推断替代。保留供未来回退参考。
     """
     combined = (module + " " + check_desc).lower()
     client_kw = ["访问", "dig ", "ping ", "curl", "wget", "响应", "解析", "请求", "发包", "客户端", "打流量"]
@@ -757,6 +1004,12 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
         }, indent=2, ensure_ascii=False)
 
     test_cases = data.get("test_cases", [])
+    # 读取模块级前置（新格式：modules 是字典）
+    modules_info = data.get("modules", {})
+    if isinstance(modules_info, list):
+        # 兼容旧格式：modules 是列表
+        modules_info = {mod: {} for mod in modules_info}
+
     results: list[dict[str, Any]] = []
 
     for case in test_cases:
@@ -778,25 +1031,47 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
 
         # 1. Inject prerequisite (C=1) — only for first case in group
         big_module, group_name = _detect_module_and_group(module, all_steps_text)
-        prereq_info = _get_prereq_info(big_module)
-        prereq_steps = prereq_info.get("init", [])
         case_group = group_name
-        if group_name not in _INJECTED_PREREQ:
-            _INJECTED_PREREQ.add(group_name)
-            for ps in prereq_steps:
-                domain = "autotest.com"
-                dm = re.search(r'["\']([\w*.-]+\.[\w]{2,})["\']', all_steps_text)
-                if not dm: dm = re.search(r'([\w-]+\.[\w-]+\.[\w]{2,})', all_steps_text)
-                if dm: domain = dm.group(1)
-                ip = "172.16.35.231"
-                im = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', all_steps_text)
-                if im: ip = im.group(1)
-                describe = ps["describe"].replace("autotest.com", domain).replace("172.16.35.231", ip)
-                decomposed_steps.append({
-                    "c": 1, "actor": ps["actor"], "action": ps["action"],
-                    "describe": describe, "g_fill": G_FILL_PDF,
-                    "hint": ps.get("hint", ""), "_domain": domain, "_ip": ip,
-                })
+
+        # 优先使用 extracted.json 中的模块级前置，fallback 到硬编码的 _FEATURE_PREREQUISITES
+        module_prereqs = modules_info.get(module, {}).get("module_prerequisites", [])
+        if module_prereqs:
+            # 使用从脑图提取的模块级前置
+            if group_name not in _INJECTED_PREREQ:
+                _INJECTED_PREREQ.add(group_name)
+                for prereq_text in module_prereqs:
+                    decomposed_steps.append({
+                        "c": 1,
+                        "phase": PHASE_SETUP,
+                        "type": TYPE_DEVICE_CONFIG,
+                        "actor": "APV_0", "action": "cmds_config",
+                        "describe": f"[前置] {prereq_text}",
+                        "g_fill": G_FILL_PDF,
+                        "hint": _build_prereq_hint(prereq_text, module),
+                    })
+        else:
+            # Fallback: 使用硬编码的 _FEATURE_PREREQUISITES
+            prereq_info = _get_prereq_info(big_module)
+            prereq_steps = prereq_info.get("init", [])
+            if group_name not in _INJECTED_PREREQ:
+                _INJECTED_PREREQ.add(group_name)
+                for ps in prereq_steps:
+                    domain = "autotest.com"
+                    dm = re.search(r'["\']([\w*.-]+\.[\w]{2,})["\']', all_steps_text)
+                    if not dm: dm = re.search(r'([\w-]+\.[\w-]+\.[\w]{2,})', all_steps_text)
+                    if dm: domain = dm.group(1)
+                    ip = "172.16.35.231"
+                    im = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', all_steps_text)
+                    if im: ip = im.group(1)
+                    describe = ps["describe"].replace("autotest.com", domain).replace("172.16.35.231", ip)
+                    decomposed_steps.append({
+                        "c": 1,
+                        "phase": PHASE_SETUP,
+                        "type": TYPE_DEVICE_CONFIG,
+                        "actor": ps["actor"], "action": ps["action"],
+                        "describe": describe, "g_fill": G_FILL_PDF,
+                        "hint": ps.get("hint", ""), "_domain": domain, "_ip": ip,
+                    })
 
         # 2. Inject feature dependencies (C=2,3,...) after init, before case steps
         c_counter = 2
@@ -815,7 +1090,10 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                     elif "递归" in module:
                         hint = "show sdns host name"
                     decomposed_steps.append({
-                        "c": c_counter, "actor": ds["actor"], "action": ds["action"],
+                        "c": c_counter,
+                        "phase": PHASE_SETUP,
+                        "type": TYPE_DEVICE_CONFIG,
+                        "actor": ds["actor"], "action": ds["action"],
                         "describe": ds["describe"], "g_fill": G_FILL_PDF, "hint": hint,
                     })
                     c_counter += 1
@@ -831,6 +1109,8 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
             _injected_case_prereqs.add(prereq_text)
             decomposed_steps.append({
                 "c": c_counter,
+                "phase": PHASE_SETUP,
+                "type": TYPE_DEVICE_CONFIG,
                 "actor": "APV_0",
                 "action": "cmds_config" if ";" in prereq_text or "、" in prereq_text else "cmd_config",
                 "describe": f"[用例前置] {prereq_text}",
@@ -843,15 +1123,42 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
         # 用例描述优先用 extracted JSON 的 description 字段（脑图 priority=2 节点文本）
         case_desc = case.get("description", "") or (steps[0][:60] if steps else module.split(" > ")[-1])
 
-        # ── 拆分编号子步骤：有人把多个步骤写到一块，用 1. 2. 3. 分隔 ──
+        # 获取 step_expected_map（步骤拆分前）
+        step_expected_map = case.get("step_expected", {})
+
+        # ── 拆分步骤：先拆编号子步骤，再拆复合动作 ──
+        # 记录原始索引到新索引的映射（expected 应该对应拆分后的最后一个步骤）
+        old_to_new_idx: dict[int, int] = {}
         _flat_steps: list[str] = []
-        for s in steps:
+        new_idx = 0
+        for old_idx, s in enumerate(steps):
+            # 先尝试拆分编号子步骤
             split_s = _split_numbered_sub_steps(s.strip())
             if split_s:
                 _flat_steps.extend(split_s)
+                old_to_new_idx[old_idx] = new_idx + len(split_s) - 1  # 最后一个拆分步骤
+                new_idx += len(split_s)
             else:
-                _flat_steps.append(s)
+                # 再尝试拆分复合动作（逗号、顿号、"并且"连接的多个动作）
+                split_c = _split_compound_actions(s.strip())
+                if split_c:
+                    _flat_steps.extend(split_c)
+                    old_to_new_idx[old_idx] = new_idx + len(split_c) - 1  # 最后一个拆分步骤
+                    new_idx += len(split_c)
+                else:
+                    _flat_steps.append(s)
+                    old_to_new_idx[old_idx] = new_idx
+                    new_idx += 1
         steps = _flat_steps
+
+        # 更新 step_expected_map 的索引（步骤拆分后，expected 对应最后一个拆分步骤）
+        if step_expected_map:
+            new_step_expected_map: dict[int, list[str]] = {}
+            for old_idx_str, exps in step_expected_map.items():
+                old_idx = int(old_idx_str)
+                if old_idx in old_to_new_idx:
+                    new_step_expected_map[old_to_new_idx[old_idx]] = exps
+            step_expected_map = new_step_expected_map
 
         # Decompose each step
         for i, step_text in enumerate(steps):
@@ -993,7 +1300,8 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
 
                 continue  # 高位动作已处理，跳过常规分类
 
-            actor, actor_desc = _classify_step(clean_text)
+            # 使用 phase + type 框架推断
+            phase, type_, actor = _infer_phase_type(clean_text)
             action, action_desc = _infer_action(actor, clean_text)
             g_fill = _infer_g_fill(actor, clean_text, bool(expected))
 
@@ -1041,6 +1349,8 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
             if not is_pure_expected and clean_text and not skip_entry:
                 entry: dict[str, Any] = {
                     "c": c_counter,
+                    "phase": phase,
+                    "type": type_,
                     "actor": actor,
                     "action": action,
                     "describe": enriched_describe,
@@ -1074,18 +1384,9 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                     elif has_reboot:
                         entry["data"] = "system reboot noninteractive"
 
-                # check_point → 注入验证步骤（设备用 show，客户端已由自身动作验证）
+                # check_point → 标记 need_verify，由主 agent 在 Step 2.5 用 LLM 推断 trigger/verify 步骤
                 if actor == "check_point":
-                    verify_actor, verify_hint = _infer_verify_hint(
-                        decomposed_steps, module, enriched_describe
-                    )
-                    if verify_actor and verify_hint:
-                        decomposed_steps.append({
-                            "c": c_counter, "actor": verify_actor, "action": "cmd_config",
-                            "describe": f"{verify_actor} 查看验证配置: 查看配置确认变更生效",
-                            "g_fill": G_FILL_PDF, "hint": verify_hint,
-                        })
-                        c_counter += 1
+                    entry["need_verify"] = True
 
                 decomposed_steps.append(entry)
                 c_counter += 1
@@ -1106,48 +1407,42 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                 prev = decomposed_steps[-1] if decomposed_steps else None
                 exp_text_final = exp_text or f"验证{clean_text[:30]}"
 
-                # check_point 前注入验证步骤（通用：设备用 show，客户端已有动作）
-                verify_actor, verify_hint = _infer_verify_hint(
-                    decomposed_steps, module, exp_text_final
-                )
-                if verify_actor and verify_hint:
-                    decomposed_steps.append({
-                        "c": c_counter, "actor": verify_actor, "action": "cmd_config",
-                        "describe": f"{verify_actor} 查看验证配置: 查看配置确认变更生效",
-                        "g_fill": G_FILL_PDF, "hint": verify_hint,
-                    })
-                    c_counter += 1
-                    prev = decomposed_steps[-1]
-
                 # Enriched describe for check_point
                 check_describe = f"断言应出现: {exp_text_final}" if check_action == "found" else f"断言不应出现: {exp_text_final}"
                 check_entry: dict[str, Any] = {
                     "c": c_counter,
+                    "phase": PHASE_VERIFY,
+                    "type": TYPE_CAPTURE_VERIFY,
                     "actor": "check_point",
                     "action": check_action,
                     "describe": check_describe,
                     "g_fill": G_FILL_INFER,
                     "infer_from": _build_check_infer_from(exp_text_final, prev),
+                    "need_verify": True,  # 主 agent Step 2.5 LLM 推断 trigger/verify
                 }
                 decomposed_steps.append(check_entry)
                 c_counter += 1
 
         # 5. 结构+内容双驱动创建 check_point
-        _NEG_KW = ["失败", "不能", "无法", "不支持", "错误", "不可以使用", "不可以", "未被保存", "未生效", "不存在", "不命中"]
-        _ASSERT_KW = ["成功", "失败", "正常", "异常", "可以使用", "不可以", "正确", "错误",
-                      "生效", "未生效", "同步", "不同步", "命中", "不命中", "显示", "提示", "删除", "不存在"]
+        # _NEG_KW 和 _ASSERT_KW 从 decomposer_keywords.md 加载（全局变量）
 
         # 5a. 结构驱动：step_expected 中有关联的步骤 → 插入 check_point
-        step_exp_map = case.get("step_expected", {})
+        # 只有实际步骤（非注入步骤）才消耗 orig_idx，expected 在对应步骤之后立即注入
+        step_exp_map = {str(k): v for k, v in step_expected_map.items()}  # 转换为 str 键
         result_steps = []
         orig_idx = 0
         for ds in decomposed_steps:
             result_steps.append(ds)
-            # 跳过不消耗原始步骤索引的内部注入步骤（init / time / 用例前置）
-            if ds.get("c", 0) == 1 or ds.get("action") == "sleep" or "[用例前置]" in ds.get("describe", ""):
+            # 注入步骤不消耗原始步骤索引
+            is_injected = (ds.get("c", 0) == 1 or
+                          ds.get("action") == "sleep" or
+                          "[用例前置]" in ds.get("describe", "") or
+                          "[前置]" in ds.get("describe", ""))
+            if is_injected:
                 continue
             str_idx = str(orig_idx)
             if str_idx in step_exp_map:
+                # 在当前步骤之后立即注入 check_point
                 for exp_text in step_exp_map[str_idx]:
                     exp_clean = re.sub(r'\[check\d*\]', '', exp_text).strip()
                     if not exp_clean:
@@ -1160,14 +1455,18 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
                     cd = f"断言应出现: {exp_clean}" if ca == "found" else f"断言不应出现: {exp_clean}"
                     c_counter += 1
                     result_steps.append({
-                        "c": c_counter, "actor": "check_point", "action": ca,
+                        "c": c_counter,
+                        "phase": PHASE_VERIFY,
+                        "type": TYPE_CAPTURE_VERIFY,
+                        "actor": "check_point", "action": ca,
                         "describe": cd, "g_fill": G_FILL_INFER,
                         "infer_from": _build_check_infer_from(exp_clean, ds),
+                        "need_verify": True,
                     })
             orig_idx += 1
         decomposed_steps = result_steps
 
-        # 5b. 内容兜底：未被覆盖的 expected 结果（关键词过滤）
+        # 5b. 内容兜底：未被覆盖的 expected 结果（无条件注入）
         for exp_text in expected:
             exp_clean = re.sub(r'\[check\d*\]', '', exp_text).strip()
             if not exp_clean:
@@ -1175,30 +1474,21 @@ def qa_decompose_test_cases(extracted_json_path: str) -> str:
             if any(s.get("actor") == "check_point" and exp_clean[:20] in s.get("describe", "")
                    for s in decomposed_steps):
                 continue
-            if not any(kw in exp_clean for kw in _ASSERT_KW):
-                continue
+            # 无条件注入 check_point，不依赖关键词过滤
             prev = decomposed_steps[-1] if decomposed_steps else None
             ca = "not_found" if any(kw in exp_clean for kw in _NEG_KW) else "found"
             cd = f"断言应出现: {exp_clean}" if ca == "found" else f"断言不应出现: {exp_clean}"
 
-            # check_point 前注入验证步骤（通用）
-            verify_actor, verify_hint = _infer_verify_hint(
-                decomposed_steps, module, exp_clean
-            )
-            if verify_actor and verify_hint:
-                c_counter += 1
-                decomposed_steps.append({
-                    "c": c_counter, "actor": verify_actor, "action": "cmd_config",
-                    "describe": f"{verify_actor} 查看验证配置: 查看配置确认变更生效",
-                    "g_fill": G_FILL_PDF, "hint": verify_hint,
-                })
-                prev = decomposed_steps[-1]
-
+            # check_point 标记需要验证步骤（由主 agent 推断）
             c_counter += 1
             decomposed_steps.append({
-                "c": c_counter, "actor": "check_point", "action": ca,
+                "c": c_counter,
+                "phase": PHASE_VERIFY,
+                "type": TYPE_CAPTURE_VERIFY,
+                "actor": "check_point", "action": ca,
                 "describe": cd, "g_fill": G_FILL_INFER,
                 "infer_from": _build_check_infer_from(exp_clean, prev),
+                "need_verify": True,
             })
 
         # Final C renumbering: after 5a/5b inject steps in the middle,

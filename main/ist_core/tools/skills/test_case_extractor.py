@@ -107,13 +107,19 @@ def _infer_node_role(
     depth: int,
     max_depth: int,
 ) -> str:
-    """Infer node role: 'module', 'case', or 'heading'."""
+    """Infer node role: 'module', 'case', 'prerequisite', or 'heading'.
+
+    Priority rules:
+    - priority=1: module (命名空间)
+    - priority=2: test case (degree 1/2/3 → P0/P1/P2)
+    - priority=3: prerequisite (前置条件，无论位置)
+    """
     if priority == 2:
         return "case"
     if priority == 1:
         return "module"
     if priority == 3:
-        return "heading"
+        return "prerequisite"
 
     # No priority — infer from structure
     if children_count == 0:
@@ -216,10 +222,16 @@ def qa_extract_test_cases(file_path: str) -> str:
 
     root_text = data[0].get("data", {}).get("text", "").strip()
 
-    # Collect test cases
+    # Collect test cases and module prerequisites
     cases: list[dict[str, Any]] = []
+    # module_prereqs: 模块路径 → 前置条件列表（P3 节点在第一个用例之前）
+    module_prereqs: dict[str, list[str]] = {}
+    # 当前正在遍历的模块路径下收集到的 P3 前置
+    _current_module_prereqs: list[str] = []
+    _current_module_path: str | None = None
 
     def _walk(nodes, path=None, depth=0):
+        nonlocal _current_module_prereqs, _current_module_path
         if path is None:
             path = []
         for node in nodes:
@@ -236,6 +248,30 @@ def qa_extract_test_cases(file_path: str) -> str:
                 priority, degree, len(children), depth, global_max_depth
             )
 
+            # ── 模块级前置：P3 节点在模块层级 ──
+            if role == "prerequisite" and depth >= 1:
+                # 构建当前模块路径
+                module_parts = []
+                for i, x in enumerate(p[:-1]):
+                    if i == 0 and x == root_text:
+                        continue
+                    if not re.match(r'^\d+[\.\、\)]', x):
+                        module_parts.append(x)
+                module_path = " > ".join(module_parts)
+
+                # 如果模块路径变化了，说明进入了新模块，清空前置缓存
+                if module_path != _current_module_path:
+                    # 将之前收集的前置保存到 module_prereqs
+                    if _current_module_path and _current_module_prereqs:
+                        module_prereqs[_current_module_path] = list(_current_module_prereqs)
+                    _current_module_path = module_path
+                    _current_module_prereqs = []
+
+                # 收集 P3 节点文本作为模块级前置
+                if text:
+                    _current_module_prereqs.append(text)
+                continue
+
             if role == "case":
                 # Build module path: skip root + non-module nodes
                 module_parts = []
@@ -251,6 +287,12 @@ def qa_extract_test_cases(file_path: str) -> str:
                         module_parts.append(x)
 
                 module_path = " > ".join(module_parts)
+
+                # 保存当前模块的前置
+                if _current_module_path and _current_module_prereqs:
+                    module_prereqs[_current_module_path] = list(_current_module_prereqs)
+                    _current_module_prereqs = []
+                _current_module_path = module_path
 
                 # Filter: skip background context nodes
                 if _is_background(text, module_path):
@@ -285,8 +327,18 @@ def qa_extract_test_cases(file_path: str) -> str:
                     ct = child.get("data", {}).get("text", "").strip()
                     if not ct:
                         continue
+                    cp = child.get("data", {}).get("priority")
                     grand_children = child.get("children", [])
                     is_last = (idx == len(children) - 1)
+
+                    # ── P3 节点 → 用例级前置（无论位置）──
+                    if cp == 3:
+                        case_prerequisites.append(ct)
+                        for gc in grand_children:
+                            gct = gc.get("data", {}).get("text", "").strip()
+                            if gct:
+                                case_prerequisites.append(gct)
+                        continue
 
                     # ── 检测"前提条件"标签 → 用例前置 ──
                     is_prereq_child = any(
@@ -349,9 +401,14 @@ def qa_extract_test_cases(file_path: str) -> str:
                         else:
                             steps.append(ct)
 
-                # 如果没有步骤但有预期结果，用例名本身就是步骤
+                # 如果没有步骤但有预期结果，检查用例描述是否是动作描述
+                # 只有当用例描述包含动作词时，才作为步骤
                 if not steps and expected and case_title:
-                    steps.append(case_title)
+                    _ACTION_KEYWORDS = ['配置', '创建', '删除', '发送', '修改', '设置',
+                                        '启用', '禁用', '开启', '关闭', '添加', '移除',
+                                        '导入', '导出', '绑定', '解绑', '重启', '升级']
+                    if any(kw in case_title for kw in _ACTION_KEYWORDS):
+                        steps.append(case_title)
 
                 # 只有有关联预期的步骤才保留对应的 expected
                 # 扁平 expected 保留兼容，同时加 step_expected 字段
@@ -416,8 +473,17 @@ def qa_extract_test_cases(file_path: str) -> str:
 
     _walk(data)
 
-    # Build module list
-    modules = sorted(set(c["module"] for c in cases if c["module"]))
+    # 保存最后收集的模块前置
+    if _current_module_path and _current_module_prereqs:
+        module_prereqs[_current_module_path] = list(_current_module_prereqs)
+
+    # Build module list with prerequisites
+    all_modules = sorted(set(c["module"] for c in cases if c["module"]))
+    modules: dict[str, Any] = {}
+    for mod in all_modules:
+        modules[mod] = {}
+        if mod in module_prereqs:
+            modules[mod]["module_prerequisites"] = module_prereqs[mod]
 
     # Assign sequential IDs
     for i, c in enumerate(cases, 1):

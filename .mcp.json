@@ -1,0 +1,6 @@
+{
+  "apv-test-runner": {
+    "type": "http",
+    "url": "http://10.4.127.103:8000/mcp"
+  }
+}

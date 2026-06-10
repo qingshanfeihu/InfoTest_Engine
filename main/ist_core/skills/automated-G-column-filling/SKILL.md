@@ -146,3 +146,22 @@ python main/ist_core/skills/automated-g-column-filling/scripts/write_g_column.py
 
 **Success criteria**: show 命令已设备执行、check_point 已验证或修正
 **Artifacts**: corrections (验证 fork 返回的修正), show_outputs
+
+### 7. 上传运行烟雾测试 (optional)
+
+**Execution**: SCP 上传 + MCP tool（smoke_test_run）
+
+当用户要求运行自动化测试时，分两步：
+
+**Step 7a**: 上传 xlsx 到 Linux 测试服务器。
+
+- 从 `environment` 文件读取 `LINUX_TEST_HOST`、`LINUX_SSH_USERNAME`、`LINUX_SSH_PASSWORD`
+- 目标路径: `/home/test/apv_src/smoke_test/istcore/`
+- 上传方式: 优先用 MCP tool `linux_ssh_execute`，或 `qa_bash scp`，无法自动上传时请用户手动操作
+
+**Step 7b**: 调 MCP tool `smoke_test_run(filename="filled_<原名>.xlsx")`。MCP Server 在 Linux 上执行 pytest，扫描 report/istcore/ 目录，返回 `The failed check point num: N` 中 N > 0 的项。
+
+触发条件：用户说"跑一下测试""跑烟雾测试""跑用例"。
+
+**Success criteria**: 测试已执行，失败项已返回
+**Artifacts**: smoke_test_result

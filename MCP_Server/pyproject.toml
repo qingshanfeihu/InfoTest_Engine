@@ -1,0 +1,43 @@
+[project]
+name = "apv-mcp-server"
+version = "1.0.0"
+description = "MCP server for remote device management — SSH/Telnet/REST API for APV devices and SSH for Linux"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "APV MCP Server" }
+]
+keywords = ["mcp", "ssh", "telnet", "restapi", "apv", "infosecos"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "paramiko>=5.0.0",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+apv-mcp-server = "apv_mcp_server.server:main"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

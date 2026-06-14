@@ -89,3 +89,10 @@ docs/prompt_gap_vs_cc_haha.md
 # Claude
 .claude/
 ssh_users.json
+
+# 框架镜像层（framework_sync 从跳转机增量拉取的实证用例 + 能力源；量大、可重建，不进库）
+# derived/（idiom 库等挖掘产物）需跟踪，单独豁免
+knowledge/framework/mirror/
+!knowledge/framework/derived/
+reference/
+.cursor/

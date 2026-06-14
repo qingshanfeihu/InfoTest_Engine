@@ -18,9 +18,9 @@ from main.ist_core.tools.deepagent._rg import RipgrepResult, run_ripgrep
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 
-
-_AGENT_ROOT = (_PROJECT_ROOT / "knowledge" / "data").resolve()
-_WORKSPACE_ROOT = (_PROJECT_ROOT / "workspace").resolve()
+from main import knowledge_paths as _kp
+_AGENT_ROOT = _kp.KNOWLEDGE_DATA_ROOT.resolve()
+_WORKSPACE_ROOT = _kp.WORKSPACE_ROOT.resolve()
 
 def _agent_roots() -> tuple[Path, ...]:
     """返回 agent 可访问的根目录列表（按优先级排序）。

@@ -25,6 +25,7 @@ import io
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -35,6 +36,47 @@ from pathlib import Path
 from typing import Any
 
 import requests
+
+from main.mineru_source_index import SourceIndex
+
+# Watchdog：进程级硬保险。卡死 5 次的根因是 macOS+SSL+OSS 慢连接环境顽疾，
+# requests/urllib3/socket 各层 timeout 均不可靠。watchdog 监控"最后进展时间"，
+# 超过 MINERU_WATCHDOG_SEC（默认 240s）无任何进展就 os._exit 强制退出，
+# 由外层循环重启续跑（zip 缓存 + 内容寻址让已完成的秒过，不丢进度）。
+_LAST_PROGRESS = [0.0]
+
+
+def _mark_progress() -> None:
+    _LAST_PROGRESS[0] = time.monotonic()
+
+
+def _start_watchdog() -> None:
+    # 默认关闭：早先以为是 SSL 挂死才加 watchdog，实际是 MinerU 限速排队
+    # （连接存活、服务端慢慢放行），watchdog 会误杀正常排队。仅在显式设置
+    # MINERU_WATCHDOG_SEC>0 时启用，作为真·挂死的兜底。
+    try:
+        limit = float(os.environ.get("MINERU_WATCHDOG_SEC") or "0")
+    except ValueError:
+        limit = 0.0
+    if limit <= 0:
+        return
+    _mark_progress()
+
+    def _watch() -> None:
+        while True:
+            time.sleep(15)
+            idle = time.monotonic() - _LAST_PROGRESS[0]
+            if idle > limit:
+                print(
+                    f"\n[watchdog] {idle:.0f}s 无进展（疑似 SSL/下载挂死），"
+                    f"强制退出让外层重启续跑。",
+                    file=sys.stderr, flush=True,
+                )
+                os._exit(2)
+
+    t = threading.Thread(target=_watch, daemon=True, name="mineru-watchdog")
+    t.start()
+
 
 BASE = "https://mineru.net"
 FILE_URLS_BATCH = f"{BASE}/api/v4/file-urls/batch"
@@ -98,6 +140,17 @@ def _safe_stem(name: str) -> str:
     return s or "document"
 
 
+def _truncate_bytes(s: str, max_bytes: int) -> str:
+    """按 UTF-8 字节上限安全截断（不切断多字节字符）。
+
+    MinerU data_id 上限按字节计；中文名 [:128] 字符截断会超 128 字节致整批失败。
+    """
+    encoded = s.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return s
+    return encoded[:max_bytes].decode("utf-8", "ignore")
+
+
 def _unique_output_stem(p: Path, used: set[str]) -> str:
     """同一目录下 stem 冲突时追加短 hash（基于完整文件名）。"""
     base = _safe_stem(p.name)
@@ -123,27 +176,33 @@ def _model_version_for_path(p: Path, override: str | None) -> str:
 
 
 def _list_input_files(input_dir: Path) -> list[Path]:
-    """列 input_dir 下的待摄入文件。
+    """列 input_dir 下的待摄入文件（递归含子目录）。
 
-    若设置 ``KMS_PRODUCT_FILES`` env（逗号分隔的文件名清单，由 ``/kms product update``
+    若设置 ``KMS_PRODUCT_FILES`` env（逗号分隔的标识符清单，由 ``/kms product update``
     传入），仅保留命中的产品桶文件——把测试用例 xlsx / Test Strategy doc 挡在 mineru
     链外，避免污染 features/scenarios/architecture。
+
+    白名单标识符是相对 ``input_dir`` 的 POSIX 路径（顶层文件即 basename），与
+    ``kms_classifier.bucketize_orgin_dir`` 产出的 key 对齐。为兼容历史只含 basename
+    的白名单，命中时同时接受 rel_key 与 basename。
+
+    隐藏文件 / 隐藏目录 / ``_pdf_splits`` 工作目录由 ``iter_orgin_files`` 统一跳过。
     """
+    from main import knowledge_paths as kp
+
     raw_whitelist = (os.environ.get("KMS_PRODUCT_FILES") or "").strip()
     whitelist = {n.strip() for n in raw_whitelist.split(",") if n.strip()} if raw_whitelist else None
     files: list[Path] = []
     skipped = 0
-    for p in sorted(input_dir.iterdir()):
-        if not p.is_file():
-            continue
-        if p.name.startswith("."):
-            continue
+    for p in kp.iter_orgin_files(input_dir):
         ext = p.suffix.lower().lstrip(".")
         if ext not in SUPPORTED_EXT:
             continue
-        if whitelist is not None and p.name not in whitelist:
-            skipped += 1
-            continue
+        if whitelist is not None:
+            rel_key = kp.orgin_rel_key(p, input_dir)
+            if rel_key not in whitelist and p.name not in whitelist:
+                skipped += 1
+                continue
         files.append(p)
     if whitelist is not None:
         print(
@@ -158,13 +217,43 @@ def _list_input_files(input_dir: Path) -> list[Path]:
 MINERU_PDF_PAGE_LIMIT = 200
 
 
+def _split_pdf_pikepdf(src: Path, ranges: list[tuple[int, int]], names: list[Path]) -> bool:
+    """用 pikepdf(qpdf C++ 后端) 切分，对大型复杂 PDF 比 pypdf 快几个数量级。
+
+    pypdf 的 PdfWriter.add_page 对超大 PDF(>600 页)是累积式深拷贝，单 part 可耗时数分钟
+    甚至挂起；pikepdf 同样操作仅毫秒级。成功返回 True，不可用/失败返回 False（让调用方回退）。
+    """
+    try:
+        import pikepdf  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        with pikepdf.open(str(src)) as pdf:
+            for (start, end), out_path in zip(ranges, names, strict=True):
+                if out_path.is_file() and out_path.stat().st_size > 0:
+                    continue
+                out = pikepdf.new()
+                for i in range(start, end):
+                    out.pages.append(pdf.pages[i])
+                # 先写临时文件再原子改名，避免中断留下 0 字节半成品被后续误当成已完成。
+                tmp = out_path.with_suffix(".pdf.part")
+                out.save(str(tmp))
+                out.close()
+                tmp.replace(out_path)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ! pikepdf 切分失败，回退 pypdf {src.name}: {exc}", file=sys.stderr)
+        return False
+
+
 def _split_large_pdf_if_needed(p: Path, work_dir: Path, limit: int = MINERU_PDF_PAGE_LIMIT) -> list[Path]:
     """若 PDF 页数超 limit 则按 limit 切成 parts 落到 work_dir，否则原样返回。
 
     输出文件名 ``<stem>__part<N>_pSTART-END.pdf``，便于 _safe_stem 后产出独立 stem，
     下游清洗 / trunk / 索引按 part 各自成档（不强制合并，避免 mineru.code_format 跨文件合并复杂度）。
 
-    非 PDF 一律原样返回。失败时也原样返回（让 MinerU 自己再失败一次便于诊断）。
+    切分优先用 pikepdf(qpdf)，不可用时回退 pypdf。非 PDF 一律原样返回。
+    失败时也原样返回（让 MinerU 自己再失败一次便于诊断）。
     """
     if p.suffix.lower() != ".pdf":
         return [p]
@@ -183,20 +272,26 @@ def _split_large_pdf_if_needed(p: Path, work_dir: Path, limit: int = MINERU_PDF_
         return [p]
     work_dir.mkdir(parents=True, exist_ok=True)
     base = _safe_stem(p.name)
+    ranges: list[tuple[int, int]] = []
     parts: list[Path] = []
-    idx = 0
     for start in range(0, n, limit):
         end = min(start + limit, n)
-        idx += 1
-        out_name = f"{base}__part{idx}_p{start + 1}-{end}.pdf"
-        out_path = work_dir / out_name
-        if not out_path.is_file():
+        ranges.append((start, end))
+        idx = len(ranges)
+        parts.append(work_dir / f"{base}__part{idx}_p{start + 1}-{end}.pdf")
+
+    # 优先 pikepdf；失败回退 pypdf（同样跳过已存在的非空 part）。
+    if not _split_pdf_pikepdf(p, ranges, parts):
+        for (start, end), out_path in zip(ranges, parts, strict=True):
+            if out_path.is_file() and out_path.stat().st_size > 0:
+                continue
             writer = PdfWriter()
             for i in range(start, end):
                 writer.add_page(reader.pages[i])
-            with out_path.open("wb") as fh:
+            tmp = out_path.with_suffix(".pdf.part")
+            with tmp.open("wb") as fh:
                 writer.write(fh)
-        parts.append(out_path)
+            tmp.replace(out_path)
     print(f"  ✓ 切分 {p.name} ({n} 页) → {len(parts)} parts (limit={limit})")
     return parts
 
@@ -208,6 +303,32 @@ def _expand_input_with_pdf_split(file_paths: list[Path], work_dir: Path) -> list
         parts = _split_large_pdf_if_needed(p, work_dir)
         expanded.extend(parts)
     return expanded
+
+
+def _large_pdf_parts_all_cached(p: Path, output_dir: Path, limit: int = MINERU_PDF_PAGE_LIMIT) -> bool:
+    """大 PDF（>limit 页）的全部切分 part zip 是否都已存在。
+
+    用于缓存判定：原始大 PDF 的内容 hash 从不入 index（只记 part），导致原始 PDF 永远
+    cache-miss → 被当 fresh → 重新切分 + 从 part zip 重新出 markdown，**覆盖已人工修订的
+    markdown**（如 cli/app 手册）。本函数让「parts 已全部转好」的大 PDF 被识别为已缓存而跳过。
+    """
+    if p.suffix.lower() != ".pdf":
+        return False
+    try:
+        from pypdf import PdfReader  # noqa: PLC0415
+        n = len(PdfReader(str(p)).pages)
+    except Exception:  # noqa: BLE001
+        return False
+    if n <= limit:
+        return False
+    base = _safe_stem(p.name)
+    for start in range(0, n, limit):
+        end = min(start + limit, n)
+        idx = start // limit + 1
+        part_stem = f"{base}__part{idx}_p{start + 1}-{end}"
+        if not (output_dir / f"{part_stem}.mineru.zip").exists():
+            return False
+    return True
 
 
 def _post_batch(
@@ -225,7 +346,9 @@ def _post_batch(
     for p in file_paths:
         item: dict[str, Any] = {
             "name": p.name,
-            "data_id": _safe_stem(p.name)[:128],
+            # data_id 上限是 128 **字节**（非字符）；中文名 UTF-8 每字按 3 字节，
+            # [:128] 字符截断会超限（曾致整批提交失败 code -10002）。按字节安全截断。
+            "data_id": _truncate_bytes(_safe_stem(p.name), 128),
         }
         if effective_mv in ("pipeline", "vlm"):
             item["is_ocr"] = is_ocr
@@ -240,9 +363,16 @@ def _post_batch(
     }
 
     r = session.post(FILE_URLS_BATCH, headers=_headers(token), json=body, timeout=120)
-    
+
+    # MinerU 限流较激进，单纯 3 次短退避不够。用更多次、更长的退避（可经
+    # MINERU_429_BACKOFFS 配置，逗号分隔秒数），覆盖持续限流窗口。
+    backoffs_raw = (os.environ.get("MINERU_429_BACKOFFS") or "15,30,60,120,120,180").strip()
+    try:
+        backoffs = [int(x) for x in backoffs_raw.split(",") if x.strip()]
+    except ValueError:
+        backoffs = [15, 30, 60, 120, 120, 180]
     if r.status_code == 429:
-        for wait in (10, 20, 40):
+        for wait in backoffs:
             print(f"  ⏳ 429 限流，等待 {wait}s 后重试…", flush=True)
             time.sleep(wait)
             r = session.post(FILE_URLS_BATCH, headers=_headers(token), json=body, timeout=120)
@@ -285,13 +415,15 @@ def _poll_batch(
     deadline = time.monotonic() + max_wait_sec
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
-        r = session.get(
+        r = _http_get_with_retry(
+            session,
             f"{EXTRACT_RESULTS_BATCH}/{batch_id}",
             headers=_headers(token),
-            timeout=120,
+            read_timeout=60.0,
+            max_retries=3,
         )
-        r.raise_for_status()
         last = r.json()
+        _mark_progress()
         if last.get("code") != 0:
             raise RuntimeError(f"extract-results/batch 错误: {last}")
         results = last.get("data", {}).get("extract_result") or []
@@ -324,13 +456,15 @@ def _poll_batch_stream(
     last: dict[str, Any] = {}
     total_known: int | None = None
     while time.monotonic() < deadline:
-        r = session.get(
+        r = _http_get_with_retry(
+            session,
             f"{EXTRACT_RESULTS_BATCH}/{batch_id}",
             headers=_headers(token),
-            timeout=120,
+            read_timeout=60.0,
+            max_retries=3,
         )
-        r.raise_for_status()
         last = r.json()
+        _mark_progress()
         if last.get("code") != 0:
             raise RuntimeError(f"extract-results/batch 错误: {last}")
         results = last.get("data", {}).get("extract_result") or []
@@ -363,10 +497,54 @@ def _poll_batch_stream(
     )
 
 
-def _download_zip(session: requests.Session, url: str) -> bytes:
-    r = session.get(url, timeout=600)
-    r.raise_for_status()
-    return r.content
+def _http_get_with_retry(
+    session: requests.Session,
+    url: str,
+    *,
+    headers: dict | None = None,
+    connect_timeout: float = 30.0,
+    read_timeout: float = 120.0,
+    max_retries: int = 4,
+    stream: bool = False,
+) -> requests.Response:
+    """带 (connect, read) 双超时 + 指数退避重试的 GET。
+
+    根治"连接已建立但服务端慢速/挂起"导致的无限阻塞：requests 的 read_timeout
+    限制两次数据块之间的最大间隔，超时即抛 → 外层重试换新连接。
+    之前用单一 timeout=600 在某些网络栈状态下不生效，曾导致进程挂死 90+ 分钟。
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            r = session.get(
+                url,
+                headers=headers,
+                timeout=(connect_timeout, read_timeout),
+                stream=stream,
+            )
+            r.raise_for_status()
+            return r
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ChunkedEncodingError,
+                socket.timeout,
+                OSError) as e:
+            last_exc = e
+            wait = min(2 ** attempt * 5, 60)
+            print(f"  ⏳ GET 超时/中断(第{attempt+1}次)，{wait}s 后重试: {type(e).__name__}",
+                  file=sys.stderr, flush=True)
+            time.sleep(wait)
+    raise last_exc if last_exc else RuntimeError(f"GET 失败: {url}")
+
+
+def _download_zip(url: str) -> bytes:
+    """下载 zip。每次用**独立** requests.Session——requests.Session 非线程安全，
+    多个下载线程共享同一 session 会在连接池争用时死锁（曾导致整批下载线程全部挂死、
+    CPU 0%、无网络连接、且 timeout 不触发）。download URL 是预签名的，无需复用连接。"""
+    with requests.Session() as s:
+        # read_timeout=180s（两块数据间隔上限），整体可重试 4 次。
+        r = _http_get_with_retry(s, url, read_timeout=180.0, max_retries=4)
+        return r.content
 
 
 def _find_in_zip(z: zipfile.ZipFile, predicate) -> str | None:
@@ -529,6 +707,7 @@ class FileOutcome:
     raw_data_path: str | None = None
     markdown_path: str | None = None
     warnings: list[str] = field(default_factory=list)
+    source_sha256: str | None = None  # 解析成功后回填，供主线程登记内容寻址索引
 
 
 def _is_success(outcome: FileOutcome) -> bool:
@@ -574,8 +753,67 @@ def _resolve_markdown_dir() -> Path | None:
     return target
 
 
+def _backfill_source_index(
+    index: SourceIndex, file_paths: list[Path], output_dir: Path
+) -> int:
+    """首次升级时把已存在的 ``{stem}.mineru.zip`` 按源内容 hash 灌进索引（纯本地，零 API）。
+
+    没有这步，升级后索引为空会导致全部文件 cache-miss → 数百次 API 调用爆炸。
+    只补「索引里没有、但磁盘上 zip 已存在」的条目；已在索引里的跳过。返回回填条数。
+    """
+    filled = 0
+    for p in file_paths:
+        stem = _safe_stem(p.name)
+        zipname = f"{stem}.mineru.zip"
+        if not (output_dir / zipname).exists():
+            continue
+        try:
+            h = index.source_hash(p)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ! backfill 跳过 {p.name}（哈希失败）: {exc}", file=sys.stderr)
+            continue
+        if index.has_hash(h):
+            continue
+        index.record(h, stem=stem, zipname=zipname, source_name=p.name)
+        filled += 1
+    if filled:
+        index.save()
+        print(f"[source-index] backfilled {filled} existing zip(s) by content hash", flush=True)
+    return filled
+
+
+def _emit_markdown_from_zip(
+    zip_path: Path, md_dir: Path | None, stem: str
+) -> tuple[str | None, list[str]]:
+    """从 cached/复用 zip 里抽 full.md 写到 ``md_dir/{stem}.md``。返回 (md_path|None, warnings)。"""
+    warnings: list[str] = []
+    with zipfile.ZipFile(zip_path) as z:
+        md_name = _find_in_zip(z, lambda n: n.endswith("full.md") or n == "full.md")
+        if md_name and md_dir is not None:
+            md_text = _read_zip_text(z, md_name)
+            md_path = md_dir / f"{stem}.md"
+            md_path.write_text(md_text, encoding="utf-8")
+            return str(md_path), warnings
+        if not md_name:
+            warnings.append("cached zip 中未找到 full.md")
+    return None, warnings
+
+
 def main() -> None:
     from main import knowledge_paths as kp
+
+    # 全局 socket 硬超时：最底层保险。requests/urllib3 的 read_timeout 在 macOS 上对
+    # "连接存活但服务端静默"的 SSL read 不可靠（曾导致主线程轮询无限挂死、CPU 0%、
+    # 1 个 ESTAB 连接冻结不动）。socket 层默认超时让任何 socket 操作（含 SSL read）
+    # 超时即抛 socket.timeout，配合 _http_get_with_retry 的重试根治挂死。
+    # 可经 MINERU_SOCKET_TIMEOUT 调整（默认 90s，需 > 单次轮询的合理响应时间）。
+    try:
+        sock_to = float(os.environ.get("MINERU_SOCKET_TIMEOUT") or "90")
+    except ValueError:
+        sock_to = 90.0
+    socket.setdefaulttimeout(sock_to)
+    _start_watchdog()
+
     ap = argparse.ArgumentParser(description="MinerU 精准解析批量导出 JSON")
     ap.add_argument("--input-dir", type=Path, default=kp.KNOWLEDGE_ORGIN,
                     help=f"源文件目录（默认 {kp.KNOWLEDGE_ORGIN}）")
@@ -643,21 +881,46 @@ def main() -> None:
     used_stems: set[str] = set()
     all_outcomes: list[FileOutcome] = []
 
-    
+    # 内容寻址缓存：命中键 = 源文件内容 sha256，而非文件名。
+    # 首次升级先 backfill 已有 zip，避免索引为空导致全量重解析。
+    source_index = SourceIndex.load(input_dir, output_dir)
+    _backfill_source_index(source_index, file_paths, output_dir)
+
     md_dir = _resolve_markdown_dir()
     cached_paths: list[Path] = []
     fresh_paths: list[Path] = []
+    # 记录每个命中文件复用的 zip 路径（按内容 hash 查到，可能与自身 stem 不同名）。
+    reuse_zip: dict[str, Path] = {}
     for p in file_paths:
-        stem = _safe_stem(p.name)
-        zip_path = output_dir / f"{stem}.mineru.zip"
-        if zip_path.exists():
-            cached_paths.append(p)
-        else:
+        try:
+            h = source_index.source_hash(p)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ! 源哈希失败，按 fresh 处理 {p.name}: {exc}", file=sys.stderr)
             fresh_paths.append(p)
+            continue
+        entry = source_index.lookup(h)
+        cached_zip = output_dir / entry["zip"] if entry else None
+        if entry and cached_zip and cached_zip.exists():
+            cached_paths.append(p)
+            reuse_zip[str(p)] = cached_zip
+        elif _large_pdf_parts_all_cached(p, output_dir):
+            # 大 PDF：原始内容 hash 不入 index，但其切分 parts 已全部转好。
+            # 跳过（不重切、不从 part zip 重出 markdown），避免覆盖已人工修订的手册 markdown。
+            print(f"  [cache·split-parts] {p.name} 的全部切分 part 已转，跳过", flush=True)
+        else:
+            # 同名 zip 存在但内容 hash 对不上 → 内容已变，重新解析（修正确性）。
+            stem_zip = output_dir / f"{_safe_stem(p.name)}.mineru.zip"
+            if stem_zip.exists():
+                print(
+                    f"  ⟳ {p.name} 内容已变（同名 zip 命中失效），将重新解析并覆盖 markdown",
+                    flush=True,
+                )
+            fresh_paths.append(p)
+    source_index.save()
 
     for p in cached_paths:
         stem = _unique_output_stem(p, used_stems)
-        zip_path = output_dir / f"{stem}.mineru.zip"
+        zip_path = reuse_zip[str(p)]
         fo = FileOutcome(
             source=p.name,
             stem=stem,
@@ -667,16 +930,12 @@ def main() -> None:
             raw_data_path=str(output_dir / f"{stem}.raw_data.json"),
         )
         try:
-            with zipfile.ZipFile(zip_path) as z:
-                md_name = _find_in_zip(z, lambda n: n.endswith("full.md") or n == "full.md")
-                if md_name and md_dir is not None:
-                    md_text = _read_zip_text(z, md_name)
-                    md_path = md_dir / f"{stem}.md"
-                    md_path.write_text(md_text, encoding="utf-8")
-                    fo.markdown_path = str(md_path)
-                elif not md_name:
-                    fo.warnings.append("cached zip 中未找到 full.md")
-            print(f"  [cache] {p.name} → {fo.markdown_path or '(no markdown_dir env)'}", flush=True)
+            md_path, warns = _emit_markdown_from_zip(zip_path, md_dir, stem)
+            fo.markdown_path = md_path
+            fo.warnings.extend(warns)
+            reused = zip_path.name != f"{_safe_stem(p.name)}.mineru.zip"
+            tag = "[cache·reuse]" if reused else "[cache]"
+            print(f"  {tag} {p.name} → {fo.markdown_path or '(no markdown_dir env)'}", flush=True)
         except Exception as exc:  # noqa: BLE001
             fo.state = "error"
             fo.err_msg = f"读取 cached zip 失败: {exc}"
@@ -691,8 +950,39 @@ def main() -> None:
         file_paths = fresh_paths
 
     
-    pdf_split_dir = input_dir / "_pdf_splits"
+    pdf_split_dir = input_dir / kp.ORGIN_WORKDIR_NAME
     file_paths = _expand_input_with_pdf_split(file_paths, pdf_split_dir)
+
+    # 每日页数预算：MinerU 限速约 1000 页/天，超出排队（连接存活但久不返回，
+    # 曾被误诊为 SSL 挂死）。受控提交——本次只提交累计 ≤ MINERU_PAGE_BUDGET 页的文件，
+    # 其余留到次日续跑（zip 缓存 + 内容寻址保证不重复花配额）。0 = 不限。
+    try:
+        page_budget = int(os.environ.get("MINERU_PAGE_BUDGET") or "0")
+    except ValueError:
+        page_budget = 0
+    if page_budget > 0 and file_paths:
+        def _pages_of(p: Path) -> int:
+            if p.suffix.lower() != ".pdf":
+                return 1
+            try:
+                from pypdf import PdfReader
+                return max(1, len(PdfReader(str(p)).pages))
+            except Exception:
+                return 1
+        # 计算每个文件页数，按页数升序——小页数高价值文档（docx/ppt/小pdf）优先吃配额，
+        # 大 PDF 手册（网卡 datasheet/Intel 手册/竞品手册）自然排到后面，分批跑完。
+        paged = sorted(((p, _pages_of(p)) for p in file_paths), key=lambda t: t[1])
+        kept: list[Path] = []
+        acc = 0
+        for p, pg in paged:
+            if kept and acc + pg > page_budget:
+                continue
+            kept.append(p)
+            acc += pg
+        deferred = len(file_paths) - len(kept)
+        print(f"[page-budget] 预算 {page_budget} 页：本次提交 {len(kept)} 个文件"
+              f"（约 {acc} 页），推迟 {deferred} 个到次日续跑。", flush=True)
+        file_paths = kept
 
     
     def split_by_model_version(paths: list[Path]) -> list[list[Path]]:
@@ -714,28 +1004,52 @@ def main() -> None:
         n_chunks = len(chunks)
 
         for chunk_idx, chunk in enumerate(chunks, start=1):
-            
+            # 批间节流：默认 8s，可经 MINERU_BATCH_INTERVAL_SEC 调大以缓解 429。
             if chunk_idx > 1:
-                time.sleep(5)
+                try:
+                    iv = float(os.environ.get("MINERU_BATCH_INTERVAL_SEC") or "8")
+                except ValueError:
+                    iv = 8.0
+                time.sleep(max(0.0, iv))
             print(
                 f"[batch {chunk_idx}/{n_chunks}] 提交 {len(chunk)} 个文件，"
                 f"model_version={effective_mv}",
                 flush=True,
             )
 
-            batch_id, upload_urls = _post_batch(
-                session,
-                token,
-                chunk,
-                effective_mv=effective_mv,
-                language=args.language,
-                enable_formula=args.enable_formula,
-                enable_table=args.enable_table,
-                is_ocr=args.is_ocr,
-            )
-            print(f"batch_id={batch_id}，开始上传…", flush=True)
-            _upload_files(session, chunk, upload_urls)
-            print("上传完成，轮询解析结果…", flush=True)
+            # 提交+上传失败（如 429 退避耗尽）不再让整个进程崩溃：记录该批为 error，
+            # 继续下一批。已成功批次与 zip/markdown 缓存全部保留，下次断点续跑可补。
+            try:
+                batch_id, upload_urls = _post_batch(
+                    session,
+                    token,
+                    chunk,
+                    effective_mv=effective_mv,
+                    language=args.language,
+                    enable_formula=args.enable_formula,
+                    enable_table=args.enable_table,
+                    is_ocr=args.is_ocr,
+                )
+                print(f"batch_id={batch_id}，开始上传…", flush=True)
+                _upload_files(session, chunk, upload_urls)
+                print("上传完成，轮询解析结果…", flush=True)
+            except Exception as submit_exc:  # noqa: BLE001
+                print(
+                    f"[batch {chunk_idx}/{n_chunks}] 提交/上传失败，跳过本批继续: "
+                    f"{type(submit_exc).__name__}: {submit_exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                for p in chunk:
+                    all_outcomes.append(
+                        FileOutcome(
+                            source=p.name,
+                            stem=_unique_output_stem(p, used_stems),
+                            state="error",
+                            err_msg=f"batch submit failed: {submit_exc}",
+                        )
+                    )
+                continue
 
             
             by_source_name = {p.name: p for p in chunk}
@@ -768,7 +1082,7 @@ def main() -> None:
                 if state != "done" or not fo.full_zip_url:
                     return fo
                 try:
-                    zb = _download_zip(session, fo.full_zip_url)
+                    zb = _download_zip(fo.full_zip_url)
                     pack = _extract_outputs_from_zip(
                         zb,
                         embed_binary_in_json=args.embed_binary_in_json,
@@ -782,6 +1096,12 @@ def main() -> None:
                     if args.save_mineru_zip:
                         mineru_zip_path.write_bytes(zb)
                         fo.mineru_zip_path = str(mineru_zip_path)
+                        # 回填源内容 hash（主线程已在 by_path 快表里算过，这里命中快表零开销），
+                        # 供主线程把 {hash → zip} 登记进内容寻址索引。
+                        try:
+                            fo.source_sha256 = source_index.source_hash(p)
+                        except Exception:  # noqa: BLE001
+                            fo.source_sha256 = None
 
                     code_obj = {
                         "source_file": p.name,
@@ -847,6 +1167,7 @@ def main() -> None:
             try:
                 with ThreadPoolExecutor(max_workers=download_workers) as pool:
                     futures = []
+                    fut_to_info = {}
                     for info in _poll_batch_stream(
                         session,
                         token,
@@ -858,18 +1179,36 @@ def main() -> None:
                             f"  → {info.get('file_name')} {info.get('state')}，下发下载",
                             flush=True,
                         )
-                        futures.append(pool.submit(_finalize, info))
-                    for fut in as_completed(futures):
-                        fo = fut.result()
-                        with outcomes_lock:
-                            batch_outcomes.append(fo)
-                            if fo.code_format_path:
-                                print(
-                                    f"  ✓ {fo.source} -> {Path(fo.code_format_path).name}",
-                                    flush=True,
-                                )
-                            elif fo.state == "failed":
-                                print(f"  ✗ {fo.source}: {fo.err_msg}", flush=True)
+                        _mark_progress()
+                        f = pool.submit(_finalize, info)
+                        futures.append(f)
+                        fut_to_info[f] = info
+                    # as_completed 整体超时兜底：_finalize 内部下载已有重试(≈十几分钟封顶)，
+                    # 这里给一个宽松上限防止极端情况下主线程永久等待挂死(曾发生过)。
+                    dl_deadline = max(600, len(futures) * 120)
+                    try:
+                        for fut in as_completed(futures, timeout=dl_deadline):
+                            fo = fut.result()
+                            with outcomes_lock:
+                                batch_outcomes.append(fo)
+                                _mark_progress()
+                                if fo.code_format_path:
+                                    print(
+                                        f"  ✓ {fo.source} -> {Path(fo.code_format_path).name}",
+                                        flush=True,
+                                    )
+                                elif fo.state == "failed":
+                                    print(f"  ✗ {fo.source}: {fo.err_msg}", flush=True)
+                    except TimeoutError:
+                        done_srcs = {o.source for o in batch_outcomes}
+                        for f, info in fut_to_info.items():
+                            fn = info.get("file_name") or "?"
+                            if fn not in done_srcs:
+                                print(f"  ⏱ 下载超时未完成，记为 error: {fn}",
+                                      file=sys.stderr, flush=True)
+                                batch_outcomes.append(FileOutcome(
+                                    source=fn, stem=_safe_stem(fn),
+                                    state="error", err_msg="download timeout"))
             except Exception as e:
                 for p in chunk:
                     if not any(o.source == p.name for o in batch_outcomes):
@@ -883,6 +1222,20 @@ def main() -> None:
                         )
 
             all_outcomes.extend(batch_outcomes)
+            # 主线程登记本批新解析的「源内容 hash → zip」（_finalize 在子线程只回填 hash，
+            # 不碰非线程安全的索引）。同名改内容会通过 record() 清掉旧悬空条目。
+            recorded = 0
+            for o in batch_outcomes:
+                if o.state == "done" and o.source_sha256 and o.mineru_zip_path:
+                    source_index.record(
+                        o.source_sha256,
+                        stem=o.stem,
+                        zipname=Path(o.mineru_zip_path).name,
+                        source_name=o.source,
+                    )
+                    recorded += 1
+            if recorded:
+                source_index.save()
             print(
                 f"[batch {chunk_idx}/{n_chunks}] 完成，本批 {len(batch_outcomes)} 个结果",
                 flush=True,

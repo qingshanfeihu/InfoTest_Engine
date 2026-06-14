@@ -225,8 +225,8 @@ def get_footprint_index() -> FootprintIndex:
     """获取进程级 FootprintIndex 单例。"""
     global _FOOTPRINT_INDEX_SINGLETON
     if _FOOTPRINT_INDEX_SINGLETON is None:
-        from main.ist_core.memory.backend import get_default_root
-        fp_dir = get_default_root().parent / "knowledge" / "footprints"
+        from main import knowledge_paths as kp
+        fp_dir = kp.KNOWLEDGE_FOOTPRINTS
         _FOOTPRINT_INDEX_SINGLETON = FootprintIndex(fp_dir)
     return _FOOTPRINT_INDEX_SINGLETON
 

@@ -2,6 +2,13 @@
 
 将 Step 1 提取的结构化用例拆解为原子步骤序列，标记每步的 G 列填充策略。
 可扩展：新增 g_fill 类型、actor/action 映射、推断规则只需改配置常量。
+
+⚠️ 路线说明（2026-06 更新）：
+    测试用例编译的**正路**是 `ist_compile_orchestrate` 编排 + 三个 fork 子流程
+    （ist_compile_draft/run/grade，详见 docs/case_compile_orchestration.md）。
+    本工具（qa_decompose_test_cases，关键词规则驱动）属**过渡方案**，仅服务旧
+    `decompose-test-cases` skill 流水线（半自动手工补全场景）。
+    新能力一律走 ist_compile 架构，勿在此追加新规则。
 """
 
 from __future__ import annotations

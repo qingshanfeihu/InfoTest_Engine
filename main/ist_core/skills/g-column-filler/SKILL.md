@@ -88,7 +88,7 @@ $ARGUMENTS
 用 `module_keywords` 确定范围。**搜索优先级**：
 
 1. **首选** grep `knowledge/data/markdown/product/app__part*.md`、`app_21__part*.md` 或 `ePolicy用户指南.md`，查找该业务的**完整配置示例**（如 SLB 的 virtual server + real server + group + health check 完整创建流程）。找到后修改 IP/端口/名称即可
-2. 主力 grep `knowledge/data/markdown/product/cli__part*.md`、`cli_74__part*.md`（纯文本 CLI 手册分片），对 1a 清单中的每种资源类型找到对应的 add/create/set 命令语法
+2. 主力 grep `knowledge/data/markdown/product/*cli__part*.md`、`cli_74__part*.md`（纯文本 CLI 手册分片），对 1a 清单中的每种资源类型找到对应的 add/create/set 命令语法
 3. 兜底 grep `knowledge/.intermediate/mineru/cli_*part*.code_format.json` 的 `markdown` 字段
 
 #### 1c. 逐资源生成创建命令

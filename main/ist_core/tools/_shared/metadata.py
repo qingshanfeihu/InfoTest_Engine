@@ -90,6 +90,42 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": None,
         "intent": "exec",
     },
+    "qa_run_case": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "exec",
+    },
+    "qa_probe_show": {
+        "read_only": True,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "exec",
+    },
+    "qa_lookup_pattern": {
+        "read_only": True,
+        "concurrency_safe": True,
+        "fallback_for": None,
+        "intent": "read",
+    },
+    "qa_confidence_score": {
+        "read_only": True,
+        "concurrency_safe": True,
+        "fallback_for": None,
+        "intent": "read",
+    },
+    "qa_remember": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "write",
+    },
+    "qa_emit_xlsx": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "write",
+    },
 
     "web_bug_search": {
         "read_only": False,

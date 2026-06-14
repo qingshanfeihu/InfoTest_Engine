@@ -26,9 +26,8 @@ logger = logging.getLogger(__name__)
 # ── Paths ────────────────────────────────────────────────────────────────
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
-_TOPOLOGY_PATH = (
-    _PROJECT_ROOT / "knowledge" / "data" / "auto_env" / "network_topology_rag.md"
-)
+from main import knowledge_paths as _kp
+_TOPOLOGY_PATH = _kp.KNOWLEDGE_AUTO_ENV_TOPOLOGY
 _APV_SSH_CLIENT_PATH = (
     Path(__file__).resolve().parents[2]
     / "skills" / "device-verify" / "scripts" / "apv_ssh_client.py"
@@ -202,7 +201,7 @@ def qa_ssh(
     SSH is the fallback — not the first choice.
 
     **PREREQUISITE** — before calling this tool, you MUST grep
-    ``knowledge/data/markdown/product/cli_*_commands.md`` to confirm the exact
+    ``knowledge/data/markdown/product/*cli__part*.md`` to confirm the exact
     command name and syntax. The device runs InfosecOS, NOT Cisco IOS.
 
     Data may live on the device, but COMMAND SYNTAX lives in the CLI manual.

@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 MAIN_DIR = Path(__file__).resolve().parent
@@ -30,6 +31,55 @@ KNOWLEDGE_INTERMEDIATE = KNOWLEDGE_ROOT / ".intermediate"
 
 
 KNOWLEDGE_ORGIN = KNOWLEDGE_DATA_ROOT / "orgin"
+
+
+# mineru_batch_export 在 orgin/ 下自建的 PDF 切分工作目录；枚举源文件时必须排除，
+# 否则切片会被当成新源文件重复摄入。以 ``.`` 开头的隐藏目录同样跳过。
+ORGIN_WORKDIR_NAME = "_pdf_splits"
+
+
+def _is_skipped_dir(name: str) -> bool:
+    """递归遍历 orgin/ 时应跳过的目录名（隐藏目录 + mineru 工作目录）。"""
+    return name.startswith(".") or name == ORGIN_WORKDIR_NAME
+
+
+def iter_orgin_files(orgin_dir: Path | str | None = None) -> Iterator[Path]:
+    """递归枚举 orgin/ 下的源文件（含任意层级子目录），结果路径稳定排序。
+
+    跳过隐藏文件 / 隐藏目录 / ``_pdf_splits`` 工作目录。返回绝对/原样 ``Path``，
+    调用方可用 ``path.relative_to(orgin_dir)`` 取得贯穿 KMS 全链的相对标识符。
+    """
+    root = Path(orgin_dir) if orgin_dir is not None else KNOWLEDGE_ORGIN
+    if not root.exists():
+        return
+
+    def _walk(d: Path) -> Iterator[Path]:
+        for child in sorted(d.iterdir(), key=lambda p: p.name):
+            if child.is_dir():
+                if _is_skipped_dir(child.name):
+                    continue
+                yield from _walk(child)
+            elif child.is_file():
+                if child.name.startswith("."):
+                    continue
+                yield child
+
+    yield from _walk(root)
+
+
+def orgin_rel_key(path: Path | str, orgin_dir: Path | str | None = None) -> str:
+    """把 orgin/ 下的文件路径转成贯穿 KMS 全链的相对标识符（POSIX 斜杠）。
+
+    顶层文件返回的就是 basename，保证与旧链路（按 ``p.name``）行为一致；
+    嵌套文件返回 ``subdir/file.ext`` 形式，避免跨子目录同名冲突。
+    """
+    root = Path(orgin_dir) if orgin_dir is not None else KNOWLEDGE_ORGIN
+    p = Path(path)
+    try:
+        return p.relative_to(root).as_posix()
+    except ValueError:
+        return p.name
+
 
 
 KNOWLEDGE_MARKDOWN = KNOWLEDGE_DATA_ROOT / "markdown"
@@ -46,6 +96,19 @@ WORKSPACE_DEFECTS = WORKSPACE_ROOT / "defects"
 KNOWLEDGE_MINERU = KNOWLEDGE_INTERMEDIATE / "mineru"
 
 CACHE_JSON = KNOWLEDGE_INTERMEDIATE / ".cache.json"
+
+
+# footprint 知识库：从产品文档提炼的 CLI 命令知识（slb.virtual.http.json 等），
+# 属 knowledge 资产而非用户私有记忆，故锚定项目 knowledge 根。
+# 注意：历史上 footprint/index.py 与 dream.py 用 ``get_default_root().parent``
+# 拼此路径——仅在 IST_MEMORY_ROOT 未设时才碰巧等于此处；统一到这里消除该耦合。
+KNOWLEDGE_FOOTPRINTS = KNOWLEDGE_ROOT / "footprints"
+KNOWLEDGE_FOOTPRINTS_NODES = KNOWLEDGE_FOOTPRINTS / "nodes"
+
+
+# auto_env：设备自动化环境资产（网络拓扑 RAG 等），历史上在 5 处文件各自硬编码。
+KNOWLEDGE_AUTO_ENV = KNOWLEDGE_DATA_ROOT / "auto_env"
+KNOWLEDGE_AUTO_ENV_TOPOLOGY = KNOWLEDGE_AUTO_ENV / "network_topology_rag.md"
 
 
 

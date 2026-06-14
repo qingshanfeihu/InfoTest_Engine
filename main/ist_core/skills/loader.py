@@ -72,6 +72,27 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["qa_footprint_lookup"] = qa_footprint_lookup
         except ImportError:
             pass
+        # 厨房角色 tools（cook-case/verify-case/review-case 子 agent 用）
+        try:
+            from main.ist_core.tools.device import (
+                qa_emit_xlsx,
+                qa_probe_show,
+                qa_run_case,
+            )
+            _TOOL_REGISTRY["qa_emit_xlsx"] = qa_emit_xlsx
+            _TOOL_REGISTRY["qa_run_case"] = qa_run_case
+            _TOOL_REGISTRY["qa_probe_show"] = qa_probe_show
+        except ImportError:
+            pass
+        try:
+            from main.ist_core.tools.device.kitchen_tools import (
+                qa_confidence_score,
+                qa_lookup_pattern,
+            )
+            _TOOL_REGISTRY["qa_lookup_pattern"] = qa_lookup_pattern
+            _TOOL_REGISTRY["qa_confidence_score"] = qa_confidence_score
+        except ImportError:
+            pass
     return _TOOL_REGISTRY
 
 

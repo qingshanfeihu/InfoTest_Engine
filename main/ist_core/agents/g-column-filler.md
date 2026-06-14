@@ -85,7 +85,7 @@ The caller's brief (in `$ARGUMENTS`) contains:
 ## CLI 文档查找路径
 
 - **配置示例**: `knowledge/data/markdown/product/app__part*.md`、`app_21__part*.md`、`ePolicy用户指南.md`
-- **主力**: `knowledge/data/markdown/product/cli__part*.md`、`cli_74__part*.md`（KMS 导出的纯文本 CLI 手册分片）
+- **主力**: `knowledge/data/markdown/product/*cli__part*.md`、`cli_74__part*.md`（KMS 导出的纯文本 CLI 手册分片）
 - **兜底**: `knowledge/.intermediate/mineru/cli_*part*.code_format.json`（Mineru 原始 JSON，CLI 在 `markdown` 字段）
 - **拓扑参考**: `knowledge/data/auto_env/network_topology_rag.md`
 - **execute_action**: `knowledge/data/auto_env/execute_action`

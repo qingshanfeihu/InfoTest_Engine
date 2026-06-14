@@ -499,13 +499,14 @@ class DreamTask:
             return []
 
         root = get_default_root()
-        footprint_dir = root.parent / "knowledge" / "footprints"
+        from main import knowledge_paths as kp
+        footprint_dir = kp.KNOWLEDGE_FOOTPRINTS
         working_dir = root / "working"
 
         if not working_dir.exists():
             return []
 
-        nodes_dir = footprint_dir / "nodes"
+        nodes_dir = kp.KNOWLEDGE_FOOTPRINTS_NODES
         nodes_dir.mkdir(parents=True, exist_ok=True)
 
         cutoff = time.time() - self._lookback_days * 86400

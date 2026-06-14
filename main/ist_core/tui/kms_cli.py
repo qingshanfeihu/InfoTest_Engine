@@ -110,8 +110,21 @@ def _run_product_update() -> int:
     )
     if rc != 0:
         print(f"\n[kms product update] FAILED (exit code {rc})", file=sys.stderr)
-    else:
-        print(f"\n[kms product update] done")
+        return rc
+
+    # 转换成功 → 自动后处理：命令手册语法修复 + product 去重 + 垃圾清理。
+    # 全部幂等可逆(move 软删)，使一条 update 即产出干净、语法完整、已去重的 KMS。
+    # 后处理失败不应推翻转换成果，故捕获异常仅告警。
+    try:
+        from main.kms_postprocess import run_postprocess, _print_report
+        print("\n[kms product update] 转换完成，开始后处理(语法修复+去重)...")
+        report = run_postprocess(apply=True)
+        _print_report(report)
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n[kms product update] 后处理告警(转换已成功，不影响产物): {exc}",
+              file=sys.stderr)
+
+    print(f"\n[kms product update] done")
     return rc
 
 
@@ -171,6 +184,16 @@ def _run_qa_update() -> int:
 
     if skipped:
         print(f"\n[kms qa update] skipped (unsupported): {', '.join(skipped)}")
+
+    # 转换完成 → qa 桶后处理：仅去重 + 垃圾清理(qa 无命令手册，跳过语法修复)。
+    try:
+        from main.kms_postprocess import run_postprocess, _print_report
+        print("\n[kms qa update] 转换完成，开始后处理(去重)...")
+        report = run_postprocess(apply=True, bucket="qa", do_syntax=False)
+        _print_report(report)
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n[kms qa update] 后处理告警(转换已成功，不影响产物): {exc}",
+              file=sys.stderr)
 
     print(f"\n[kms qa update] done")
     return 0

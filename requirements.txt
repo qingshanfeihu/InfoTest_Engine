@@ -56,3 +56,4 @@ pytest-textual-snapshot>=0.4,<2
 fastapi>=0.110,<1
 uvicorn>=0.27,<1
 python-multipart>=0.0.9,<1
+pikepdf>=10

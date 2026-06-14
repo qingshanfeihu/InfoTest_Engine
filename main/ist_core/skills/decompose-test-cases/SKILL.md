@@ -1,6 +1,6 @@
 ---
 name: decompose-test-cases
-description: 拆分用例+生成xlsx。TRIGGER: 拆分用例, decompose, 完整拆分, 流水线
+description: "拆分用例+生成xlsx。TRIGGER: 拆分用例, decompose, 完整拆分, 流水线"
 when_to_use: |
   用户提供原始测试用例文件(.txt脑图/.xlsx用例表)要求拆分为原子步骤；用户要求生成xlsx测试用例文件；用户要求一条龙流水线(拉取→提取→拆分→生成xlsx→填充G列)；用户提到"拆分用例""用例分解""生成测试用例xlsx""补全用例""测试用例流水线"。SKIP: 用户只要求查看/搜索已有用例；只要求执行测试；只要求修改xlsx中某几个单元格。
 allowed-tools: qa_fetch_test_cases qa_extract_test_cases qa_decompose_test_cases qa_inject_init_and_deps qa_generate_test_case_xlsx qa_invoke_skill qa_deepagent_write_file qa_deepagent_read_file

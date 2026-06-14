@@ -54,7 +54,7 @@ def qa_restapi(
     """Execute CLI commands on APV/NSAE devices via REST API (much faster than SSH).
 
     **PREREQUISITE** — before calling this tool, you MUST grep
-    ``knowledge/data/markdown/product/cli_*_commands.md`` to confirm the exact
+    ``knowledge/data/markdown/product/*cli__part*.md`` to confirm the exact
     command name and syntax. The device runs InfosecOS, NOT Cisco IOS.
     Correct commands come ONLY from the CLI manual — never guess and probe.
 

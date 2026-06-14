@@ -18,11 +18,13 @@ from main.ist_core.tools.deepagent import (
     qa_deepagent_write_file,
 )
 from main.ist_core.tools.deepagent.exec_tools import qa_bash, qa_exec
-from main.ist_core.tools.device import qa_restapi, qa_ssh
+from main.ist_core.tools.device import qa_restapi, qa_ssh, qa_run_case, qa_probe_show, qa_emit_xlsx
+from main.ist_core.tools.device.kitchen_tools import qa_confidence_score, qa_lookup_pattern
 from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
 from main.ist_core.tools.skills import qa_invoke_skill
 from main.ist_core.tools.ask_user import qa_ask_user
+from main.ist_core.tools.memory_tool import qa_remember
 from main.ist_core.tools.skills.test_case_extractor import qa_extract_test_cases
 from main.ist_core.tools.skills.test_case_decomposer import qa_decompose_test_cases
 from main.ist_core.tools.skills.inject_init_and_deps import qa_inject_init_and_deps
@@ -45,6 +47,11 @@ def _default_generic_tools() -> list[Any]:
         qa_bash,
         qa_ssh,
         qa_restapi,
+        qa_run_case,
+        qa_probe_show,
+        qa_emit_xlsx,
+        qa_lookup_pattern,
+        qa_confidence_score,
 
         web_bug_search,
 
@@ -54,6 +61,7 @@ def _default_generic_tools() -> list[Any]:
         qa_invoke_skill,
 
         qa_ask_user,
+        qa_remember,
 
         qa_extract_test_cases,
         qa_decompose_test_cases,

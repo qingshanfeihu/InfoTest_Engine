@@ -145,7 +145,8 @@ def _locate_in_inbox(bare_name: str) -> Path | None:
 
 def _is_in_sandbox(path: Path) -> bool:
     """路径是否已经在 agent 可访问的沙箱内（knowledge/data 或 workspace）。"""
-    _knowledge_data = _PROJECT_ROOT / "knowledge" / "data"
+    from main import knowledge_paths as kp
+    _knowledge_data = kp.KNOWLEDGE_DATA_ROOT
     try:
         path.resolve().relative_to(_knowledge_data.resolve())
         return True
@@ -239,7 +240,8 @@ def preprocess_file_paths(
                     ).as_posix()
                 except ValueError:
                     try:
-                        _kd = _PROJECT_ROOT / "knowledge" / "data"
+                        from main import knowledge_paths as kp
+                        _kd = kp.KNOWLEDGE_DATA_ROOT
                         sandbox_rel = path.resolve().relative_to(
                             _kd.resolve()
                         ).as_posix()

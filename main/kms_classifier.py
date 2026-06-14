@@ -234,13 +234,19 @@ def _call_llm(filename: str, hints: str) -> ClassifierResult:
 
 
 
-def classify_file(file_path: Path | str) -> ClassifierResult:
-    """对单个文件做分类。三层兜底：override → cache → LLM。"""
+def classify_file(file_path: Path | str, key: str | None = None) -> ClassifierResult:
+    """对单个文件做分类。三层兜底：override → cache → LLM。
+
+    ``key`` 是该文件在 override / cache 中的标识符。默认用 basename，
+    与旧链路一致；orgin/ 嵌套子目录场景下由调用方传入相对路径
+    （如 ``subdir/file.docx``），避免跨子目录同名文件在缓存里互相覆盖。
+    """
     p = Path(file_path)
+    cache_key = key or p.name
 
     overrides = _load_json(_overrides_path())
-    if p.name in overrides:
-        ov = overrides[p.name]
+    if cache_key in overrides:
+        ov = overrides[cache_key]
         cat = str(ov.get("category", "")).strip().lower()
         if cat in _VALID_CATEGORIES:
             return {
@@ -256,7 +262,7 @@ def classify_file(file_path: Path | str) -> ClassifierResult:
 
     sig = _file_signature(p)
     cache = _load_json(_cache_path())
-    cached = cache.get(p.name)
+    cached = cache.get(cache_key)
     if cached and tuple(cached.get("sig", [])) == sig:
         return {
             "category": cached["category"],
@@ -271,7 +277,7 @@ def classify_file(file_path: Path | str) -> ClassifierResult:
 
     result = _call_llm(p.name, hints)
     if result["source"] == "llm":
-        cache[p.name] = {
+        cache[cache_key] = {
             "sig": list(sig),
             "category": result["category"],
             "confidence": result["confidence"],
@@ -285,7 +291,13 @@ def classify_file(file_path: Path | str) -> ClassifierResult:
 
 
 def bucketize_orgin_dir(orgin_dir: Path | str) -> dict[OrginCategory, list[str]]:
-    """对 orgin_dir 下所有文件分桶。返回 ``{category: [filename, ...]}``。"""
+    """对 orgin_dir 下所有文件分桶（递归含子目录）。返回 ``{category: [rel_key, ...]}``。
+
+    rel_key 是相对 orgin_dir 的 POSIX 路径：顶层文件即 basename，嵌套文件为
+    ``subdir/file.ext``，作为贯穿 KMS 全链（白名单 / markdown 落地）的标识符。
+    """
+    from main import knowledge_paths as kp
+
     root = Path(orgin_dir)
     buckets: dict[OrginCategory, list[str]] = {
         "product": [],
@@ -295,40 +307,42 @@ def bucketize_orgin_dir(orgin_dir: Path | str) -> dict[OrginCategory, list[str]]
     }
     if not root.exists():
         return buckets
-    for p in sorted(root.iterdir()):
-        if not p.is_file():
-            continue
-        r = classify_file(p)
-        buckets[r["category"]].append(p.name)
+    for p in kp.iter_orgin_files(root):
+        rel_key = kp.orgin_rel_key(p, root)
+        r = classify_file(p, key=rel_key)
+        buckets[r["category"]].append(rel_key)
     return buckets
 
 
 def classify_orgin_file(filename: str) -> OrginCategory:
     """旧 API 兼容：只返回 category 字符串。
 
-    如果 ``filename`` 是绝对路径或可在 ``orgin/`` 下找到，做完整分类；
-    否则只跑 LLM 仅基于文件名。
+    如果 ``filename`` 是绝对路径或可在 ``orgin/`` 下找到（支持嵌套相对路径），
+    做完整分类；否则只跑 LLM 仅基于文件名。
     """
     from main import knowledge_paths as kp
     p = Path(filename)
     candidate = p if p.is_absolute() else (kp.KNOWLEDGE_ORGIN / filename)
     if candidate.exists():
-        return classify_file(candidate)["category"]
+        key = kp.orgin_rel_key(candidate) if not p.is_absolute() else None
+        return classify_file(candidate, key=key)["category"]
     return _call_llm(p.name, "")["category"]
 
 
 def list_orgin_with_reasons(orgin_dir: Path | str) -> list[dict]:
     """对 orgin_dir 下每个文件返回 ``{name, category, confidence, reason, source}``。
 
+    递归含子目录；``name`` 是相对 orgin_dir 的 POSIX 路径（顶层即 basename）。
     给 ``/kms product status`` / ``/kms qa status`` 显示理由用。
     """
+    from main import knowledge_paths as kp
+
     root = Path(orgin_dir)
     rows: list[dict] = []
     if not root.exists():
         return rows
-    for p in sorted(root.iterdir()):
-        if not p.is_file():
-            continue
-        r = classify_file(p)
-        rows.append({"name": p.name, **r})
+    for p in kp.iter_orgin_files(root):
+        rel_key = kp.orgin_rel_key(p, root)
+        r = classify_file(p, key=rel_key)
+        rows.append({"name": rel_key, **r})
     return rows

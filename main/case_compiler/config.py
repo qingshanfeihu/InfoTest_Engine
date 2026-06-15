@@ -83,33 +83,6 @@ class CompilerConfig:
     # staging 模块归属（sdns 测试床）
     staging_module: str = "sdns"
 
-    # 配置生效等待秒数（W-settle：配置变更后断言前插入 time/sleep；防 rr 轮转/状态刷新未完成即断言）
-    settle_seconds: int = 5
-
-    # rr/wrr 统计断言重写开关（report-only 增强：把脆弱的逐次绝对 IP 断言换成池级 Hit 分布断言）。
-    # 仅对识别到 sdns host method rr|wrr 的 case 生效，非 rr/wrr case 一律 no-op（向后兼容）。
-    rr_rewrite_enabled: bool = True
-    # 重写 Hit 容差（多核抖动余量）+ 模式（tolerance/exact/nonzero）。
-    rr_rewrite_tolerance: int = 1
-    rr_rewrite_mode: str = "tolerance"
-
-    # 三确定性变换（assertion-fix / rr-rewrite / settle）的执行路由开关（Phase 2 双路）。
-    # False（默认）→ 走 pipeline 内联调用（事实源仍是三个 .py，行为零变化）；
-    # True → 经 skill_lib.verify_runner 调三技能 verify.py，逐字节等价（opt-in 等价证明）。
-    use_skill_transforms: bool = False
-
-    # 闸硬阻断开关（red line 落地）。False（默认）→ 五重闸 report-only（仅写 notes，行为零变化）；
-    # True → validate_stage 对**非 passthrough（agent 合成）产物**的阻断类违规
-    # （W6 无溯源断言 / W1-W3 / X2 / W4-W5 / X1 syntax_error）抛 GateBlocked，case 进 rejected 不上机。
-    # passthrough（框架既验证原件）永不硬阻断。
-    gate_hard_block: bool = False
-
-    # Step D：无 passthrough 先例的 case 是否走合成路径（检索最近邻 + LLM 改编 + spec 定律）。
-    # False（默认）→ 无先例直接 rejected（run_all 原 passthrough-only 语义，行为零变化）；
-    # True → 路由到合成，让 agent 真正编写新用例（zhaiyq 时序类靠此解锁）。配合 gate_hard_block
-    # 守 red line：合成产物的无溯源断言被 W6 拦。env IST_SYNTH_NO_PRECEDENT。
-    synthesize_without_precedent: bool = False
-
     # MySQL 结果库（口令敏感；host 可被 conf 覆盖，见 result_db）
     mysql_host: str = ""               # 空=从跳转机 conf [other] mysql_ip 读
     mysql_db: str = "smoke_test"
@@ -146,40 +119,16 @@ class CompilerConfig:
         init = fc.get("default_init")
         if not isinstance(init, list) or not init:
             init = None
-        # 三确定性变换路由开关：env > 文件 > 默认（False），并强制成 bool。
-        _ust = _pick("IST_USE_SKILL_TRANSFORMS", fc, "use_skill_transforms",
-                     cls.use_skill_transforms)
-        use_skill_transforms = (
-            _ust if isinstance(_ust, bool)
-            else str(_ust).strip().lower() in ("1", "true", "yes", "on")
-        )
-        # 闸硬阻断开关：env > 文件 > 默认（False），强制成 bool。
-        _ghb = _pick("IST_GATE_HARD_BLOCK", fc, "gate_hard_block", cls.gate_hard_block)
-        gate_hard_block = (
-            _ghb if isinstance(_ghb, bool)
-            else str(_ghb).strip().lower() in ("1", "true", "yes", "on")
-        )
-        # Step D 合成开关：env > 文件 > 默认（False），强制成 bool。
-        _syn = _pick("IST_SYNTH_NO_PRECEDENT", fc, "synthesize_without_precedent",
-                     cls.synthesize_without_precedent)
-        synthesize_without_precedent = (
-            _syn if isinstance(_syn, bool)
-            else str(_syn).strip().lower() in ("1", "true", "yes", "on")
-        )
         return cls(
             build=_pick("IST_DEVICE_BUILD", fc, "build", cls.build),
             target_version=_pick("IST_TARGET_VERSION", fc, "target_version", cls.target_version),
             staging_module=_pick("IST_STAGING_MODULE", fc, "staging_module", cls.staging_module),
-            settle_seconds=int(_pick("IST_SETTLE_SECONDS", fc, "settle_seconds", cls.settle_seconds)),
             mysql_host=_pick("IST_MYSQL_HOST", fc, "mysql_host", cls.mysql_host),
             mysql_db=_pick("IST_MYSQL_DB", fc, "mysql_db", cls.mysql_db),
             mysql_user=_pick("IST_MYSQL_USER", fc, "mysql_user", cls.mysql_user),
             jumphost=jh,
             xlsx=xl,
             default_init_lines=(init or list(cls().default_init_lines)),
-            use_skill_transforms=use_skill_transforms,
-            gate_hard_block=gate_hard_block,
-            synthesize_without_precedent=synthesize_without_precedent,
         )
 
     def default_init_g(self) -> str:

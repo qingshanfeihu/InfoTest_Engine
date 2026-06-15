@@ -63,7 +63,7 @@ _TASK_PROMPT = """\
 - grep/read 手册和先例语料(knowledge/ 下)
 - qa_ssh 直连设备 172.16.34.70 发单条命令探查回显/语法
 - qa_exec 写一次性分析脚本
-- qa_generate_test_case_xlsx 产出 case.xlsx;qa_run_case 把它上机跑
+- qa_emit_xlsx 产出 case.xlsx;qa_run_case 把它上机跑
 - 设备 build/topology 已配好,APV_0=172.16.34.70
 
 # 推进纪律(重要)

@@ -17,7 +17,6 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
-import re
 from pathlib import Path
 from langchain_core.tools import tool
 
@@ -26,8 +25,6 @@ logger = logging.getLogger(__name__)
 # ── Paths ────────────────────────────────────────────────────────────────
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
-from main import knowledge_paths as _kp
-_TOPOLOGY_PATH = _kp.KNOWLEDGE_AUTO_ENV_TOPOLOGY
 _APV_SSH_CLIENT_PATH = (
     Path(__file__).resolve().parents[2]
     / "skills" / "device-verify" / "scripts" / "apv_ssh_client.py"
@@ -93,36 +90,26 @@ _SAFE_CONFIG_PREFIXES: tuple[str, ...] = (
     "no ha", "clear ha",
 )
 
-# ── IP validation cache ──────────────────────────────────────────────────
-
-_valid_ips: set[str] | None = None
-
-
-def _load_valid_ips() -> set[str]:
-    """Parse network_topology_rag.md and extract all known device IPs."""
-    if not _TOPOLOGY_PATH.exists():
-        logger.warning("Topology file not found at %s; IP validation skipped.", _TOPOLOGY_PATH)
-        return set()
-    text = _TOPOLOGY_PATH.read_text(encoding="utf-8")
-    ips: set[str] = set()
-    for m in re.finditer(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b", text):
-        ips.add(m.group(1))
-    for m in re.finditer(r"\b([0-9a-fA-F:]+:+[0-9a-fA-F:]+)\b", text):
-        ips.add(m.group(1))
-    return ips
+# ── IP validation ─────────────────────────────────────────────────────────
+# 设备可达性校验复用权威事实源(env_facts），不再在此重复解析拓扑文件。
 
 
 def _validate_device_ip(host: str) -> tuple[bool, str]:
-    """Check whether *host* (IP address) appears in the network topology."""
-    global _valid_ips
-    if _valid_ips is None:
-        _valid_ips = _load_valid_ips()
-    if not _valid_ips:
-        return True, ""  # topology file missing → permissive (avoid blocking)
-    if host in _valid_ips:
+    """Check whether *host* (IP address) is reachable per the network topology facts source.
+
+    复用权威事实源(env_facts):可达 = 精确等于某设备 IP 或落在某设备子网内。
+    事实源 JSON 缺失时 env_facts 宽松降级(恒可达),与历史行为一致(避免误杀阻断连接)。
+    """
+    from main.ist_core.tools._shared.env_facts import get_env_facts
+
+    facts = get_env_facts()
+    if not facts.devices:
+        return True, ""  # facts source missing → permissive
+    if facts.is_reachable(host):
         return True, ""
     return False, (
-        f"Device IP '{host}' not found in network topology ({_TOPOLOGY_PATH}). "
+        f"Device IP '{host}' not reachable in network topology "
+        f"(subnets: {', '.join(facts.reachable_subnets())}). "
         "Refusing connection to unknown device."
     )
 

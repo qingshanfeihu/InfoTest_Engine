@@ -110,7 +110,7 @@ def qa_ask_user(questions: list[dict[str, Any]]) -> str:
         if not isinstance(opts, list) or not (2 <= len(opts) <= 4):
             return f"error: question[{i}] 'options' must be 2-4 items"
 
-    
+
     import uuid
     question_id = uuid.uuid4().hex[:8]
     event = threading.Event()
@@ -123,7 +123,7 @@ def qa_ask_user(questions: list[dict[str, Any]]) -> str:
     with _PENDING_LOCK:
         _PENDING[question_id] = pending
 
-    
+
     try:
         from main.ist_core.events import get_default_bus
         bus = get_default_bus()
@@ -138,7 +138,36 @@ def qa_ask_user(questions: list[dict[str, Any]]) -> str:
     except Exception:  # noqa: BLE001
         pass
 
-    
+    # 非交互模式（仅测试用的 print 模式 `-p`，无 TUI 可应答）：绝不阻塞、绝不猜答案。
+    # 生产接口只有 TUI；在非交互下命中 qa_ask_user 一定是「测试输入缺信息」或「设计/bug」。
+    # 立即返回明确错误把问题暴露出来——而不是 event.wait() 死等一个永不到来的应答。
+    import os as _os
+    if (_os.environ.get("IST_NON_INTERACTIVE") or "").strip() in ("1", "true", "True"):
+        with _PENDING_LOCK:
+            _PENDING.pop(question_id, None)
+        _q_summary = " | ".join(str(q.get("question", "")) for q in questions)
+        return (
+            "error: 当前为非交互模式（无 TUI，无法向用户提问），qa_ask_user 不可用。"
+            "请改为：从用户请求原文中提取该信息；若请求确实未提供该必要信息，"
+            "请停止并明确报告『缺少哪项信息、为何无法在不询问用户的情况下继续』，"
+            "不要臆测或自行选默认值。"
+            f" 你本想问的是：{_q_summary}"
+        )
+
+    # 诊断：把 agent 实际想问的问题打到 stderr，便于排查"为什么 ask_user"。
+    try:
+        import sys as _sys
+        _qs = "; ".join(
+            str(q.get("question", "")) + " ["
+            + "/".join(str(o.get("label", "")) for o in (q.get("options") or []))
+            + "]"
+            for q in questions
+        )
+        print(f"[qa_ask_user] agent 提问: {_qs}", file=_sys.stderr, flush=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
     event.wait()
 
     

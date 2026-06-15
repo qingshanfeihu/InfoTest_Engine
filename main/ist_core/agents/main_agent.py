@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from main.ist_core.agents._llm import build_agent_chat_model
+from main.ist_core.agents import _llm
 from main.ist_core.agents._prompt import build_system_prompt
 from main.ist_core.tools.deepagent import (
     qa_deepagent_edit_file,
@@ -19,16 +19,18 @@ from main.ist_core.tools.deepagent import (
 )
 from main.ist_core.tools.deepagent.exec_tools import qa_bash, qa_exec
 from main.ist_core.tools.device import qa_restapi, qa_ssh, qa_run_case, qa_probe_show, qa_emit_xlsx
+from main.ist_core.tools.device import (
+    qa_compile_prep,
+    qa_compile_fanout,
+    qa_run_batch,
+    qa_emit_xlsx_merged,
+)
 from main.ist_core.tools.device.kitchen_tools import qa_confidence_score, qa_lookup_pattern
 from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
 from main.ist_core.tools.skills import qa_invoke_skill
 from main.ist_core.tools.ask_user import qa_ask_user
 from main.ist_core.tools.memory_tool import qa_remember
-from main.ist_core.tools.skills.test_case_extractor import qa_extract_test_cases
-from main.ist_core.tools.skills.test_case_decomposer import qa_decompose_test_cases
-from main.ist_core.tools.skills.inject_init_and_deps import qa_inject_init_and_deps
-from main.ist_core.tools.skills.test_case_xlsx_generator import qa_generate_test_case_xlsx
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,12 @@ def _default_generic_tools() -> list[Any]:
         qa_lookup_pattern,
         qa_confidence_score,
 
+        # 批量编译总厨(ist_compile_batch)用：备料 + fan-out + 串行上机 + 合并打包
+        qa_compile_prep,
+        qa_compile_fanout,
+        qa_run_batch,
+        qa_emit_xlsx_merged,
+
         web_bug_search,
 
         qa_footprint_lookup,
@@ -62,11 +70,6 @@ def _default_generic_tools() -> list[Any]:
 
         qa_ask_user,
         qa_remember,
-
-        qa_extract_test_cases,
-        qa_decompose_test_cases,
-        qa_inject_init_and_deps,
-        qa_generate_test_case_xlsx,
 
     ]
 
@@ -78,7 +81,7 @@ def build_main_agent(**kwargs: Any):
     ``extra_prompt``/``skill_prompt`` string explicitly; no repository skill is
     loaded implicitly on the main path.
     """
-    model = kwargs.pop("model", None) or build_agent_chat_model()
+    model = kwargs.pop("model", None) or _llm.build_agent_chat_model()
     tools = kwargs.pop("tools", None) or _default_generic_tools()
 
     from main.ist_core.tools._shared.metadata import attach_tool_metadata as _attach_md  # noqa: PLC0415
@@ -140,18 +143,14 @@ def build_main_agent(**kwargs: Any):
         
         
         
-        try:
-            from deepagents.middleware.skills import SkillsMiddleware  # type: ignore[import-not-found]
+        # 不挂 deepagents 原生 SkillsMiddleware：它把 skill listing 拼到 system prompt 末尾，
+        # 且教模型用 read_file 读 SKILL.md 全文——但本项目用 _ToolExclusionMiddleware 屏蔽了
+        # read_file，那条指令是死指令，且与自研 PerTurnSkillReminderMiddleware（教用 qa_invoke_skill）
+        # 双路重复注入、互相矛盾。skill listing 由下面的 per_turn middleware 单路负责；
+        # 本项目 skill 执行走 qa_invoke_skill + loader.execute_fork_skill，不依赖 state['skills_metadata']。
+        # 详见 docs/skill_progressive_disclosure_fix.md。
 
-            skills_mw = SkillsMiddleware(
-                backend=backend,
-                sources=[(_SKILLS_DIR, "IST-Core")],
-            )
-            middleware.append(skills_mw)
-        except Exception as skills_exc:  # noqa: BLE001
-            logger.info("SkillsMiddleware 不可用: %s", skills_exc)
 
-        
         
         
         

@@ -127,6 +127,35 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "intent": "write",
     },
 
+    # 批量编译工具(ist_compile_batch 总厨)
+    "qa_compile_prep": {
+        # 解析脑图→manifest 落盘:写本地 manifest.json(非设备态),read_only=False。
+        "read_only": False,
+        "concurrency_safe": True,
+        "fallback_for": None,
+        "intent": "read",
+    },
+    "qa_compile_fanout": {
+        # 内部线程池并发派发 fork(draft/grade),本身可并发,但通常一次性调度全批。
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "exec",
+    },
+    "qa_run_batch": {
+        # 串行上机(改设备态),绝不并发。
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "exec",
+    },
+    "qa_emit_xlsx_merged": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "write",
+    },
+
     "web_bug_search": {
         "read_only": False,
         "concurrency_safe": False,

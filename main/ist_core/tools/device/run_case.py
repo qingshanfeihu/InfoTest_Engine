@@ -120,9 +120,14 @@ def qa_run_case(
                 return (f"=== qa_run_case ===\nautoid={autoid}\nverdict: error\n"
                         f"--- deliver 失败 ---\n{dres.get('error')}")
             run = client.run_and_wait(module, autoid, build, [autoid], max_s=max_s)
+            if run.get("busy") or run.get("error") == "device_busy":
+                # 设备正在验证上一个用例——显式 verdict=busy + 正在跑的 autoid/已跑时长，
+                # 让 agent 知道环境忙(而非编译错)，自行决定等待/稍后重试/上报。
+                return (f"=== qa_run_case ===\nautoid={autoid}\nverdict: busy\n"
+                        f"--- 环境忙 ---\n{run.get('message') or '正在验证上一个用例'}")
             if run.get("error"):
                 return (f"=== qa_run_case ===\nautoid={autoid}\nverdict: error\n"
-                        f"--- 提交/运行失败 ---\n{run.get('error')}(锁被占用?稍后重试)")
+                        f"--- 提交/运行失败 ---\n{run.get('error')}")
             verdict = (run.get("results") or {}).get(autoid) or run.get("result") or "unknown"
             task_id = run.get("task_id", "")
             log_tail = (run.get("log_tail") or "")[-1200:]

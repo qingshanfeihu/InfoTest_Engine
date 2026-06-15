@@ -78,14 +78,22 @@ def run_single(
     thread_id: str | None = None,
     stream: bool = False,
     verbose: bool = False,
+    checkpointer: Any | bool = True,
 ) -> dict[str, Any]:
-    """单次调用 Graph，返回最终 state。"""
+    """单次调用 Graph，返回最终 state。
+
+    ``checkpointer`` 透传给 ``build_ist_core_graph``：
+    - ``True``（默认）：按 ``stream`` 选 async/sync 的 SqliteSaver（持久化，可 resume）。
+    - 传入 saver 实例（如 ``InMemorySaver()``）：用该实例。print 单次模式用它绕开
+      共享 SqliteSaver 锁——外层图 ``qa_node`` 同步调内层 MainAgent 子图会嵌套
+      Pregel 循环，共享同一 sqlite 连接的锁在嵌套 invoke 下会死锁（见 cli.py）。
+    """
     from main.ist_core.graph import build_ist_core_graph
 
-    
-    
+
+
     mode = "async" if stream else "sync"
-    graph = build_ist_core_graph(checkpointer=True, checkpointer_mode=mode)
+    graph = build_ist_core_graph(checkpointer=checkpointer, checkpointer_mode=mode)
 
     thread_id = thread_id or f"run-{uuid.uuid4().hex[:8]}"
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}

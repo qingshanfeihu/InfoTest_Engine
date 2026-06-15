@@ -81,14 +81,30 @@ def _resolve_initial_query(args: argparse.Namespace) -> str | dict | None:
 
 
 def _run_print_mode(query, *, task_type: str, thread_id: str | None) -> int:
-    """非交互 print 模式——直接调 runner.run_single，不启 TUI。"""
+    """非交互 print 模式——直接调 runner.run_single，不启 TUI。
+
+    用 ``InMemorySaver`` 而非默认共享 SqliteSaver：print 是单次执行，不需要持久化
+    resume；而外层主图的 ``qa_node`` 会**同步**调内层 MainAgent 子图（嵌套 Pregel
+    循环）。共享同一 sqlite 连接的 checkpointer 在嵌套同步 invoke 下会死锁：
+      - sync SqliteSaver：内层 invoke 重入外层已持有的 threading.Lock → 可重入死锁；
+      - async AsyncSqliteSaver：aiosqlite 工作线程在主事件循环未 pump 时空等队列，
+        qa_node 线程阻塞等其结果 → 死锁。
+    InMemorySaver 无跨线程锁/无 aiosqlite 线程，每次 invoke 独立，彻底绕开。
+    """
+    from langgraph.checkpoint.memory import InMemorySaver
     from main.ist_core.runner import run_single
+
+    # 标记非交互模式：qa_ask_user 据此立即返回而非阻塞等 TUI 应答（print 无 TUI）。
+    import os as _os
+    _os.environ["IST_NON_INTERACTIVE"] = "1"
+
     result = run_single(
         query,
         task_type=task_type,
         thread_id=thread_id,
         stream=False,
         verbose=False,
+        checkpointer=InMemorySaver(),
     )
     final = result.get("final_answer") or "（无回答）"
     print(final)

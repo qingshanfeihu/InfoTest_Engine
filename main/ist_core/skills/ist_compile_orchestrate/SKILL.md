@@ -1,18 +1,16 @@
 ---
 name: ist_compile_orchestrate
-description: "把人工测试用例编译成上机能跑通、且断言真覆盖目标行为的 case.xlsx。本 skill 是编译流程的编排层：调用方作为编排器，不直接生成/上机/评分，而是依次派发三个 fork 子流程并汇总其反馈——ist_compile_draft(生成 xlsx 草稿)→ist_compile_run(上机执行并采集设备真实裁决)→ist_compile_grade(独立评估断言是否覆盖目标行为)。两路反馈(设备裁决+质量评估)均通过才判定交付；任一不通过则携带反馈派发重做；连续 N 轮不通过则上报。设计目标：消除单 agent 自生成自评估、以及 verdict=pass 但断言未覆盖目标行为的弱断言。"
+description: "把人工测试用例（脑图/txt/需求描述）编译或改编成上机能跑通、断言真覆盖目标行为的自动化 case.xlsx / excel。本 skill 是编排层：派发生成→上机→评估三个独立子流程并汇总反馈判定交付，编排器自身不直接生成/上机/评分。"
 context: inline
 user-invocable: true
 source: hand
 version: "2"
 effort: high
 when_to_use: |
-  Use 当要把一条人工测试用例(脑图/需求描述)编译成框架能上机执行、且断言真覆盖作者目标行为的 case.xlsx。
-  调用方作为编排器统筹整个编译流程(派发生成→上机→评估→重做→上报)，自身不直接生成/上机/评分。
-  典型触发：编译/改编单个用例；上机 verdict=pass 但需确认断言真覆盖目标行为；编译动态/时序/分布类
-  行为(轮询、会话保持、计数变化)这类「能跑通但断言易退化成弱覆盖」的用例。
-  Trigger keywords: 用例编译, 编译自动化, case.xlsx, 上机验证, 断言覆盖, 编排, 派发子流程。
-  SKIP when: 只是查看一条 CLI 回显(用 qa_probe_show)。
+  Use when 用户要把人工测试用例（脑图 txt / 需求描述）编译或改编成框架能上机执行、断言真覆盖作者目标行为的 case.xlsx / excel。
+  Examples: "把这条脑图用例编译成 excel", "把 automatic_case 下的 txt 转成自动化 excel", "把这个用例改编成自动化 case", "生成 case.xlsx 并上机跑通", "verdict=pass 了但确认下断言有没有真覆盖目标行为"。
+  Trigger keywords: 用例编译, 编译, 改编, 脑图转excel, txt转excel, case.xlsx, 自动化用例, 上机验证, 断言覆盖, 编排, 派发子流程。
+  SKIP when: 只查看一条 CLI 回显（用 qa_probe_show）；评审已有用例文件（用 test-list-review）。
 ---
 
 # 编译编排层：派发三个子流程，汇总反馈判定交付

@@ -126,6 +126,15 @@ def qa_lookup_pattern(my_config: str, limit: int = 3) -> str:
             out.append(f"  {e} {f}({g[:50]})")
     out.append("\n注意先例'怎么触发'(test_env 的 dig/查询类型、次数、A/AAAA)和'怎么断言'是配套的。"
                "照它的完整链写,别只抄断言漏了触发方式;期望值溯源到先例+手册。")
+    # 契约:先例 G 列可能混有不可达示例 IP(1.1.1.1 等历史脏数据)。在同一返回里附上本测试床
+    # 真实可达集合,让你写 IP 时取真值,别照抄先例的示例 IP——emit 出口会按此校验,不可达必打回。
+    try:
+        from main.ist_core.tools._shared.env_facts import get_env_facts
+        facts = get_env_facts()
+        if facts.devices:
+            out.append("\n" + facts.summary_for_agent())
+    except Exception:  # noqa: BLE001
+        pass
     return "\n".join(out)
 
 

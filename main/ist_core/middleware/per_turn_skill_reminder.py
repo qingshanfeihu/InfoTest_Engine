@@ -31,11 +31,15 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import HumanMessage
 
 _SKILL_LISTING_TEMPLATE = """<system-reminder>
-Available skills (use qa_invoke_skill to invoke):
+The following skills are available for use with the qa_invoke_skill tool:
 
 {skill_list}
 
-RULE: If any skill matches, your FIRST tool_call MUST be qa_invoke_skill. Pass the user's raw question as the brief — the skill handles all file reading, document lookup, and answer generation internally. Do NOT read files or search before invoking the skill.
+RULES (BLOCKING REQUIREMENT):
+- When a skill matches the user's request, your response MUST invoke that skill via qa_invoke_skill BEFORE doing anything else about the task. Pass the user's raw question/request as the brief — the skill handles all file reading, document lookup, generation, and on-device steps internally.
+- This applies at ANY point, not just the first tool_call: if you are about to read files / write scripts / call qa_exec / qa_bash / qa_emit_xlsx to do work that a listed skill covers, STOP and invoke the skill instead. Do NOT hand-roll what a skill already does.
+- NEVER mention or describe a skill without actually calling qa_invoke_skill.
+- Only skip a skill if the task genuinely falls outside every skill's description, or the user explicitly said not to use one.
 </system-reminder>"""
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -44,8 +48,17 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 # - 单条 description 截断上限（字符）
 # - 全局 listing 字符预算；溢出时把溢出的 skill 降级为 name-only（仅列名，不列描述）
 # 均可经 env 覆盖。
-_PER_SKILL_DESC_CAP = int(os.environ.get("IST_SKILL_DESC_CAP", "200"))
-_LISTING_CHAR_BUDGET = int(os.environ.get("IST_SKILL_LISTING_BUDGET", "1200"))
+_PER_SKILL_DESC_CAP = int(os.environ.get("IST_SKILL_DESC_CAP", "250"))
+_LISTING_CHAR_BUDGET = int(os.environ.get("IST_SKILL_LISTING_BUDGET", "8000"))
+
+# listing 渲染优先级（数字小=排前=预算紧张时最后被降级）。核心/高频 skill 排前。
+# 未列入的默认 50，按名字字母序稳定排列。
+_LISTING_PRIORITY = {
+    "ist_compile_batch": 0,
+    "ist_compile_orchestrate": 0,
+    "test-list-review": 0,
+    "config-answer": 0,
+}
 
 
 def _parse_skill_frontmatter(skill_md_path: Path) -> dict[str, str] | None:
@@ -92,7 +105,9 @@ def _parse_skill_frontmatter(skill_md_path: Path) -> dict[str, str] | None:
             when_to_use_lines.append(line.strip())
 
     description = " ".join(s for s in description_lines if s).strip()
-    when_to_use = " ".join(s for s in when_to_use_lines if s).strip()
+    # when_to_use 保留换行：下游 _format_skill_list 靠 split("\n") 找 "Trigger keywords:" 行首
+    # 提取触发词。若在此用空格 join 压成一行，行首锚点丢失，触发词永远提取不到。
+    when_to_use = "\n".join(when_to_use_lines).strip()
 
     context = "inline"
     user_invocable = "true"
@@ -122,14 +137,16 @@ def _parse_skill_frontmatter(skill_md_path: Path) -> dict[str, str] | None:
 
 
 def _skill_eligible_for_listing(meta: dict[str, str]) -> bool:
-    """处理 user-invocable / disable-model-invocation 语义：
+    """决定一个 skill 是否进**主 agent 的 listing**（模型每轮看到的清单）。
 
-    - user-invocable: false → 仅用户菜单不显示，**模型 listing 仍可见**
-      "仅本智能体可调用此 skill" — 用于 background knowledge / sub-skill
-    - disable-model-invocation: true → 模型 listing 完全不可见
+    只过滤 disable-model-invocation: true（完全不可见，qa_invoke_skill 也拒）。
 
-    注意：listing 过滤只看 disable-model-invocation；
-    user-invocable 由 TUI `/skill` 命令的用户菜单层控制。
+    **user-invocable: false 仍进 listing**：这类是 fork 子流程（ist_compile_draft/run/grade、
+    review-verification），由 inline 编排 skill（ist_compile_orchestrate / test-list-review）的
+    body 引导**主 agent** 经 qa_invoke_skill 派发——派发者就是主 agent 本身，故必须对模型可见，
+    否则主 agent 按 body 指示调用时找不到。它们只是不进 TUI `/skill` 用户菜单（user-invocable
+    语义由菜单层控制）。防"主 agent 越过编排器直调子流程"靠编排 skill 的 body 纪律 + prompt
+    引导，不靠从 listing 隐藏（隐藏会连合法派发路径一起切断）。
     """
     disable_invoke = (meta.get("disable-model-invocation") or "false").strip().lower()
     if disable_invoke in {"true", "yes", "1", "on"}:
@@ -173,19 +190,26 @@ def _format_skill_list(skills_metadata: list[dict[str, str]]) -> str:
     """
     if not skills_metadata:
         return "(no skills loaded)"
+    # 预算闸按顺序累加，靠后的 skill 先被降级为 name-only。给高频/核心 skill 排前，
+    # 保证 8000 预算被未来 skill 暴增挤占时它们的描述最后才丢（当前 skill 数少不触发降级，
+    # 此排序是面向未来的兜底，不改变当前输出）。未列入的按字母序保持稳定。
+    skills_metadata = sorted(
+        skills_metadata, key=lambda s: (_LISTING_PRIORITY.get(s.get("name", ""), 50), s.get("name", ""))
+    )
     lines: list[str] = []
     used = 0
     for skill in skills_metadata:
         name = skill.get("name", "")
         description = _truncate(skill.get("description", ""), _PER_SKILL_DESC_CAP)
         when = skill.get("when_to_use", "")
-        # Extract trigger keywords from when_to_use
+        # 从 when_to_use 提取触发词行（"Trigger keywords:" 或 "Trigger phrases:"，
+        # 大小写无关、中英冒号均可）。依赖 _parse_skill_frontmatter 保留了 \n（行首锚点）。
         triggers = ""
         if when:
             for line in when.split("\n"):
                 stripped = line.strip()
-                if stripped.startswith("Trigger phrases:") or stripped.startswith("Trigger keywords"):
-                    triggers = stripped.split(":", 1)[1].strip()
+                if re.match(r"trigger\s+(keywords|phrases)\s*[:：]", stripped, re.I):
+                    triggers = re.split(r"[:：]", stripped, 1)[1].strip()
                     break
         if description and triggers:
             entry = f"- **{name}**: {description} [触发: {triggers}]"
@@ -200,15 +224,6 @@ def _format_skill_list(skills_metadata: list[dict[str, str]]) -> str:
         lines.append(entry)
     return "\n".join(lines)
 
-
-def _has_recent_reminder(messages: list) -> bool:
-    """检查是否最近 4 条消息内已有 skill reminder（避免重复堆积）"""
-    recent = messages[-4:] if len(messages) > 4 else messages
-    for msg in recent:
-        content = getattr(msg, "content", "") or ""
-        if isinstance(content, str) and "<system-reminder>" in content and "qa_invoke_skill tool" in content:
-            return True
-    return False
 
 class PerTurnSkillReminderMiddleware(AgentMiddleware):
     """Inject skill listing as a HumanMessage in each ModelRequest.
@@ -253,9 +268,6 @@ class PerTurnSkillReminderMiddleware(AgentMiddleware):
         """返回插入了 reminder 的 messages 副本（不修改原列表）"""
         skills_metadata = self._get_metadata()
         if not skills_metadata:
-            return list(request.messages)
-
-        if _has_recent_reminder(request.messages):
             return list(request.messages)
 
         skill_list = _format_skill_list(skills_metadata)

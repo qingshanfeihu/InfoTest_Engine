@@ -5,7 +5,7 @@
 1. **复用现有 loader 的容忍性**：`loader.py::_parse_skill_md` 用 ``yaml.safe_load`` 读
    frontmatter，未知 key 静默忽略。归纳技能新增的 ``params`` / ``verify_script`` /
    ``evidence`` 对主 agent 运行时**完全 drop-in**。这里反过来做：``from_frontmatter``
-   解析时也要**容忍人写技能无扩展字段**（config-answer / g-column-filler 等只有
+   解析时也要**容忍人写技能无扩展字段**（config-answer / device-verify 等只有
    ``name`` / ``description`` / ``when_to_use`` / ``effort`` 等基础字段）。
 2. **借 cc-haha 字段语义**：``version`` / ``effort`` / ``source`` / ``paths`` / ``shell`` /
    ``context`` / ``agent`` / ``user-invocable``（见 plan line 101-106）。

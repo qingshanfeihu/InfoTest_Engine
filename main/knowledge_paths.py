@@ -109,6 +109,9 @@ KNOWLEDGE_FOOTPRINTS_NODES = KNOWLEDGE_FOOTPRINTS / "nodes"
 # auto_env：设备自动化环境资产（网络拓扑 RAG 等），历史上在 5 处文件各自硬编码。
 KNOWLEDGE_AUTO_ENV = KNOWLEDGE_DATA_ROOT / "auto_env"
 KNOWLEDGE_AUTO_ENV_TOPOLOGY = KNOWLEDGE_AUTO_ENV / "network_topology_rag.md"
+# 权威 JSON 事实源（env_facts 投影用）：拓扑（可达性判据）+ 动作词表（合法动作集）。
+KNOWLEDGE_AUTO_ENV_TOPOLOGY_JSON = KNOWLEDGE_AUTO_ENV / "network_topology.json"
+KNOWLEDGE_AUTO_ENV_ACTIONS_JSON = KNOWLEDGE_AUTO_ENV / "execute_actions.json"
 
 
 

@@ -84,6 +84,20 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["qa_probe_show"] = qa_probe_show
         except ImportError:
             pass
+        # 批量编译 tools（ist_compile_batch 总厨用）：备料 + 合并打包 + fan-out + 串行上机
+        try:
+            from main.ist_core.tools.device import (
+                qa_compile_fanout,
+                qa_compile_prep,
+                qa_emit_xlsx_merged,
+                qa_run_batch,
+            )
+            _TOOL_REGISTRY["qa_compile_prep"] = qa_compile_prep
+            _TOOL_REGISTRY["qa_emit_xlsx_merged"] = qa_emit_xlsx_merged
+            _TOOL_REGISTRY["qa_compile_fanout"] = qa_compile_fanout
+            _TOOL_REGISTRY["qa_run_batch"] = qa_run_batch
+        except ImportError:
+            pass
         try:
             from main.ist_core.tools.device.kitchen_tools import (
                 qa_confidence_score,

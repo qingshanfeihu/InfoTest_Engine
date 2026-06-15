@@ -13,7 +13,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from main.case_compiler.config import get_config
 
@@ -126,9 +126,11 @@ class FrameworkMCPClient:
         b64 = base64.b64encode(Path(xlsx_path).read_bytes()).decode()
         return self.call([("write_case", {"module": module, "autoid": autoid, "xlsx_b64": b64})]).get("write_case", {})
 
-    def run(self, module: str, autoid: str, build: str) -> Optional[str]:
-        r = self.call([("run_cases_submit", {"module": module, "autoid": autoid, "build": build})])
-        return (r.get("run_cases_submit") or {}).get("task_id")
+    def run(self, module: str, autoid: str, build: str) -> dict:
+        """提交上机。返回 server 原始结果：成功含 task_id，撞锁含 busy 结构。"""
+        return (self.call([("run_cases_submit",
+                            {"module": module, "autoid": autoid, "build": build})])
+                .get("run_cases_submit") or {})
 
     def status(self, task_id: str, build: str, case_ids: list[str]) -> dict:
         return self.call([("run_cases_status",
@@ -136,10 +138,21 @@ class FrameworkMCPClient:
 
     def run_and_wait(self, module: str, autoid: str, build: str, case_ids: list[str],
                      poll_s: int = 10, max_s: int = 600) -> dict:
-        """提交一个 staging 用例并轮询到 done，返回最终 status。"""
-        tid = self.run(module, autoid, build)
+        """提交一个 staging 用例并轮询到 done，返回最终 status。
+
+        撞锁（设备正在验证上一个用例）时**不静默放弃**，把 server 的结构化 busy
+        信号原样上抛（含 running_autoid / elapsed_s / message），由上层 agent 决定
+        等待、跳过还是上报——而不是把"环境忙"误当成"提交失败"。
+        """
+        sub = self.run(module, autoid, build)
+        if sub.get("busy") or sub.get("error") == "device_busy":
+            return {"error": "device_busy", "busy": True,
+                    "running_autoid": sub.get("running_autoid", ""),
+                    "elapsed_s": sub.get("elapsed_s"),
+                    "message": sub.get("message", "环境忙：正在验证上一个用例，请稍后重试。")}
+        tid = sub.get("task_id")
         if not tid:
-            return {"error": "submit failed (lock held?)"}
+            return {"error": "submit failed: %s" % (sub.get("error") or "unknown")}
         deadline = time.time() + max_s
         last = {}
         while time.time() < deadline:

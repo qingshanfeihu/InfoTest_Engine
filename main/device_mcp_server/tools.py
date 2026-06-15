@@ -172,6 +172,45 @@ def _acquire_lock(task_id):
     return None
 
 
+def _busy_info(held):
+    """撞锁时构造结构化 busy 信息：正在验证哪个 autoid、已跑多少秒。
+
+    held = (task_id, pid)。task_id 形如 ``ist_<module>_<autoid>_<epoch>``，
+    autoid 与起始 epoch 都能从中解析；起始时间优先用 status 文件的 ts（更准），
+    缺失则回退 task_id 尾段 epoch。让 ist 端 agent 知道"环境正在验证上一个用例"
+    并能估算还要等多久，自行决定等/跳/上报。
+    """
+    task_id = held[0] if held else ""
+    autoid, started = "", None
+    if task_id:
+        parts = task_id.split("_")
+        # ist_<module>_<autoid>_<epoch>：尾段 epoch、倒数第二段 autoid
+        if len(parts) >= 4 and parts[-1].isdigit():
+            autoid = parts[-2]
+            started = int(parts[-1])
+        # status 文件的 ts 更准（实际起跑时刻）
+        try:
+            with open(os.path.join(TASK_DIR, task_id + ".status.json")) as f:
+                st = json.load(f)
+            started = st.get("ts", started)
+            autoid = st.get("autoid", autoid)
+        except Exception:
+            pass
+    elapsed_s = int(time.time() - started) if started else None
+    msg = "环境忙：正在验证用例 %s" % (autoid or "?")
+    if elapsed_s is not None:
+        msg += "，已运行 %ds" % elapsed_s
+    msg += "。同一时刻只能跑一个上机任务，请等上一个验证完成后重试。"
+    return {
+        "error": "device_busy",
+        "busy": True,
+        "running_autoid": autoid,
+        "running_task_id": task_id,
+        "elapsed_s": elapsed_s,
+        "message": msg,
+    }
+
+
 def _submit_pytest(module, autoid, build, node):
     """setsid 脱离跑 pytest 目标 node（文件或目录）。共享给单用例/整目录批量。"""
     _ensure_dirs()
@@ -179,8 +218,7 @@ def _submit_pytest(module, autoid, build, node):
     task_id = "ist_%s_%s_%d" % (module, autoid, int(time.time()))
     lock_fd = _acquire_lock(task_id)
     if lock_fd is None:
-        held = _read_lock()
-        return {"error": "another run in progress (lock held by %s)" % (held[0] if held else "?")}
+        return _busy_info(_read_lock())
 
     log_path = os.path.join(TASK_DIR, task_id + ".log")
     status_path = os.path.join(TASK_DIR, task_id + ".status.json")

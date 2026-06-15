@@ -25,7 +25,7 @@ from main.ist_core.tools.device import (
     qa_run_batch,
     qa_emit_xlsx_merged,
 )
-from main.ist_core.tools.device.kitchen_tools import qa_confidence_score, qa_lookup_pattern
+from main.ist_core.tools.device.precedent_tools import qa_confidence_score, qa_lookup_pattern
 from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
 from main.ist_core.tools.skills import qa_invoke_skill
@@ -55,7 +55,7 @@ def _default_generic_tools() -> list[Any]:
         qa_lookup_pattern,
         qa_confidence_score,
 
-        # 批量编译总厨(ist_compile_batch)用：备料 + fan-out + 串行上机 + 合并打包
+        # 批量编译编排器(ist_compile_batch)用：解析清单 + fan-out + 串行上机 + 合并打包
         qa_compile_prep,
         qa_compile_fanout,
         qa_run_batch,

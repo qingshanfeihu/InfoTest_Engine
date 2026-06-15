@@ -1,7 +1,6 @@
 """qa_compile_prep: 脑图(mind-map JSON)→ 批量编译 manifest(JSON 中间表示)。
 
-这是"集中备料"的第一步(餐厅比喻:先看整桌点了哪些菜,列出备料清单),把一个脑图
-文件解析成结构化 manifest,供 ist_compile_batch 总厨按阶段调度。
+批量编译的第一步:把一个脑图文件解析成结构化 manifest,供 ist_compile_batch 编排器按阶段调度。
 
 **零硬编码红线(第一原则,见计划 linear-imagining-galaxy.md)**:
 本工具**只产"需求 + 分组 + 先例引用"**,绝不产任何设备命令/参数/断言。manifest 里
@@ -97,9 +96,9 @@ def _extract_cases(root: dict) -> list[dict]:
 
 @tool(parse_docstring=True)
 def qa_compile_prep(mindmap_path: str, out_name: str = "") -> str:
-    """把一个脑图文件解析成批量编译 manifest(JSON 中间表示),供总厨按阶段调度。
+    """把一个脑图文件解析成批量编译 manifest(JSON 中间表示),供编排器按阶段调度。
 
-    这是"集中备料"第一步:通读整个脑图,列出它包含的所有 case(autoid 主键)、各自的
+    通读整个脑图,列出它包含的所有 case(autoid 主键)、各自的
     标题/分组/步骤需求/期望(全是脑图原文需求),分组归类。
 
     **本工具只产需求,不产命令**(零硬编码红线):manifest 里每个 case 的
@@ -109,7 +108,7 @@ def qa_compile_prep(mindmap_path: str, out_name: str = "") -> str:
 
     关键契约:
     - autoid 是主键,标题重名**不去重**(yzg/zhaiyq 有大量同名 case,区别只在参数)。
-    - 分组(group_path)记录 case 在脑图里的父节点链,供总厨识别"组级共享基线"
+    - 分组(group_path)记录 case 在脑图里的父节点链,供编排器识别"组级共享基线"
       (如 zhaiyq 把基线抽到组外前置节点,组内 case 都不重述)。
 
     Args:
@@ -118,7 +117,7 @@ def qa_compile_prep(mindmap_path: str, out_name: str = "") -> str:
             空则用脑图文件名(去扩展名)。
 
     Returns:
-        manifest 落盘路径 + case 统计(总数/分组/重名标题数)。总厨据此按阶段 fan-out。
+        manifest 落盘路径 + case 统计(总数/分组/重名标题数)。编排器据此按阶段 fan-out。
     """
     # 解析路径(走 agent 沙箱多根)
     p = None
@@ -156,7 +155,7 @@ def qa_compile_prep(mindmap_path: str, out_name: str = "") -> str:
             dups.append(c["autoid"])
         seen.add(c["autoid"])
 
-    # 分组聚合(按 group_path 的末级,供总厨参考;不做语义判断)
+    # 分组聚合(按 group_path 的末级,供编排器参考;不做语义判断)
     from collections import Counter
     groups = Counter(" / ".join(c["group_path"]) for c in cases)
     titles = Counter(c["title"] for c in cases)
@@ -184,4 +183,4 @@ def qa_compile_prep(mindmap_path: str, out_name: str = "") -> str:
             f"{dup_note}\n"
             f"--- manifest 只含需求(标题/分组/步骤/期望),不含任何命令 ---\n"
             f"每个 case 的 init_commands/steps/assertions_provenance 都是 null,\n"
-            f"由 draft 子 agent 现场查手册/先例后回填。下一步:总厨按 case 组 brief 派发 draft。")
+            f"由 draft 子 agent 现场查手册/先例后回填。下一步:编排器按 case 组 brief 派发 draft。")

@@ -72,7 +72,7 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["qa_footprint_lookup"] = qa_footprint_lookup
         except ImportError:
             pass
-        # 厨房角色 tools（cook-case/verify-case/review-case 子 agent 用）
+        # 单 case 编译/上机 tools（draft/grade 子 agent 用）
         try:
             from main.ist_core.tools.device import (
                 qa_emit_xlsx,
@@ -84,7 +84,7 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["qa_probe_show"] = qa_probe_show
         except ImportError:
             pass
-        # 批量编译 tools（ist_compile_batch 总厨用）：备料 + 合并打包 + fan-out + 串行上机
+        # 批量编译 tools（ist_compile_batch 编排器用）：解析清单 + 合并打包 + fan-out + 串行上机
         try:
             from main.ist_core.tools.device import (
                 qa_compile_fanout,
@@ -99,7 +99,7 @@ def _get_tool_registry() -> dict[str, Any]:
         except ImportError:
             pass
         try:
-            from main.ist_core.tools.device.kitchen_tools import (
+            from main.ist_core.tools.device.precedent_tools import (
                 qa_confidence_score,
                 qa_lookup_pattern,
             )

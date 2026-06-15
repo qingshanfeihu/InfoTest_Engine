@@ -1,6 +1,8 @@
 # 人工用例编译流程：四子流程编排架构
 
 > 设计与实现记录。代码中只保留必要的"做什么"注释；设计理念、演进背景、踩过的坑沉淀于此。
+>
+> 本文档讲**单条 case** 的编排（`ist_compile_orchestrate`）。把**整个脑图/多个 txt** 批量编译成 excel 的架构见 [`batch_compile_architecture.md`](batch_compile_architecture.md)（`ist_compile_batch`），它在本文档的四子流程之上加了"解析 manifest → 分阶段并行调度 → 合并打包"的批量层。
 
 ## 解决的问题
 
@@ -46,7 +48,7 @@
 
 - **工具注册**：`skills/loader.py` 的 `_TOOL_REGISTRY` 注册了 `qa_emit_xlsx`/`qa_run_case`/`qa_confidence_score`/`qa_lookup_pattern`/`qa_probe_show`，fork 子 agent 才能取用。
 - **置信判分** `case_compiler/confidence_f.py`：LLM 依据证据（需求 + 配置上下文 + 同类先例 + 手册行为）判分，非硬编码规则；缺判分模型时 abstain，不以硬规则猜分。`qa_confidence_score` 返回结构化 JSON（overall / decision / 逐 check_point score+reasons）。
-- **检索与评估工具** `tools/device/kitchen_tools.py`：`qa_lookup_pattern`（按配置结构相似度检索已验证先例，纯结构距离、无 embedding）、`qa_confidence_score`（判分入口）。
+- **检索与评估工具** `tools/device/precedent_tools.py`：`qa_lookup_pattern`（按配置结构相似度检索已验证先例，纯结构距离、无 embedding）、`qa_confidence_score`（判分入口）。
 
 ## 演进中清理的历史包袱
 

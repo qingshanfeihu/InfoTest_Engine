@@ -31,7 +31,7 @@ _APV_SRC = "/home/test/apv_src"
 # 注：_remote_hashes 用 `find -type f` 拉取，天然排除 test_xlsx.py 符号链接（-type l）。
 # .py 用例是跨模块只读先例弹药（ssl/slb/system 等零 xlsx 模块的唯一已验证来源）：
 # 全产品 ~1.3 万 .py 此前被"只抓 xlsx"挡在门外。corpus._parse_py_case 只收数字命名用例，
-# conftest.py 也一并拉下供 ef_spec 采集设备 fixture 别名（Seg0 等）。
+# conftest.py 也一并拉下供 normalizer 采集设备 fixture 别名（Seg0 等）。
 _SYNC_SPEC = [
     ("smoke_test", ["*.xlsx", "*.py"]),         # 实证用例（xlsx 可直转 + .py 跨模块先例）
     ("lists", ["*"]),                           # run 清单（case_id↔autoid）

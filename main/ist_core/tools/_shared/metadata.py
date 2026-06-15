@@ -127,7 +127,7 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "intent": "write",
     },
 
-    # 批量编译工具(ist_compile_batch 总厨)
+    # 批量编译工具(ist_compile_batch 编排器)
     "qa_compile_prep": {
         # 解析脑图→manifest 落盘:写本地 manifest.json(非设备态),read_only=False。
         "read_only": False,

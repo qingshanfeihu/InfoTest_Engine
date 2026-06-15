@@ -1,6 +1,6 @@
 ---
 name: ist_compile_batch
-description: "把整个脑图文件（含几十条用例）批量编译成一个 excel——通读脑图→备料 manifest→按阶段批量并行调度（draft 并发、run 串行、grade 并发）→合并打包。面向『把 N 个 txt 转成 N 个 excel』『把整个脑图转自动化』这类批量请求；单条用例编译仍用 ist_compile_orchestrate。"
+description: "把整个脑图文件（含几十条用例）批量编译成一个 excel——通读脑图→解析 manifest→按阶段批量并行调度（draft 并发、run 串行、grade 并发）→合并打包。面向『把 N 个 txt 转成 N 个 excel』『把整个脑图转自动化』这类批量请求；单条用例编译仍用 ist_compile_orchestrate。"
 context: inline
 user-invocable: true
 source: hand
@@ -13,13 +13,13 @@ when_to_use: |
   SKIP when: 只编译**单条**用例（用 ist_compile_orchestrate）；只查 CLI 回显（qa_probe_show）；评审已有用例（test-list-review）。
 ---
 
-# 批量编译总厨：通读脑图→备料→分阶段并行调度→合并打包
+# 批量编译编排：通读脑图→解析 manifest→分阶段并行调度→合并打包
 
-把**一个脑图文件**编译成**一个 excel**（含该脑图全部用例，每条都上机跑通且断言真覆盖）。你是总厨，不亲自炒菜：通读整桌点单（脑图）→列备料清单（manifest）→按阶段把活铺开给子流程（draft/run/grade），最后把通过的菜合并装盘。
+把**一个脑图文件**编译成**一个 excel**（含该脑图全部用例，每条都上机跑通且断言真覆盖）。你是编排器，不亲自生成命令：通读整个脑图→解析出 case 清单（manifest）→按阶段把工作分发给子流程（draft/run/grade），最后把通过的 case 合并打包。
 
-## 餐厅比喻（为什么分阶段，不逐条从头炒）
+## 为什么分阶段（不逐条从头编译）
 
-逐条 orchestrate = 每道菜从头备料炒，慢且重复。正确做法：先看整桌点了什么（prep），能并行的并行（draft 各菜同时下锅、grade 同时品控），只有抢同一口锅的串行（run 上机受框架全局锁，必须排队）。
+逐条 orchestrate = 每个 case 都从头解析、查证、生成，慢且重复。正确做法：先一次性解析整个脑图（prep），能并行的并行（draft 各 case 同时生成、grade 同时判分），只有竞争同一资源的串行（run 上机受框架全局锁，必须排队）。
 
 ## 第一原则（不可违反，高于一切）
 
@@ -29,17 +29,17 @@ when_to_use: |
 
 | 阶段 | 工具 | 并行性 | 为什么 |
 |---|---|---|---|
-| 备料 | `qa_compile_prep` | 一次 | 解析脑图→manifest（只含需求，零命令） |
+| 解析 | `qa_compile_prep` | 一次 | 解析脑图→manifest（只含需求，零命令） |
 | 生成 draft | `qa_compile_fanout(skill="ist_compile_draft")` | **并发** | 查手册+本地 emit，不碰设备态 |
 | 上机 run | `qa_run_batch` | **串行**（工具内部 for 循环） | 框架全局锁 + 设备共享态，并发必互相污染 |
 | 评估 grade | `qa_compile_fanout(skill="ist_compile_grade")` | **并发** | 纯本地判分，零设备交互 |
 | 打包 | `qa_emit_xlsx_merged` | 一次 | 同脑图通过的 case 合并成一个 excel + 哨兵垫底 |
 
-## 总厨步数纪律（必须遵守，否则跑不完整批）
+## 编排器步数纪律（必须遵守，否则跑不完整批）
 
-你的工具调用步数有硬上限（recursion_limit）。批量编译有几十上百个 case，**你绝不能自己逐 case grep 手册 / qa_probe_show 探设备 / qa_lookup_pattern 查先例**——那是 draft 子 agent 的活，你这么做会在备料阶段就把步数耗光，整批编译半途而废（已有前车之鉴）。
+你的工具调用步数有硬上限（recursion_limit）。批量编译有几十上百个 case，**你绝不能自己逐 case grep 手册 / qa_probe_show 探设备 / qa_lookup_pattern 查先例**——那是 draft 子 agent 的活，你这么做会在解析阶段就把步数耗光，整批编译半途而废（已有前车之鉴）。
 
-你（总厨）每个脑图**只允许这几类调用**：`qa_compile_prep`（1 次）→ 读 manifest（1-2 次）→ `qa_compile_fanout(draft)`（1 次，一把梭全部 case）→ `qa_run_batch` 或逐条 run（按串行约束）→ `qa_compile_fanout(grade)`（1 次）→ 判定 → 重做 fanout（如需）→ `qa_emit_xlsx_merged`（1 次）。**探查手册/先例/设备的活全在 fanout 内部由 draft 子 agent 完成，你看不到也不该看。** 每个脑图主循环控制在个位数到十几次主 agent 调用，省下的步数留给重做循环。
+你（编排器）每个脑图**只允许这几类调用**：`qa_compile_prep`（1 次）→ 读 manifest（1-2 次）→ `qa_compile_fanout(draft)`（1 次，一把梭全部 case）→ `qa_run_batch` 或逐条 run（按串行约束）→ `qa_compile_fanout(grade)`（1 次）→ 判定 → 重做 fanout（如需）→ `qa_emit_xlsx_merged`（1 次）。**探查手册/先例/设备的活全在 fanout 内部由 draft 子 agent 完成，你看不到也不该看。** 每个脑图主循环控制在个位数到十几次主 agent 调用，省下的步数留给重做循环。
 
 ## 流程
 
@@ -50,7 +50,7 @@ when_to_use: |
 - **用户没写版本就立即 `qa_ask_user` 问**，不要从 config 猜默认值、不要臆测——版本是改变命令正确性的关键决策，猜错会让整批用例查错手册、生成错命令。拿不到版本不得往下走。
 - 确定版本后，推出手册 glob：版本 `10.5` → 手册 `knowledge/data/markdown/product/10.5_cli__part*.md`。这个 glob 后面写进每条 brief 的"指路"，draft 据此 grep 对版本手册。
 
-### 1. 备料：`qa_compile_prep(mindmap_path=..., out_name=<脑图名>)`
+### 1. 解析：`qa_compile_prep(mindmap_path=..., out_name=<脑图名>)`
 产出 `manifest.json`：该脑图全部 case（autoid 主键，标题重名不去重）的标题/分组/步骤需求/期望，以及 `groups`（分组链）。**manifest 里 case 的 init_commands/steps 都是 null**——这是对的，命令由 draft 回填。
 
 
@@ -119,7 +119,7 @@ qa_emit_xlsx_merged(
 **自检三问**（每条 brief 过一遍）：① 这句是"需求/现状/规则/指路"还是"命令/期望值/映射"？后者删。② 删掉后子 agent 是"查不到"还是"想不到"？查不到补"去哪查"，不补答案。③ 这句换个 build/设备还成立吗？不成立=领域写死了。
 
 ## 约束（与 ist_compile_orchestrate 一致 + 批量特有）
-- **总厨不亲自生成/上机/评分**：emit/run/grade 全派发子流程；你只做备料、调度、判定、重做、合并、上报。
+- **编排器不亲自生成/上机/评分**：emit/run/grade 全派发子流程；你只做解析、调度、判定、重做、合并、上报。
 - **交付需双绿**：设备裁决（行为已覆盖）+ grade（断言覆盖目标行为），缺一不可。verdict=pass 不足够。
 - **run 绝不并发**：上机只走 qa_run_batch（串行）或逐条 ist_compile_run，绝不放进 qa_compile_fanout。
 - **autoid 是主键，标题重名不去重**：合并按 autoid，同名 case 各自独立。

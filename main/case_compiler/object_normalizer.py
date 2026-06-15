@@ -1,4 +1,4 @@
-"""E 列对象规范化（ef = entity/fixture spec）。
+"""E 列对象名规范化器。
 
 把 .py 先例代码里的对象名（设备别名 Seg0/APV0_C/apv_0、check_point、主机名等）
 归一成 xlsx 标准 E 列对象名（APV_0 / check_point / test_env / time）。corpus 解析 .py
@@ -29,7 +29,7 @@ _KEYWORD_CANON = {
 _DEVICE_RE = re.compile(r"^(?:apv|seg(?:ment)?|dut)[_-]?(\d+)?", re.IGNORECASE)
 
 
-class EfSpec:
+class ObjectNameNormalizer:
     """E 列对象规范化器。device_aliases 可由 conftest fixture 采集补充（运行时注入）。"""
 
     def __init__(self, device_aliases: dict[str, str] | None = None):
@@ -62,6 +62,6 @@ class EfSpec:
 
 
 @lru_cache(maxsize=1)
-def get_ef_spec() -> EfSpec:
+def get_object_normalizer() -> ObjectNameNormalizer:
     """进程级单例（corpus 解析先例时复用）。"""
-    return EfSpec()
+    return ObjectNameNormalizer()

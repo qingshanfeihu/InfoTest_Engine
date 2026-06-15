@@ -101,16 +101,17 @@ main/ist_core/tools/
 
 ## 用例编译（人工用例 → 自动化 case.xlsx，`main/case_compiler/` + `ist_compile_*` skill）
 
-把人工测试用例（脑图）编译成框架能上机执行、且断言真覆盖目标行为的 `case.xlsx`。**走平台正路**：用户在 TUI 让 main agent 编译，main agent 作为**编排器**派发四子流程，不依赖外层脚本（旧 `scripts/debug/agent_compile_case.py` driver 已退役）。详见 `docs/case_compile_orchestration.md`。
+把人工测试用例（脑图）编译成框架能上机执行、且断言真覆盖目标行为的 `case.xlsx`。**走平台正路**：用户在 TUI 让 main agent 编译，main agent 作为**编排器**派发四子流程，不依赖外层脚本（旧 `scripts/debug/agent_compile_case.py` driver 已退役）。详见 `docs/case_compile_orchestration.md`（单条）与 `docs/batch_compile_architecture.md`（整脑图批量）。
 
-- **编排器** `ist_compile_orchestrate`（inline skill）：派发子流程、汇总反馈、判定交付、派重做、上报。自身不生成/上机/评估。
+- **单条编排** `ist_compile_orchestrate`（inline skill）：派发子流程、汇总反馈、判定交付、派重做、上报。自身不生成/上机/评估。
+- **批量编排** `ist_compile_batch`（inline skill）：把**整个脑图**（含几十条 case）编译成**一个 excel**。`qa_compile_prep` 解析脑图→manifest（只含需求，零命令），`qa_compile_fanout` 把 draft/grade 阶段并发 fan-out，`qa_run_batch` 串行上机（框架全局锁），`qa_emit_xlsx_merged` 合并打包。面向「把 N 个 txt 转成 N 个 excel」。
 - **三个 fork 子流程**（独立 fresh subagent，彼此隔离，消除"自生成自评估"）：
   - `ist_compile_draft`（agent `ist-compile-draft`）：核查前置 → 检索先例 → `qa_emit_xlsx` 生成 xlsx 草稿。
   - `ist_compile_run`（agent `ist-compile-run`）：`qa_run_case` 上机 + 采集框架真实裁决（ground truth，不信 verdict 字符串）。
   - `ist_compile_grade`（agent `ist-compile-grade`）：`qa_confidence_score` 判断断言是否覆盖目标行为 + 给重做意见。
 - **交付需两路反馈均通过**：上机（能跑通）+ 评估（覆盖目标行为）。任一不过则携反馈派重做；连续 N 轮不过则 escalate/qa_ask_user 上报。
-- **case_compiler 现存活件**（早期确定性管线已删）：`case_extract`（抽脑图）/`case_ir`+`xlsx_emit`（xlsx 数据结构与产出）/`confidence_f`（LLM 置信判分，非硬编码规则）/`corpus`+`ef_spec`（先例语料与 E 列对象规范化）/`config`/`device_mcp_client`（跳转机通道）。
-- **关键工具**：`qa_lookup_pattern`（按配置结构相似度检索已验证先例，无 embedding）/`qa_confidence_score`（判分，返回结构化 JSON）/`qa_emit_xlsx`/`qa_run_case`/`qa_probe_show`——均在 `skills/loader.py` 的 `_TOOL_REGISTRY` 注册供 fork 子流程取用。
+- **case_compiler 现存活件**（早期确定性管线已删）：`case_ir`+`xlsx_emit`（xlsx 数据结构与产出）/`confidence_f`（LLM 置信判分，非硬编码规则）/`corpus`+`object_normalizer`（先例语料与 E 列对象名规范化）/`config`/`device_mcp_client`（跳转机通道）。
+- **关键工具**：`qa_lookup_pattern`（按配置结构相似度检索已验证先例，无 embedding）/`qa_confidence_score`（判分，返回结构化 JSON）/`qa_emit_xlsx`/`qa_run_case`/`qa_probe_show`/`qa_compile_prep`/`qa_compile_fanout`/`qa_run_batch`/`qa_emit_xlsx_merged`——均在 `skills/loader.py` 的 `_TOOL_REGISTRY` 注册供 fork 子流程取用。检索与置信工具在 `tools/device/precedent_tools.py`，批量编排工具在 `tools/device/batch_tools.py`+`compile_prep.py`。
 - **红线**：skill/agent 定义零写死的 sdns/APV 具体命令（领域内容靠 LLM 现场查手册 `*cli__part*.md`/先例）；断言期望值溯源先例/手册，不 observe-then-assert。
 
 ## 记忆子系统（`main/ist_core/memory/`）

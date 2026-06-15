@@ -112,7 +112,7 @@ def _parse_file(path: Path) -> list[CorpusCase]:
     return cases
 
 
-def _parse_py_case(path: Path, ef_spec=None) -> "CorpusCase | None":
+def _parse_py_case(path: Path, normalizer=None) -> "CorpusCase | None":
     """把 host_persistence 风格的 pytest .py 脚本反编译成 CorpusCase（行级 DSL）。
 
     形态（实证 205271757988517196.py）：
@@ -125,8 +125,8 @@ def _parse_py_case(path: Path, ef_spec=None) -> "CorpusCase | None":
           time.sleep(10)                  → E=time F=sleep G=10
     autoid 来自文件名（[0-9]+.py）。action/expect 注释作 title。
 
-    E 列对象合法集 + 设备别名来自 ef_spec（原始 xlsx 下拉菜单的权威源），
-    不再写死 {APV0,APV1,...}（根因红线，见 ef_spec.py）。ef_spec=None 时懒加载单例。
+    E 列对象合法集 + 设备别名来自 normalizer（原始 xlsx 下拉菜单的权威源），
+    不再写死 {APV0,APV1,...}（根因红线，见 object_normalizer.py）。normalizer=None 时懒加载单例。
     """
     name = path.stem
     if not re.fullmatch(r"\d{7,}", name):
@@ -135,9 +135,9 @@ def _parse_py_case(path: Path, ef_spec=None) -> "CorpusCase | None":
         src = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return None
-    if ef_spec is None:
-        from main.case_compiler.ef_spec import get_ef_spec
-        ef_spec = get_ef_spec()
+    if normalizer is None:
+        from main.case_compiler.object_normalizer import get_object_normalizer
+        normalizer = get_object_normalizer()
     # title: 取注释里的 action 行
     title = ""
     m = re.search(r"#\s*action[:：]\s*(.+)", src)
@@ -157,7 +157,7 @@ def _parse_py_case(path: Path, ef_spec=None) -> "CorpusCase | None":
             continue
         save_var, obj, method, argstr = cm.group(1), cm.group(2), cm.group(3), cm.group(4)
         # 还原 E 列对象名：经规范源归一（设备别名 Seg0/APV0_C→APV_0），R2 修复①
-        eobj = ef_spec.canon_object(obj)
+        eobj = normalizer.canon_object(obj)
         if eobj is None:
             continue
         g = _extract_g(argstr, eobj, method)   # R2 修复③：kwargs/多位置参数
@@ -247,10 +247,10 @@ class IdiomCorpus:
         cases: list[CorpusCase] = []
         seen: set[str] = set()
         # 规范源单例（E×F 合法集 + 设备别名），全 .py 共享一份，避免逐文件重扫语料
-        ef_spec = None
+        normalizer = None
         if include_py:
-            from main.case_compiler.ef_spec import get_ef_spec
-            ef_spec = get_ef_spec()
+            from main.case_compiler.object_normalizer import get_object_normalizer
+            normalizer = get_object_normalizer()
         for root in roots:
             if not root.exists():
                 continue
@@ -274,7 +274,7 @@ class IdiomCorpus:
                         continue
                     seen.add(key)
                     try:
-                        cc = _parse_py_case(pyf, ef_spec=ef_spec)
+                        cc = _parse_py_case(pyf, normalizer=normalizer)
                         if cc is not None:
                             cases.append(cc)
                     except Exception:

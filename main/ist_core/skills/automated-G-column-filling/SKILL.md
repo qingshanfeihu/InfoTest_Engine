@@ -161,7 +161,19 @@ python main/ist_core/skills/automated-g-column-filling/scripts/write_g_column.py
 
 **Step 7b**: 调 MCP tool `smoke_test_run(filename="filled_<原名>.xlsx")`。MCP Server 在 Linux 上执行 pytest，扫描 report/istcore/ 目录，返回 `The failed check point num: N` 中 N > 0 的项。
 
+**Step 7c**: 分析失败结果并修正 G 列。
+
+当 `smoke_test_run` 返回失败项时：
+1. 用 MCP tool `linux_ssh_execute(host, "cat /home/test/apv_src/report/istcore/<filename>")` 读取每个失败 report 的完整内容，逐项分析失败原因
+2. 判断是否为 G 列填写错误（如 check_point 格式不对、IP/端口错误、命令语法错误等）
+3. 如果是 G 列填写错误：
+   - 定位对应的行号和当前 G 列内容
+   - 根据失败信息推断正确内容
+   - 调 `write_g_column.py --overwrite` 修正 G 列，重新上传到 Linux 并再次执行 `smoke_test_run`
+   - 重复直到全部通过或无法自动修正（最多重试 2 次）
+4. 如果不是 G 列错误（如环境问题、设备配置问题等）→ 报告给用户，不自动修正
+
 触发条件：用户说"跑一下测试""跑烟雾测试""跑用例"。
 
-**Success criteria**: 测试已执行，失败项已返回
-**Artifacts**: smoke_test_result
+**Success criteria**: 测试全部通过，或失败项已报告并附修正建议
+**Artifacts**: smoke_test_result, corrections

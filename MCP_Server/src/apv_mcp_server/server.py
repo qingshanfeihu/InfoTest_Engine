@@ -12,7 +12,8 @@ Session management (for persistent connections):
   7. device_session_close — Close a session
   8. device_session_list  — List all open sessions
 
-Requires Python 3.11+. Uses the official MCP Python SDK (FastMCP).
+Requires Python 3.10+ (FastMCP SDK constraint). Core client modules
+(ssh_apv, telnet_apv, restapi_apv, ssh_linux) work on Python 3.8+.
 """
 
 from __future__ import annotations
@@ -23,7 +24,10 @@ import os
 import uuid
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP  # type: ignore[import-untyped]
+except ImportError:
+    from apv_mcp_server._mcp_compat import FastMCP  # Python 3.8/3.9 fallback
 
 from apv_mcp_server.ssh_apv import APVSSHClient
 from apv_mcp_server.telnet_apv import APVTelnetClient
@@ -595,17 +599,12 @@ async def smoke_test_run(filename: str) -> str:
     # Step 3: Collect failed check points from report files
     report_dir = Path("/home/test/apv_src/report/istcore")
     failures: list[str] = []
-    report_summary: list[str] = []
 
     if report_dir.exists():
         for fname in sorted(report_dir.iterdir()):
             if not fname.is_file():
                 continue
-            try:
-                content = fname.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                continue
-            for line in content.splitlines():
+            for line in fname.read_text(encoding="utf-8", errors="replace").splitlines():
                 if "The failed check point num:" in line:
                     parts = line.split("The failed check point num:")
                     if len(parts) > 1:
@@ -615,19 +614,24 @@ async def smoke_test_run(filename: str) -> str:
                         except ValueError:
                             num = 0
                         if num > 0:
-                            failures.append(f"{fname.name}: {line.strip()}")
-                            report_summary.append(f"  [{fname.name}] {line.strip()}")
+                            failures.append(f"{fname.name}  failed_num={num}  path={report_dir}/{fname.name}")
                     break
 
     failed_count = len(failures)
     status = "failed" if failed_count > 0 else "all_passed"
-    return (
-        f"=== smoke_test_run ===\n"
-        f"file: {filename}\n"
-        f"pytest exit_code: {exit_code}  failed check points: {failed_count}  status: {status}\n"
-        + (f"--- failures ---\n" + "\n".join(report_summary) if failed_count > 0
-           else "--- result ---\nAll check points passed (failed num = 0)")
-    )
+    lines = [
+        f"=== smoke_test_run ===",
+        f"file: {filename}",
+        f"pytest exit_code: {exit_code}  failed check points: {failed_count}  status: {status}",
+    ]
+    if failed_count > 0:
+        lines.append("--- failures ---")
+        lines.extend(failures)
+        lines.append(f"\nUse linux_ssh_execute to read report content: cat {report_dir}/<filename>")
+    else:
+        lines.append("--- result ---")
+        lines.append("All check points passed (failed num = 0)")
+    return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════════════

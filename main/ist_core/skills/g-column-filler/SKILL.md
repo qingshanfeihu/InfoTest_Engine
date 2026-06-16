@@ -73,6 +73,8 @@ $ARGUMENTS
 
 | 资源类型 | 来源（行号+D列关键词） | 需要的参数 |
 |---------|---------------------|-----------|
+| zone | 行X D列提到"区域""zone""域名解析" | 区域名称（域名格式） |
+| record (ns/a/aaaa/cname/txt/...) | 行X D列提到"记录""record""ns""a记录""解析" | 记录名、域名、IP/目标域名 |
 | host/domain | 行X D列提到"域名""host" | 域名值 |
 | service/pool | 行X D列提到"服务""pool" | 服务名 |
 | listener | 行X D列提到"监听""listener""端口" | IP、端口、协议 |
@@ -95,7 +97,7 @@ $ARGUMENTS
 
 按依赖顺序（先创建被依赖资源，再创建依赖资源）为 1a 清单中的每种资源生成创建命令。CLI 手册有配置示例时以此为模板。多条命令用换行分隔。只做搭建，不含清除命令（no/clear 等）。
 
-**命令顺序原则**：先启用模块（如 `sdns on`），再创建基础资源（host/domain），然后创建服务组件（service/pool），最后创建接入层（listener）。启用命令必须放在第一条。
+**命令顺序原则**：先启用模块（如 `sdns on`），再创建基础资源（host/domain/zone），然后创建服务组件（service/pool/record），最后创建接入层（listener）和关联（`sdns zone record`）。启用命令必须放在第一条。SDNS DNS 场景特别注意：必须先 `sdns zone name` 创建 zone，再 `sdns record` 创建记录，最后 `sdns zone record` 将记录关联到 zone——只建 record 不建 zone + 关联 = record 无效。
 
 **Listener 创建策略**：基础配置行**通常不创建 listener**——listener 由后续各测试组按需创建（不同测试组有不同的 IP/端口/协议需求）。除非 1a 资源清单中只有一个固定的 listener 配置被所有后续行共用。
 
@@ -103,11 +105,12 @@ $ARGUMENTS
 
 | 模块 | 服务栈层级（从底向上）                                         | 最少命令数 |
 |------|-----------------------------------------------------|-----------|
-| SDNS | sdns on → host → service → pool → listener          | ≥4 |
+| SDNS (GSLB) | sdns on → host → service → pool → listener          | ≥4 |
+| SDNS (DNS)  | sdns zone name → sdns record → sdns zone record → sdns fulldns on → sdns on | ≥5 |
 | SLB | virtual server → real server → group → health check | ≥3 |
 | HA | ha unit → ha group → ha fip                         | ≥3 |
 
-**硬性门槛**：如果生成的基础配置命令数少于该模块的最少命令数，说明遗漏了服务栈的某层，必须回到 1a 重新盘点。
+**硬性门槛**：如果生成的基础配置命令数少于该模块的最少命令数，说明遗漏了服务栈的某层，必须回到 1a 重新盘点。SDNS DNS 场景只给 `sdns record` 不给 `sdns zone name` + `sdns zone record` = 不完整。
 
 #### 1d. 自检（每条必须通过，不通过则回到 1a）
 
@@ -119,7 +122,7 @@ $ARGUMENTS
 6. 每条 APV 参数已通过 CLI 验证流程（见 Step 2e）？
 7. 需要手动启用的模块/功能/节点已追加启用命令？（查 CLI 手册确认默认启用状态，默认关闭的必须加 `sdns on`/`ha on` 等）
 8. 跨模块资源已处理？
-9. **无孤悬资源**：每个 real server 是否通过 group member 被引用？每个 health check 是否 bind 到了对象？每个 pool/group 是否被 virtual server 或 policy 使用？定义但无人引用的资源 → 补充引用或删除
+9. **无孤悬资源**：每个 real server 是否通过 group member 被引用？每个 health check 是否 bind 到了对象？每个 pool/group 是否被 virtual server 或 policy 使用？每个 `sdns record` 是否通过 `sdns zone record` 关联到 zone？每个 zone 是否包含至少一个 NS + 一个 A/AAAA 记录？定义但无人引用的资源 → 补充引用或删除
 
 **Success criteria**: 基础配置行命令完整覆盖 1a 资源清单中的所有资源类型，9 条自检全部通过
 

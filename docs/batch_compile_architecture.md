@@ -47,9 +47,23 @@
 
 交付门槛是 **grade 断言质量**（弱断言/未覆盖仍 CUT，不救场），**不是上机 pass**。上机由 `ist_verify` 在产出后独立做——环境瞬态失败不挡 excel 产出；verify 发现的真实断言问题（非环境）可回流重编译。
 
+## 已知约束与实证教训（2026-06-16 yzg 26 case 端到端实跑）
+
+这些是真实上机暴露的硬约束，设计/生成时必须遵守（详见 `docs/yzg_grade_vs_run_audit.md`）：
+
+1. **check_point 必须紧跟产生回显的命令（show/dig），不能跟在纯配置命令后**。配置命令（`cmds_config`/`cmd_config` 写操作）无输出，check_point 匹配到 `result=None` → 框架 `lib/check_point.py` 抛 `TypeError: expected string or bytes-like object`。draft 生成红线，emit 阶段宜加结构校验门拦截。
+2. **框架对合并 xlsx 是「一个 case 崩溃中断整包后续」**，不跳过坏 case。实证：yzg 合并 xlsx 第 4 个 case（悬空 check_point）抛 TypeError 后，后续 22 个 case 全部 no_log（未执行）。故合并 xlsx 跑法依赖每个 case 都不崩；稳妥做法是 case 间隔离或先剔除会崩的 case。
+3. **合并 xlsx 的正确跑法 = deliver 一次 + run 一次**（框架按 xlsx 顺序跑全部 case，各 case 子日志落 `ist_staging_<module>/<run的autoid>/test_xlsx/case.xlsx/<each_autoid>/`）。**不是**对每个 autoid 循环 deliver+run（那会重复跑整包 + verdict 张冠李戴）。
+4. **grade（断言质量）与上机（能否跑通）正交**：grade PASS 的 case 上机仍可能 fail（如 dig 没解析到后端 IP——环境/解析链路问题，非断言错）。这印证编译/验证解耦的合理性——断言写得对 ≠ 当前环境能跑通。
+5. **环境瞬态 fail 的识别**：`fail to find <IP> in:`（in 后为空 = dig 无有效响应）、`Socket is closed`、`connection timed out`、NXDOMAIN/SERVFAIL 多为设备/网络瞬态，ist_verify 应标注为环境失败、不回流重编译（重做 case 没用）。
+
 ## 相关文件
 
-- skill：`main/ist_core/skills/ist_compile_batch/SKILL.md`（编排规范 + brief 五要素）
+- 编译 skill：`main/ist_core/skills/ist_compile_batch/SKILL.md`（编排规范 + brief 五要素）
+- 上机验证 skill：`main/ist_core/skills/ist_verify/SKILL.md`（成品 excel 上机 + 断言失败/环境失败分类 + 回流）
+- 子流程：`main/ist_core/skills/ist_compile_{draft,grade,run}/SKILL.md` + `main/ist_core/agents/ist-compile-*.md`
 - 解析工具：`main/ist_core/tools/device/compile_prep.py`（`qa_compile_prep`）
 - 批量工具：`main/ist_core/tools/device/batch_tools.py`（`qa_compile_fanout` / `qa_run_batch` / `qa_emit_xlsx_merged`）
-- 单条编排：`docs/case_compile_orchestration.md`
+- 子流程编排设计：`docs/case_compile_orchestration.md`
+- 端到端实证审计：`docs/yzg_grade_vs_run_audit.md`
+- 本轮重构汇总：`docs/compile_refactor_round_2026-06-16.md`

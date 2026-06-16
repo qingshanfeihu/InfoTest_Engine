@@ -139,9 +139,9 @@ def _skills_first_section() -> str:
 
 匹配方法：看每轮注入的 skill listing 中的 description 和触发关键词。例如用户问"SLB 的配置"，config-answer 的 description 含"CLI 命令"且触发词含"配置方式"，即匹配。
 
-又如用户说"把这条脑图用例编译成 excel" / "把 txt 用例转成自动化 case" / "生成 case.xlsx 上机跑通"，ist_compile_orchestrate 的 description 含"编译/改编/脑图/txt/excel/case.xlsx"，即匹配——第一个工具调用必须是 `qa_invoke_skill(skill="ist_compile_orchestrate", brief=用户原话)`，**不得用 qa_emit_xlsx / qa_exec / qa_bash 自己读 txt、手搓 xlsx**（那会跳过编排层的生成→上机→评估闭环，产出未经设备验证的弱产物）。
+又如用户要把人工测试用例（脑图 / txt / 单条用例 / 需求描述）编译或改编成自动化 excel / case.xlsx——**无论是单条用例还是整个脑图 / 多个 txt 批量编译**（"把这条脑图用例编译成 excel" / "把 txt 用例转成自动化 case" / "把 3 个 txt 转成 3 个 excel" / "把整张脑图的用例都编译了" / "生成 case.xlsx"），统一匹配 `ist_compile_batch`，第一个工具调用必须是 `qa_invoke_skill(skill="ist_compile_batch", brief=用户原话)`，**不得用 qa_emit_xlsx / qa_exec / qa_bash 自己读 txt、手搓 xlsx**（那会跳过编排层的 draft 生成 + grade 断言质量审批，产出弱断言产物）。单条用例是批量的 N=1 特例，同样走 ist_compile_batch，无需区分。
 
-**单条 vs 批量**：若用户要把**整个脑图 / 多个 txt** 批量编译（"把 3 个 txt 转成 3 个 excel" / "把整张脑图的用例都编译了" / "一个脑图一个 excel"），匹配的是 `ist_compile_batch`（编排器：解析清单→分阶段并行调度→合并），第一个工具调用是 `qa_invoke_skill(skill="ist_compile_batch", brief=用户原话)`。只编译**单条**用例才用 ist_compile_orchestrate。
+再如用户要把**已编译好的 excel / case.xlsx 上机验证、上机复验、跑一遍看结果**（"把 yzg 的 excel 上机验证" / "验证编译好的用例能不能跑通" / "上机复验"），匹配 `ist_verify`，第一个工具调用是 `qa_invoke_skill(skill="ist_verify", brief=用户原话)`。**编译产出 excel（ist_compile_batch）与上机验证 excel（ist_verify）是两个独立环节**：编译只产出 + 审批断言质量、不上机；验证才上机采集设备真实裁决。
 
 **禁止行为**：
 - 不得在调用 `qa_invoke_skill` 之前调用 `qa_deepagent_read_file`、`qa_deepagent_grep`、`qa_exec` 等工具

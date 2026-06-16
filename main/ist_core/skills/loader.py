@@ -14,6 +14,9 @@ Subagents (agents/<name>.md):
 from __future__ import annotations
 
 import logging
+import os
+import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,66 @@ logger = logging.getLogger(__name__)
 
 _SKILLS_DIR = Path(__file__).parent
 _AGENTS_DIR = Path(__file__).resolve().parents[1] / "agents"
+
+# fork 子 agent 可观测性：每次 fork 执行把内部工具调用分布/轮数/耗时落到此日志，
+# 用于诊断「draft/grade 慢在哪一步」（fork 内部 LLM 往返不进主 stream）。
+# 路径走 IST_SESSION_DIR/runtime，默认 runtime/logs/fork_trace.log。
+_FORK_TRACE_PATH = os.environ.get("IST_FORK_TRACE_LOG") or str(
+    Path(__file__).resolve().parents[2] / "runtime" / "logs" / "fork_trace.log"
+)
+
+
+def _summarize_fork_messages(messages: list) -> dict:
+    """从 fork 子 agent 返回的 messages 统计可观测指标：
+    工具调用分布、AI 轮数（≈LLM 往返）、ToolMessage 数。"""
+    tool_calls: Counter = Counter()
+    ai_rounds = 0
+    tool_results = 0
+    for m in messages:
+        mtype = getattr(m, "type", "")
+        if mtype == "ai":
+            ai_rounds += 1
+            for tc in (getattr(m, "tool_calls", None) or []):
+                name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+                if name:
+                    tool_calls[name] += 1
+        elif mtype == "tool":
+            tool_results += 1
+    return {
+        "ai_rounds": ai_rounds,
+        "tool_results": tool_results,
+        "tool_calls": dict(tool_calls),
+    }
+
+
+def _trace_fork(skill_name: str, brief: str, elapsed_s: float, summary: dict, error: str = "") -> None:
+    """把单次 fork 执行的可观测摘要落到 fork_trace.log（失败静默，不挂主流程）。"""
+    try:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        # brief 取首行 + 截断，避免日志过长，且不泄露完整内容
+        brief_head = (brief or "").strip().splitlines()[0][:80] if brief else ""
+        tc = summary.get("tool_calls", {})
+        tc_str = ", ".join(f"{k}={v}" for k, v in sorted(tc.items(), key=lambda x: -x[1]))
+        line = (
+            f"[{ts}] fork={skill_name} elapsed={elapsed_s:.1f}s "
+            f"ai_rounds={summary.get('ai_rounds', 0)} "
+            f"tool_results={summary.get('tool_results', 0)} "
+            f"tools=[{tc_str}]"
+            + (f" ERROR={error}" if error else "")
+            + f" brief1={brief_head!r}\n"
+        )
+        p = Path(_FORK_TRACE_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(line)
+        # 同时进模块 logger（便于 stderr 实时看）
+        logger.info(
+            "fork %s done: elapsed=%.1fs ai_rounds=%d tools=[%s]",
+            skill_name, elapsed_s, summary.get("ai_rounds", 0), tc_str,
+        )
+    except Exception:  # noqa: BLE001 — 可观测性绝不能影响主流程
+        logger.debug("fork trace 写入失败", exc_info=True)
+
 
 _MODEL_MAP = {
     "opus": "opus",
@@ -323,13 +386,17 @@ def execute_fork_skill(skill_name: str, brief: str = "") -> str:
 
     from langchain_core.messages import HumanMessage
 
+    _t0 = time.monotonic()
     try:
         result = runnable.invoke({"messages": [HumanMessage(content=rendered_body)]})
     except Exception as exc:
         logger.exception("Fork skill %s execution failed", skill_name)
+        _trace_fork(skill_name, brief, time.monotonic() - _t0, {}, error=str(exc)[:120])
         return f"ERROR: fork skill {skill_name!r} execution failed: {exc}"
 
     messages = result.get("messages", [])
+    # 可观测性：落 fork 内部工具调用分布/轮数/耗时到 fork_trace.log
+    _trace_fork(skill_name, brief, time.monotonic() - _t0, _summarize_fork_messages(messages))
     for msg in reversed(messages):
         if hasattr(msg, "content") and getattr(msg, "type", "") == "ai":
             content = msg.content

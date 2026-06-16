@@ -34,14 +34,14 @@ def test_skill_eligible_for_listing():
 def test_load_skills_from_dir_includes_fork_subflows():
     """fork 子流程 skill（user-invocable: false）仍进主 agent listing。
 
-    它们由 inline 编排 skill（ist_compile_orchestrate / test-list-review）的 body 引导
+    它们由 inline 编排 skill（ist_compile_batch / test-list-review）的 body 引导
     主 agent 经 qa_invoke_skill 派发，派发者是主 agent，必须对模型可见。
     listing 唯一过滤条件是 disable-model-invocation: true。
     """
     skills_dir = Path(__file__).resolve().parents[3] / "main" / "ist_core" / "skills"
     names = {m["name"] for m in _load_skills_from_dir(skills_dir)}
     assert "test-list-review" in names
-    assert "ist_compile_orchestrate" in names
+    assert "ist_compile_batch" in names
     assert "review-verification" in names
 
 
@@ -117,16 +117,38 @@ def test_trigger_keywords_case_and_colon_variants():
         assert "[触发: 甲, 乙" in out, f"未提取: {when!r} → {out!r}"
 
 
-def test_real_orchestrate_skill_listing_has_triggers():
-    """真实 ist_compile_orchestrate skill：listing 必须含描述 + 编译类触发词。
+def test_real_compile_skill_listing_has_triggers():
+    """真实 ist_compile_batch skill：listing 必须含描述 + 编译类触发词。
 
-    这是用户报告「编译脑图用例没命中 ist_compile_orchestrate」的端到端回归保护。
+    这是用户报告「编译脑图用例没命中编译编排 skill」的端到端回归保护。
+    入口已统一为 ist_compile_batch（orchestrate 已删除，单条/批量都走 batch）。
     """
     skills_dir = Path(__file__).resolve().parents[3] / "main" / "ist_core" / "skills"
     metas = _load_skills_from_dir(skills_dir)
     out = _format_skill_list(metas)
-    orch_line = next((l for l in out.splitlines() if "ist_compile_orchestrate" in l), "")
-    assert orch_line, "ist_compile_orchestrate 未出现在 listing"
+    batch_line = next((l for l in out.splitlines() if "ist_compile_batch" in l), "")
+    assert batch_line, "ist_compile_batch 未出现在 listing"
+    # orchestrate 已删除，不应再出现
+    assert "ist_compile_orchestrate" not in out, "orchestrate 已删除，listing 不应再含它"
     # 用户高频用词进了 description 或触发词
-    assert "编译" in orch_line
-    assert "[触发:" in orch_line and ("excel" in orch_line.lower() or "case.xlsx" in orch_line)
+    assert "编译" in batch_line
+    assert "[触发:" in batch_line and ("excel" in batch_line.lower() or "case.xlsx" in batch_line)
+
+
+def test_verify_skill_listed_and_decoupled_from_compile():
+    """ist_verify 独立进 listing，且与 ist_compile_batch 触发词不冲突（编译/验证解耦）。
+
+    2026-06-16：编译产出（ist_compile_batch，不上机）与上机验证（ist_verify）解耦。
+    回归保护：『上机验证』类触发词归 ist_verify，不再混在 batch 里抢命中。
+    """
+    skills_dir = Path(__file__).resolve().parents[3] / "main" / "ist_core" / "skills"
+    metas = _load_skills_from_dir(skills_dir)
+    out = _format_skill_list(metas)
+    verify_line = next((l for l in out.splitlines() if "ist_verify" in l), "")
+    batch_line = next((l for l in out.splitlines() if "ist_compile_batch" in l), "")
+    assert verify_line, "ist_verify 未出现在 listing"
+    # 上机验证触发词归 ist_verify
+    assert "上机验证" in verify_line or "上机复验" in verify_line
+    # batch 的触发词不再含『上机验证』（避免与 verify 抢命中）
+    batch_trig = batch_line.split("[触发:")[-1] if "[触发:" in batch_line else ""
+    assert "上机验证" not in batch_trig, "batch 触发词不应再含『上机验证』——归 ist_verify"

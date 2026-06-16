@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -13,6 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from main.ist_core.events import IstCoreEvent
+
+# verbose 模式下 tool_result.output 的打印上限。output 是 debug 关键证据
+# (如 grade fanout 返回的逐 case 判分理由),默认给足 2 万字符,避免被截断丢证;
+# env IST_CLI_OUTPUT_CAP 可调。
+try:
+    _OUTPUT_CAP = int(os.environ.get("IST_CLI_OUTPUT_CAP", "20000"))
+except (TypeError, ValueError):
+    _OUTPUT_CAP = 20000
 
 _COLOR_MAP = {
     "node_start": "\033[36m",
@@ -90,9 +99,19 @@ class CLISink:
 
         if self.verbose:
             payload = event.get("payload") or {}
-            extra = {k: v for k, v in payload.items() if k != "content"}
+            # output 是 debug 关键证据(如 grade 26 个 case 的判分理由)——单独大上限打印,
+            # 不与其余小字段一起被 300 字符截断。其余 extra(input/name 等)保持精简。
+            output_val = payload.get("output")
+            extra = {k: v for k, v in payload.items() if k not in ("content", "output")}
             if extra:
                 base += " " + json.dumps(extra, ensure_ascii=False, default=str)[:300]
+            if output_val is not None:
+                out_str = output_val if isinstance(output_val, str) else json.dumps(
+                    output_val, ensure_ascii=False, default=str
+                )
+                if len(out_str) > _OUTPUT_CAP:
+                    out_str = out_str[:_OUTPUT_CAP] + f"…[truncated {len(out_str) - _OUTPUT_CAP} chars]"
+                base += " output=" + out_str
             usage = event.get("usage")
             if usage:
                 base += f"  usage={usage}"

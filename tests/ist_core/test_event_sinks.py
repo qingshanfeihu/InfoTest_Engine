@@ -80,3 +80,28 @@ def test_langsmith_sink_disabled_by_default(monkeypatch) -> None:
 
     assert sink.enabled is False
     sink({"kind": "run_start", "payload": {}, "run_id": "x", "seq": 1, "ts": "", "tags": {}})
+
+
+def test_cli_sink_verbose_preserves_long_tool_output() -> None:
+    """tool_result.output 是 debug 关键证据（如 grade fanout 逐 case 判分理由），
+    verbose 模式下不得被旧的 300 字符 extra 截断丢掉。回归保护：
+    曾因 json.dumps(extra)[:300] 把 grade 26 个 case 结果砍到只剩第 1 个。"""
+    sink = CLISink(verbose=True, no_color=True)
+    # 模拟 grade fanout 返回:两个 case，第 2 个在 300 字符之后
+    long_out = (
+        "[{'key':'c1','output':'**评估结论：PASS**" + "A" * 1000 + "'},"
+        "{'key':'c2','output':'**评估结论：CUT** 弱断言" + "B" * 1000 + "'}]"
+    )
+    buf = io.StringIO()
+    orig = sys.stdout
+    sys.stdout = buf
+    try:
+        sink({"kind": "tool_result", "payload": {"name": "qa_compile_fanout", "output": long_out},
+              "run_id": "x", "seq": 1, "ts": "", "tags": {"name": "qa_compile_fanout"}})
+    finally:
+        sys.stdout = orig
+    out = buf.getvalue()
+    # 第 1 个 PASS 和第 2 个 CUT 都必须在(旧实现第 2 个会被截掉)
+    assert "PASS" in out
+    assert "CUT" in out
+    assert "弱断言" in out

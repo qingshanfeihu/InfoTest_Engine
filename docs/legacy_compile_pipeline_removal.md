@@ -1,5 +1,7 @@
 # 旧用例编译管线全删清单（2026-06-15）
 
+> **后续更新（2026-06-15 同日）**：本文档提到的 `ist_compile_orchestrate` 编排架构已于同日删除，编译入口统一为 `ist_compile_batch`（单条/批量都走它）。下文 `ist_compile_orchestrate` 引用为当时历史。
+
 ## 背景
 `infotest -p` 全量编译 3 脑图实跑发现：main agent 没命中 `ist_compile_orchestrate` 编排架构，而是走了并存的**旧确定性管线工具**（`qa_extract_test_cases`→`qa_decompose_test_cases`→`qa_generate_test_case_xlsx`+G列填充 skill）。
 

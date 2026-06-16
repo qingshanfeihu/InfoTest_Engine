@@ -2,7 +2,7 @@
 
 > 设计与实现记录。代码中只保留必要的"做什么"注释；设计理念、演进背景、踩过的坑沉淀于此。
 >
-> 本文档讲**单条 case** 的编排（`ist_compile_orchestrate`）。把**整个脑图/多个 txt** 批量编译成 excel 的架构见 [`batch_compile_architecture.md`](batch_compile_architecture.md)（`ist_compile_batch`），它在本文档的四子流程之上加了"解析 manifest → 分阶段并行调度 → 合并打包"的批量层。
+> 本文档讲**四子流程（draft/run/grade）的编排设计**。编译入口已统一为 `ist_compile_batch`（2026-06-15 合并：原 `ist_compile_orchestrate` 单条编排器已删除，单条用例是 N=1 特例、走同一批量流程）。批量层（解析 manifest → 分阶段并行调度 → 合并打包）见 [`batch_compile_architecture.md`](batch_compile_architecture.md)。本文档描述的四子流程编排红线被 `ist_compile_batch` 复用。
 
 ## 解决的问题
 
@@ -20,7 +20,7 @@
 
 | 角色 | skill / agent | 职责 |
 |---|---|---|
-| 编排器 | `ist_compile_orchestrate`（inline，main agent 读取并编排） | 派发子流程、汇总反馈、判定交付、派发重做、上报。不直接生成/上机/评估 |
+| 编排器 | `ist_compile_batch`（inline，main agent 读取并编排，唯一编译入口） | 派发子流程、汇总反馈、判定交付、派发重做、上报。不直接生成/上机/评估 |
 | 生成 | `ist_compile_draft` / `ist-compile-draft`（fork） | 核查前置→检索先例→`qa_emit_xlsx` 生成草稿。不上机、不自评 |
 | 上机 | `ist_compile_run` / `ist-compile-run`（fork） | `qa_run_case` 上机执行 + 采集框架真实裁决（ground truth）。不修改、不评估 |
 | 评估 | `ist_compile_grade` / `ist-compile-grade`（fork） | `qa_confidence_score` 判断断言是否覆盖目标行为 + 给重做意见。不生成、不上机 |
@@ -63,4 +63,4 @@
 
 ## 入口
 
-走平台正路：用户在 infotest TUI 中要求"把某脑图的某用例编译成 case 并上机验证"，main agent 触发 `ist_compile_orchestrate` 自主完成。不再使用 `scripts/debug/agent_compile_case.py`（已退役）。
+走平台正路：用户在 infotest TUI 中要求"把某脑图的某用例编译成 case 并上机验证"，main agent 触发 `ist_compile_batch` 自主完成。不再使用 `scripts/debug/agent_compile_case.py`（已退役）。

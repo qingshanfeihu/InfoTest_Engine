@@ -2,6 +2,8 @@
 
 > 2026-06-15。修复「main agent 面对编译脑图用例任务时没命中 `ist_compile_orchestrate`，
 > 转而用 qa_exec/qa_bash 手搓」的问题。设计与取舍记录于此，代码只留必要注释。
+>
+> **后续更新（2026-06-15 同日）**：`ist_compile_orchestrate` 已删除，编译入口统一为 `ist_compile_batch`（单条/批量都走它）。本文档内的 `ist_compile_orchestrate` 引用为当时历史，结论（让编译任务命中编排 skill）现适用于 `ist_compile_batch`。
 
 ## 问题与根因
 

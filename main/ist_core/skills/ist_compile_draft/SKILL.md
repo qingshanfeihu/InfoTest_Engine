@@ -1,6 +1,6 @@
 ---
 name: ist_compile_draft
-description: Generate a structured case.xlsx draft from one manual test case (or rework a prior draft using the device verdict and grading feedback). Checks preconditions, retrieves canonical precedents, emits the xlsx. Does NOT run on-device and does NOT self-assess — the orchestrator dispatches run/grade separately. Invoked by ist_compile_orchestrate; takes a structured brief as $ARGUMENTS.
+description: Generate a structured case.xlsx draft from one manual test case (or rework a prior draft using the device verdict and grading feedback). Checks preconditions, retrieves canonical precedents, emits the xlsx. Does NOT run on-device and does NOT self-assess — the orchestrator dispatches run/grade separately. Invoked by ist_compile_batch; takes a structured brief as $ARGUMENTS.
 context: fork
 agent: ist-compile-draft
 user-invocable: false

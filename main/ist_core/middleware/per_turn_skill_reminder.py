@@ -55,7 +55,7 @@ _LISTING_CHAR_BUDGET = int(os.environ.get("IST_SKILL_LISTING_BUDGET", "8000"))
 # 未列入的默认 50，按名字字母序稳定排列。
 _LISTING_PRIORITY = {
     "ist_compile_batch": 0,
-    "ist_compile_orchestrate": 0,
+    "ist_verify": 0,
     "test-list-review": 0,
     "config-answer": 0,
 }
@@ -142,7 +142,7 @@ def _skill_eligible_for_listing(meta: dict[str, str]) -> bool:
     只过滤 disable-model-invocation: true（完全不可见，qa_invoke_skill 也拒）。
 
     **user-invocable: false 仍进 listing**：这类是 fork 子流程（ist_compile_draft/run/grade、
-    review-verification），由 inline 编排 skill（ist_compile_orchestrate / test-list-review）的
+    review-verification），由 inline 编排 skill（ist_compile_batch / test-list-review）的
     body 引导**主 agent** 经 qa_invoke_skill 派发——派发者就是主 agent 本身，故必须对模型可见，
     否则主 agent 按 body 指示调用时找不到。它们只是不进 TUI `/skill` 用户菜单（user-invocable
     语义由菜单层控制）。防"主 agent 越过编排器直调子流程"靠编排 skill 的 body 纪律 + prompt

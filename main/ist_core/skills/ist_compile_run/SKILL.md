@@ -1,6 +1,6 @@
 ---
 name: ist_compile_run
-description: Deliver a case.xlsx to the jumphost framework, run it on-device, and collect the framework ground-truth verdict (per-checkpoint Success/Fail Num, not just the verdict string). Reports the structured device verdict to the orchestrator; does not edit the case or assess quality. Invoked by ist_compile_orchestrate; takes xlsx path + autoid as $ARGUMENTS.
+description: Deliver a case.xlsx to the jumphost framework, run it on-device, and collect the framework ground-truth verdict (per-checkpoint Success/Fail Num, not just the verdict string). Reports the structured device verdict to the orchestrator; does not edit the case or assess quality. Invoked by ist_compile_batch; takes xlsx path + autoid as $ARGUMENTS.
 context: fork
 agent: ist-compile-run
 user-invocable: false

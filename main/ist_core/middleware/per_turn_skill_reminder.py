@@ -124,15 +124,16 @@ def _parse_skill_frontmatter(skill_md_path: Path) -> dict[str, str] | None:
 def _skill_eligible_for_listing(meta: dict[str, str]) -> bool:
     """处理 user-invocable / disable-model-invocation 语义：
 
-    - user-invocable: false → 仅用户菜单不显示，**模型 listing 仍可见**
-      "仅本智能体可调用此 skill" — 用于 background knowledge / sub-skill
+    - user-invocable: false → 模型 listing 也不可见（fork skill 仅供 inline skill 内部调用）
     - disable-model-invocation: true → 模型 listing 完全不可见
 
-    注意：listing 过滤只看 disable-model-invocation；
-    user-invocable 由 TUI `/skill` 命令的用户菜单层控制。
+    注意：user-invocable=false 和 disable-model-invocation=true 都从 listing 中排除。
     """
     disable_invoke = (meta.get("disable-model-invocation") or "false").strip().lower()
     if disable_invoke in {"true", "yes", "1", "on"}:
+        return False
+    user_invoke = (meta.get("user-invocable") or "true").strip().lower()
+    if user_invoke in {"false", "no", "0", "off"}:
         return False
     return True
 

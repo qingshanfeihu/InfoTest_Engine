@@ -18,7 +18,7 @@ from main.ist_core.tools.deepagent import (
     qa_deepagent_write_file,
 )
 from main.ist_core.tools.deepagent.exec_tools import qa_bash, qa_exec
-from main.ist_core.tools.device import qa_restapi, qa_ssh, qa_run_case, qa_probe_show, qa_emit_xlsx
+from main.ist_core.tools.device import qa_restapi, qa_ssh, qa_run_case, qa_probe_show, qa_emit_xlsx, qa_smoke_test
 from main.ist_core.tools.device.kitchen_tools import qa_confidence_score, qa_lookup_pattern
 from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
@@ -50,6 +50,7 @@ def _default_generic_tools() -> list[Any]:
         qa_run_case,
         qa_probe_show,
         qa_emit_xlsx,
+        qa_smoke_test,
         qa_lookup_pattern,
         qa_confidence_score,
 

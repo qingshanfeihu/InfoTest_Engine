@@ -1,13 +1,12 @@
 ---
 name: g-column-verify
-description: 将已填充 G 列的测试用例在真实设备上执行 show 命令，验证 check_point 与实际输出匹配，不匹配则修正
+description: [已废弃-优先使用烟雾测试] 设备直连执行 show 命令验证 check_point
 context: fork
 agent: g-column-verifier
-user-invocable: true
+user-invocable: false
 when_to_use: |
-  Use when automated-g-column-filling 生成 G 列后需要设备验证，或用户要求"验证 G 列"、"上机确认用例"、"核对 check_point"、"检查 G 列是否正确"。
-  Trigger phrases: 验证G列, 上机确认, 核对check_point, 设备验证用例, 检查G列
-  SKIP when: 设备不可达且用户不愿手动执行；xlsx 中没有 APV show 命令。
+  Use when automated-g-column-filling 需要直接在 APV 设备上逐条执行 show 命令验证 check_point（不经过烟雾测试框架）。
+  SKIP when: 优先走 smoke_test_run 烟雾测试验证（automated-g-column-filling Step 6），此技能仅在设备直连验证场景使用。
 allowed-tools:
   - qa_deepagent_read_file
   - qa_deepagent_grep

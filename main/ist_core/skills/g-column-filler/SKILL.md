@@ -97,7 +97,7 @@ $ARGUMENTS
 
 按依赖顺序（先创建被依赖资源，再创建依赖资源）为 1a 清单中的每种资源生成创建命令。CLI 手册有配置示例时以此为模板。多条命令用换行分隔。只做搭建，不含清除命令（no/clear 等）。
 
-**命令顺序原则**：先启用模块（如 `sdns on`），再创建基础资源（host/domain/zone），然后创建服务组件（service/pool/record），最后创建接入层（listener）和关联（`sdns zone record`）。启用命令必须放在第一条。SDNS DNS 场景特别注意：必须先 `sdns zone name` 创建 zone，再 `sdns record` 创建记录，最后 `sdns zone record` 将记录关联到 zone——只建 record 不建 zone + 关联 = record 无效。
+**命令顺序原则**：先启用模块（如 `sdns on`），再创建基础资源（host/domain/zone），然后创建服务组件（service/pool/record），最后创建接入层（listener）和关联（`sdns zone record/sdns pool service/sdns host pool`）。启用命令必须放在第一条。SDNS DNS 场景特别注意：必须先 `sdns zone name` 创建 zone，再 `sdns record` 创建记录，最后 `sdns zone record` 将记录关联到 zone——只建 record 不建 zone + 关联 = record 无效。
 
 **Listener 创建策略**：基础配置行**通常不创建 listener**——listener 由后续各测试组按需创建（不同测试组有不同的 IP/端口/协议需求）。除非 1a 资源清单中只有一个固定的 listener 配置被所有后续行共用。
 

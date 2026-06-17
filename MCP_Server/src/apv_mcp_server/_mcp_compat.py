@@ -98,53 +98,56 @@ def _extract_arg_descriptions(doc: str) -> Dict[str, str]:
     return descriptions
 
 
+
+def _annotation_to_type(anno) -> type:
+    """Resolve a type annotation (type or string) to a concrete Python type."""
+    if not isinstance(anno, str):
+        if anno in (str, int, float, bool):
+            return anno
+        origin = typing.get_origin(anno)
+        if origin is typing.Union:
+            args = [a for a in typing.get_args(anno) if a is not type(None)]
+            if len(args) == 1:
+                return _annotation_to_type(args[0])
+        return str
+    s = anno.strip()
+    while s.startswith('Optional[') and s.endswith(']'):
+        s = s[9:-1].strip()
+    if s in ('str', 'string'): return str
+    if s in ('int', 'integer'): return int
+    if s in ('float', 'number'): return float
+    if s in ('bool', 'boolean'): return bool
+    return str
+
+
 def _func_to_tool_schema(func: Callable) -> Dict[str, Any]:
-    """Generate an MCP tool schema (name, description, inputSchema) from a function.
-
-    Reads type hints for JSON Schema types and docstring for descriptions.
-    """
-    hints: Dict[str, Any] = {}
-    try:
-        hints = typing.get_type_hints(func)
-    except Exception:
-        pass
-
+    """Generate an MCP tool schema from a function (avoids typing.get_type_hints)."""
     sig = inspect.signature(func)
-    doc = inspect.getdoc(func) or ""
+    doc = inspect.getdoc(func) or ''
     description = _extract_docstring_summary(doc)
     arg_descriptions = _extract_arg_descriptions(doc)
-
     properties: Dict[str, Any] = {}
     required: List[str] = []
-
     for name, param in sig.parameters.items():
-        if name in ("self", "cls"):
+        if name in ('self', 'cls'):
             continue
-
-        py_type = hints.get(name)
-        prop = _resolve_type(py_type) if py_type else {"type": "string"}
-
-        # Add human-readable description from docstring
+        if param.annotation is not inspect.Parameter.empty:
+            py_type = _annotation_to_type(param.annotation)
+        else:
+            py_type = str
+        prop = _resolve_type(py_type)
         if name in arg_descriptions:
-            prop["description"] = arg_descriptions[name]
-
-        # Determine if required (no default → required)
+            prop['description'] = arg_descriptions[name]
         if param.default is inspect.Parameter.empty:
             required.append(name)
         else:
-            # Include default value so clients can pre-populate
-            prop["default"] = param.default
-
+            prop['default'] = param.default
+        properties[name] = prop
     return {
-        "name": func.__name__,
-        "description": description,
-        "inputSchema": {
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        },
+        'name': func.__name__,
+        'description': description,
+        'inputSchema': {'type': 'object', 'properties': properties, 'required': required},
     }
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # FastMCP-compatible class
@@ -329,10 +332,16 @@ class FastMCP:
                     request = json.loads(body_bytes)
                 except json.JSONDecodeError:
                     continue
+            else:
+                # Plain line-delimited JSON (no Content-Length header)
+                try:
+                    request = json.loads(line_str)
+                except json.JSONDecodeError:
+                    continue
 
-                response = await self._dispatch(request)
-                if response is not None:
-                    await _send(response)
+            response = await self._dispatch(request)
+            if response is not None:
+                await _send(response)
 
     # ── Transport: HTTP ───────────────────────────────────────────
 

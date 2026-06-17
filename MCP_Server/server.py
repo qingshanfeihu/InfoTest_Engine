@@ -43,14 +43,33 @@ if not _MCP_AVAILABLE:
         file=sys.stderr,
     )
 
-# 加载 .env 文件（优先级高于系统环境变量中已存在的值）
+# 加载 .env 文件（优先 python-dotenv，无则以标准库解析）
+def _load_dotenv(env_path: Path) -> None:
+    """Parse .env KEY=value lines and set os.environ (no external dependency)."""
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in os.environ:  # don't override existing env
+            os.environ[key] = val
+
 try:
     from dotenv import load_dotenv
     _env_path = Path(__file__).resolve().parent / ".env"
     if _env_path.exists():
         load_dotenv(_env_path, override=True)
 except ImportError:
-    pass  # python-dotenv 未安装，跳过
+    _load_dotenv(Path(__file__).resolve().parent / ".env")
+
+# ── 确保 src/ 在 sys.path ───────────────────────────────────────────
+_SRC_DIR = str(Path(__file__).resolve().parent / "src")
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
 
 _MCP_IMPORT_ERROR = None
 try:
@@ -61,11 +80,13 @@ except ImportError as exc:
 if __name__ == "__main__":
     if _MCP_IMPORT_ERROR is not None:
         sys.exit(
-            f"ERROR: Cannot start MCP server on Python {_PY_VERSION[0]}.{_PY_VERSION[1]}.\n"
-            f"The MCP FastMCP library requires Python 3.10+.\n"
+            f"ERROR: Cannot start MCP server.\n"
+            f"Python: {_PY_VERSION[0]}.{_PY_VERSION[1]}  MCP mode: {'official SDK' if _MCP_AVAILABLE else 'built-in compat layer'}\n"
             f"Import error: {_MCP_IMPORT_ERROR}\n\n"
-            f"The client modules are still usable directly — import apv_mcp_server.ssh_apv "
-            f"or apv_mcp_server.ssh_linux to use SSH/Telnet/REST clients without MCP."
+            f"Troubleshooting:\n"
+            f"  1. pip install paramiko httpx python-dotenv\n"
+            f"  2. Python 3.10+: pip install mcp\n"
+            f"  3. Verify 'src/' directory exists next to this script"
         )
     if len(sys.argv) > 1 and sys.argv[1] == "--http":
         main_http()

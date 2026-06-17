@@ -151,3 +151,15 @@ PLAYWRIGHT_STATE_DIR=knowledge/.intermediate/defect_raw/_state
 # APV_USERNAME=admin                             # SSH 用户名
 # APV_PASSWORD=                                  # SSH 密码（填真实值，勿留弱口令）
 # APV_SSH_PORT=22                                # SSH 端口（默认 22）
+
+# REST API 凭据（qa_restapi / MCP apv_restapi_execute 使用）
+APV_RESTAPI_USERNAME=rest
+APV_RESTAPI_PASSWORD=
+APV_RESTAPI_PORT=9997
+
+# =============================================================================
+# 九、MCP 测试执行（smoke_test_run / linux_ssh_execute）
+# =============================================================================
+LINUX_TEST_HOST=
+LINUX_SSH_USERNAME=
+LINUX_SSH_PASSWORD=

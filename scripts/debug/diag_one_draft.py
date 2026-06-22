@@ -31,11 +31,11 @@ def main():
                               manual_glob="10.5_cli__part*.md", groups={}, precedent_text=pt)
 
     # 渲染 draft skill body（与 execute_fork_skill 同路径）
-    parsed = _parse_skill_md(_SKILLS_DIR / "ist_draft_v3" / "SKILL.md")
+    parsed = _parse_skill_md(_SKILLS_DIR / "ist_compile_draft" / "SKILL.md")
     body = _render_skill_body(parsed["body"], brief)
 
     import time
-    runnable = get_subagent_runnable("ist-draft-v3")
+    runnable = get_subagent_runnable("ist-compile-draft")
     t0 = time.time()
     result = runnable.invoke({"messages": [HumanMessage(content=body)]})
     elapsed = time.time() - t0

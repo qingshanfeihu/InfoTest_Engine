@@ -1,6 +1,6 @@
 """qa_compile_prep: 脑图(mind-map JSON)→ 批量编译 manifest(JSON 中间表示)。
 
-批量编译的第一步:把一个脑图文件解析成结构化 manifest,供 ist_compile_batch 编排器按阶段调度。
+批量编译的第一步:把一个脑图文件解析成结构化 manifest,供 ist_compile 编译链(qa_compile_pipeline)按阶段调度。
 
 **零硬编码红线(第一原则,见计划 linear-imagining-galaxy.md)**:
 本工具**只产"需求 + 分组 + 先例引用"**,绝不产任何设备命令/参数/断言。manifest 里

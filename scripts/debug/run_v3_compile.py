@@ -1,7 +1,7 @@
 """V3 编译驱动：对一个脑图直接调确定性流水线 qa_compile_pipeline（不经主 agent，免编排 churn）。
 
 产出 workspace/outputs/<out_name>/case.xlsx——含 draft 诚实留空的 <RUNTIME> 槽位（不可知期望值）。
-上机回填走 ist_verify_v3（另起）。
+上机回填走 ist_verify（另起）。
 
 用法：python -m scripts.debug.run_v3_compile <mindmap.txt> <version> [out_name]
 """

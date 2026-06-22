@@ -291,7 +291,7 @@ def _build_case_brief(case: dict, *, product_version: str, manual_glob: str,
 会话/连接保持的具体值、哈希、脚本运行时值）时，**不许凭空编一个值**。优先写部分模式
 （前缀溯源手册/先例，只把不可知值槽位留 <RUNTIME>，如 "Hits:\\s*<RUNTIME>"）；连结构都无从溯源
 才整值填 <RUNTIME>。这类步标 source.kind=device_runtime（<RUNTIME>⟺device_runtime 自洽，emit 强制）。
-真实值由后续 ist_verify_v3 上机回填锁死——draft 只负责诚实留空，不为过机编值。
+真实值由后续 ist_verify 上机回填锁死——draft 只负责诚实留空，不为过机编值。
 
 指路（先例已为你预检索，见下方「预检索先例」）：**优先照预检索先例的完整配置基线改写**——
 启用步如 sdns on、数据中心/池法/监听器等基线步一个不能漏（漏了服务不起、dig 零解析、断言全 fail）；
@@ -503,7 +503,7 @@ def qa_compile_pipeline(mindmap_path: str, product_version: str, out_name: str =
     不必等全部 draft 完才开 grade) → grade-PASS 合并成一个 excel。命令/断言全由 draft fork
     现场查（零硬编码），自由度在 fork 内不在编排层。
 
-    不上机（上机走 ist_verify_v3 独立环节）。多脑图请逐个调本工具（每脑图一次）。
+    不上机（上机走 ist_verify 独立环节）。多脑图请逐个调本工具（每脑图一次）。
 
     Args:
         mindmap_path: 脑图 txt 路径。
@@ -525,7 +525,7 @@ def qa_compile_pipeline(mindmap_path: str, product_version: str, out_name: str =
 
     try:
         result = _run_pipeline(mp, ver, out_name,
-                               draft_skill="ist_draft_v3", grade_skill="ist_grade_v3")
+                               draft_skill="ist_compile_draft", grade_skill="ist_compile_grade")
     except Exception as e:  # noqa: BLE001
         logger.exception("compile_pipeline 失败")
         return f"error: 流水线异常: {e}"

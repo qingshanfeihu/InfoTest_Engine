@@ -1,6 +1,6 @@
 """一次性诊断脚本:stream 模式跑单脑图,实时记录工具调用序列。
 不改产品代码;用 InMemorySaver 避死锁;CLISink 把每步 tool_call 写 stdout。
-目的:看 agent 在 ist_compile_batch 流程里到底怎么调度(fanout? 逐条? run/grade/merged?)。
+目的:看 agent 在 ist_compile 流程里到底怎么调度(fanout? 逐条? run/grade/merged?)。
 """
 import os, sys
 os.environ["IST_NON_INTERACTIVE"] = "1"

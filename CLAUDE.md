@@ -101,13 +101,13 @@ main/ist_core/tools/
 
 ## 用例编译（人工用例 → 自动化 case.xlsx，`main/case_compiler/` + `ist_compile_*` skill）
 
-把人工测试用例（脑图）编译成断言真覆盖目标行为的 `case.xlsx`。**走平台正路**：用户在 TUI 让 main agent 编译，main agent 作为**编排器**派发子流程，不依赖外层脚本（旧 `scripts/debug/agent_compile_case.py` driver 已退役）。详见 `docs/batch_compile_architecture.md`。**编译入口统一为 `ist_compile_batch`**（2026-06-15 合并：原 `ist_compile_orchestrate` 单条编排器已删除，单条用例是 N=1 特例、走同一流程）。**编译与上机验证解耦**（2026-06-16）：编译只产出 excel（draft 生成 → grade 断言质量审批 → 合并打包），不上机；上机验证由独立的 `ist_verify` skill 对成品 excel 做。
+把人工测试用例（脑图）编译成断言真覆盖目标行为的 `case.xlsx`。**走平台正路**：用户在 TUI 让 main agent 编译，main agent 作为**编排器**派发子流程，不依赖外层脚本。**编译入口为 `ist_compile`**（inline skill）：main agent 对每个脑图只调一次确定性流水线工具 `qa_compile_pipeline`，单条用例与整脑图批量走同一流程（单条是 N=1 特例）。**编译与上机验证解耦**：编译只产出 excel（draft 生成 → grade 断言质量审批 → 合并打包），不上机；上机验证由独立的 `ist_verify` skill 对成品 excel 做。
 
-- **统一编排** `ist_compile_batch`（inline skill，唯一编译入口）：单条用例或整脑图批量都走它。`qa_compile_prep` 解析脑图→manifest（只含需求，零命令），`qa_compile_fanout` 把 draft/grade 阶段并发 fan-out，`qa_emit_xlsx_merged` 合并打包。**不上机**（上机走 ist_verify）。面向「把 N 个 txt 转成 N 个 excel」，单条时各工具天然退化（prep 出 1 case manifest、fanout 并发度 1、merged 出单 case+哨兵）。
+- **统一编排** `ist_compile`（inline skill，唯一编译入口）：main agent 对每个脑图调一次 `qa_compile_pipeline`，工具内部确定性跑完——`qa_compile_prep` 解析脑图→manifest（只含需求，零命令）→ 每 case 独立流水线（draft 产 provenance → grade 验 provenance → CUT 带反馈重做 ≤3 轮，N case 并发无屏障）→ `qa_emit_xlsx_merged` 合并打包。**不上机**（上机走 ist_verify）。主 agent **不自己拆步调 prep/fanout/merge**——固定序列锁在 pipeline 工具内（自由度只在 draft/grade fork 内现场查命令）。
 - **两个 fork 子流程**（编译链内，独立 fresh subagent，彼此隔离，消除"自生成自评估"）：
   - `ist_compile_draft`（agent `ist-compile-draft`）：核查前置 → 检索先例 → `qa_emit_xlsx` 生成 xlsx 草稿。
   - `ist_compile_grade`（agent `ist-compile-grade`）：`qa_confidence_score` 判断断言是否覆盖目标行为 + 给重做意见。**断言质量审批，不依赖上机裁决**（device verdict 可选输入）。
-- **独立上机验证** `ist_verify`（inline skill，user-invocable）：对成品 excel 用 `qa_run_batch` 串行上机、采集框架真实裁决，区分「真实断言失败」（回流重编译）与「设备环境瞬态失败」（SSH 中断/dig 超时/DNS 失败，标注不回流）。`ist_compile_run`（agent `ist-compile-run`，`qa_run_case` 上机采集 ground truth，不信 verdict 字符串）是其执行核心。
+- **独立上机验证** `ist_verify`（inline skill，user-invocable）：对成品 excel 用 `qa_run_batch` 串行上机、采集框架真实裁决。先 `qa_fill_runtime` 用设备真实输出回填 draft 留空的 `<RUNTIME>` 断言并锁死，再用 `qa_attribute_fail` 对每个 fail 做四层归因（G错/E错/V错/瞬态）——G/E/V 错带层级反馈回流 `ist_compile` 重编对应层、瞬态不回流；上机真 PASS 的 case 把 G 段文法写回 footprint。不信 verdict 字符串，以框架逐 check_point 明细为准。
 - **交付门槛是 grade 断言质量**（弱断言/未覆盖 CUT，不救场）；上机 pass 不再是交付前置——环境瞬态失败不挡 excel 产出。verify 发现的真实断言问题可回流重编译。连续 N 轮 CUT 则 escalate/qa_ask_user 上报。
 - **case_compiler 现存活件**（早期确定性管线已删）：`case_ir`+`xlsx_emit`（xlsx 数据结构与产出）/`confidence_f`（LLM 置信判分，非硬编码规则）/`corpus`+`object_normalizer`（先例语料与 E 列对象名规范化）/`config`/`device_mcp_client`（跳转机通道）。
 - **关键工具**：`qa_lookup_pattern`（按配置结构相似度检索已验证先例，无 embedding）/`qa_confidence_score`（判分，返回结构化 JSON）/`qa_emit_xlsx`/`qa_run_case`/`qa_probe_show`/`qa_compile_prep`/`qa_compile_fanout`/`qa_run_batch`/`qa_emit_xlsx_merged`——均在 `skills/loader.py` 的 `_TOOL_REGISTRY` 注册供 fork 子流程取用。检索与置信工具在 `tools/device/precedent_tools.py`，批量编排工具在 `tools/device/batch_tools.py`+`compile_prep.py`。

@@ -65,7 +65,7 @@ def test_fanout_retries_on_rate_limit_then_succeeds(monkeypatch):
     monkeypatch.setattr(bt.time, "sleep", lambda s: None)  # 不真睡
 
     out = bt.qa_compile_fanout.invoke({
-        "skill": "ist_draft_v2",
+        "skill": "ist_compile_draft",
         "briefs_json": '[{"key": "c1", "brief": "b"}]',
     })
     import json
@@ -85,7 +85,7 @@ def test_fanout_gives_up_after_max_retries(monkeypatch):
 
     import json
     out = bt.qa_compile_fanout.invoke({
-        "skill": "ist_draft_v2",
+        "skill": "ist_compile_draft",
         "briefs_json": '[{"key": "c1", "brief": "b"}]',
     })
     res = json.loads(out)

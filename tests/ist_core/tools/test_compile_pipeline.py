@@ -70,7 +70,7 @@ def test_pipeline_per_case_no_barrier(monkeypatch):
     # execute_fork_skill(skill, brief)：draft brief 含"需求："→落 xlsx 返回路径；
     # grade brief 含"xlsx_path="→返回 PASS。
     def fake_fork(skill, brief):
-        if skill == "ist_draft_v3":
+        if skill == "ist_compile_draft":
             # 从 brief 提 autoid
             aid = brief.split("autoid=")[1].split("，")[0].strip()
             calls.append(("draft", aid))
@@ -90,11 +90,11 @@ def test_pipeline_per_case_no_barrier(monkeypatch):
     monkeypatch.setattr(loader_mod, "execute_fork_skill", fake_fork)
 
     res = CP._run_pipeline("dongkl.txt", "10.5", "t_pipe",
-                           draft_skill="ist_draft_v3", grade_skill="ist_grade_v3")
+                           draft_skill="ist_compile_draft", grade_skill="ist_compile_grade")
     # 两 case 各 draft 一次 + grade 一次，全 PASS → merge 2
     assert ("prep", "dongkl.txt") in calls
     assert ("draft", "111") in calls and ("draft", "222") in calls
-    assert calls.count(("grade", "ist_grade_v3")) == 2
+    assert calls.count(("grade", "ist_compile_grade")) == 2
     assert ("merge", 2) in calls
     assert sorted(res["done"]) == ["111", "222"]
     assert not res["escalated"]
@@ -114,7 +114,7 @@ def test_pipeline_escalates_after_max_rounds(monkeypatch):
         def invoke(self, d): return self._fn(d)
 
     def fake_fork(skill, brief):
-        if skill == "ist_draft_v3":
+        if skill == "ist_compile_draft":
             n_draft["n"] += 1
             aid = brief.split("autoid=")[1].split("，")[0].strip()
             cdir = root / "workspace" / "outputs" / aid
@@ -131,7 +131,7 @@ def test_pipeline_escalates_after_max_rounds(monkeypatch):
     monkeypatch.setattr(loader_mod, "execute_fork_skill", fake_fork)
 
     res = CP._run_pipeline("x.txt", "10.5", "t_esc",
-                           draft_skill="ist_draft_v3", grade_skill="ist_grade_v3")
+                           draft_skill="ist_compile_draft", grade_skill="ist_compile_grade")
     assert res["done"] == []
     assert "111" in res["escalated"]
     assert n_draft["n"] == CP._MAX_REWORK_ROUNDS  # 重做到上限

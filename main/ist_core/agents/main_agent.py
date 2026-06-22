@@ -60,7 +60,7 @@ def _default_generic_tools() -> list[Any]:
         qa_lookup_pattern,
         qa_confidence_score,
 
-        # 批量编译编排器(ist_compile_batch)用：解析清单 + fan-out + 串行上机 + 合并打包
+        # 批量编译工具(ist_compile 编译链/qa_compile_pipeline)用：解析清单 + fan-out + 串行上机 + 合并打包
         qa_compile_prep,
         qa_compile_fanout,
         qa_run_batch,

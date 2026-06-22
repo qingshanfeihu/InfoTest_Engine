@@ -193,7 +193,7 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["qa_probe_show"] = qa_probe_show
         except ImportError:
             pass
-        # 批量编译 tools（ist_compile_batch 编排器用）：解析清单 + 合并打包 + fan-out + 串行上机
+        # 批量编译 tools（ist_compile 编译链用）：解析清单 + 合并打包 + fan-out + 串行上机
         try:
             from main.ist_core.tools.device import (
                 qa_compile_fanout,

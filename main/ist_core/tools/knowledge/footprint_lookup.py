@@ -9,10 +9,43 @@ agent 在评审或回答产品问题时，通过 CLI 命令名查询已积累的
 from __future__ import annotations
 
 import logging
+import re
 
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
+
+# 启用/总开关命令的形态：含 {on|off}/{enable|disable} 选项,或以 on/enable 结尾。
+_ENABLE_CMD_RE = re.compile(
+    r"\{\s*on\s*\|\s*off\s*\}|\{\s*enable\s*\|\s*disable\s*\}|\bon\b\s*$|\benable\b\s*$",
+    re.IGNORECASE,
+)
+
+
+def _module_enable_hint(idx, command: str) -> str:
+    """子功能查询时,上溯模块根节点、带回它的「启用/总开关」命令。
+
+    根因(实测): `sdns on` 是 `sdns {on|off}` 的形态,存在模块根节点 `sdns` 里;查子功能
+    (sdns host/pool…)时检索不到它 → draft 漏总开关 → 服务不起、上机全 fail。这里对任何
+    `<module> <sub...>` 查询,把模块根的启用命令作为"需先执行"附上。通用(任何模块同理),
+    不写死具体命令。
+    """
+    toks = (command or "").lower().split()
+    if len(toks) < 2:
+        return ""  # 查的就是根本身,无需提示
+    root = toks[0]
+    try:
+        rnode = idx.lookup(root)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not rnode:
+        return ""
+    for cm in (rnode.get("cli", {}) or {}).get("commands", []):
+        c = cm.get("command", "") if isinstance(cm, dict) else str(cm)
+        if c and _ENABLE_CMD_RE.search(c):
+            return (f"⚠ 模块总开关(用任何 {root} 功能前**必须先执行**,否则配了也不生效、"
+                    f"服务不起、上机全 fail): {c}\n\n")
+    return ""
 
 
 def _format_node(data: dict) -> str:
@@ -82,17 +115,70 @@ def qa_footprint_lookup(command: str) -> str:
         from main.ist_core.memory.footprint import get_footprint_index
         idx = get_footprint_index()
         result = idx.lookup(command)
-        if result is None:
-            return f"未找到 '{command}' 的 footprint 知识。"
+        enable_hint = _module_enable_hint(idx, command)
 
-        if "children" in result:
-            children_str = "\n".join(f"  - {c}" for c in result["children"])
-            return (
-                f"## {result['feature_id']} (前缀匹配, "
-                f"{len(result['children'])} 个子命令)\n{children_str}"
+        def _has_commands(r: dict | None) -> bool:
+            return bool(r and r.get("cli", {}).get("commands"))
+
+        def _collect_descendant_command_nodes(node: dict, seen: set[str]) -> list[dict]:
+            """递归收集 node 子树里**所有带命令的后代节点**（深度优先，去重）。
+            治：trunk 的直接子节点本身是空 branch、命令在孙节点时，单层展开会漏。"""
+            out: list[dict] = []
+            for cid in node.get("children", []) or []:
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                cnode = idx.lookup(cid)
+                if cnode is None:
+                    continue
+                if _has_commands(cnode):
+                    out.append(cnode)
+                # 子节点即便自己有命令，也可能还有更深的孙节点，继续下潜
+                out.extend(_collect_descendant_command_nodes(cnode, seen))
+            return out
+
+        # 命中的节点自己没有命令（branch/trunk 空壳索引节点，或合成前缀结果）：
+        if not _has_commands(result):
+            # 这是一个**已知的 branch**（lookup 命中了，有 children）→ 递归展开其子树里
+            # 带命令的后代节点，给 draft 它真正要的命令（而不是全树模糊的无关节点）。
+            if result and result.get("children"):
+                child_nodes = _collect_descendant_command_nodes(result, set())
+                if child_nodes:
+                    parts = [f"## 「{command}」是父节点，展开其子树中 "
+                             f"{len(child_nodes)} 个带命令的节点："]
+                    for node in child_nodes:
+                        parts.append("\n" + _format_node(node))
+                    return enable_hint + "\n".join(parts)
+                # branch 存在但整棵子树都没有命令 → 如实说明，不要用 branch 的 token
+                # 去全树模糊匹配（那会返回仅共享一个词的无关节点，误导 draft）。
+                return (f"## {result.get('feature_id', command)} "
+                        f"是父节点，但其子树未记录任何 CLI 命令。")
+
+            # result is None：查询不对应任何节点/前缀（多为自然措辞，如
+            # "sdns host method rr"）→ 全树模糊兜底，只收带命令的叶子。
+            hits = idx.search(command, top_k=3)
+            leaf_hits = []
+            for fid, _ in hits:
+                node = idx.lookup(fid)
+                if _has_commands(node):
+                    leaf_hits.append(node)
+            if leaf_hits:
+                parts = [f"## 「{command}」精确未命中，模糊匹配到 "
+                         f"{len(leaf_hits)} 个相关命令节点："]
+                for node in leaf_hits:
+                    parts.append("\n" + _format_node(node))
+                return enable_hint + "\n".join(parts)
+            return (enable_hint + f"未找到 '{command}' 的 footprint 知识。") if enable_hint \
+                else f"未找到 '{command}' 的 footprint 知识。"
+
+        # 命中的节点自己有命令：展开它；若同时是 branch（带子节点）附子命令清单。
+        out = _format_node(result)
+        children = result.get("children") or []
+        if children:
+            out += "\n\n子命令 ({}):\n".format(len(children)) + "\n".join(
+                f"  - {c}" for c in children
             )
-
-        return _format_node(result)
+        return enable_hint + out
     except Exception as exc:
         logger.warning("qa_footprint_lookup error: %s", exc)
         return f"查询失败: {exc}"

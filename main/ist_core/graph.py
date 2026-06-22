@@ -264,11 +264,20 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
                 self._current_task_tool_use_id = run_id
 
         tags = self._subagent_tags(kwargs, base_tags={"name": name})
-        
-        
-        
+
+
+
         if run_id:
             tags["lc_tool_run_id"] = run_id
+        # durable 主 agent 活动日志（治长跑卡住时主 agent 时间线不可见的盲区）。
+        # 只记主 agent 自身的 tool_call；子 agent fork 已有 fork_status.jsonl。
+        if is_main_agent_event:
+            try:
+                from main.ist_core.resilience import record_main_activity
+                record_main_activity("tool_start", tool_name=name,
+                                     detail=(input_str or "")[:150])
+            except Exception:  # noqa: BLE001
+                pass
         self._emit_to_bus(
             "tool_call",
             payload={"name": name, "input": {"raw": (input_str or "")[:cap]}},

@@ -34,13 +34,51 @@ _FORK_TRACE_PATH = os.environ.get("IST_FORK_TRACE_LOG") or str(
     Path(__file__).resolve().parents[2] / "runtime" / "logs" / "fork_trace.log"
 )
 
+# fork 状态记录（结构化 JSONL，可解析）：每个 fork 的最终状态 + 产物摘要持久化，
+# 使主循环中途崩溃时「哪些 fork 已完成、产出什么」不丢失（fork_trace.log 是人读摘要，
+# 这个是机读状态）。一行一条 JSON。
+_FORK_STATUS_PATH = os.environ.get("IST_FORK_STATUS_LOG") or str(
+    Path(__file__).resolve().parents[2] / "runtime" / "logs" / "fork_status.jsonl"
+)
+
+
+def _record_fork_status(skill_name: str, agent_name: str, elapsed_s: float,
+                        summary: dict, *, ok: bool, output: str = "", error: str = "") -> None:
+    """把单次 fork 的最终状态写成一行 JSON（持久化，崩溃不丢已完成记录）。"""
+    try:
+        import json as _json
+        # output 只存摘要（首 500 字符），避免日志膨胀，又足够事后追溯产物。
+        out_digest = (output or "").strip()[:500]
+        rec = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "skill": skill_name,
+            "agent": agent_name,
+            "ok": ok,
+            "elapsed_s": round(elapsed_s, 1),
+            "ai_rounds": summary.get("ai_rounds", 0),
+            "tool_results": summary.get("tool_results", 0),
+            "tool_calls": summary.get("tool_calls", {}),
+            "search_queries": summary.get("search_queries", {}),
+            "output_digest": out_digest,
+            "error": error,
+        }
+        p = Path(_FORK_STATUS_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001 — 状态记录绝不能影响主流程
+        logger.debug("fork status 写入失败", exc_info=True)
+
 
 def _summarize_fork_messages(messages: list) -> dict:
     """从 fork 子 agent 返回的 messages 统计可观测指标：
-    工具调用分布、AI 轮数（≈LLM 往返）、ToolMessage 数。"""
+    工具调用分布、AI 轮数（≈LLM 往返）、ToolMessage 数。
+    额外记录 grep / footprint_lookup 的实际查询词（诊断「在查什么」用，截断防膨胀）。"""
     tool_calls: Counter = Counter()
     ai_rounds = 0
     tool_results = 0
+    search_queries: dict[str, list[str]] = {"qa_deepagent_grep": [],
+                                             "qa_footprint_lookup": []}
     for m in messages:
         mtype = getattr(m, "type", "")
         if mtype == "ai":
@@ -49,12 +87,20 @@ def _summarize_fork_messages(messages: list) -> dict:
                 name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
                 if name:
                     tool_calls[name] += 1
+                if name in search_queries:
+                    args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})
+                    q = ""
+                    if isinstance(args, dict):
+                        q = str(args.get("pattern") or args.get("command") or args.get("query") or "")
+                    if q:
+                        search_queries[name].append(q[:80])
         elif mtype == "tool":
             tool_results += 1
     return {
         "ai_rounds": ai_rounds,
         "tool_results": tool_results,
         "tool_calls": dict(tool_calls),
+        "search_queries": {k: v for k, v in search_queries.items() if v},
     }
 
 
@@ -391,25 +437,42 @@ def execute_fork_skill(skill_name: str, brief: str = "") -> str:
         result = runnable.invoke({"messages": [HumanMessage(content=rendered_body)]})
     except Exception as exc:
         logger.exception("Fork skill %s execution failed", skill_name)
-        _trace_fork(skill_name, brief, time.monotonic() - _t0, {}, error=str(exc)[:120])
+        _elapsed = time.monotonic() - _t0
+        _trace_fork(skill_name, brief, _elapsed, {}, error=str(exc)[:120])
+        _record_fork_status(skill_name, agent_name, _elapsed, {}, ok=False,
+                            error=str(exc)[:300])
         return f"ERROR: fork skill {skill_name!r} execution failed: {exc}"
 
     messages = result.get("messages", [])
+    _elapsed = time.monotonic() - _t0
+    _summary = _summarize_fork_messages(messages)
     # 可观测性：落 fork 内部工具调用分布/轮数/耗时到 fork_trace.log
-    _trace_fork(skill_name, brief, time.monotonic() - _t0, _summarize_fork_messages(messages))
+    _trace_fork(skill_name, brief, _elapsed, _summary)
+
+    output = ""
     for msg in reversed(messages):
         if hasattr(msg, "content") and getattr(msg, "type", "") == "ai":
             content = msg.content
             if isinstance(content, str) and content.strip():
-                return content
+                output = content
+                break
             if isinstance(content, list):
                 text_parts = [
                     b.get("text", "") for b in content
                     if isinstance(b, dict) and b.get("type") == "text"
                 ]
                 if text_parts:
-                    return "\n".join(text_parts)
+                    output = "\n".join(text_parts)
+                    break
 
+    if output:
+        # 结构化状态记录：fork 成功 + 产物摘要（崩溃不丢）
+        _record_fork_status(skill_name, agent_name, _elapsed, _summary,
+                            ok=not output.startswith("ERROR:"), output=output)
+        return output
+
+    _record_fork_status(skill_name, agent_name, _elapsed, _summary, ok=False,
+                        error="fork returned no text output")
     return "ERROR: fork skill returned no text output."
 
 

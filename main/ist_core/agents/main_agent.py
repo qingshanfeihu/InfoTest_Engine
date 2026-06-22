@@ -24,6 +24,11 @@ from main.ist_core.tools.device import (
     qa_compile_fanout,
     qa_run_batch,
     qa_emit_xlsx_merged,
+    qa_cluster_intents,
+    qa_attribute_fail,
+    qa_compile_pipeline,
+    qa_list_runtime_slots,
+    qa_fill_runtime,
 )
 from main.ist_core.tools.device.precedent_tools import qa_confidence_score, qa_lookup_pattern
 from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
@@ -60,6 +65,11 @@ def _default_generic_tools() -> list[Any]:
         qa_compile_fanout,
         qa_run_batch,
         qa_emit_xlsx_merged,
+        qa_cluster_intents,  # v3：意图族摊销 H_G
+        qa_attribute_fail,   # v3：上机 fail 四层归因
+        qa_compile_pipeline,  # v3 approach A：确定性编译流水线（主 agent 只调一次）
+        qa_list_runtime_slots,  # v3：列 <RUNTIME> 待回填槽位
+        qa_fill_runtime,        # v3：上机真实值锁死回填（不反复改）
 
         web_bug_search,
 

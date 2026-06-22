@@ -191,3 +191,35 @@ class FrameworkMCPClient:
         except Exception:
             return ""
 
+    def fetch_device_context(self, autoid: str, max_chars: int = 9000) -> str:
+        """拉**完整设备上下文**（上机失败诊断用，喂给 agent 让它知道怎么改/怎么填）。
+
+        fetch_case_detail 只给 check_point 裁决（找没找到）；失败时 agent 还需要看到：
+        ① **设备配置会话原文**（每条 config 命令 + 设备的真实响应，含 "Failed to execute X
+           because Y"）→ 知道**哪条命令、为什么被拒** → 怎么改；
+        ② **触发端会话**（RouterA/clientc 的 dig 等真实输出，含 ANSWER SECTION / 解析出的 IP）
+           → 知道设备**实际返回了什么** → 怎么填 <RUNTIME>。
+        这些是自动化框架已经写在跳转机报告目录里的原始 log，原样取来不解析。
+        """
+        base = (f"/home/test/apv_src/report/*/*/ist_staging_*/{autoid}/test_xlsx")
+        sources = [
+            ("设备配置会话(每条命令+设备响应)", f"{base}/case.xlsx/apv_*.txt"),
+            ("触发端会话 RouterA(dig 真实输出)", f"{base}/RouterA.txt"),
+            ("触发端会话 clientc", f"{base}/clientc.txt"),
+        ]
+        per = max(1500, max_chars // max(1, len(sources)))
+        parts: list[str] = []
+        try:
+            for label, g in sources:
+                _i, o, _e = self._c.exec_command(f"ls -t {g} 2>/dev/null | head -1", timeout=20)
+                path = o.read().decode("utf-8", "replace").strip()
+                if not path:
+                    continue
+                _i, o, _e = self._c.exec_command(f"cat '{path}'", timeout=20)
+                text = o.read().decode("utf-8", "replace")
+                if text.strip():
+                    parts.append(f"=== {label} ({path.split('/')[-1]}) ===\n{text[-per:]}")
+        except Exception:
+            return ""
+        return "\n\n".join(parts)
+

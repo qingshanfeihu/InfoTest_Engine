@@ -29,8 +29,10 @@ _TOPOLOGY_JSON = _kp.KNOWLEDGE_AUTO_ENV_TOPOLOGY_JSON
 _ACTIONS_JSON = _kp.KNOWLEDGE_AUTO_ENV_ACTIONS_JSON
 
 _IPV4_RE = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
-# 后端/服务类设备类型(派生 service_ips 用)——这些词本身来自 JSON 的 type 字段,不是写死的领域规则
-_SERVER_TYPES = ("服务器",)
+# 设备类型分组(派生用)——词本身来自 JSON 的 type 字段,不是写死的领域规则/IP。
+_SERVER_TYPES = ("服务器",)            # 后端服务器(service/pool 后端 IP)
+_LB_TYPES = ("负载均衡",)              # 被测设备 APV(listener/VIP 配在它的接口上)
+_TRIGGER_TYPES = ("路由器", "客户端")   # 触发设备(dig/curl 从这里发起,必须够得着 listener)
 
 
 class EnvFacts:
@@ -97,16 +99,98 @@ class EnvFacts:
     def reachable_subnets(self) -> list[str]:
         return [str(n) for n in self._subnets]
 
+    # ── 触发可达性派生(listener/VIP 选址用)──────────────────────────────
+    # 关键事实:dig/curl 从「触发设备」(路由器/客户端)发起,必须够得着 listener。
+    # 「够得着」= 触发设备与 APV 在同一网段(L2 直连)。所以 listener 只能配在
+    # 「APV 与某触发设备共享的网段」内的 APV 接口上;APV 那些没有触发设备同段的
+    # 接口(如只挂了服务器/纯管理段)→ 触发够不着 → 配 listener 上机必不解析。
+    # 全部从拓扑 type 字段派生,不写死任何 IP/段(换测试床改 JSON 即可)。
+
+    def _types_per_subnet(self) -> dict[str, set[str]]:
+        """每个可达子网内出现过的设备 type 集合。"""
+        out: dict[str, set[str]] = {str(n): set() for n in self._subnets}
+        for dev in self.devices:
+            t = dev.get("type", "")
+            for cidr in dev.get("ipv4", []):
+                try:
+                    addr = ipaddress.IPv4Address(cidr.split("/")[0])
+                except ValueError:
+                    continue
+                for net in self._subnets:
+                    if addr in net:
+                        out[str(net)].add(t)
+        return out
+
+    def _lb_ips_with_subnet(self) -> list[tuple[str, ipaddress.IPv4Network]]:
+        """所有 APV(负载均衡)接口 IP 及其所属子网。"""
+        out: list[tuple[str, ipaddress.IPv4Network]] = []
+        for dev in self.devices:
+            if not any(t in dev.get("type", "") for t in _LB_TYPES):
+                continue
+            for cidr in dev.get("ipv4", []):
+                try:
+                    addr = ipaddress.IPv4Address(cidr.split("/")[0])
+                except ValueError:
+                    continue
+                for net in self._subnets:
+                    if addr in net:
+                        out.append((str(addr), net))
+                        break
+        return out
+
+    def listener_ips(self) -> list[str]:
+        """可作 listener/VIP 的 APV 接口 IP:其所在网段同时有触发设备(路由器/客户端)。
+
+        触发设备(dig/curl 源)与该接口同段 → L2 够得着 → 配 listener 上机能解析。
+        """
+        types = self._types_per_subnet()
+        out: list[str] = []
+        for ip, net in self._lb_ips_with_subnet():
+            present = types.get(str(net), set())
+            if any(any(tt in p for tt in _TRIGGER_TYPES) for p in present):
+                if ip not in out:
+                    out.append(ip)
+        return out
+
+    def unreachable_lb_ips(self) -> list[str]:
+        """触发够不着的 APV 接口 IP:其所在网段没有任何触发设备(纯管理/纯后端段)。
+
+        这些接口**不能配 listener/VIP**——dig/curl 源够不着,上机必不解析。
+        """
+        types = self._types_per_subnet()
+        out: list[str] = []
+        for ip, net in self._lb_ips_with_subnet():
+            present = types.get(str(net), set())
+            if not any(any(tt in p for tt in _TRIGGER_TYPES) for p in present):
+                if ip not in out:
+                    out.append(ip)
+        return out
+
     def summary_for_agent(self) -> str:
-        """给 draft 子 agent 的事实摘要:可达子网 + 后端服务器真实 IP + 设备清单。"""
+        """给 draft 子 agent 的事实摘要:listener 选址 + 后端真实 IP + 设备清单。"""
+        listener = self.listener_ips()
+        blind = self.unreachable_lb_ips()
         lines = ["=== 本测试床网络事实源(写 IP 只能用这里的真实可达值)==="]
         lines.append(f"可达子网(IP 必须落在其中之一): {', '.join(self.reachable_subnets())}")
         lines.append(f"后端服务器真实 IP(service/pool 后端用): {', '.join(self.service_ips())}")
+        if listener:
+            lines.append(
+                "★ listener/VIP 必须用这些 APV 接口 IP(触发设备 dig/curl 够得着的网段): "
+                + ", ".join(listener)
+            )
+        if blind:
+            lines.append(
+                "⚠ 这些 APV 接口 IP 禁止配 listener/VIP(所在网段没有路由器/客户端,"
+                "dig/curl 源够不着,上机必不解析): " + ", ".join(blind)
+            )
         lines.append("设备清单:")
         for dev in self.devices:
             ips = ", ".join(dev.get("ipv4", []))
             lines.append(f"  {dev.get('name')} [{dev.get('type')}]: {ips}")
-        lines.append("VIP/listener 用段内未占用 IP(不与上述设备 IP 冲突即可)。")
+        lines.append(
+            "选址规则:listener/VIP 的 IP、以及 check 步骤里 dig/curl 的目标 IP "
+            "必须一致且来自上面的 ★ 列表;后端用服务器真实 IP。"
+        )
         lines.append("禁止裸用 1.1.1.1/2.2.2.2/10.x/192.168.x 等示例 IP——它们不可达,上机 dig 必失败。")
         return "\n".join(lines)
 

@@ -105,13 +105,22 @@ def run_single(
     }
 
     if stream:
-        
+
         from main.ist_core.sinks.cli_sink import CLISink
         from main.ist_core.streaming import stream_and_collect
 
         return stream_and_collect(graph, initial_state, config=config, sinks=[CLISink(verbose=verbose)])
 
-    result = graph.invoke(initial_state, config)
+    # 主循环连接韧性：心跳 + 外层连接重试（治长跑遇 APIConnectionError 整轮崩、0 产出）。
+    from main.ist_core.resilience import Heartbeat, run_with_resilience, set_active_heartbeat
+    with Heartbeat() as hb:
+        hb.set_note(f"thread={thread_id} task={task_type}")
+        set_active_heartbeat(hb)  # 让主 agent tool_call 能刷新 note（当前阶段可见）
+        try:
+            result = run_with_resilience(lambda: graph.invoke(initial_state, config),
+                                         label=f"graph.invoke[{thread_id}]")
+        finally:
+            set_active_heartbeat(None)
     return result
 
 

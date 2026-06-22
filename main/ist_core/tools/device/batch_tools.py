@@ -21,35 +21,55 @@ import concurrent.futures as cf
 import json
 import logging
 import os
+import time
 
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
 # fan-out 并发上限。draft/grade 是 LLM 调用，并发度受端点限流约束而非 CPU；
-# 默认 4，env 可调。夹紧防失控（端点 429 / 把自己打挂）。
+# 默认 auto（按待编译数自适应），夹紧到 _MAX_FANOUT 防失控（端点 429 / 把自己打挂）。
 _DEFAULT_FANOUT = 4
-_MAX_FANOUT = 12
+_MAX_FANOUT = 16
 
 # 单个 fork 的兜底超时（秒）。draft 查手册+emit、grade 判分，给足但不无限挂。
 _FORK_TIMEOUT_S = 900
 
+# 429 退避：命中端点限流时指数退避重试，不直接判 fork 失败。
+_RATE_LIMIT_MAX_RETRIES = 4
+_RATE_LIMIT_BASE_SLEEP_S = 2.0
 
-def _resolve_concurrency(requested: int) -> int:
+
+def _resolve_concurrency(requested: int, n_items: int = 0) -> int:
+    """决定 fan-out 并发度。优先级：env 硬覆盖 > 调用方显式值 > auto(按 item 数自适应)。
+
+    auto（requested<=0）：min(_MAX_FANOUT, max(_DEFAULT_FANOUT, n_items))——
+    待编译数少时不空开线程，多时自动铺到上限。墙钟从 Σfork/4 降到 Σfork/min(16,n)。
+    """
     env = os.environ.get("IST_FANOUT_CONCURRENCY")
-    base = requested
     if env:
         try:
             base = int(env)
         except (TypeError, ValueError):
             base = requested
+    elif requested and requested > 0:
+        base = requested
+    else:
+        # auto：按待编译数自适应
+        base = max(_DEFAULT_FANOUT, n_items) if n_items > 0 else _DEFAULT_FANOUT
     if base <= 0:
         base = _DEFAULT_FANOUT
     return max(1, min(base, _MAX_FANOUT))
 
 
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """判断异常是否端点限流（429 / rate limit）。靠消息匹配，跨 SDK 兜底。"""
+    s = str(exc).lower()
+    return "429" in s or "rate limit" in s or "too many requests" in s or "overloaded" in s
+
+
 @tool(parse_docstring=True)
-def qa_compile_fanout(skill: str, briefs_json: str, concurrency: int = _DEFAULT_FANOUT) -> str:
+def qa_compile_fanout(skill: str, briefs_json: str, concurrency: int = 0) -> str:
     """并发派发**同一个 fork skill** 给多个 brief，收齐所有子 agent 的输出。
 
     用于批量编译里 draft / grade 这类**可并行**阶段：每个 case 一个 brief，
@@ -67,7 +87,8 @@ def qa_compile_fanout(skill: str, briefs_json: str, concurrency: int = _DEFAULT_
         skill: 要并发派发的 fork skill 名（如 "ist_compile_draft" / "ist_compile_grade"）。
         briefs_json: JSON 数组字符串。每项是 {"key": "<标识,如autoid>", "brief": "<完整brief文本>"}。
             key 仅用于把输出对回到 case，不影响执行。
-        concurrency: 并发度（默认 4，夹紧到 12；env IST_FANOUT_CONCURRENCY 可覆盖）。
+        concurrency: 并发度。**默认 0=auto**（按待编译数自适应：min(16, max(4, N))）；
+            传正整数显式指定；env IST_FANOUT_CONCURRENCY 硬覆盖。夹紧到 16 防 429。
 
     Returns:
         JSON 数组字符串。每项 {"key": ..., "ok": bool, "output": "<子agent输出或错误>"}，
@@ -94,16 +115,28 @@ def qa_compile_fanout(skill: str, briefs_json: str, concurrency: int = _DEFAULT_
 
     from main.ist_core.skills.loader import execute_fork_skill
 
-    workers = _resolve_concurrency(concurrency)
+    workers = _resolve_concurrency(concurrency, n_items=len(norm))
+    logger.info("qa_compile_fanout skill=%s items=%d concurrency=%d", skill, len(norm), workers)
 
     def _run(item: dict) -> dict:
-        try:
-            out = execute_fork_skill(skill, item["brief"])
-            ok = not (isinstance(out, str) and out.startswith("ERROR:"))
-            return {"key": item["key"], "ok": ok, "output": out}
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("fanout fork %s key=%s failed", skill, item["key"])
-            return {"key": item["key"], "ok": False, "output": f"ERROR: {exc}"}
+        last_exc = None
+        for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
+            try:
+                out = execute_fork_skill(skill, item["brief"])
+                ok = not (isinstance(out, str) and out.startswith("ERROR:"))
+                return {"key": item["key"], "ok": ok, "output": out}
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if not _is_rate_limit_error(exc):
+                    logger.exception("fanout fork %s key=%s failed", skill, item["key"])
+                    return {"key": item["key"], "ok": False, "output": f"ERROR: {exc}"}
+                if attempt < _RATE_LIMIT_MAX_RETRIES:
+                    sleep_s = _RATE_LIMIT_BASE_SLEEP_S * (2 ** attempt)
+                    logger.warning("fanout fork %s key=%s 命中限流(429)，第%d次退避 %.0fs",
+                                   skill, item["key"], attempt + 1, sleep_s)
+                    time.sleep(sleep_s)
+        return {"key": item["key"], "ok": False,
+                "output": f"ERROR: 限流重试耗尽({_RATE_LIMIT_MAX_RETRIES}次): {last_exc}"}
 
     results: dict[str, dict] = {}
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:
@@ -233,6 +266,10 @@ def qa_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
                                                ln, _re.IGNORECASE)]
                     rec["causality"] = "\n".join(causality[-12:]) if causality else ""
                     rec["detail_tail"] = (detail or "")[-2500:]
+                    # 非 pass：附完整设备上下文(配置会话每条命令的设备响应 + dig 真实输出),
+                    # 供 agent 据此改配置 / 填 <RUNTIME>。pass 的不附(省体积)。
+                    if rec["verdict"] != "pass":
+                        rec["device_context"] = client.fetch_device_context(autoid)
                 except Exception as exc:  # noqa: BLE001
                     rec["detail_tail"] = f"上机异常: {exc}"
                 out.append(rec)

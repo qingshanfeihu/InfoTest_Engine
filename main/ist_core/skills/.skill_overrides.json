@@ -1,0 +1,7 @@
+{
+  "skillOverrides": {
+    "ist_compile_v3": "on",
+    "ist_compile_v2": "off",
+    "ist_compile_batch": "off"
+  }
+}

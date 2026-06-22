@@ -135,6 +135,9 @@ def qa_run_case(
             # 拿什么和什么比、Success/Fail Num 因果。这是框架对产物的**真实执行陈述**(ground truth),
             # pytest 的 "1 passed" 看不到这些。原样回给 agent,不解析不判断。
             detail = client.fetch_case_detail(autoid)
+            # 上机非 pass：额外拉**完整设备上下文**(配置会话每条命令的设备响应 + dig 真实输出),
+            # 让 agent 看到哪条命令被设备拒/为什么、dig 实际返回啥 → 知道怎么改配置/怎么填 <RUNTIME>。
+            dev_ctx = client.fetch_device_context(autoid) if verdict != "pass" else ""
     except RuntimeError as exc:  # 口令缺失等
         return f"error: {exc}"
     except Exception as exc:  # noqa: BLE001
@@ -169,7 +172,8 @@ def qa_run_case(
         f"{fail_signal}\n"
         f"--- 框架逐步骤执行明细(每条命令实际发了什么、断言拿什么和什么比;ground truth)---\n"
         f"{detail[-3500:] if detail else '(未取到执行明细)'}\n"
-        f"--- 任务日志尾 ---\n"
+        + (f"--- ⚠ 完整设备上下文(上机未过,据此改配置/填值)---\n{dev_ctx}\n" if dev_ctx else "")
+        + f"--- 任务日志尾 ---\n"
         f"{log_tail or '(无日志)'}"
     )
 

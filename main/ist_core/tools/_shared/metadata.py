@@ -135,6 +135,27 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": None,
         "intent": "read",
     },
+    "qa_cluster_intents": {
+        # v3：按意图相似度聚族(H_G 摊销)。纯确定性内存计算,不读写设备/落盘。
+        "read_only": True,
+        "concurrency_safe": True,
+        "fallback_for": None,
+        "intent": "read",
+    },
+    "qa_attribute_fail": {
+        # v3：上机 fail 四层归因(G/E/V/瞬态)。纯确定性内存计算,不读写设备/落盘。
+        "read_only": True,
+        "concurrency_safe": True,
+        "fallback_for": None,
+        "intent": "read",
+    },
+    "qa_compile_pipeline": {
+        # v3 approach A：确定性编译流水线(内部 prep+fanout+merge)。写本地产物,内部串行调度。
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "exec",
+    },
     "qa_compile_fanout": {
         # 内部线程池并发派发 fork(draft/grade),本身可并发,但通常一次性调度全批。
         "read_only": False,

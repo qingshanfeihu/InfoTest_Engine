@@ -364,7 +364,7 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
     result: dict[str, Any] = {"mindmap": mindmap_path, "out_name": out_name,
                               "phases": [], "errors": []}
     root = _project_root()
-    manual_glob = f"{product_version}_cli__part*.md"
+    manual_glob = f"cli_{product_version}_Chapter*.md"
 
     # 1. prep（一次）
     prep_out = compile_prep.invoke({"mindmap_path": mindmap_path, "out_name": out_name})

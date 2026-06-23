@@ -88,9 +88,9 @@ effort: high
 
 ### 3. 读 CLI 手册
 
-grep `knowledge/data/markdown/product/*cli__part*.md`，找到相关命令的完整参数表，确认参数间依赖关系（互斥/包含）、合法值范围和默认值。同时查找该命令在其他位置的引用，确认兼容关系。
+grep `knowledge/data/markdown/product/cli_*_Chapter*.md` + `cli_*_Appendix*.md`，找到相关命令的完整参数表，确认参数间依赖关系（互斥/包含）、合法值范围和默认值。同时查找该命令在其他位置的引用，确认兼容关系。
 
-**ONLY**: knowledge/data/markdown/product/*cli__part*.md
+**ONLY**: knowledge/data/markdown/product/cli_*_Chapter*.md + cli_*_Appendix*.md
 **Success criteria**: 能列出命令完整参数表 + 使用方法 + 配置示例 + 参数间依赖关系
 **Artifacts**: param_table, legal_values, defaults, param_dependencies, usage_examples
 

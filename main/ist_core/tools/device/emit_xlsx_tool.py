@@ -283,7 +283,7 @@ def _gate_save_restore_pairing(autoid: str, steps: list, init: str = "",
         if fam in _SAVE_REMOTE and not _param_tail(c, fam):
             verb = "write" if _save_family(c) else "config"
             errs.append(f"命令缺参数:{c!r}——{fam} 变体需带参数(如 {verb} {fam} <文件名/目标>),"
-                        f"按手册 *cli__part*.md 补全,裸命令设备会拒。")
+                        f"按手册 cli_*_Chapter*.md + cli_*_Appendix*.md 补全,裸命令设备会拒。")
 
     # P1c 意图变体(manifest 透传;缺失 no-op)
     if expected_save_variant:

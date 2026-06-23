@@ -40,7 +40,7 @@ _SYSTEM_PROMPT = """\
       "issue_title": "[Http rewrite body] Fail to rewrite a 1024KB file",
       "affected_versions": ["10.4.2","10.4.3"],
 
-      "evidence_file": "knowledge/data/markdown/product/10.5_cli__part2_p201-400.md",
+      "evidence_file": "knowledge/data/markdown/product/cli_10.5_Chapter2.md",
       "evidence_quote": "http rewrite body {on|off}"
     }
   ]
@@ -60,7 +60,7 @@ _SYSTEM_PROMPT = """\
 
 ## evidence 字段（cli_command / decision_rule / behavior 必填，known_issue 不需要）
 
-- `evidence_file`: cli/rule/behavior 必填。这条事实在哪个产品文档中能查到。必须是真实路径（如 `knowledge/data/markdown/product/10.5_cli__part2_p201-400.md`），从 tool 调用的 path 参数中获取，不要凭空构造
+- `evidence_file`: cli/rule/behavior 必填。这条事实在哪个产品文档中能查到。必须是真实路径（如 `knowledge/data/markdown/product/cli_10.5_Chapter2.md`），从 tool 调用的 path 参数中获取，不要凭空构造
 - `evidence_quote`: cli/rule/behavior 必填。**必须是 evidence_file 里的原文片段**，未经任何改写、合并、概括。merger 会用 grep 验证：如果 evidence_quote 在 evidence_file 里 grep 不到，整条 fact 会被丢弃
   - 取**最能直接证明这条事实的那段原文**，而不是任意能 grep 到的文字。对 cli_command，引命令定义/语法呈现的那一行（哪怕它在文档里是残缺形态）；对 decision_rule/behavior，引陈述该规则或行为的那句。不要用章节标题、泛泛的导语或不相关的旁支句来充数。
   - cli_syntax 与 evidence_quote 角色不同：cli_syntax 是你综合还原的完整签名，evidence_quote 是文档里支撑它的原始呈现，两者不必逐字相同。

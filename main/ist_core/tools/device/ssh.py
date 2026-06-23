@@ -188,7 +188,8 @@ def dev_ssh(
     SSH is the fallback — not the first choice.
 
     **PREREQUISITE** — before calling this tool, you MUST grep
-    ``knowledge/data/markdown/product/*cli__part*.md`` to confirm the exact
+    ``knowledge/data/markdown/product/cli_*_Chapter*.md`` +
+    ``cli_*_Appendix*.md`` to confirm the exact
     command name and syntax. The device runs InfosecOS, NOT Cisco IOS.
 
     Data may live on the device, but COMMAND SYNTAX lives in the CLI manual.

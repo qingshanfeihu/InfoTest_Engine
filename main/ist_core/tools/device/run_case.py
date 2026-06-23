@@ -43,7 +43,7 @@ def dev_run_case(
     **何时用**:你已经产出/改好一个 case.xlsx,要知道它在真机上到底过不过。
     **何时不用**:只想看一条 CLI 命令的回显或语法对不对 → 用 dev_ssh(更快,单命令)。
     **前置**:断言期望值要先有出处(作者意图/已声明资源/框架先例),别凭空编;CLI 语法
-    拿不准先 grep ``knowledge/data/markdown/product/*cli__part*.md`` 或 dev_ssh 探一下。
+    拿不准先 grep ``knowledge/data/markdown/product/cli_*_Chapter*.md`` + ``cli_*_Appendix*.md`` 或 dev_ssh 探一下。
 
     框架流程(本工具内部完成,你只看结果):
     1. deliver:把 xlsx 落到跳转机 staging 目录(框架自动 xlsx→python)。

@@ -1,7 +1,7 @@
 ---
 name: review-verifier
 description: Read-only adversarial verification of a test list review draft. Independently re-checks the test case file and the draft findings, identifies gaps, and produces a structured findings report. The caller (main agent) will compose the final user-facing review using your output as evidence.
-tools: fs_read, fs_grep, fs_ls
+tools: fs_read, fs_grep, fs_ls, fs_glob
 model: opus
 inherit-parent-prompt: true
 ---

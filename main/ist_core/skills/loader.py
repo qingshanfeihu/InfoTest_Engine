@@ -147,6 +147,7 @@ def _get_tool_registry() -> dict[str, Any]:
     """延迟加载工具注册表——包含所有可能被 fork skill 使用的工具。"""
     if not _TOOL_REGISTRY:
         from main.ist_core.tools.deepagent import (
+            fs_glob,
             fs_grep,
             fs_ls,
             fs_read,
@@ -155,6 +156,7 @@ def _get_tool_registry() -> dict[str, Any]:
             "fs_read": fs_read,
             "fs_grep": fs_grep,
             "fs_ls": fs_ls,
+            "fs_glob": fs_glob,
         })
         try:
             from main.ist_core.tools.deepagent import run_shell, run_python
@@ -279,6 +281,13 @@ def _resolve_tools(allowed: list[str] | str) -> list[Any]:
         base_name = name.split("(")[0].strip()
         if base_name in registry:
             tools.append(registry[base_name])
+        elif base_name:
+            # 哨兵：子 agent frontmatter 声明了未注册工具 → 静默丢弃曾让 fs_glob 之类
+            # 改 frontmatter 也不生效且无报错。打 warning 暴露，提示补进 _get_tool_registry()。
+            logger.warning(
+                "_resolve_tools: 未注册工具 %r 被忽略（不在 _TOOL_REGISTRY）；"
+                "若该工具应供 fork 子流程使用，请补进 _get_tool_registry()。", base_name,
+            )
     return tools
 
 

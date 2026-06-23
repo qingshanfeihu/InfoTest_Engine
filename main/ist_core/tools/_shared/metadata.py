@@ -183,6 +183,33 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": None,
         "intent": "search",
     },
+
+    # 交互 / 元工具
+    "ask_user": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "exec",
+    },
+    "invoke_skill": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "exec",
+    },
+    # 上机回填 runtime 槽位（ist_verify 用）
+    "compile_runtime_slots": {
+        "read_only": True,
+        "concurrency_safe": True,
+        "fallback_for": None,
+        "intent": "read",
+    },
+    "compile_runtime_fill": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "write",
+    },
 }
 
 

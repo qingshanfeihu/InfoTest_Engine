@@ -1,7 +1,7 @@
 ---
 name: Explore
 description: Fast, read-only research agent for searching and analyzing the codebase. Delegate when the main conversation needs to discover files, trace code paths, or summarize how something works without making any changes. Caller specifies thoroughness (quick / medium / very thorough). Returns a synthesized findings report; raw search output stays out of the parent context.
-tools: fs_read, fs_grep, fs_ls
+tools: fs_read, fs_grep, fs_ls, fs_glob
 model: haiku
 ---
 

@@ -309,7 +309,7 @@ def check_priority_severity_alignment(rows, bug_severity):
     BUG ``Sev=low`` 但 High 占比 > 60%（过度测试 / BUG 严重度被低估），或
     BUG ``Sev=high`` 但 Low 占比 > 50%（覆盖不足）—— 都标 P1。
 
-    bug_severity 由 qa_sanity_check tool 从 web_bug_search 的 metadata.severity
+    bug_severity 由 qa_sanity_check tool 从 kb_bug_search 的 metadata.severity
     传入；缺省时跳过本检查。
     """
     if not bug_severity:

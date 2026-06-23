@@ -1,4 +1,4 @@
-"""qa_ask_user 工具 + reducer 事件 + AskUserSession 交互逻辑回归。"""
+"""ask_user 工具 + reducer 事件 + AskUserSession 交互逻辑回归。"""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ import pytest
 # ── 工具注册 ──────────────────────────────────────────────────────────
 
 
-def test_qa_ask_user_registered_in_default_tools():
+def test_ask_user_registered_in_default_tools():
     from main.ist_core.agents.main_agent import _default_generic_tools
 
     names = {getattr(t, "name", "") for t in _default_generic_tools()}
-    assert "qa_ask_user" in names
+    assert "ask_user" in names
 
 
 # ── reducer 事件 → ask_user 块 ────────────────────────────────────────
@@ -41,7 +41,7 @@ def test_reducer_emits_ask_user_block():
                 }
             ],
         },
-        "tags": {"name": "qa_ask_user"},
+        "tags": {"name": "ask_user"},
     }
     r = MessageReducer()
     r.dispatch(ev)
@@ -56,13 +56,13 @@ def test_reducer_emits_ask_user_block():
 # ── 工具 schema 校验 ──────────────────────────────────────────────────
 
 
-def test_qa_ask_user_rejects_bad_input():
-    from main.ist_core.tools.ask_user import qa_ask_user
+def test_ask_user_rejects_bad_input():
+    from main.ist_core.tools.ask_user import ask_user
 
-    assert "error" in qa_ask_user.invoke({"questions": []})
+    assert "error" in ask_user.invoke({"questions": []})
     # options 少于 2
     bad = [{"question": "q?", "options": [{"label": "x", "description": ""}]}]
-    assert "error" in qa_ask_user.invoke({"questions": bad})
+    assert "error" in ask_user.invoke({"questions": bad})
 
 
 def test_submit_answers_unblocks_tool():
@@ -72,7 +72,7 @@ def test_submit_answers_unblocks_tool():
     result: dict = {}
 
     def run_tool():
-        result["out"] = au.qa_ask_user.invoke(
+        result["out"] = au.ask_user.invoke(
             {
                 "questions": [
                     {

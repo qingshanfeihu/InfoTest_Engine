@@ -53,7 +53,7 @@ class StepSource:
 
 @dataclass
 class StepIR:
-    """一个编译步骤 + 三层来源标注。E/F/G 与 xlsx 列语义一致（见 qa_emit_xlsx）。"""
+    """一个编译步骤 + 三层来源标注。E/F/G 与 xlsx 列语义一致（见 compile_emit）。"""
     E: str
     F: str
     G: str

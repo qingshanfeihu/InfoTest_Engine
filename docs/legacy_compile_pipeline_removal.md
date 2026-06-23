@@ -12,10 +12,10 @@
 1. **41→1 数据丢失**：extract 识别 dongkl 41 用例，decompose 后 cases 数组只剩 1。
 2. **自造模板非框架格式**：`qa_generate_test_case_xlsx` 用 `openpyxl.Workbook()` 造空白簿（test_case_xlsx_generator.py:69），表头是「autoid/优先级/步骤...」，**非框架认的 R28 表头/锚点'自动化ID'**（emit_xlsx 克隆 sdns_listener 模板那套）→ 上机零 check_point。
 3. **G 列空壳**：生成的 xlsx 只有步骤骨架，CLI命令/断言期望列全空。
-4. **计划无上机**：纯生成管线，从不调 qa_run_case。
+4. **计划无上机**：纯生成管线，从不调 dev_run_case。
 
 ## 编排架构独立性（已验证）
-`ist_compile_*` skill/agent + loader `_TOOL_REGISTRY` 零依赖旧工具，用的是 `qa_emit_xlsx`/`qa_run_case`/`qa_confidence_score`/`qa_lookup_pattern`/`qa_probe_show`。删旧管线不影响编排架构。
+`ist_compile_*` skill/agent + loader `_TOOL_REGISTRY` 零依赖旧工具，用的是 `compile_emit`/`dev_run_case`/`compile_score`/`compile_precedent`/`dev_probe`。删旧管线不影响编排架构。
 
 ## 删除清单
 

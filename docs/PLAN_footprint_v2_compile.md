@@ -40,7 +40,7 @@
 1. **单 case draft = 21 轮往返 / 567 秒**（case 676654，zone forward）。工具分布：grep 26 次、read_file 6、probe 4、lookup_pattern 3、footprint_lookup 1、emit 1。
 2. **21 轮里 #6-18 共 13 轮**在反复 grep 手册找一条基础命令语法 `sdns listener <ip> [port]`，reasoning 一路 "I can't find the sdns listener command syntax"。
 3. **该语法手册第7395行完整存在**（`10.5_cli__part2_p201-400.md`），LLM 因 `sdns listener` 在手册出现几十处噪声而捞不出 → 修正认知：**不是手册缺，是 footprint 没把现成文法提进来，LLM 被迫现 grep**。
-4. draft 第7轮调了 `qa_footprint_lookup("sdns zone forward name")` 返回"无"——**footprint 未覆盖**（现仅15节点，sdns 仅 `sdns`+`sdns.listener`，且 sdns.listener 只有 `show sdns listener`、无配置语法）。
+4. draft 第7轮调了 `kb_footprint("sdns zone forward name")` 返回"无"——**footprint 未覆盖**（现仅15节点，sdns 仅 `sdns`+`sdns.listener`，且 sdns.listener 只有 `show sdns listener`、无配置语法）。
 5. **lookup_pattern 检索不到的原因**：它只按 my_config 命令 token 的 Jaccard 相似度检索，**draft 必须先猜出要配什么命令**；676654 需求只一句"访问成功"，猜不出 config → 检索不到 → 退回啃手册。
 6. **676654 对照**（V 段自评不可信实例）：draft 自判"可交付"，独立 grade 判 **CUT**（理由：断言未验转发实际生效）。→ **V 段让生成者自评会放水**。
 7. grade 判分 `score_case`（`main/case_compiler/confidence_f.py:127`）用 `json.loads(m.group(0))` 正则抠 JSON，未用 response_format → 脆弱。
@@ -116,7 +116,7 @@ show sdns listener / clear ...      ← show/clear 变体
 
 **问题**：lookup_pattern 只按 my_config 命令 token Jaccard 检索，draft 须先猜命令；676654 类需求一句话的分布外 case 猜不出 → 检索不到 → 啃手册。
 
-**做法（改 `main/ist_core/tools/device/precedent_tools.py` 的 qa_lookup_pattern——注意这是 v1/v2 共用工具，改动须向后兼容、不破坏 v1）**：
+**做法（改 `main/ist_core/tools/device/precedent_tools.py` 的 compile_precedent——注意这是 v1/v2 共用工具，改动须向后兼容、不破坏 v1）**：
 1. **建意图标签索引**（新数据，不改代码逻辑）：从 csv 读 `xlsx_file → intent_path` 映射，生成 `knowledge/framework/mirror_intent_index.json`（`{xlsx文件名: [intent_path,...]}`，一个 xlsx 可对多意图）。
 2. **lookup_pattern 加可选入参 `intent: str = ""`**（默认空 = 行为与现在完全一致，v1 不受影响）：
    - 传了 intent：对每个先例，除 config Jaccard 外，再算 intent 与该 xlsx 的 intent_path 文本相似度（词重叠/可后续上向量）；
@@ -133,8 +133,8 @@ show sdns listener / clear ...      ← show/clear 变体
 **2.1** 新建（不同名）：`main/ist_core/skills/ist_compile_v2/SKILL.md`（编排器）+ `ist_draft_v2`/`ist_grade_v2`/`ist_verify_v2/SKILL.md` + `main/ist_core/agents/ist-draft-v2.md` 等。复用全部现有工具（lookup_pattern/footprint_lookup/emit_xlsx/run_case/env_facts），不改工具。
 
 **2.2 v2 draft：G→E→V 三层生成**
-- **G-文法**：先 `qa_footprint_lookup` 拿参数文法（命中即得不啃手册）。
-- **G-骨架**：`qa_lookup_pattern(my_config, intent=需求)` 拿骨架候选（带意图轴）；**骨架选择由 LLM 做**（H_G≠0，§4.5），footprint/先例只给候选。
+- **G-文法**：先 `kb_footprint` 拿参数文法（命中即得不啃手册）。
+- **G-骨架**：`compile_precedent(my_config, intent=需求)` 拿骨架候选（带意图轴）；**骨架选择由 LLM 做**（H_G≠0，§4.5），footprint/先例只给候选。
 - **E**：draft **直接调 env_facts** 拿可达 IP（**独立于先例通道**——治论文 §5.6 点的"E 段依附 lookup"缺口）；IP 不可达当场换（确定性比对，676654 已证 draft 能准确做）。
 - **V**：LLM 填业务值，期望值溯源先例/手册。
 - **结构化**：产 steps 走 json_object + schema（顶层 `{"steps":[...]}`）。
@@ -142,7 +142,7 @@ show sdns listener / clear ...      ← show/clear 变体
   - 命令头必须∈手册 allowlist（footprint 已有的命令集）；
   - **断言对象必须挂在某前序观测算子（show/dig 等产出回显的步骤）的值域上**——断言对象的类型规则，与意图无关、机械可判，根治 655203 悬空崩溃；
   - 绑定 IP 必须∈env_facts 可达表。
-  - 落点：在 `qa_emit_xlsx`（v2 走的 emit 路径）出口做生成后过滤，违反则拒绝 + 返回结构化原因让 draft 改。**注意：这是结构约束，不碰骨架选择（不替 LLM 决定测什么）。**
+  - 落点：在 `compile_emit`（v2 走的 emit 路径）出口做生成后过滤，违反则拒绝 + 返回结构化原因让 draft 改。**注意：这是结构约束，不碰骨架选择（不替 LLM 决定测什么）。**
 
 **2.3 v2 grade：瘦身只判 V 段语义**
 - 只判"V 段断言是否真覆盖目标行为"（676654 那种"未验转发生效"要能判出）；G/E 配置存在性不参与覆盖度评分（治旧 grade 偏严）。

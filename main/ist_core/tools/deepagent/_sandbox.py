@@ -39,7 +39,7 @@ def _default_cwd() -> Path:
 def _resolve_cwd_for_target(target: Path | str | None) -> Path:
     """根据目标路径选最匹配的沙箱根作为 cwd。
 
-    用法：``qa_bash`` 解析命令路径参数后传给本函数，得到子进程 cwd。
+    用法：``run_shell`` 解析命令路径参数后传给本函数，得到子进程 cwd。
 
     - target 为 None / 不在任何沙箱根 → 返回 ``_default_cwd()``
     - target 在某个沙箱根下 → 返回该根

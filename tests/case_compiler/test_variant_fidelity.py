@@ -6,7 +6,9 @@
 """
 from __future__ import annotations
 
-import main.ist_core.tools.device.compile_pipeline as cp
+import importlib
+
+cp = importlib.import_module("main.ist_core.tools.device.compile_pipeline")
 
 
 # ── 意图抽取(title+desc,不含 expected;findall 全取;词边界)─────────────

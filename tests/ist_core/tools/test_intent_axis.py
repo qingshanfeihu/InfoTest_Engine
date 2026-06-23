@@ -1,4 +1,4 @@
-"""qa_lookup_pattern 意图轴：向后兼容 + 意图索引 + 双轴融合（PLAN §阶段一·补）。"""
+"""compile_precedent 意图轴：向后兼容 + 意图索引 + 双轴融合（PLAN §阶段一·补）。"""
 
 from __future__ import annotations
 
@@ -25,13 +25,13 @@ def test_intent_similarity_higher_for_overlap():
 
 
 def test_lookup_pattern_both_empty_errors():
-    r = pt.qa_lookup_pattern.invoke({"my_config": "", "intent": ""})
+    r = pt.compile_precedent.invoke({"my_config": "", "intent": ""})
     assert r.startswith("error")
 
 
 def test_lookup_pattern_intent_only_does_not_error_on_empty_config():
     # 分布外：my_config 空但 intent 非空 → 走纯意图轴，不报 "my_config 为空" 错。
-    r = pt.qa_lookup_pattern.invoke({
+    r = pt.compile_precedent.invoke({
         "my_config": "", "intent": "SSL通道能够建立", "limit": 2,
     })
     assert not r.startswith("error: my_config")

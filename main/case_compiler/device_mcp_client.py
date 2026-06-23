@@ -117,7 +117,7 @@ class FrameworkMCPClient:
         """只读设备探针:经跳转机在被测 APV 上跑单条 show/get 命令,取真实回显。
 
         本测试床 APV 只能经跳转机访问(本地/agent 直连不通),故探单命令走这里,
-        不走直连 qa_ssh。硬白名单首 token show/get(server 侧强制)。
+        不走直连 dev_ssh。硬白名单首 token show/get(server 侧强制)。
         build 决定 conf 设备段(infosec_hgk 等),空则 server 端遍历设备段兜底。
         """
         return self.call([("probe_show", {"command": command, "build": build})]).get("probe_show", {})

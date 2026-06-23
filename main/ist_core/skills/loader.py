@@ -77,8 +77,8 @@ def _summarize_fork_messages(messages: list) -> dict:
     tool_calls: Counter = Counter()
     ai_rounds = 0
     tool_results = 0
-    search_queries: dict[str, list[str]] = {"qa_deepagent_grep": [],
-                                             "qa_footprint_lookup": []}
+    search_queries: dict[str, list[str]] = {"fs_grep": [],
+                                             "kb_footprint": []}
     for m in messages:
         mtype = getattr(m, "type", "")
         if mtype == "ai":
@@ -147,73 +147,73 @@ def _get_tool_registry() -> dict[str, Any]:
     """延迟加载工具注册表——包含所有可能被 fork skill 使用的工具。"""
     if not _TOOL_REGISTRY:
         from main.ist_core.tools.deepagent import (
-            qa_deepagent_grep,
-            qa_deepagent_ls,
-            qa_deepagent_read_file,
+            fs_grep,
+            fs_ls,
+            fs_read,
         )
         _TOOL_REGISTRY.update({
-            "qa_deepagent_read_file": qa_deepagent_read_file,
-            "qa_deepagent_grep": qa_deepagent_grep,
-            "qa_deepagent_ls": qa_deepagent_ls,
+            "fs_read": fs_read,
+            "fs_grep": fs_grep,
+            "fs_ls": fs_ls,
         })
         try:
-            from main.ist_core.tools.deepagent import qa_bash, qa_exec
-            _TOOL_REGISTRY["qa_bash"] = qa_bash
-            _TOOL_REGISTRY["qa_exec"] = qa_exec
+            from main.ist_core.tools.deepagent import run_shell, run_python
+            _TOOL_REGISTRY["run_shell"] = run_shell
+            _TOOL_REGISTRY["run_python"] = run_python
         except ImportError:
             pass
         try:
-            from main.ist_core.tools.device import qa_restapi, qa_ssh
-            _TOOL_REGISTRY["qa_ssh"] = qa_ssh
-            _TOOL_REGISTRY["qa_restapi"] = qa_restapi
+            from main.ist_core.tools.device import dev_rest, dev_ssh
+            _TOOL_REGISTRY["dev_ssh"] = dev_ssh
+            _TOOL_REGISTRY["dev_rest"] = dev_rest
         except ImportError:
             pass
         try:
-            from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
-            _TOOL_REGISTRY["web_bug_search"] = web_bug_search
+            from main.ist_core.tools.knowledge.kb_bug_search import kb_bug_search
+            _TOOL_REGISTRY["kb_bug_search"] = kb_bug_search
         except ImportError:
             pass
         try:
             from main.ist_core.tools.knowledge.footprint_lookup import (
-                qa_footprint_lookup,
+                kb_footprint,
             )
 
-            _TOOL_REGISTRY["qa_footprint_lookup"] = qa_footprint_lookup
+            _TOOL_REGISTRY["kb_footprint"] = kb_footprint
         except ImportError:
             pass
         # 单 case 编译/上机 tools（draft/grade 子 agent 用）
         try:
             from main.ist_core.tools.device import (
-                qa_emit_xlsx,
-                qa_probe_show,
-                qa_run_case,
+                compile_emit,
+                dev_probe,
+                dev_run_case,
             )
-            _TOOL_REGISTRY["qa_emit_xlsx"] = qa_emit_xlsx
-            _TOOL_REGISTRY["qa_run_case"] = qa_run_case
-            _TOOL_REGISTRY["qa_probe_show"] = qa_probe_show
+            _TOOL_REGISTRY["compile_emit"] = compile_emit
+            _TOOL_REGISTRY["dev_run_case"] = dev_run_case
+            _TOOL_REGISTRY["dev_probe"] = dev_probe
         except ImportError:
             pass
         # 批量编译 tools（ist_compile 编译链用）：解析清单 + 合并打包 + fan-out + 串行上机
         try:
             from main.ist_core.tools.device import (
-                qa_compile_fanout,
-                qa_compile_prep,
-                qa_emit_xlsx_merged,
-                qa_run_batch,
+                compile_fanout,
+                compile_prep,
+                compile_emit_merged,
+                dev_run_batch,
             )
-            _TOOL_REGISTRY["qa_compile_prep"] = qa_compile_prep
-            _TOOL_REGISTRY["qa_emit_xlsx_merged"] = qa_emit_xlsx_merged
-            _TOOL_REGISTRY["qa_compile_fanout"] = qa_compile_fanout
-            _TOOL_REGISTRY["qa_run_batch"] = qa_run_batch
+            _TOOL_REGISTRY["compile_prep"] = compile_prep
+            _TOOL_REGISTRY["compile_emit_merged"] = compile_emit_merged
+            _TOOL_REGISTRY["compile_fanout"] = compile_fanout
+            _TOOL_REGISTRY["dev_run_batch"] = dev_run_batch
         except ImportError:
             pass
         try:
             from main.ist_core.tools.device.precedent_tools import (
-                qa_confidence_score,
-                qa_lookup_pattern,
+                compile_score,
+                compile_precedent,
             )
-            _TOOL_REGISTRY["qa_lookup_pattern"] = qa_lookup_pattern
-            _TOOL_REGISTRY["qa_confidence_score"] = qa_confidence_score
+            _TOOL_REGISTRY["compile_precedent"] = compile_precedent
+            _TOOL_REGISTRY["compile_score"] = compile_score
         except ImportError:
             pass
     return _TOOL_REGISTRY
@@ -233,7 +233,7 @@ def _coerce_bool(value: Any, *, default: bool = False) -> bool:
 
 
 def skill_disable_model_invocation(fm: dict[str, Any]) -> bool:
-    """``disable-model-invocation: true`` → 禁止主 agent 经 ``qa_invoke_skill`` 加载。"""
+    """``disable-model-invocation: true`` → 禁止主 agent 经 ``invoke_skill`` 加载。"""
     return _coerce_bool(fm.get("disable-model-invocation"))
 
 

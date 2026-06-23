@@ -2,7 +2,7 @@
    调查→改写→上机验证 闭环。MiMo vs DeepSeek 对比。
 
 不走 case_compiler 管线。直接给主 agent 一个真实脆弱用例 + 任务,给它全套工具
-(qa_ssh 探命令 / qa_exec 写分析脚本 / grep 手册 / qa_run_case 上机验证),
+(dev_ssh 探命令 / run_python 写分析脚本 / grep 手册 / dev_run_case 上机验证),
 看它能否复现人当年的根因分析路径——且全程无人告诉它"答案是 show statistics sdns pool 分布断言"。
 
 用法:
@@ -55,22 +55,22 @@ _TASK_PROMPT = """\
    绝不能"跑一次看设备输出什么就照着写"(那会把偶然结果固化成期望)。
 2. **查证据,别猜**:CLI 命令语法以产品手册为准。设备命令手册在
    knowledge/data/markdown/product/*cli__part*.md,先 grep 核对再用。
-   设备可直连排查:用 qa_ssh(show 命令只读探查 / config 安全子集)。
-3. **上机是唯一裁判**:改完用 qa_run_case 真机跑,pass/fail 设备说了算,不是你自评。
+   设备可直连排查:用 dev_ssh(show 命令只读探查 / config 安全子集)。
+3. **上机是唯一裁判**:改完用 dev_run_case 真机跑,pass/fail 设备说了算,不是你自评。
    fail 了就看日志诊断、改、再跑,直到稳定 pass 或你能确证这是产品缺陷。
 
 # 可用手段
 - grep/read 手册和先例语料(knowledge/ 下)
-- qa_ssh 直连设备 172.16.34.70 发单条命令探查回显/语法
-- qa_exec 写一次性分析脚本
-- qa_emit_xlsx 产出 case.xlsx;qa_run_case 把它上机跑
+- dev_ssh 直连设备 172.16.34.70 发单条命令探查回显/语法
+- run_python 写一次性分析脚本
+- compile_emit 产出 case.xlsx;dev_run_case 把它上机跑
 - 设备 build/topology 已配好,APV_0=172.16.34.70
 
 # 推进纪律(重要)
 - 调查是手段不是目的——**交付物是一个上机验证过的稳定 case.xlsx**,不是一份分析报告。
-- 一旦你诊断出根因(通常几次 grep/读手册就够),**立刻**动手:产出修好的 xlsx → qa_run_case 上机。
+- 一旦你诊断出根因(通常几次 grep/读手册就够),**立刻**动手:产出修好的 xlsx → dev_run_case 上机。
 - 别反复探查同一批文件。想清楚了就动手;上机 fail 比继续空想更有价值——失败日志会告诉你下一步。
-- 你必须至少调用一次 qa_run_case 上机验证你的修复;没上机过就不算完成。
+- 你必须至少调用一次 dev_run_case 上机验证你的修复;没上机过就不算完成。
 
 先简述根因(1-2 段),然后直接产出 xlsx 并上机。开始。
 """
@@ -136,7 +136,7 @@ def main():
     print(f"elapsed={elapsed:.0f}s  total_tool_calls={len(tool_calls)}", flush=True)
     from collections import Counter
     print(f"tool histogram: {dict(Counter(tool_calls))}", flush=True)
-    print(f"qa_run_case calls (上机次数): {tool_calls.count('qa_run_case')}", flush=True)
+    print(f"dev_run_case calls (上机次数): {tool_calls.count('dev_run_case')}", flush=True)
     print(f"\n--- agent final message (tail) ---\n{final_text[-1500:]}", flush=True)
 
 

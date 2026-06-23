@@ -1,7 +1,7 @@
 """真实 runtime 集成测试：fork skill 完整链路 + 官方 explore subagent 加载。
 
 不依赖 tmp_path，使用 IST-Core 仓库内真实文件。
-LLM 用 stub 避免 API 依赖，但 graph / qa_invoke_skill / execute_fork_skill 路径真实执行。
+LLM 用 stub 避免 API 依赖，但 graph / invoke_skill / execute_fork_skill 路径真实执行。
 """
 
 from __future__ import annotations
@@ -39,8 +39,8 @@ def test_official_explore_subagent_loads():
     assert "thoroughness" in spec["system_prompt"].lower()
     
     tools_spec = spec["tools_spec"]
-    assert "qa_deepagent_read_file" in str(tools_spec)
-    assert "qa_deepagent_grep" in str(tools_spec)
+    assert "fs_read" in str(tools_spec)
+    assert "fs_grep" in str(tools_spec)
 
 
 def test_official_explore_listed_in_subagents():
@@ -75,7 +75,7 @@ def test_fork_skill_can_reference_official_explore():
 
 
 def test_review_verification_fork_runs_end_to_end(monkeypatch):
-    """端到端：qa_invoke_skill('review-verification') → execute_fork_skill →
+    """端到端：invoke_skill('review-verification') → execute_fork_skill →
     review-verifier subagent → 返回带 VERDICT/LEVEL 的报告。
 
     用 stub LLM 模拟 review-verifier 的行为（输出 VERDICT/LEVEL 行）。
@@ -132,7 +132,7 @@ def test_review_verification_fork_runs_end_to_end(monkeypatch):
     clear_subagent_cache()
 
     
-    from main.ist_core.tools.skills import qa_invoke_skill
+    from main.ist_core.tools.skills import invoke_skill
 
     test_brief = (
         "test_case_file: knowledge/data/markdown/qa/Test_List_demo.md\n"
@@ -142,7 +142,7 @@ def test_review_verification_fork_runs_end_to_end(monkeypatch):
         "draft_level: P3\n"
     )
 
-    result = qa_invoke_skill.invoke({
+    result = invoke_skill.invoke({
         "skill": "review-verification",
         "brief": test_brief,
     })
@@ -164,7 +164,7 @@ def test_review_verification_fork_runs_end_to_end(monkeypatch):
 
 
 def test_skill_overrides_off_blocks_fork_skill_invocation(monkeypatch, tmp_path):
-    """skillOverrides 'off' 状态下，qa_invoke_skill 应拒绝调用。"""
+    """skillOverrides 'off' 状态下，invoke_skill 应拒绝调用。"""
     import main.ist_core.skills.state as state_mod
 
     
@@ -174,9 +174,9 @@ def test_skill_overrides_off_blocks_fork_skill_invocation(monkeypatch, tmp_path)
     
     state_mod.set_skill_state("review-verification", "off")
 
-    from main.ist_core.tools.skills import qa_invoke_skill
+    from main.ist_core.tools.skills import invoke_skill
 
-    result = qa_invoke_skill.invoke({
+    result = invoke_skill.invoke({
         "skill": "review-verification",
         "brief": "test",
     })
@@ -186,7 +186,7 @@ def test_skill_overrides_off_blocks_fork_skill_invocation(monkeypatch, tmp_path)
 
 
 def test_skill_overrides_on_allows_invocation(monkeypatch, tmp_path):
-    """skillOverrides 'on' 状态（默认）下，qa_invoke_skill 应放行到执行流程。"""
+    """skillOverrides 'on' 状态（默认）下，invoke_skill 应放行到执行流程。"""
     import main.ist_core.skills.state as state_mod
 
     settings = tmp_path / "settings.local.json"
@@ -201,9 +201,9 @@ def test_skill_overrides_on_allows_invocation(monkeypatch, tmp_path):
         lambda skill, brief="": f"STUB: skill={skill}, brief={brief[:20]}",
     )
 
-    from main.ist_core.tools.skills import qa_invoke_skill
+    from main.ist_core.tools.skills import invoke_skill
 
-    result = qa_invoke_skill.invoke({
+    result = invoke_skill.invoke({
         "skill": "review-verification",
         "brief": "test brief content",
     })

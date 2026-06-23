@@ -63,7 +63,7 @@ def ask_grounded(model, steps, ground, timeout=180):
 
 def main():
     from main.ist_core.agents._llm import build_agent_chat_model
-    from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
+    from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
     model = build_agent_chat_model()
     sample = json.load(open(ROOT / "runtime/logs/crossfamily_sample.json"))
     # 基线明细:用于逐 case 对照抬升
@@ -86,7 +86,7 @@ def main():
         steps, golds = extract(xp)
         if not golds:
             continue
-        ground = grounding_block(case_commands(xp), qa_footprint_lookup)
+        ground = grounding_block(case_commands(xp), kb_footprint)
         try:
             d = ask_grounded(model, steps[:60], ground)
         except Exception as e:  # noqa: BLE001

@@ -35,9 +35,9 @@ def test_review_verification_listed_to_model():
     assert _skill_eligible_for_listing(meta)
 
 
-def test_qa_invoke_skill_allows_test_list_review():
-    from main.ist_core.tools.skills import qa_invoke_skill
-    out = qa_invoke_skill.invoke({"skill": "test-list-review", "brief": ""})
+def test_invoke_skill_allows_test_list_review():
+    from main.ist_core.tools.skills import invoke_skill
+    out = invoke_skill.invoke({"skill": "test-list-review", "brief": ""})
     assert "ERROR: skill" not in out.split("\n", 1)[0]
     assert "# Skill loaded: test-list-review" in out
 

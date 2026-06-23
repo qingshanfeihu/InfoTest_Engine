@@ -14,12 +14,12 @@ def test_summarize_fork_messages_counts_rounds_and_tools():
     msgs = [
         HumanMessage(content="task"),
         AIMessage(content="", tool_calls=[
-            {"name": "qa_lookup_pattern", "args": {}, "id": "1"},
-            {"name": "qa_deepagent_grep", "args": {}, "id": "2"},
+            {"name": "compile_precedent", "args": {}, "id": "1"},
+            {"name": "fs_grep", "args": {}, "id": "2"},
         ]),
         ToolMessage(content="r1", tool_call_id="1"),
         ToolMessage(content="r2", tool_call_id="2"),
-        AIMessage(content="", tool_calls=[{"name": "qa_deepagent_grep", "args": {}, "id": "3"}]),
+        AIMessage(content="", tool_calls=[{"name": "fs_grep", "args": {}, "id": "3"}]),
         ToolMessage(content="r3", tool_call_id="3"),
         AIMessage(content="done"),
     ]
@@ -27,7 +27,7 @@ def test_summarize_fork_messages_counts_rounds_and_tools():
     assert s["ai_rounds"] == 3
     assert s["tool_results"] == 3
     # 慢在哪一步可见：grep 调了 2 次，lookup 1 次
-    assert s["tool_calls"] == {"qa_deepagent_grep": 2, "qa_lookup_pattern": 1}
+    assert s["tool_calls"] == {"fs_grep": 2, "compile_precedent": 1}
 
 
 def test_trace_fork_writes_line(tmp_path, monkeypatch):
@@ -38,13 +38,13 @@ def test_trace_fork_writes_line(tmp_path, monkeypatch):
         "ist_compile_draft",
         "Case X: 配置 zone forward\n第二行被截断",
         42.5,
-        {"ai_rounds": 12, "tool_results": 11, "tool_calls": {"qa_deepagent_grep": 8, "qa_lookup_pattern": 2}},
+        {"ai_rounds": 12, "tool_results": 11, "tool_calls": {"fs_grep": 8, "compile_precedent": 2}},
     )
     content = (tmp_path / "fork_trace.log").read_text(encoding="utf-8")
     assert "fork=ist_compile_draft" in content
     assert "elapsed=42.5s" in content
     assert "ai_rounds=12" in content
-    assert "qa_deepagent_grep=8" in content
+    assert "fs_grep=8" in content
     # brief 只记首行、不泄露完整内容
     assert "第二行被截断" not in content
 

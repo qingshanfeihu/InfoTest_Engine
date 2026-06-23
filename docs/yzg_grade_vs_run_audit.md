@@ -11,7 +11,7 @@
 我在拿到完整 grade 理由前,曾凭"读了几个断言"判断 **grade 判 CUT 过严、把合理的解析断言误杀**。读完 26 个完整判分理由后,**这个判断大部分是错的,需更正**:
 
 - grade 的判分**不是**"凡是 dig 验解析 IP 就 PASS、凡是没验动态就 CUT"的粗暴标准。
-- 真实标准是逐 check_point 打分(`qa_confidence_score`)+ 对照**手册行为**和**先例形态**,且明确区分"配置存在性检查"(弱)与"功能行为验证"(强),**最弱 check_point 拖垮全局**(整体 < 0.5 → CUT)。
+- 真实标准是逐 check_point 打分(`compile_score`)+ 对照**手册行为**和**先例形态**,且明确区分"配置存在性检查"(弱)与"功能行为验证"(强),**最弱 check_point 拖垮全局**(整体 < 0.5 → CUT)。
 - 我之前以为"被误杀"的 dig 验解析 IP 的 case(655154/655173/655188/655218/655233/655262 等),grade **全判了 PASS**——和我后来的人工判断一致。grade 没有误杀它们。
 
 最终分布:**12 PASS / 14 CUT**。下文逐条对照,指出 grade **判对**的和**仍可商榷**的。
@@ -27,7 +27,7 @@
 | 655218 | PASS | no_log | 强动态断言(0.9+1.0)+ 先例支撑 |
 | 655233 | PASS | no_log | dig 验具体解析内容,非状态码 |
 | 655248 | CUT | no_log | grade:check1 静态配置检查弱;但 check2/3(dig 验后端 IP)强 |
-| 655262 | PASS | no_log | qa_confidence_score overall=1.0 |
+| 655262 | PASS | no_log | compile_score overall=1.0 |
 | 655276 | CUT | no_log | grade:仅验 NOERROR,未验"默认端口53不显示"的手册行为 |
 | 655290 | CUT | no_log | grade:check2 仅 0.4 分,要求验自定义端口 10001 行为 |
 | 667986 | PASS | no_log | found_times×16 强结构断言,有手册"最多16条"依据 |
@@ -53,7 +53,7 @@
 
 grade 不是单一标准,而是多维度:
 
-1. **逐 check_point 打分**(`qa_confidence_score`,0~1):配置存在性检查 ≈ 0.3(弱),功能行为验证(dig 验解析 IP/状态码)≈ 0.9~1.0(强)。
+1. **逐 check_point 打分**(`compile_score`,0~1):配置存在性检查 ≈ 0.3(弱),功能行为验证(dig 验解析 IP/状态码)≈ 0.9~1.0(强)。
 2. **最弱 check_point 拖垮全局**:整体分由弱项决定,有一条纯静态弱断言且无强断言补足 → 整体 < 0.5 → CUT。
 3. **对照手册行为**:多次引 `10.5_cli__part2` 手册具体行号(如第7405行"write mem 后默认端口53不保存"、第7416行"默认端口53不显示")判断断言是否抓住手册描述的关键行为。
 4. **对照先例形态**:反复引 `sdns_listener.xlsx`/`sdns_listener_tcp.xlsx`/`sdns_forward-test.xlsx` 等先例,断言形态与先例一致才认。

@@ -5,12 +5,12 @@
 ## 一、实测:单 case draft = 21 轮往返 / 567 秒
 
 工具调用分布:
-- **qa_deepagent_grep: 26 次**(绝对大头)
-- qa_deepagent_read_file: 6 次
-- qa_probe_show: 4 次
-- qa_lookup_pattern: 3 次
-- qa_footprint_lookup: 1 次
-- qa_emit_xlsx: 1 次(第 19 轮才生成)
+- **fs_grep: 26 次**(绝对大头)
+- fs_read: 6 次
+- dev_probe: 4 次
+- compile_precedent: 3 次
+- kb_footprint: 1 次
+- compile_emit: 1 次(第 19 轮才生成)
 
 ## 二、逐轮真相:13/21 轮在反复找一条基础命令语法
 
@@ -56,7 +56,7 @@ reasoning 原文佐证(#6-18 一路是):"I still haven't found the sdns listener
 
 ## 五、载体:footprint 知识树(已有基础设施,覆盖不全)
 
-- 第 7 轮 LLM 调了 `qa_footprint_lookup("sdns zone forward name")` 但返回"无"——**footprint 没覆盖这条命令**。
+- 第 7 轮 LLM 调了 `kb_footprint("sdns zone forward name")` 但返回"无"——**footprint 没覆盖这条命令**。
 - footprint(`knowledge/footprints/nodes/*.json`)本就是按 CLI 命令前缀组织的产品事实树(记忆 `project_llm_endpoint_and_memory_subsystem`),设计上正是装"命令语法/行为"的地方。
 - **所以方向**:把命令语法表落到 footprint(或类似结构化语法源),让 draft 先查语法表(命中即得)、查不到才 grep 手册(并把这次查到的沉淀进 footprint,下次不用再查)。这与论文 G 段、记忆 `compile-version-manual-binding-gap`(手册无版本锚点)、`mineru-cli-syntax-truncation`(手册命令行被 MinerU 截断)全部呼应。
 

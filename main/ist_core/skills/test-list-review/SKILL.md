@@ -7,7 +7,7 @@ when_to_use: |
   "看一下 121100 用例怎么样", "按之前评审要求", "xlsx 评审".
   Trigger phrases: 评审, review, Test List, BUG-XXXXX, 测试用例评审.
   SKIP when: 用户只问 CLI 用法、产品规格说明、缺陷详情查询，或要求生成新用例。
-allowed-tools: qa_deepagent_read_file, qa_deepagent_grep, qa_deepagent_ls, qa_exec, qa_bash, web_bug_search, qa_footprint_lookup, qa_invoke_skill
+allowed-tools: fs_read, fs_grep, fs_ls, run_python, run_shell, kb_bug_search, kb_footprint, invoke_skill
 effort: high
 ---
 
@@ -70,12 +70,12 @@ effort: high
 
 ### 1. 读缺陷 / 需求
 
-调 ``web_bug_search(ticket_id)``。``ticket_id`` 可用 ``BUG-121100`` 或纯数字 ``121100``——工具在 **bugzilla / 禅道缺陷 / 禅道需求** 三端分别查询，不按前缀猜平台。重点理解研发修复了什么问题、改了哪些参数/枚举值/行为。
+调 ``kb_bug_search(ticket_id)``。``ticket_id`` 可用 ``BUG-121100`` 或纯数字 ``121100``——工具在 **bugzilla / 禅道缺陷 / 禅道需求** 三端分别查询，不按前缀猜平台。重点理解研发修复了什么问题、改了哪些参数/枚举值/行为。
 
 - 仅一端命中：用 ``title`` / ``description`` / ``metadata`` 写后续 ``bug_summary``
 - ``hits_count`` > 1：对比 ``results`` 里各 ``probe_backend``，选定与评审相关的一条（其余勿丢）
 
-**ONLY**: web_bug_search
+**ONLY**: kb_bug_search
 **Success criteria**: 能回答"研发具体改了什么、影响哪些命令和版本"
 **Artifacts**: bug_summary, fix_approach, affected_params, affected_versions, cli_command, severity
 
@@ -114,25 +114,25 @@ grep 测试用例中包含的相关功能历史的Test List，重点关注：覆
 
 **MUST** read entire test case file. If > 500 lines, paginated reads until full coverage.
 
-在 Step 7 之前，对 ``cli_command`` 调 ``qa_footprint_lookup``，把测试用例中已确认的产品测试事实写入后续 brief 的 ``evidence_collected``（禁止留到交叉验证之后再补查）。
+在 Step 7 之前，对 ``cli_command`` 调 ``kb_footprint``，把测试用例中已确认的产品测试事实写入后续 brief 的 ``evidence_collected``（禁止留到交叉验证之后再补查）。
 
-**ONLY**: 用例文件 + qa_footprint_lookup
+**ONLY**: 用例文件 + kb_footprint
 **Success criteria**: 全文覆盖 + footprint 要点已记录 + 用例中所有命令/模块均已确认语义
 **Artifacts**: footprint_facts, test_coverage_dimensions, test_design_approach, module_partition
 **Rules**: 用例中出现未知命令/模块时，必须 grep product/ 确认语义后再评审；禁止凭名字推断功能行为
 
 ### 7. 草稿 + 交叉验证 (when applicable: 多 sheet)
 
-**多 sheet xlsx（when applicable）**：若 xlsx 有 N 个独立 sheet/section（各 >500 行），先 peek 结构，再**同一条消息**并发 N 个 ``qa_invoke_skill(skill="review-verification", brief=...)``，每块一份 brief；全部返回后按 worst-case 聚合（任一 FAIL → FAIL；否则任一 PARTIAL → PARTIAL）。
+**多 sheet xlsx（when applicable）**：若 xlsx 有 N 个独立 sheet/section（各 >500 行），先 peek 结构，再**同一条消息**并发 N 个 ``invoke_skill(skill="review-verification", brief=...)``，每块一份 brief；全部返回后按 worst-case 聚合（任一 FAIL → FAIL；否则任一 PARTIAL → PARTIAL）。
 
-**Execution**: Fork skill — 必须调 ``qa_invoke_skill(skill="review-verification", brief=<完整草稿>)``
+**Execution**: Fork skill — 必须调 ``invoke_skill(skill="review-verification", brief=<完整草稿>)``
 
 ⚠️ **关键约束**：
 - skill 名必须是 ``review-verification``（fork skill），**不是** ``test-list-review``（你已加载的 inline skill）
 - 再调 ``test-list-review`` 只会重新返回这份 SKILL.md（inline skill 行为），**不会触发独立验证**
 - ``review-verification`` 是 fork skill，会在独立 subagent (review-verifier) 中执行验证，返回结构化研究报告
 
-先在对话里写完整草稿（证据列表 + draft_findings + draft_level），再调 ``qa_invoke_skill(skill="review-verification", ...)``。Brief 必须完整——fork skill 从零上下文开始，看不到你之前的对话。
+先在对话里写完整草稿（证据列表 + draft_findings + draft_level），再调 ``invoke_skill(skill="review-verification", ...)``。Brief 必须完整——fork skill 从零上下文开始，看不到你之前的对话。
 
 ``brief`` 建议结构：
 
@@ -147,7 +147,7 @@ evidence_collected:
   - Phase 3: <参数表 + 依赖关系>
   - Phase 4: <历史测试维度 + 方法论>
   - Phase 5: <同类覆盖模式>
-  - Phase 6 footprint: <qa_footprint_lookup 要点>
+  - Phase 6 footprint: <kb_footprint 要点>
   - Phase 6 用例结构: <覆盖维度 + 模块划分>
 evidence_gaps:
   - <知识库中未找到但可能影响判断的信息>
@@ -161,7 +161,7 @@ draft_findings:
 draft_level: P0-P7
 
 Independently verify each finding (you will grep/read internally).
-Try to break my draft. User-facing report: 中文「发现项」+ 证据摘录（勿写 qa_deepagent_* 工具行）+ VERDICT + LEVEL.
+Try to break my draft. User-facing report: 中文「发现项」+ 证据摘录（勿写 fs_* 工具行）+ VERDICT + LEVEL.
 ```
 
 **Success criteria**: task 返回含 ``VERDICT:`` + ``LEVEL:`` 的报告

@@ -34,8 +34,8 @@ def _load_rows(xlsx):
 
 
 def _need_map():
-    from main.ist_core.tools.device.compile_prep import qa_compile_prep
-    qa_compile_prep.invoke({"mindmap_path": "workspace/inputs/automatic_case/dongkl.txt",
+    from main.ist_core.tools.device.compile_prep import compile_prep
+    compile_prep.invoke({"mindmap_path": "workspace/inputs/automatic_case/dongkl.txt",
                             "out_name": "_recon_intent"})
     m = json.load(open(ROOT / "workspace/outputs/_recon_intent/manifest.json"))
     out = {}

@@ -364,7 +364,7 @@ class MemoryStore:
             return []
 
     def lookup_footprint(self, command: str) -> dict | None:
-        """精确查找 footprint（供 qa_footprint_lookup tool 调用）。
+        """精确查找 footprint（供 kb_footprint tool 调用）。
 
         - 完整命令: "http rewrite body" → leaf 完整内容
         - 前缀命令: "slb mode" → 子节点列表

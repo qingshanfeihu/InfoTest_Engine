@@ -96,8 +96,8 @@ def test_cli_sink_verbose_preserves_long_tool_output() -> None:
     orig = sys.stdout
     sys.stdout = buf
     try:
-        sink({"kind": "tool_result", "payload": {"name": "qa_compile_fanout", "output": long_out},
-              "run_id": "x", "seq": 1, "ts": "", "tags": {"name": "qa_compile_fanout"}})
+        sink({"kind": "tool_result", "payload": {"name": "compile_fanout", "output": long_out},
+              "run_id": "x", "seq": 1, "ts": "", "tags": {"name": "compile_fanout"}})
     finally:
         sys.stdout = orig
     out = buf.getvalue()

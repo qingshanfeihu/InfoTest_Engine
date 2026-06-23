@@ -4,12 +4,12 @@
 不派魔数分。检索只按**客观配置结构相似度**,判分交给 **LLM 看真实证据**(已验证先例+手册+需求)。
 
 角色对应:
-- qa_lookup_pattern(先例检索):给你的用例配置,按"配置结构相似度"返回最像的已验证先例
+- compile_precedent(先例检索):给你的用例配置,按"配置结构相似度"返回最像的已验证先例
   (客观距离,不判模式、不派分)。你自己看先例的断言形态、自己归纳该怎么测。
-- qa_confidence_score(质量评估判据):把"待判断言+所测配置+已验证先例+原始需求"喂给 LLM 判分,
+- compile_score(质量评估判据):把"待判断言+所测配置+已验证先例+原始需求"喂给 LLM 判分,
   给CUT/PASS决策。不替代上机 verdict——verdict 看"能不能跑通",f() 看"是不是要测的那个行为"。
 
-红线:f() 只做快筛+abstain,绝不单独定生死;终判仍上机(qa_run_case)。
+红线:f() 只做快筛+abstain,绝不单独定生死;终判仍上机(dev_run_case)。
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ _INTENT_INDEX_PATH = (
 
 _INTENT_INDEX_CACHE: dict | None = None
 
-# mirror 先例语料缓存（per-file 静态解析只做一次）。根因：qa_lookup_pattern 原本每次调用都
+# mirror 先例语料缓存（per-file 静态解析只做一次）。根因：compile_precedent 原本每次调用都
 # openpyxl 全量加载 380+ 个 mirror xlsx，16 并发 draft 下被 GIL 串行化成 CPU 墙（编译慢的主因）。
 # 静态部分（cfg_tokens + 触发→断言链 seq）缓存一次；相似度仍每次按 query 实时算，结果不变。
 _MIRROR_CORPUS_CACHE: list[dict] | None = None
@@ -172,7 +172,7 @@ def _resolve_xlsx(xlsx_path: str):
 
 
 @tool(parse_docstring=True)
-def qa_lookup_pattern(my_config: str, limit: int = 3, intent: str = "") -> str:
+def compile_precedent(my_config: str, limit: int = 3, intent: str = "") -> str:
     """【先例检索】给你这个用例的配置/意图,返回最像的已验证先例当参考。
 
     排序看**客观事实**两轴(融合):
@@ -199,7 +199,7 @@ def qa_lookup_pattern(my_config: str, limit: int = 3, intent: str = "") -> str:
     # 生产默认 Arm-L 不进此分支。
     from main.ist_core.tools._shared.ablation import is_baseline
     if is_baseline():
-        return ("=== qa_lookup_pattern(基线臂:不提供先例) ===\n"
+        return ("=== compile_precedent(基线臂:不提供先例) ===\n"
                 "本臂不检索已验证先例(对照实验 Arm-E)。请直接依据需求与通用知识生成,"
                 "不依赖同类先例的触发→断言形态。")
     my_toks = _cmd_tokens(my_config)
@@ -235,11 +235,11 @@ def qa_lookup_pattern(my_config: str, limit: int = 3, intent: str = "") -> str:
     cands.sort(key=lambda x: -x[0])
     hits = [c for c in cands[:limit] if c[0] > 0]
     if not hits:
-        return ("=== qa_lookup_pattern ===\n你的配置/意图在先例库里没有结构相近的先例(分布外/新类型)。\n"
+        return ("=== compile_precedent ===\n你的配置/意图在先例库里没有结构相近的先例(分布外/新类型)。\n"
                 "→ 没有现成范式可抄,你得自己查手册推断该测什么 + 上机验证;f() 会因无锚点给低置信,"
                 "做不出就诚实上报(escalate-when-stuck)。")
     axis = "config+intent 融合" if (my_toks and intent) else ("intent 意图轴" if intent else "config 结构轴")
-    out = [f"=== qa_lookup_pattern(按{axis}相似度排序;含完整触发→断言链)==="]
+    out = [f"=== compile_precedent(按{axis}相似度排序;含完整触发→断言链)==="]
     for score, cfg_sim, intent_sim, fn, seq in hits:
         if my_toks and intent:
             tag = f"配置{cfg_sim:.2f}+意图{intent_sim:.2f}"
@@ -270,15 +270,15 @@ def qa_lookup_pattern(my_config: str, limit: int = 3, intent: str = "") -> str:
 
 
 @tool(parse_docstring=True)
-def qa_confidence_score(xlsx_path: str, need_intent: str = "",
+def compile_score(xlsx_path: str, need_intent: str = "",
                         anchor_examples: str = "", manual_facts: str = "") -> str:
     """【质量评估判据】判 case.xlsx 的断言"配不配得上它所测的配置行为",给CUT/PASS决策(LLM判,无硬规则)。
 
-    **第二判据,不是 verdict**:qa_run_case 看"能不能跑通"(弱断言 found 一个总在的域名也 pass);
+    **第二判据,不是 verdict**:dev_run_case 看"能不能跑通"(弱断言 found 一个总在的域名也 pass);
     本工具看"断言有没有咬住需求要测的行为"。
 
     **判分由 LLM 看真实证据现场判**(原始需求 + 每个断言所测的配置 + 已验证先例 + 手册行为),
-    不写"某模式该怎样"的规则、不派魔数。证据越全判得越准:先用 qa_lookup_pattern 拿先例填
+    不写"某模式该怎样"的规则、不派魔数。证据越全判得越准:先用 compile_precedent 拿先例填
     anchor_examples、grep 手册填 manual_facts,再调本工具。
 
     overall<0.5 → CUT:断言没咬住需求行为,看 reason 换做法重写,别充数。
@@ -288,7 +288,7 @@ def qa_confidence_score(xlsx_path: str, need_intent: str = "",
     Args:
         xlsx_path: 本地 case.xlsx 路径。
         need_intent: 原始用例需求/作者意图原文(用于跨层对齐判定)。
-        anchor_examples: qa_lookup_pattern 返回的同类已验证先例文本(判分锚点,强烈建议填)。
+        anchor_examples: compile_precedent 返回的同类已验证先例文本(判分锚点,强烈建议填)。
         manual_facts: grep 手册得到的"该配置该产生什么可观测行为"(判分依据,建议填)。
 
     Returns:
@@ -300,14 +300,14 @@ def qa_confidence_score(xlsx_path: str, need_intent: str = "",
     if is_baseline():
         import json as _json
         return _json.dumps({
-            "tool": "qa_confidence_score", "arm": "E_baseline",
+            "tool": "compile_score", "arm": "E_baseline",
             "note": "基线臂:无质量审批门,直接放行(对照实验 Arm-E)",
             "overall": 1.0, "abstain": False, "decision": "PASS(基线臂不判分)",
             "checkpoints": [],
         }, ensure_ascii=False, indent=2)
     p = _resolve_xlsx(xlsx_path)
     if p is None:
-        return f"error: xlsx 不存在: {xlsx_path}(用 qa_deepagent_ls 看真实落盘路径)"
+        return f"error: xlsx 不存在: {xlsx_path}(用 fs_ls 看真实落盘路径)"
     try:
         from main.case_compiler.confidence_f import score_case
         rows = _load_case_rows(str(p))
@@ -323,13 +323,13 @@ def qa_confidence_score(xlsx_path: str, need_intent: str = "",
     # 下游(agent/driver)可直接 json.loads 取结构化判分,不用正则从文本抠数字。
     if res.get("reason") and not res.get("rows"):
         return _json.dumps({
-            "tool": "qa_confidence_score", "abstain": True, "overall": 0.0,
+            "tool": "compile_score", "abstain": True, "overall": 0.0,
             "decision": "abstain", "reason": res["reason"],
-            "hint": "f() 不在缺 LLM 时硬猜分;确保判分模型可用,或直接 qa_run_case 由 verdict 兜底。",
+            "hint": "f() 不在缺 LLM 时硬猜分;确保判分模型可用,或直接 dev_run_case 由 verdict 兜底。",
             "checkpoints": [],
         }, ensure_ascii=False, indent=2)
     out = {
-        "tool": "qa_confidence_score",
+        "tool": "compile_score",
         "note": "第二判据(LLM据证据判,非框架verdict);质量评估判据",
         "overall": round(res["overall"], 2),
         "abstain": res["abstain"],
@@ -340,6 +340,6 @@ def qa_confidence_score(xlsx_path: str, need_intent: str = "",
              "reasons": [n for n in rs.notes if n]}
             for rs in res.get("rows", [])
         ],
-        "how_to_use": "CUT→看每个checkpoint的reasons,用qa_lookup_pattern查相似先例正确断言形态改写;放行→qa_run_case上机终判。",
+        "how_to_use": "CUT→看每个checkpoint的reasons,用compile_precedent查相似先例正确断言形态改写;放行→dev_run_case上机终判。",
     }
     return _json.dumps(out, ensure_ascii=False, indent=2)

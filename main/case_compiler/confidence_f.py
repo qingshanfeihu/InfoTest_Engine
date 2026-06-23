@@ -58,7 +58,7 @@ class RowScore:
 # ── 证据组装(客观:把三份真实料拼成给 LLM 的证据,不含任何判断逻辑)──────
 def build_judge_evidence(rows: list[dict], need_intent: str,
                          anchor_examples: str = "", manual_facts: str = "") -> str:
-    """组装判分证据包(纯拼装,无判断)。anchor_examples=招牌菜先例文本(qa_lookup_pattern 给),
+    """组装判分证据包(纯拼装,无判断)。anchor_examples=招牌菜先例文本(compile_precedent 给),
     manual_facts=手册相关行为(agent grep 给)。这些是真实料,不是我编的规则。"""
     links = link_assertion_to_config(rows)
     parts = [f"原始需求(作者意图): {need_intent or '(未提供)'}", "", "待判的 check_point(每个含它所测的配置):"]

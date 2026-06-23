@@ -30,7 +30,7 @@ _TOOL_INPUT_MAX = 200
 
 
 _DERIVED_TOOLS = frozenset({
-    "qa_footprint_lookup",
+    "kb_footprint",
 })
 
 

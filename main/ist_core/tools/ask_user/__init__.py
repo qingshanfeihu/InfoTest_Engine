@@ -1,4 +1,4 @@
-"""qa_ask_user: 问答/交互式辅助工具。
+"""ask_user: 问答/交互式辅助工具。
 
 工具设计要点：
 - 工具定位：当 agent 需要决策且答案改变后续行为时调用。**不要**用于"约定俗成的默认值"
@@ -68,7 +68,7 @@ def submit_answers(question_id: str, answers: dict[str, str]) -> bool:
 
 
 @tool
-def qa_ask_user(questions: list[dict[str, Any]]) -> str:
+def ask_user(questions: list[dict[str, Any]]) -> str:
     """Ask the user multiple choice questions to gather information, clarify ambiguity, understand preferences, or offer them choices.
 
     Use this tool when you need user input during execution, especially:
@@ -133,13 +133,13 @@ def qa_ask_user(questions: list[dict[str, Any]]) -> str:
                 "question_id": question_id,
                 "questions": questions,
             },
-            tags={"name": "qa_ask_user"},
+            tags={"name": "ask_user"},
         )
     except Exception:  # noqa: BLE001
         pass
 
     # 非交互模式（仅测试用的 print 模式 `-p`，无 TUI 可应答）：绝不阻塞、绝不猜答案。
-    # 生产接口只有 TUI；在非交互下命中 qa_ask_user 一定是「测试输入缺信息」或「设计/bug」。
+    # 生产接口只有 TUI；在非交互下命中 ask_user 一定是「测试输入缺信息」或「设计/bug」。
     # 立即返回明确错误把问题暴露出来——而不是 event.wait() 死等一个永不到来的应答。
     import os as _os
     if (_os.environ.get("IST_NON_INTERACTIVE") or "").strip() in ("1", "true", "True"):
@@ -147,7 +147,7 @@ def qa_ask_user(questions: list[dict[str, Any]]) -> str:
             _PENDING.pop(question_id, None)
         _q_summary = " | ".join(str(q.get("question", "")) for q in questions)
         return (
-            "error: 当前为非交互模式（无 TUI，无法向用户提问），qa_ask_user 不可用。"
+            "error: 当前为非交互模式（无 TUI，无法向用户提问），ask_user 不可用。"
             "请改为：从用户请求原文中提取该信息；若请求确实未提供该必要信息，"
             "请停止并明确报告『缺少哪项信息、为何无法在不询问用户的情况下继续』，"
             "不要臆测或自行选默认值。"
@@ -163,7 +163,7 @@ def qa_ask_user(questions: list[dict[str, Any]]) -> str:
             + "]"
             for q in questions
         )
-        print(f"[qa_ask_user] agent 提问: {_qs}", file=_sys.stderr, flush=True)
+        print(f"[ask_user] agent 提问: {_qs}", file=_sys.stderr, flush=True)
     except Exception:  # noqa: BLE001
         pass
 

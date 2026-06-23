@@ -3,11 +3,11 @@
 设计依据（见计划 linear-imagining-galaxy.md 决策二）：并行的物理边界落在
 **工具内部实现**，不靠 prompt 自律——
 
-- ``qa_compile_fanout``：draft / grade 是纯 LLM + 只读检索/本地写，不碰设备可变态，
+- ``compile_fanout``：draft / grade 是纯 LLM + 只读检索/本地写，不碰设备可变态，
   用 ThreadPoolExecutor **并发** fan-out 多个 fork。并发安全已由 P0-S1 验证
   （execute_fork_skill 全局部变量 + LangGraph graph 无状态 + ChatOpenAI/httpx
   并发安全），同一缓存 runnable 可安全被多线程并发 invoke。
-- ``qa_run_batch``：上机受跳转机框架全局锁约束（device_mcp_client run_and_wait
+- ``dev_run_batch``：上机受跳转机框架全局锁约束（device_mcp_client run_and_wait
   拿不到 task_id 即 "submit failed (lock held?)"），且设备配置/统计是全局共享态，
   **必须单线程串行**。它内部就是一个 for 循环，物理上不可能并发上机。
 
@@ -69,18 +69,18 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 
 
 @tool(parse_docstring=True)
-def qa_compile_fanout(skill: str, briefs_json: str, concurrency: int = 0) -> str:
+def compile_fanout(skill: str, briefs_json: str, concurrency: int = 0) -> str:
     """并发派发**同一个 fork skill** 给多个 brief，收齐所有子 agent 的输出。
 
     用于批量编译里 draft / grade 这类**可并行**阶段：每个 case 一个 brief，
     一次性并发跑完（受并发度上限约束，超出的排队），返回每个 brief 的产物。
-    比逐个 qa_invoke_skill 串行快 N 倍（N≈并发度），且各 fork 互相隔离、不串话。
+    比逐个 invoke_skill 串行快 N 倍（N≈并发度），且各 fork 互相隔离、不串话。
 
     **只用于 draft / grade**（纯 LLM + 检索/本地写，不碰设备可变态）。
     **上机（run）绝不用本工具**——上机受框架全局锁 + 设备共享态约束，必须串行，
-    用 qa_run_batch。
+    用 dev_run_batch。
 
-    每个 brief 就是你本来要传给 qa_invoke_skill 的那段 brief 文本（需求+现状+规则+
+    每个 brief 就是你本来要传给 invoke_skill 的那段 brief 文本（需求+现状+规则+
     指路+边界，不含具体命令答案——命令由子 agent 自己查）。
 
     Args:
@@ -116,7 +116,7 @@ def qa_compile_fanout(skill: str, briefs_json: str, concurrency: int = 0) -> str
     from main.ist_core.skills.loader import execute_fork_skill
 
     workers = _resolve_concurrency(concurrency, n_items=len(norm))
-    logger.info("qa_compile_fanout skill=%s items=%d concurrency=%d", skill, len(norm), workers)
+    logger.info("compile_fanout skill=%s items=%d concurrency=%d", skill, len(norm), workers)
 
     def _run(item: dict) -> dict:
         last_exc = None
@@ -155,13 +155,13 @@ def qa_compile_fanout(skill: str, briefs_json: str, concurrency: int = 0) -> str
     return json.dumps(ordered, ensure_ascii=False)
 
 
-# 上机串行超时上限（单 case），与 qa_run_case 对齐。
+# 上机串行超时上限（单 case），与 dev_run_case 对齐。
 _RUN_DEFAULT_MAX_S = 600
 _RUN_MAX_MAX_S = 1200
 
 
 @tool(parse_docstring=True)
-def qa_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
+def dev_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
                  build: str = "", max_s_each: int = _RUN_DEFAULT_MAX_S) -> str:
     """把**一个合并 xlsx 里的多个 case** 顺序上机，逐个回 verdict + 框架真实裁决。
 
@@ -169,10 +169,10 @@ def qa_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
     一个上机任务；且设备配置/统计是全局共享态，并发上机会互相污染。本工具内部就是
     一个 for 循环，复用一条 SSH 会话顺序 deliver+run+取明细——物理上不会并发上机。
 
-    与 qa_run_case 的区别：qa_run_case 跑单个 autoid；本工具跑同一个 xlsx 里的一批
+    与 dev_run_case 的区别：dev_run_case 跑单个 autoid；本工具跑同一个 xlsx 里的一批
     autoid（批量编译合并产物的上机验证），少开 N-1 次 SSH 会话，省连接开销。
 
-    verdict 语义同 qa_run_case：来自框架 MySQL 每个 check_point 结果，pass 条件 =
+    verdict 语义同 dev_run_case：来自框架 MySQL 每个 check_point 结果，pass 条件 =
     fail num 全 0 且 success>0。pytest "1 passed" 不代表断言通过。
 
     Args:
@@ -197,7 +197,7 @@ def qa_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"error": f"autoids_json 解析失败: {exc}"}, ensure_ascii=False)
 
-    # 复用 qa_run_case 的多根路径解析（agent 沙箱视角）
+    # 复用 dev_run_case 的多根路径解析（agent 沙箱视角）
     p = None
     try:
         from main.ist_core.tools.deepagent.file_tools import _resolve_inside_root

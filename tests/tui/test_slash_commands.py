@@ -219,7 +219,7 @@ def test_dispatch_init_returns_inject_with_bootstrap_prompt():
     p = parse_slash_command("/init")
     result = dispatch_slash_command(p, _mock_app())
     assert isinstance(result, InjectResult)
-    assert "qa_deepagent_ls" in result.prompt
+    assert "fs_ls" in result.prompt
     assert "README.md" in result.prompt
 
 

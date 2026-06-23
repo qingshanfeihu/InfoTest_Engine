@@ -17,7 +17,7 @@ from main.case_compiler.provenance_ir import (
     CaseProvenance, StepIR, StepSource, RUNTIME_PLACEHOLDER, check_runtime_consistency,
 )
 from main.case_compiler.runtime_fill import list_runtime_slots, apply_fills
-from main.ist_core.tools.device.emit_xlsx_tool import qa_emit_xlsx
+from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
 
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -43,7 +43,7 @@ def _emit_fixture(out_name: str):
         StepIR("check_point", "found", r"Hits:\s*<RUNTIME>", "V", StepSource("device_runtime", "")),
         StepIR("check_point", "found", "172.16.34.70", "V", StepSource("manual", "10.5_cli:1")),
     ])
-    r = qa_emit_xlsx.invoke({"autoid": out_name, "steps_json": json.dumps(steps),
+    r = compile_emit.invoke({"autoid": out_name, "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": out_name,
                              "provenance_json": prov.to_json()})
     assert "已产出" in r, r

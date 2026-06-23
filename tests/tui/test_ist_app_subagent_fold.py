@@ -79,7 +79,7 @@ def test_subagent_tool_use_folds_to_progress_line() -> None:
     app = _bare_app()
     block = make_tool_use_block(
         tool_use_id="r1:9",
-        name="qa_deepagent_read_file",
+        name="fs_read",
         input={"file_path": "knowledge/data/markdown/qa/x.md"},
         status="running",
     )

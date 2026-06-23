@@ -97,7 +97,7 @@ def attribute_fail(verdict_detail: str, *, failing_assertion_layer: str = "",
 
 
 @tool(parse_docstring=True)
-def qa_attribute_fail(verdict_detail: str, failing_assertion_layer: str = "",
+def compile_attribute(verdict_detail: str, failing_assertion_layer: str = "",
                       failing_assertion_source_kind: str = "") -> str:
     """把一个上机 fail 的 check_point 四层归因（V3 步骤5，论文 §5.4：G错/E错/V错/瞬态）。
 

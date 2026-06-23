@@ -258,7 +258,7 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         is_main_agent_event = not agent_name or agent_name == "main_agent"
         if name == "task" and is_main_agent_event:
             self._current_task_tool_use_id = run_id
-        elif name == "qa_invoke_skill" and is_main_agent_event:
+        elif name == "invoke_skill" and is_main_agent_event:
             
             if "review-verification" in (input_str or "") or "context: fork" in (input_str or ""):
                 self._current_task_tool_use_id = run_id
@@ -325,7 +325,7 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         meta = kwargs.get("metadata") or {}
         agent_name = meta.get("lc_agent_name") or ""
         is_main_agent_event = not agent_name or agent_name == "main_agent"
-        if tool_name in ("task", "qa_invoke_skill") and is_main_agent_event:
+        if tool_name in ("task", "invoke_skill") and is_main_agent_event:
             self._current_task_tool_use_id = ""
 
         tags = self._subagent_tags(kwargs, base_tags={"name": tool_name})
@@ -350,7 +350,7 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         meta = kwargs.get("metadata") or {}
         agent_name = meta.get("lc_agent_name") or ""
         is_main_agent_event = not agent_name or agent_name == "main_agent"
-        if tool_name in ("task", "qa_invoke_skill") and is_main_agent_event:
+        if tool_name in ("task", "invoke_skill") and is_main_agent_event:
             self._current_task_tool_use_id = ""
 
         tags = self._subagent_tags(kwargs, base_tags={"name": tool_name})

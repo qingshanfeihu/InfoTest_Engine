@@ -1,4 +1,4 @@
-"""qa_remember: agent 主动把"踩过的坑/验证过的洞察"记进长期记忆(MUSE .memory.md 的精神)。
+"""remember: agent 主动把"踩过的坑/验证过的洞察"记进长期记忆(MUSE .memory.md 的精神)。
 
 为什么要它:agent 调查一个 case 时踩的坑(如"xlsx 的 G 列不是 Python 变量""sdns persistence
 的 query_type 写法""APV 经跳转机访问"),下次跑同类 case 不该再踩。给 agent 一个工具,
@@ -25,7 +25,7 @@ def _slug(text: str) -> str:
 
 
 @tool(parse_docstring=True)
-def qa_remember(lesson: str, topic: str = "") -> str:
+def remember(lesson: str, topic: str = "") -> str:
     """把一条**验证过的教训/踩过的坑**记进长期记忆,下次同类任务自动看到,不再重踩。
 
     什么时候用:你在调查/上机过程中**确认**了一条非显而易见、且未来还会用到的事实——
@@ -57,7 +57,7 @@ def qa_remember(lesson: str, topic: str = "") -> str:
         rel = f"long_term/feedback/{topic}.md"
         store.upsert_long_term(rel, lesson, mode="append", keywords=topic.replace("-", " "))
     except Exception as exc:  # noqa: BLE001
-        logger.warning("qa_remember 写入失败: %s", exc)
+        logger.warning("remember 写入失败: %s", exc)
         return f"error: 记忆写入失败: {exc}"
 
     return (f"已记入长期记忆 long_term/feedback/{topic}.md:\n{lesson[:120]}\n"

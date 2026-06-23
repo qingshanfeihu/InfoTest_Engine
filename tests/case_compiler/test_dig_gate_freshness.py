@@ -6,7 +6,8 @@ import time
 
 
 def test_stale_draft_rejected(tmp_path, monkeypatch):
-    import main.ist_core.tools.device.compile_pipeline as cp
+    import importlib
+    cp = importlib.import_module("main.ist_core.tools.device.compile_pipeline")
     root = tmp_path
     d = root / "workspace" / "outputs" / "aid1"
     d.mkdir(parents=True)

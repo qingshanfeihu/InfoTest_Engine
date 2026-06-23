@@ -287,8 +287,8 @@ def test_nested_fork_pops_stack_via_run_id(monkeypatch):
     r.subscribe(snaps.append)
 
     
-    r.dispatch(_evt("tool_call", 1, tags={"name": "qa_invoke_skill", "lc_tool_run_id": "RID_QIS"},
-                    payload={"name": "qa_invoke_skill",
+    r.dispatch(_evt("tool_call", 1, tags={"name": "invoke_skill", "lc_tool_run_id": "RID_QIS"},
+                    payload={"name": "invoke_skill",
                              "input": {"skill": "review-verification", "brief": "x"}}))
     
     r.dispatch(_evt("tool_call", 2, tags={"name": "qa_grep", "lc_tool_run_id": "RID_GREP"},
@@ -298,8 +298,8 @@ def test_nested_fork_pops_stack_via_run_id(monkeypatch):
     
     r.dispatch(_evt("llm_end", 4, payload={"name": "final_thought", "content": "VERIFIER REPORT"}))
     
-    r.dispatch(_evt("tool_result", 5, tags={"name": "qa_invoke_skill", "lc_tool_run_id": "RID_QIS"},
-                    payload={"name": "qa_invoke_skill", "output": "VERDICT: PARTIAL\nLEVEL: P3"}))
+    r.dispatch(_evt("tool_result", 5, tags={"name": "invoke_skill", "lc_tool_run_id": "RID_QIS"},
+                    payload={"name": "invoke_skill", "output": "VERDICT: PARTIAL\nLEVEL: P3"}))
     
     r.dispatch(_evt("llm_end", 6, payload={"name": "final_thought", "content": "MAIN REPORT"}))
 
@@ -322,11 +322,11 @@ def test_fork_pairing_falls_back_to_fifo_without_run_id(monkeypatch):
     snaps = []
     r.subscribe(snaps.append)
 
-    r.dispatch(_evt("tool_call", 1, tags={"name": "qa_invoke_skill"},
-                    payload={"name": "qa_invoke_skill",
+    r.dispatch(_evt("tool_call", 1, tags={"name": "invoke_skill"},
+                    payload={"name": "invoke_skill",
                              "input": {"skill": "review-verification", "brief": "x"}}))
-    r.dispatch(_evt("tool_result", 2, tags={"name": "qa_invoke_skill"},
-                    payload={"name": "qa_invoke_skill", "output": "VERDICT: PARTIAL\nLEVEL: P3"}))
+    r.dispatch(_evt("tool_result", 2, tags={"name": "invoke_skill"},
+                    payload={"name": "invoke_skill", "output": "VERDICT: PARTIAL\nLEVEL: P3"}))
     r.dispatch(_evt("llm_end", 3, payload={"name": "final_thought", "content": "MAIN REPORT"}))
 
     
@@ -347,16 +347,16 @@ def test_serial_multi_sheet_forks_each_pop_correctly(monkeypatch):
 
     def fork(call_seq, res_seq, rid, body_seq):
         r.dispatch(_evt("tool_call", call_seq,
-                        tags={"name": "qa_invoke_skill", "lc_tool_run_id": rid},
-                        payload={"name": "qa_invoke_skill",
+                        tags={"name": "invoke_skill", "lc_tool_run_id": rid},
+                        payload={"name": "invoke_skill",
                                  "input": {"skill": "review-verification", "brief": "x"}}))
         
         r.dispatch(_evt("llm_end", body_seq,
                         payload={"name": "final_thought", "content": "INNER"}))
         
         r.dispatch(_evt("tool_result", res_seq,
-                        tags={"name": "qa_invoke_skill", "lc_tool_run_id": rid},
-                        payload={"name": "qa_invoke_skill", "output": "VERDICT: PASS\nLEVEL: P4"}))
+                        tags={"name": "invoke_skill", "lc_tool_run_id": rid},
+                        payload={"name": "invoke_skill", "output": "VERDICT: PASS\nLEVEL: P4"}))
 
     fork(1, 3, "RID_A", 2)
     

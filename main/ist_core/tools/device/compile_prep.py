@@ -1,6 +1,6 @@
-"""qa_compile_prep: 脑图(mind-map JSON)→ 批量编译 manifest(JSON 中间表示)。
+"""compile_prep: 脑图(mind-map JSON)→ 批量编译 manifest(JSON 中间表示)。
 
-批量编译的第一步:把一个脑图文件解析成结构化 manifest,供 ist_compile 编译链(qa_compile_pipeline)按阶段调度。
+批量编译的第一步:把一个脑图文件解析成结构化 manifest,供 ist_compile 编译链(compile_pipeline)按阶段调度。
 
 **零硬编码红线(第一原则,见计划 linear-imagining-galaxy.md)**:
 本工具**只产"需求 + 分组 + 先例引用"**,绝不产任何设备命令/参数/断言。manifest 里
@@ -95,7 +95,7 @@ def _extract_cases(root: dict) -> list[dict]:
 
 
 @tool(parse_docstring=True)
-def qa_compile_prep(mindmap_path: str, out_name: str = "") -> str:
+def compile_prep(mindmap_path: str, out_name: str = "") -> str:
     """把一个脑图文件解析成批量编译 manifest(JSON 中间表示),供编排器按阶段调度。
 
     通读整个脑图,列出它包含的所有 case(autoid 主键)、各自的
@@ -175,7 +175,7 @@ def qa_compile_prep(mindmap_path: str, out_name: str = "") -> str:
     out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     dup_note = f"\n⚠️ autoid 重复: {dups}" if dups else ""
-    return (f"=== qa_compile_prep ===\n"
+    return (f"=== compile_prep ===\n"
             f"manifest 已落盘: {out}\n"
             f"脑图: {p.name}  case 总数: {len(cases)}\n"
             f"分组({len(groups)}): {dict(list(groups.items())[:12])}\n"

@@ -99,7 +99,7 @@ def _get_fork_skill_names() -> set[str]:
 
 
 def _is_fork_skill_invocation(input_dict: Mapping[str, Any]) -> bool:
-    """检查 qa_invoke_skill 调用是否是 fork skill。
+    """检查 invoke_skill 调用是否是 fork skill。
 
     优先看 input 里 skill 字段（含 raw 字符串包装）。
     """
@@ -359,7 +359,7 @@ class MessageReducer:
         if tool_name == "task" and not parent_tool_use_id:
             self._subagent_parent_stack.append(tool_use_id)
         elif (
-            tool_name == "qa_invoke_skill"
+            tool_name == "invoke_skill"
             and not parent_tool_use_id
             and _is_fork_skill_invocation(input_dict)
         ):
@@ -394,7 +394,7 @@ class MessageReducer:
 
         
         
-        if tool_name in ("task", "qa_invoke_skill") and self._subagent_parent_stack:
+        if tool_name in ("task", "invoke_skill") and self._subagent_parent_stack:
             if self._subagent_parent_stack[-1] == tool_use_id:
                 self._subagent_parent_stack.pop()
             elif tool_use_id in self._subagent_parent_stack:
@@ -532,7 +532,7 @@ class MessageReducer:
         self._messages.append(msg)
 
     def _on_ask_user_request(self, event: IstCoreEvent) -> None:
-        """qa_ask_user 发起交互式问答：生成一条 ask_user 块供 UI 渲染选项。
+        """ask_user 发起交互式问答：生成一条 ask_user 块供 UI 渲染选项。
 
         payload 含 ``question_id`` + ``questions``（schema 见 tools/ask_user）。
         UI 据 question_id 在用户选完后回调 ``submit_answers``。

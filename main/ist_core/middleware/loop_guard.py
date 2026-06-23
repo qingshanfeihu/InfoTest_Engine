@@ -247,7 +247,7 @@ def _build_reminder(stats: dict[str, Any], *, dup_thr: int, empty_thr: int, soft
         "不要假装找到了。\n"
         "2. **升级检索**：若确实需要更广的搜索，改用 explore 子代理或换不同的关键词/路径，"
         "不要原样重发同一个 grep。\n"
-        "3. **向用户澄清**：若信息缺口必须用户补充，用 qa_ask_user 提问。\n"
+        "3. **向用户澄清**：若信息缺口必须用户补充，用 ask_user 提问。\n"
         "继续重复相同的无效搜索是不允许的。\n"
         "</system-reminder>"
     )

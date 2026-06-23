@@ -8,7 +8,7 @@
 红线（§七）：只执行**与意图无关的类型规则**（命令合法性、断言非悬空、IP 可达），
 绝不替 LLM 决定"测什么/什么命令序列/什么断言形态"（H_G≠0 的语义决策永远 LLM）。
 
-只在 v2 编译链启用（qa_emit_xlsx(strict_structural=True)）；v1 默认 False，行为零变化。
+只在 v2 编译链启用（compile_emit(strict_structural=True)）；v1 默认 False，行为零变化。
 """
 
 from __future__ import annotations

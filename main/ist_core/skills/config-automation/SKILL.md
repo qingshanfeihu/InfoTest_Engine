@@ -5,7 +5,7 @@ when_to_use: |
   Use when LLM 已给出含示例IP的配置、用户要求替换为环境真实IP。
   Trigger phrases: 替换IP, 真实IP, 自动化环境, 10.x/192.168.x 配置
   SKIP when: 用户只问命令用法、理论说明、不涉及具体配置IP替换。
-allowed-tools: qa_deepagent_read_file qa_deepagent_write_file qa_deepagent_grep qa_deepagent_ls
+allowed-tools: fs_read fs_write fs_grep fs_ls
 ---
 
 <Role>
@@ -34,7 +34,7 @@ allowed-tools: qa_deepagent_read_file qa_deepagent_write_file qa_deepagent_grep 
 ### LLM 调用方式
 
 ```
-qa_invoke_skill(skill="config-automation", config_text="<LLM生成的完整配置文本>")
+invoke_skill(skill="config-automation", config_text="<LLM生成的完整配置文本>")
 ```
 
 一次调用完成所有替换，返回的 `Pipeline Execution Result` JSON 包含：

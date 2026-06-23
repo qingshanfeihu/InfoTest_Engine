@@ -10,13 +10,13 @@ from main.langchain_env import langchain_load_dotenv_if_present
 
 def main():
     langchain_load_dotenv_if_present()
-    from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
+    from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
     from main.ist_core.agents._llm import build_agent_chat_model, ist_core_tier_model
 
     fp = []
     for cmd in ["sdns on", "sdns host", "sdns pool", "sdns service ip", "sdns listener"]:
         try:
-            fp.append(qa_footprint_lookup.invoke({"command": cmd}))
+            fp.append(kb_footprint.invoke({"command": cmd}))
         except Exception as ex:
             fp.append(f"({cmd}: {ex})")
     fpctx = "\n\n".join(fp)[:6000]
@@ -48,7 +48,7 @@ def main():
               "host pool", "rr", "listener"]:
         print(f"  {k}: " + ("有" if k in low else "缺!"))
 
-    from main.ist_core.tools.device.emit_xlsx_tool import qa_emit_xlsx
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
     from main.case_compiler.device_mcp_client import FrameworkMCPClient
     from main.case_compiler.config import get_config
     lines = [l.strip() for l in cfg.split("\n") if l.strip().lower().startswith(("sdns", "no "))]
@@ -57,7 +57,7 @@ def main():
              {"E": "check_point", "F": "found", "G": "172.16.34.70"},
              {"E": "test_env", "F": "routera", "G": "dig @172.16.34.70 autotest.com"},
              {"E": "check_point", "F": "found", "G": "172.16.35.231"}]
-    qa_emit_xlsx.invoke({"autoid": "203699000002", "steps_json": json.dumps(steps),
+    compile_emit.invoke({"autoid": "203699000002", "steps_json": json.dumps(steps),
                          "init_commands": "", "out_name": "haiku_disc"})
     cfgc = get_config()
     with FrameworkMCPClient() as c:

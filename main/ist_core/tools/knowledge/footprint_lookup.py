@@ -1,4 +1,4 @@
-"""qa_footprint_lookup — agent 查询 footprint 知识的工具。
+"""kb_footprint — agent 查询 footprint 知识的工具。
 
 agent 在评审或回答产品问题时，通过 CLI 命令名查询已积累的 footprint 知识，
 获取已验证的产品事实、决策规则、已知缺陷等。
@@ -94,7 +94,7 @@ def _format_node(data: dict) -> str:
 
 
 @tool(parse_docstring=True)
-def qa_footprint_lookup(command: str) -> str:
+def kb_footprint(command: str) -> str:
     """查询 CLI 命令的产品知识（已验证的规则、行为、缺陷）。
 
     在评审或回答产品问题时使用。读到 CLI 命令文档后调用此工具，
@@ -180,5 +180,5 @@ def qa_footprint_lookup(command: str) -> str:
             )
         return enable_hint + out
     except Exception as exc:
-        logger.warning("qa_footprint_lookup error: %s", exc)
+        logger.warning("kb_footprint error: %s", exc)
         return f"查询失败: {exc}"

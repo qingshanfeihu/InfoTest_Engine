@@ -94,7 +94,7 @@ def _run_print_mode(query, *, task_type: str, thread_id: str | None) -> int:
     from langgraph.checkpoint.memory import InMemorySaver
     from main.ist_core.runner import run_single
 
-    # 标记非交互模式：qa_ask_user 据此立即返回而非阻塞等 TUI 应答（print 无 TUI）。
+    # 标记非交互模式：ask_user 据此立即返回而非阻塞等 TUI 应答（print 无 TUI）。
     import os as _os
     _os.environ["IST_NON_INTERACTIVE"] = "1"
 

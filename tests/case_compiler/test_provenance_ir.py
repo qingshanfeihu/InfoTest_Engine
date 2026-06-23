@@ -1,4 +1,4 @@
-"""V3 步骤1：三层 Provenance IR + qa_emit_xlsx 旁挂（默认空＝V2 行为不变）。"""
+"""V3 步骤1：三层 Provenance IR + compile_emit 旁挂（默认空＝V2 行为不变）。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 from main.case_compiler.provenance_ir import (
     CaseProvenance, StepIR, StepSource, parse_provenance, steps_match,
 )
-from main.ist_core.tools.device.emit_xlsx_tool import qa_emit_xlsx
+from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
 
 
 def _prov():
@@ -64,7 +64,7 @@ def test_emit_without_provenance_writes_no_sidecar(tmp_path):
         {"E": "APV_0", "F": "cmd_config", "G": "show sdns listener"},
         {"E": "check_point", "F": "found", "G": "172.16.34.200"},
     ]
-    r = qa_emit_xlsx.invoke({"autoid": "t_noprov", "steps_json": json.dumps(steps),
+    r = compile_emit.invoke({"autoid": "t_noprov", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_noprov"})
     assert "已产出" in r
     assert "provenance" not in r
@@ -75,7 +75,7 @@ def test_emit_without_provenance_writes_no_sidecar(tmp_path):
 def test_emit_with_provenance_writes_sidecar():
     p = _prov()
     steps = [{"E": s.E, "F": s.F, "G": s.G} for s in p.steps]
-    r = qa_emit_xlsx.invoke({"autoid": "t1", "steps_json": json.dumps(steps),
+    r = compile_emit.invoke({"autoid": "t1", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_prov",
                              "provenance_json": p.to_json()})
     assert "provenance 已旁挂: G=2 E=0 V=1" in r
@@ -90,7 +90,7 @@ def test_emit_with_mismatched_provenance_skips_sidecar():
     p = _prov()
     steps = [{"E": s.E, "F": s.F, "G": s.G} for s in p.steps]
     steps[0]["G"] = "sdns listener 172.16.34.201"  # 与 provenance 不一致
-    r = qa_emit_xlsx.invoke({"autoid": "t1", "steps_json": json.dumps(steps),
+    r = compile_emit.invoke({"autoid": "t1", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_prov_mismatch",
                              "provenance_json": p.to_json()})
     assert "不一致" in r
@@ -134,7 +134,7 @@ def test_emit_rejects_fabricated_runtime_value():
     """strict_structural 链：标 device_runtime 却编数 → emit 打回。"""
     p = _prov_runtime("172.16.34.200", "device_runtime")
     steps = [{"E": s.E, "F": s.F, "G": s.G} for s in p.steps]
-    r = qa_emit_xlsx.invoke({"autoid": "t_rt", "steps_json": json.dumps(steps),
+    r = compile_emit.invoke({"autoid": "t_rt", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_rt_bad",
                              "strict_structural": True, "provenance_json": p.to_json()})
     assert r.startswith("error") and "不瞎写契约" in r
@@ -144,7 +144,7 @@ def test_emit_accepts_honest_placeholder():
     """strict_structural 链：占位 + device_runtime 自洽 → 正常产出 + 旁挂。"""
     p = _prov_runtime(RUNTIME_PLACEHOLDER, "device_runtime")
     steps = [{"E": s.E, "F": s.F, "G": s.G} for s in p.steps]
-    r = qa_emit_xlsx.invoke({"autoid": "t_rt", "steps_json": json.dumps(steps),
+    r = compile_emit.invoke({"autoid": "t_rt", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_rt_ok",
                              "strict_structural": True, "provenance_json": p.to_json()})
     assert "已产出" in r and "provenance 已旁挂" in r

@@ -10,32 +10,31 @@ from typing import Any
 from main.ist_core.agents import _llm
 from main.ist_core.agents._prompt import build_system_prompt
 from main.ist_core.tools.deepagent import (
-    qa_deepagent_edit_file,
-    qa_deepagent_glob,
-    qa_deepagent_grep,
-    qa_deepagent_ls,
-    qa_deepagent_read_file,
-    qa_deepagent_write_file,
+    fs_edit,
+    fs_glob,
+    fs_grep,
+    fs_ls,
+    fs_read,
+    fs_write,
 )
-from main.ist_core.tools.deepagent.exec_tools import qa_bash, qa_exec
-from main.ist_core.tools.device import qa_restapi, qa_ssh, qa_run_case, qa_probe_show, qa_emit_xlsx
+from main.ist_core.tools.deepagent.exec_tools import run_shell, run_python
+from main.ist_core.tools.device import dev_rest, dev_ssh, dev_run_case, dev_probe, compile_emit
 from main.ist_core.tools.device import (
-    qa_compile_prep,
-    qa_compile_fanout,
-    qa_run_batch,
-    qa_emit_xlsx_merged,
-    qa_cluster_intents,
-    qa_attribute_fail,
-    qa_compile_pipeline,
-    qa_list_runtime_slots,
-    qa_fill_runtime,
+    compile_prep,
+    compile_fanout,
+    dev_run_batch,
+    compile_emit_merged,
+    compile_attribute,
+    compile_pipeline,
+    compile_runtime_slots,
+    compile_runtime_fill,
 )
-from main.ist_core.tools.device.precedent_tools import qa_confidence_score, qa_lookup_pattern
-from main.ist_core.tools.knowledge.web_bug_search import web_bug_search
-from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
-from main.ist_core.tools.skills import qa_invoke_skill
-from main.ist_core.tools.ask_user import qa_ask_user
-from main.ist_core.tools.memory_tool import qa_remember
+from main.ist_core.tools.device.precedent_tools import compile_score, compile_precedent
+from main.ist_core.tools.knowledge.kb_bug_search import kb_bug_search
+from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
+from main.ist_core.tools.skills import invoke_skill
+from main.ist_core.tools.ask_user import ask_user
+from main.ist_core.tools.memory_tool import remember
 
 logger = logging.getLogger(__name__)
 
@@ -43,43 +42,42 @@ _SKILLS_DIR = str(Path(__file__).resolve().parents[1] / "skills")
 
 def _default_generic_tools() -> list[Any]:
     return [
-        qa_deepagent_ls,
-        qa_deepagent_glob,
-        qa_deepagent_grep,
-        qa_deepagent_read_file,
-        qa_deepagent_write_file,
-        qa_deepagent_edit_file,
+        fs_ls,
+        fs_glob,
+        fs_grep,
+        fs_read,
+        fs_write,
+        fs_edit,
         
-        qa_exec,
-        qa_bash,
-        qa_ssh,
-        qa_restapi,
-        qa_run_case,
-        qa_probe_show,
-        qa_emit_xlsx,
-        qa_lookup_pattern,
-        qa_confidence_score,
+        run_python,
+        run_shell,
+        dev_ssh,
+        dev_rest,
+        dev_run_case,
+        dev_probe,
+        compile_emit,
+        compile_precedent,
+        compile_score,
 
-        # 批量编译工具(ist_compile 编译链/qa_compile_pipeline)用：解析清单 + fan-out + 串行上机 + 合并打包
-        qa_compile_prep,
-        qa_compile_fanout,
-        qa_run_batch,
-        qa_emit_xlsx_merged,
-        qa_cluster_intents,  # v3：意图族摊销 H_G
-        qa_attribute_fail,   # v3：上机 fail 四层归因
-        qa_compile_pipeline,  # v3 approach A：确定性编译流水线（主 agent 只调一次）
-        qa_list_runtime_slots,  # v3：列 <RUNTIME> 待回填槽位
-        qa_fill_runtime,        # v3：上机真实值锁死回填（不反复改）
+        # 批量编译工具(ist_compile 编译链/compile_pipeline)用：解析清单 + fan-out + 串行上机 + 合并打包
+        compile_prep,
+        compile_fanout,
+        dev_run_batch,
+        compile_emit_merged,
+        compile_attribute,   # 上机 fail 四层归因
+        compile_pipeline,  # v3 approach A：确定性编译流水线（主 agent 只调一次）
+        compile_runtime_slots,  # v3：列 <RUNTIME> 待回填槽位
+        compile_runtime_fill,        # v3：上机真实值锁死回填（不反复改）
 
-        web_bug_search,
+        kb_bug_search,
 
-        qa_footprint_lookup,
+        kb_footprint,
 
 
-        qa_invoke_skill,
+        invoke_skill,
 
-        qa_ask_user,
-        qa_remember,
+        ask_user,
+        remember,
 
     ]
 
@@ -155,9 +153,9 @@ def build_main_agent(**kwargs: Any):
         
         # 不挂 deepagents 原生 SkillsMiddleware：它把 skill listing 拼到 system prompt 末尾，
         # 且教模型用 read_file 读 SKILL.md 全文——但本项目用 _ToolExclusionMiddleware 屏蔽了
-        # read_file，那条指令是死指令，且与自研 PerTurnSkillReminderMiddleware（教用 qa_invoke_skill）
+        # read_file，那条指令是死指令，且与自研 PerTurnSkillReminderMiddleware（教用 invoke_skill）
         # 双路重复注入、互相矛盾。skill listing 由下面的 per_turn middleware 单路负责；
-        # 本项目 skill 执行走 qa_invoke_skill + loader.execute_fork_skill，不依赖 state['skills_metadata']。
+        # 本项目 skill 执行走 invoke_skill + loader.execute_fork_skill，不依赖 state['skills_metadata']。
         # 详见 docs/skill_progressive_disclosure_fix.md。
 
 
@@ -238,7 +236,7 @@ def build_main_agent(**kwargs: Any):
             logger.info("memory subsystem 不可用，沿用原 FilesystemBackend: %s", exc)
 
     except ImportError as exc:
-        logger.info("deepagents filesystem/exclusion middleware 不可用，使用显式 qa_deepagent_* 工具: %s", exc)
+        logger.info("deepagents filesystem/exclusion middleware 不可用，使用显式 fs_* 工具: %s", exc)
 
     
     
@@ -281,7 +279,7 @@ def build_main_agent(**kwargs: Any):
         
         _explore_only_tools = [
             t for t in tools
-            if getattr(t, "name", "") in ("web_bug_search",)
+            if getattr(t, "name", "") in ("kb_bug_search",)
         ]
 
         explore_subagent: dict[str, Any] = {
@@ -322,7 +320,7 @@ def _resolve_interrupt_on() -> dict[str, Any] | None:
     """从 ``IST_INTERRUPT_ON`` 解析 deepagents interrupt_on 配置。
 
     格式：逗号分隔工具名（全部走 ``True`` = 允许 approve/edit/reject/respond）。
-    例：``IST_INTERRUPT_ON=web_bug_search,qa_exec``。
+    例：``IST_INTERRUPT_ON=kb_bug_search,run_python``。
 
     默认空——即所有工具自动批准。打开 interrupt_on 会让 graph 在指定工具调用
     前暂停，需要 TUI 实现 ``HumanInterrupt`` 决策的渲染（基础设施 bridge.py

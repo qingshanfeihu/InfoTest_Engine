@@ -85,4 +85,4 @@ graph TD
 - **单例 FootprintIndex**：懒加载索引层。首次调用时，在 50ms 内即可将数百个 JSON 节点序列化并缓存在后台内存。
 - **注入与主动查询双通道**：
   1. 在 `MemoryInjectionMiddleware` 作用下，每轮对话会自动提取用户输入中的 CLI 模式树并 top-k 自动注入上下文。
-  2. IST-Core 触发特定评审任务时，大模型能够通过自带的 `qa_footprint_lookup` 工具直接对特定 CLI 指令组进行高效率的“完全一致性”精准路由检索。
+  2. IST-Core 触发特定评审任务时，大模型能够通过自带的 `kb_footprint` 工具直接对特定 CLI 指令组进行高效率的“完全一致性”精准路由检索。

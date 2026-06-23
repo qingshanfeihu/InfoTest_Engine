@@ -148,12 +148,12 @@ def test_traversal_still_rejected_under_multi_root(tmp_path, monkeypatch):
 
 
 def test_glob_finds_files_in_session_dir(tmp_path, monkeypatch):
-    """qa_deepagent_glob 应该能找到 session 目录下的文件（通过绝对路径）。"""
+    """fs_glob 应该能找到 session 目录下的文件（通过绝对路径）。"""
     _, session_dir, _, _ = _setup_multi_root(tmp_path, monkeypatch)
     (session_dir / "markdown").mkdir()
     (session_dir / "markdown" / "case.md").write_text("# case", encoding="utf-8")
 
-    out = file_tools.qa_deepagent_glob.invoke(
+    out = file_tools.fs_glob.invoke(
         {"pattern": "**/*.md", "path": str(session_dir), "max_results": 50}
     )
     assert "case.md" in out
@@ -164,7 +164,7 @@ def test_read_file_works_for_user_dir(tmp_path, monkeypatch):
     target = user_dir / "preferences.md"
     target.write_text("# zhang_san prefers detailed reviews\n", encoding="utf-8")
 
-    out = file_tools.qa_deepagent_read_file.invoke(
+    out = file_tools.fs_read.invoke(
         {"path": str(target), "limit": 50}
     )
     assert "detailed reviews" in out

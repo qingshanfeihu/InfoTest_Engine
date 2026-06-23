@@ -33,17 +33,17 @@ def main():
               "host pool", "pool method", "rr", "listener"]:
         print(f"  {k}: " + ("有" if k in low else "缺!"))
 
-    from main.ist_core.tools.device.emit_xlsx_tool import qa_emit_xlsx
-    from main.ist_core.tools.device.run_case import qa_run_case
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
+    from main.ist_core.tools.device.run_case import dev_run_case
     lines = [l.strip() for l in cfg.split("\n") if l.strip().lower().startswith(("sdns", "no "))]
     steps = [{"E": "APV_0", "F": "cmds_config", "G": "\n".join(lines)},
              {"E": "APV_0", "F": "cmd_config", "G": "show sdns listener"},
              {"E": "check_point", "F": "found", "G": "172.16.34.70"},
              {"E": "test_env", "F": "routera", "G": "dig @172.16.34.70 autotest.com"},
              {"E": "check_point", "F": "found", "G": "172.16.35.231"}]
-    qa_emit_xlsx.invoke({"autoid": "888nofp", "steps_json": json.dumps(steps),
+    compile_emit.invoke({"autoid": "888nofp", "steps_json": json.dumps(steps),
                          "init_commands": "", "out_name": "opus_nofp"})
-    o = qa_run_case.invoke({"xlsx_path": "workspace/outputs/opus_nofp/case.xlsx", "autoid": "888nofp"})
+    o = dev_run_case.invoke({"xlsx_path": "workspace/outputs/opus_nofp/case.xlsx", "autoid": "888nofp"})
     v = re.search(r"verdict: (\w+)", o)
     print("=== 上机 verdict:", v.group(1) if v else "?", "===")
     for l in [x.strip()[:90] for x in o.splitlines() if "Num" in x or "172.16.35.231" in x][:5]:

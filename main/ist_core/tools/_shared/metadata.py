@@ -30,161 +30,154 @@ logger = logging.getLogger(__name__)
 
 TOOL_METADATA: dict[str, dict[str, Any]] = {
     
-    "qa_deepagent_ls": {
+    "fs_ls": {
         "read_only": True,
         "concurrency_safe": True,
         "fallback_for": None,
         "intent": "read",
     },
-    "qa_deepagent_glob": {
+    "fs_glob": {
         "read_only": True,
         "concurrency_safe": True,
-        "fallback_for": "qa_deepagent_ls",
+        "fallback_for": "fs_ls",
         "intent": "grep",
     },
-    "qa_deepagent_grep": {
+    "fs_grep": {
         "read_only": True,
         "concurrency_safe": True,
-        "fallback_for": "qa_deepagent_glob",
+        "fallback_for": "fs_glob",
         "intent": "grep",
     },
-    "qa_deepagent_read_file": {
+    "fs_read": {
         "read_only": True,
         "concurrency_safe": True,
-        "fallback_for": "qa_deepagent_grep",
+        "fallback_for": "fs_grep",
         "intent": "read",
     },
-    "qa_deepagent_write_file": {
+    "fs_write": {
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "write",
     },
-    "qa_deepagent_edit_file": {
+    "fs_edit": {
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "write",
     },
-    "qa_exec": {
+    "run_python": {
         "read_only": True,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
     },
-    "qa_bash": {
+    "run_shell": {
         "read_only": True,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
     },
-    "qa_ssh": {
+    "dev_ssh": {
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
     },
-    "qa_restapi": {
+    "dev_rest": {
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
     },
-    "qa_run_case": {
+    "dev_run_case": {
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
     },
-    "qa_probe_show": {
+    "dev_probe": {
         "read_only": True,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
     },
-    "qa_lookup_pattern": {
+    "compile_precedent": {
         "read_only": True,
         "concurrency_safe": True,
         "fallback_for": None,
         "intent": "read",
     },
-    "qa_confidence_score": {
+    "compile_score": {
         "read_only": True,
         "concurrency_safe": True,
         "fallback_for": None,
         "intent": "read",
     },
-    "qa_remember": {
+    "remember": {
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "write",
     },
-    "qa_emit_xlsx": {
+    "compile_emit": {
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "write",
     },
 
-    # 批量编译工具(ist_compile 编译链/qa_compile_pipeline)
-    "qa_compile_prep": {
+    # 批量编译工具(ist_compile 编译链/compile_pipeline)
+    "compile_prep": {
         # 解析脑图→manifest 落盘:写本地 manifest.json(非设备态),read_only=False。
         "read_only": False,
         "concurrency_safe": True,
         "fallback_for": None,
         "intent": "read",
     },
-    "qa_cluster_intents": {
-        # v3：按意图相似度聚族(H_G 摊销)。纯确定性内存计算,不读写设备/落盘。
+    "compile_attribute": {
+        # 上机 fail 四层归因(G/E/V/瞬态)。纯确定性内存计算,不读写设备/落盘。
         "read_only": True,
         "concurrency_safe": True,
         "fallback_for": None,
         "intent": "read",
     },
-    "qa_attribute_fail": {
-        # v3：上机 fail 四层归因(G/E/V/瞬态)。纯确定性内存计算,不读写设备/落盘。
-        "read_only": True,
-        "concurrency_safe": True,
-        "fallback_for": None,
-        "intent": "read",
-    },
-    "qa_compile_pipeline": {
+    "compile_pipeline": {
         # v3 approach A：确定性编译流水线(内部 prep+fanout+merge)。写本地产物,内部串行调度。
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
     },
-    "qa_compile_fanout": {
+    "compile_fanout": {
         # 内部线程池并发派发 fork(draft/grade),本身可并发,但通常一次性调度全批。
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
     },
-    "qa_run_batch": {
+    "dev_run_batch": {
         # 串行上机(改设备态),绝不并发。
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "exec",
     },
-    "qa_emit_xlsx_merged": {
+    "compile_emit_merged": {
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "write",
     },
 
-    "web_bug_search": {
+    "kb_bug_search": {
         "read_only": False,
         "concurrency_safe": False,
         "fallback_for": None,
         "intent": "search",
     },
     
-    "qa_footprint_lookup": {
+    "kb_footprint": {
         "read_only": True,
         "concurrency_safe": True,
         "fallback_for": None,

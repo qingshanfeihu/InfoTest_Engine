@@ -1,14 +1,14 @@
 # Skill 渐进披露修复（对标 cc-haha 本地三层机制）
 
 > 2026-06-15。修复「main agent 面对编译脑图用例任务时没命中 `ist_compile_orchestrate`，
-> 转而用 qa_exec/qa_bash 手搓」的问题。设计与取舍记录于此，代码只留必要注释。
+> 转而用 run_python/run_shell 手搓」的问题。设计与取舍记录于此，代码只留必要注释。
 >
 > **后续更新（2026-06-15 同日）**：`ist_compile_orchestrate` 已删除，编译入口统一为 `ist_compile_batch`（单条/批量都走它）。本文档内的 `ist_compile_orchestrate` 引用为当时历史，结论（让编译任务命中编排 skill）现适用于 `ist_compile_batch`。
 
 ## 问题与根因
 
 实跑 `infotest -p "把 automatic_case 下 3 个 txt 脑图转成 3 个 excel"`，main agent 连续 25 次
-工具调用全是 qa_exec/qa_bash/ls/read_file 自己手搓解析脑图，**一次没调 `ist_compile_orchestrate`**。
+工具调用全是 run_python/run_shell/ls/read_file 自己手搓解析脑图，**一次没调 `ist_compile_orchestrate`**。
 （前一轮还先走了已退役的旧管线工具 qa_extract/decompose/generate_test_case_xlsx，已先行删除，
 见 `legacy_compile_pipeline_removal.md`。）旧工具删掉后仍不命中编排 skill，根因是 skill 渐进披露
 机制本身有五个叠加缺陷（均在 `middleware/per_turn_skill_reminder.py`）：
@@ -20,9 +20,9 @@
    被腰斩）、`_LISTING_CHAR_BUDGET=1200`（靠后 skill 降级为纯名字无描述）。
 3. **`_prompt.py` 的 `_skills_first_section` 无编译路径引导**：只举 config-answer 例。
 4. **双路 listing 冲突**：deepagents 原生 SkillsMiddleware（system prompt 末尾，教模型用 read_file
-   读 SKILL.md 全文）+ 自研 PerTurnSkillReminder（每轮 HumanMessage，教用 qa_invoke_skill）重复
+   读 SKILL.md 全文）+ 自研 PerTurnSkillReminder（每轮 HumanMessage，教用 invoke_skill）重复
    注入；且 read_file 已被 `_ToolExclusionMiddleware` 屏蔽 → 原生那套是死指令，还和自研路径矛盾。
-5. **`_has_recent_reminder` 去重失效**：判据 `"qa_invoke_skill tool"` 与模板实际串不匹配，恒 False。
+5. **`_has_recent_reminder` 去重失效**：判据 `"invoke_skill tool"` 与模板实际串不匹配，恒 False。
 
 ## 对标事实：cc-haha 真正生效的是什么
 
@@ -50,9 +50,9 @@
 | 1 触发词 | `when_to_use` 改 `"\n".join` 保留换行；提取改正则 `r"trigger\s+(keywords\|phrases)\s*[:：]"`（大小写无关 + 中英冒号） | `per_turn_skill_reminder.py` `_parse_skill_frontmatter` / `_format_skill_list` |
 | 2 预算 | `_PER_SKILL_DESC_CAP` 200→**250**、`_LISTING_CHAR_BUDGET` 1200→**8000**（对齐 cc-haha） | `per_turn_skill_reminder.py` 模块常量 |
 | 4 双路冲突 | **不挂 deepagents 原生 SkillsMiddleware**（删挂载块，留注释说明）；listing 由自研 per_turn 单路负责 | `main_agent.py` middleware 装配处 |
-| 2/5 措辞 | `_SKILL_LISTING_TEMPLATE` 改写为 BLOCKING REQUIREMENT + 「ANY point 不只 first tool_call」+「别用 qa_exec/qa_bash/qa_emit_xlsx 手搓 skill 覆盖的活」 | `per_turn_skill_reminder.py` 模板 |
+| 2/5 措辞 | `_SKILL_LISTING_TEMPLATE` 改写为 BLOCKING REQUIREMENT + 「ANY point 不只 first tool_call」+「别用 run_python/run_shell/compile_emit 手搓 skill 覆盖的活」 | `per_turn_skill_reminder.py` 模板 |
 | 4 description | `ist_compile_orchestrate` description 压到 ~200 字、首句含「脑图/txt/excel/改编」用户词；when_to_use 补 Examples + 扩充 Trigger keywords（脑图转excel/txt转excel） | `skills/ist_compile_orchestrate/SKILL.md` |
-| 3 prompt | `_skills_first_section` 补编译路由示例（脑图/txt→excel → qa_invoke_skill orchestrate，禁手搓） | `_prompt.py` |
+| 3 prompt | `_skills_first_section` 补编译路由示例（脑图/txt→excel → invoke_skill orchestrate，禁手搓） | `_prompt.py` |
 
 ### P1（质量）
 
@@ -65,8 +65,8 @@
 
 设计初稿建议给 fork skill（draft/run/grade/review-verification）加 `disable-model-invocation: true`
 或从 listing 隐藏，防主 agent 越权直调。**实测否决**：
-- `qa_invoke_skill` 对 `disable-model-invocation: true` 直接 ERROR 拒绝；而这些 fork skill 正是由
-  **inline 编排 skill 的 body 引导主 agent 经 qa_invoke_skill 派发**（orchestrate→draft/run/grade、
+- `invoke_skill` 对 `disable-model-invocation: true` 直接 ERROR 拒绝；而这些 fork skill 正是由
+  **inline 编排 skill 的 body 引导主 agent 经 invoke_skill 派发**（orchestrate→draft/run/grade、
   test-list-review Step 7→review-verification）。派发者就是主 agent，加 disable 会连合法派发一起切断。
 - 从 listing 隐藏（user-invocable:false 不列）同样会让主 agent 按 body 指示调用时「找不到」，
   且破坏 test-list-review 既定协作（`test_disable_model_invocation.py` 明确要求 review-verification
@@ -87,4 +87,4 @@ skill 数 > 30，或单 SKILL.md body > 2000 行需拆分。
   `test_real_orchestrate_skill_listing_has_triggers`），防 bug#1 复发。
 - 实测 listing：`ist_compile_orchestrate` 渲染 236 字符、含完整触发词、未截断；核心 skill 排前。
 - 回归：`tests/ist_core/middleware/` + `tests/ist_core/skills/` 共 41+3 测试全绿；main agent + graph 构建 OK。
-- 端到端（待跑）：`infotest -p "编译脑图用例"` 首个 tool_call 应为 qa_invoke_skill(ist_compile_orchestrate)。
+- 端到端（待跑）：`infotest -p "编译脑图用例"` 首个 tool_call 应为 invoke_skill(ist_compile_orchestrate)。

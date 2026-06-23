@@ -1,4 +1,4 @@
-"""qa_restapi tool: Execute CLI commands on APV/NSAE devices via REST API.
+"""dev_rest tool: Execute CLI commands on APV/NSAE devices via REST API.
 
 Much faster than SSH — a single HTTP POST per call, no shell interaction overhead.
 Supports auto-detection of device type (APV vs NSAE) from host or topology.
@@ -42,7 +42,7 @@ _MAX_TIMEOUT = 120
 
 
 @tool(parse_docstring=True)
-def qa_restapi(
+def dev_rest(
     host: str,
     command: str,
     username: str = "",
@@ -103,7 +103,7 @@ def qa_restapi(
     if not command:
         return "error: empty command"
 
-    # Split by newline and validate each segment (same gates as qa_ssh)
+    # Split by newline and validate each segment (same gates as dev_ssh)
     segments = command.split("\n") if "\n" in command else [command]
     clean_segments = []
     for seg in segments:
@@ -211,7 +211,7 @@ def qa_restapi(
 
     # 9. Format output
     return (
-        f"=== qa_restapi ===\n"
+        f"=== dev_rest ===\n"
         f"host={host}:{port}  device={device_type}\n"
         f"command: {command[:200]}\n"
         f"status: {status}\n"

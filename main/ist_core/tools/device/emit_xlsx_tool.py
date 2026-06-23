@@ -1,6 +1,6 @@
-"""qa_emit_xlsx: 从简单步骤列表产出**结构正确**的 case.xlsx(克隆框架原生模板)。
+"""compile_emit: 从简单步骤列表产出**结构正确**的 case.xlsx(克隆框架原生模板)。
 
-为什么要它:agent 用 qa_exec 手搓 openpyxl 总在模板结构/列对齐上出错(E/F/G 错位、缺
+为什么要它:agent 用 run_python 手搓 openpyxl 总在模板结构/列对齐上出错(E/F/G 错位、缺
 27 行说明区、缺 C=0/C=1)→ 框架找不到 case 行 → 零 check_point → 空真 pass。
 本工具复用 case_compiler.xlsx_emit.emit_xlsx——它克隆真实跑通的 sdns_listener.xlsx 模板,
 只重写数据区,保留全部说明区/字典区/格式/列对齐。**结构由工具保证,内容由 agent 决定。**
@@ -348,12 +348,12 @@ def _gate_unreachable_listener(autoid: str, steps: list, init: str = "") -> str 
 
 
 @tool(parse_docstring=True)
-def qa_emit_xlsx(autoid: str, steps_json: str, init_commands: str = "",
+def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
                  out_name: str = "", strict_structural: bool = False,
                  provenance_json: str = "", expected_save_variant: str = "") -> str:
     """从步骤列表产出结构正确的 case.xlsx(克隆框架原生模板,你不用管模板结构/列对齐)。
 
-    **用这个,别用 qa_exec 手搓 openpyxl**——手搓总在 27 行说明区/C=0/C=1/E-F-G 列对齐上
+    **用这个,别用 run_python 手搓 openpyxl**——手搓总在 27 行说明区/C=0/C=1/E-F-G 列对齐上
     出错,导致框架跳过你的 case 行(零 check_point、空真 pass)。本工具保证结构 100% 合法。
 
     你只决定**内容**:文件级前置命令 + 每个步骤的 操作对象/方法/数据。
@@ -369,7 +369,7 @@ def qa_emit_xlsx(autoid: str, steps_json: str, init_commands: str = "",
     - ``H`` save_as(可选)/``I`` input_var(可选): 跨步骤传值。但 H 存的是**整段命令输出文本**,
       **不能提取其中某字段(如某个IP)再做数值相等比对**——xlsx DSL 没有 re.findall/算术。
       所以"第一次dig返回哪个IP、后续跟它比"这类**运行时动态值比对,xlsx 表达不了**;遇到这种,
-      改用"设备 show 命令把该行为转成稳定可查找的输出"再 found(先用 qa_probe_show 探有没有这种命令)。
+      改用"设备 show 命令把该行为转成稳定可查找的输出"再 found(先用 dev_probe 探有没有这种命令)。
     - ``desc``(可选): 步骤描述
 
     check_point 自动校验**上一个非 check_point 步骤的输出**,所以断言前要先有产出输出的步骤
@@ -389,7 +389,7 @@ def qa_emit_xlsx(autoid: str, steps_json: str, init_commands: str = "",
             write memory)。非持久化用例留空。
 
     Returns:
-        产出路径 + round-trip 行数统计。拿到路径后用 qa_run_case 上机验证。
+        产出路径 + round-trip 行数统计。拿到路径后用 dev_run_case 上机验证。
     """
     autoid = (autoid or "").strip()
     if not autoid:
@@ -484,15 +484,15 @@ def qa_emit_xlsx(autoid: str, steps_json: str, init_commands: str = "",
             except Exception as e:  # noqa: BLE001
                 prov_note = f"\n⚠ provenance 写入失败: {e}（xlsx 正常产出）。"
 
-    return (f"=== qa_emit_xlsx ===\n"
+    return (f"=== compile_emit ===\n"
             f"已产出结构正确的 xlsx(克隆框架模板): {out}\n"
             f"case={autoid}  steps={len(case.steps)}  check_points=有\n"
             f"round-trip 统计: {stats}{prov_note}\n"
-            f"下一步:qa_run_case(xlsx_path='{out}', autoid='{autoid}') 上机验证。")
+            f"下一步:dev_run_case(xlsx_path='{out}', autoid='{autoid}') 上机验证。")
 
 
 @tool(parse_docstring=True)
-def qa_emit_xlsx_merged(cases_json: str, shared_init: str = "", out_name: str = "") -> str:
+def compile_emit_merged(cases_json: str, shared_init: str = "", out_name: str = "") -> str:
     """把**多个 case 合并成一个 xlsx**(每脑图一个 excel 的打包工具)。
 
     用于批量编译收尾:把同一脑图里已逐个生成好的 N 个 case 合并进一个 case.xlsx,
@@ -518,7 +518,7 @@ def qa_emit_xlsx_merged(cases_json: str, shared_init: str = "", out_name: str = 
         out_name: 输出子目录名(workspace/outputs/<out_name>/case.xlsx);如脑图名 dongkl。
 
     Returns:
-        产出路径 + round-trip 对账(case 数应=输入数+1哨兵)。下一步用 qa_run_batch
+        产出路径 + round-trip 对账(case 数应=输入数+1哨兵)。下一步用 dev_run_batch
         把这些 autoid 顺序上机验证。
     """
     try:
@@ -602,9 +602,9 @@ def qa_emit_xlsx_merged(cases_json: str, shared_init: str = "", out_name: str = 
         return f"error: emit 失败: {e}"
 
     autoids = [c.autoid for c in case_irs]
-    return (f"=== qa_emit_xlsx_merged ===\n"
+    return (f"=== compile_emit_merged ===\n"
             f"已合并 {len(case_irs)} 个真 case + 1 哨兵 → {out}\n"
             f"autoids: {autoids}\n"
             f"round-trip 统计: {stats}\n"
             f"(case_count 应={len(case_irs)}+1哨兵={len(case_irs)+1})\n"
-            f"下一步:qa_run_batch(xlsx_path='{out}', autoids_json={json.dumps(autoids)}) 顺序上机。")
+            f"下一步:dev_run_batch(xlsx_path='{out}', autoids_json={json.dumps(autoids)}) 顺序上机。")

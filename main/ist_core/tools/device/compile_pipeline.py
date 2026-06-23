@@ -57,13 +57,13 @@ def _precedent_best_score(text: str) -> float:
 def _preretrieve_precedent(case: dict) -> str:
     """确定性预检索：用 case 意图召回最像的已验证先例（含完整配置基线），供 brief 内联。
 
-    轨迹缩减核心：把"draft 自己在 ReAct 轮里调 qa_lookup_pattern"前移到流水线确定性预跑，
+    轨迹缩减核心：把"draft 自己在 ReAct 轮里调 compile_precedent"前移到流水线确定性预跑，
     draft 拿到现成先例 → 少几轮往返。检索是客观结构相似召回（非硬编码答案），draft 仍自由改写。
 
     **低置信不内联**：最佳相似度 < `_PRECEDENT_MIN_SCORE` 时返回 ""——烂先例(尤其算法类常带错变体)
     内联只会白塞 token + 先例支配误导,不如让 draft 回落 footprint 自查(已含手册事实)。
     """
-    from main.ist_core.tools.device.precedent_tools import qa_lookup_pattern
+    from main.ist_core.tools.device.precedent_tools import compile_precedent
     intent = " ".join(filter(None, [
         str(case.get("title", "")),
         " ".join(str(s.get("desc", "")) for s in (case.get("step_intents") or [])),
@@ -71,7 +71,7 @@ def _preretrieve_precedent(case: dict) -> str:
     if not intent:
         return ""
     try:
-        out = qa_lookup_pattern.invoke({"my_config": "", "intent": intent, "limit": 2})
+        out = compile_precedent.invoke({"my_config": "", "intent": intent, "limit": 2})
     except Exception:  # noqa: BLE001
         return ""
     if _precedent_best_score(out) < _PRECEDENT_MIN_SCORE:
@@ -82,7 +82,7 @@ def _preretrieve_precedent(case: dict) -> str:
 def _precedent_block(precedent_text: str) -> str:
     """把预检索先例渲染成 brief 末尾的内联块（空召回时给降级提示）。"""
     if not precedent_text or not precedent_text.strip():
-        return "\n\n（预检索未召回先例——分布外/新类型，自己 qa_footprint_lookup + grep 手册推断。）"
+        return "\n\n（预检索未召回先例——分布外/新类型，自己 kb_footprint + grep 手册推断。）"
     return ("\n\n=== 预检索先例（确定性结构相似召回；含完整配置基线 + 触发→断言链 + 本测试床网络事实源）"
             "===\n照它改写，别再为它已给的东西重复检索。\n" + precedent_text.strip())
 
@@ -235,7 +235,7 @@ def _build_case_brief(case: dict, *, product_version: str, manual_glob: str,
     五要素：需求(autoid/title/step_intents) + 现状(模块/版本/分组+组级基线) +
     规则(溯源/不observe-then-assert/自包含) + 指路(先例已预检索内联) + 边界。
     命令/期望值不写进 brief（零硬编码红线）；precedent_text 是**确定性预检索**的已验证先例
-    （非硬编码答案，是 qa_lookup_pattern 的客观结构相似召回），内联进来让 draft 少跑检索轮次
+    （非硬编码答案，是 compile_precedent 的客观结构相似召回），内联进来让 draft 少跑检索轮次
     （轨迹缩减：把确定性检索移出 ReAct 轮循环，draft 退化成近单发生成）。
     """
     autoid = str(case.get("autoid", ""))
@@ -264,7 +264,7 @@ def _build_case_brief(case: dict, *, product_version: str, manual_glob: str,
   配 listener → show/found → write {save_variant} <参数>(就用 {save_variant} 这个变体,别换成别的)
   → no sdns listener <ip>(或 clear sdns,先清运行配置)→ config {save_variant} <同参数>(同族恢复)→ show → 断言。
 基线 init 里【不要】放任何 write 保存命令(会污染恢复快照)。
-调 qa_emit_xlsx 时【必须传 expected_save_variant="{save_variant}"】。"""
+调 compile_emit 时【必须传 expected_save_variant="{save_variant}"】。"""
 
     # 算法变体类用例(rr/wrr/ga/…):对冲"先例支配"——算法以需求为准,别照抄先例的算法
     _algos = _intent_methods(case)
@@ -295,8 +295,8 @@ def _build_case_brief(case: dict, *, product_version: str, manual_glob: str,
 
 指路（先例已为你预检索，见下方「预检索先例」）：**优先照预检索先例的完整配置基线改写**——
 启用步如 sdns on、数据中心/池法/监听器等基线步一个不能漏（漏了服务不起、dig 零解析、断言全 fail）；
-触发(dig 类型/次数)+断言形态照先例配套写。**只有先例里缺的命令**才 qa_footprint_lookup
-（你没有手册全文 grep 工具——footprint+先例就是全部命令源；缺的用 qa_probe_show 探设备或推断，绝不空转）。
+触发(dig 类型/次数)+断言形态照先例配套写。**只有先例里缺的命令**才 kb_footprint
+（你没有手册全文 grep 工具——footprint+先例就是全部命令源；缺的用 dev_probe 探设备或推断，绝不空转）。
 IP 取下方「本测试床网络事实源」的可达值，绝不照抄示例 IP。
 **listener/VIP 选址(dig/curl 必须够得着)**：listener/VIP 的 IP、以及 check 步骤里 dig/curl 的
 目标 IP 必须**一致**，且只能取事实源里标 ★ 的「触发设备够得着的 APV 接口 IP」。标 ⚠ 的接口段
@@ -330,7 +330,7 @@ def _extract_xlsx_path(fork_output: str, autoid: str, since: float = 0.0) -> Pat
 def _parse_grade_verdict(out: str) -> bool:
     """解析 grade fork 的最终裁定是否 PASS。
 
-    grade 报告会**先讨论** qa_confidence_score 工具给的分（可能含 "CUT"），**再下**自己的
+    grade 报告会**先讨论** compile_score 工具给的分（可能含 "CUT"），**再下**自己的
     结论。朴素的 `"PASS" in out and "CUT" not in out` 会把"工具说 CUT 但我判 PASS"误读成
     重做 → 无谓 churn。改为取**最后出现**的裁定词（结论总在末尾），ERROR 一律不通过。
     """
@@ -346,9 +346,9 @@ def _parse_grade_verdict(out: str) -> bool:
 def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
                   *, draft_skill: str, grade_skill: str) -> dict:
     """确定性跑完 prep→draft→grade→筛→merge。返回结构化结果 dict（不抛，错误进 result）。"""
-    from main.ist_core.tools.device.compile_prep import qa_compile_prep
-    from main.ist_core.tools.device.batch_tools import qa_compile_fanout
-    from main.ist_core.tools.device.emit_xlsx_tool import qa_emit_xlsx_merged
+    from main.ist_core.tools.device.compile_prep import compile_prep
+    from main.ist_core.tools.device.batch_tools import compile_fanout
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit_merged
     from main.ist_core.tools.device.precedent_tools import _load_case_rows
 
     result: dict[str, Any] = {"mindmap": mindmap_path, "out_name": out_name,
@@ -357,7 +357,7 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
     manual_glob = f"{product_version}_cli__part*.md"
 
     # 1. prep（一次）
-    prep_out = qa_compile_prep.invoke({"mindmap_path": mindmap_path, "out_name": out_name})
+    prep_out = compile_prep.invoke({"mindmap_path": mindmap_path, "out_name": out_name})
     manifest_path = root / "workspace" / "outputs" / out_name / "manifest.json"
     if not manifest_path.is_file():
         result["errors"].append(f"prep 未产 manifest: {prep_out[:200]}")
@@ -485,7 +485,7 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
             merged_cases.append({"autoid": aid, "title": info["case"].get("title", ""),
                                  "steps": rows})
         if merged_cases:
-            merge_out = qa_emit_xlsx_merged.invoke(
+            merge_out = compile_emit_merged.invoke(
                 {"cases_json": json.dumps(merged_cases, ensure_ascii=False), "out_name": out_name})
             result["phases"].append(f"merge: {len(merged_cases)} cases → {out_name}/case.xlsx")
             result["merge_output"] = merge_out[:300]
@@ -493,11 +493,11 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
 
 
 @tool(parse_docstring=True)
-def qa_compile_pipeline(mindmap_path: str, product_version: str, out_name: str = "") -> str:
+def compile_pipeline(mindmap_path: str, product_version: str, out_name: str = "") -> str:
     """【确定性编译流水线】一次跑完一个脑图的 prep→draft→grade→筛→合并，产出 case.xlsx。
 
-    把固定编译序列锁在工具内部——你只调这一次，不要自己逐步调 qa_compile_prep /
-    qa_compile_fanout / qa_emit_xlsx_merged（那会让序列失控：prep 重复、fanout 多发、误调别的 skill）。
+    把固定编译序列锁在工具内部——你只调这一次，不要自己逐步调 compile_prep /
+    compile_fanout / compile_emit_merged（那会让序列失控：prep 重复、fanout 多发、误调别的 skill）。
     工具内部固定：解析 manifest → 每个 case 独立流水线(draft 产 provenance → grade 验 provenance
     → CUT 带反馈重做≤3 轮)，N 个 case 并发且无屏障(case A 在 grade 时 case B 还能 draft，
     不必等全部 draft 完才开 grade) → grade-PASS 合并成一个 excel。命令/断言全由 draft fork
@@ -518,7 +518,7 @@ def qa_compile_pipeline(mindmap_path: str, product_version: str, out_name: str =
         return "error: 必须提供 mindmap_path"
     ver = (product_version or "").strip()
     if not ver:
-        return "error: 必须提供 product_version（如 10.5）——版本决定查哪个手册，不可臆测，缺失请先 qa_ask_user 问用户"
+        return "error: 必须提供 product_version（如 10.5）——版本决定查哪个手册，不可臆测，缺失请先 ask_user 问用户"
     if not out_name:
         out_name = Path(mp).stem
     out_name = out_name.strip().replace("/", "_")
@@ -530,7 +530,7 @@ def qa_compile_pipeline(mindmap_path: str, product_version: str, out_name: str =
         logger.exception("compile_pipeline 失败")
         return f"error: 流水线异常: {e}"
 
-    lines = [f"=== qa_compile_pipeline: {out_name} ==="]
+    lines = [f"=== compile_pipeline: {out_name} ==="]
     lines += [f"  {p}" for p in result.get("phases", [])]
     lines.append(f"done: {len(result.get('done', []))} cases")
     if result.get("escalated"):

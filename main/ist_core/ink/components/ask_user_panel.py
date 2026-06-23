@@ -1,6 +1,6 @@
 """AskUserPanel — 钉在输入框横线上方的交互式问答面板。
 
-仿 PlanPanel：qa_ask_user 触发时，IstInkApp 把 AskUserSession 的渲染行整块
+仿 PlanPanel：ask_user 触发时，IstInkApp 把 AskUserSession 的渲染行整块
 塞进本面板（独立 Box 节点），**不再 append 到 transcript**——所以问答选项不会
 随对话滚走，始终固定在输入框上方（底部 permission dialog 位置）。
 

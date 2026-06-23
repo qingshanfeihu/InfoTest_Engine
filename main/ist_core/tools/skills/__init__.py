@@ -1,6 +1,6 @@
-"""qa_invoke_skill: Skill 相关 tool.
+"""invoke_skill: Skill 相关 tool.
 
-qa_invoke_skill — 基于 Skill 文件的辅助工具调用机制
+invoke_skill — 基于 Skill 文件的辅助工具调用机制
 
 统一处理 inline 和 fork 两种 context：
 - inline: 返回 SKILL.md 全文，注入主对话
@@ -22,7 +22,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 
 @tool
-def qa_invoke_skill(skill: str, brief: str = "") -> str:
+def invoke_skill(skill: str, brief: str = "") -> str:
     """Execute a skill within the main conversation.
 
     Available skills are listed in the `## Skills System` section of the system
@@ -85,7 +85,7 @@ def qa_invoke_skill(skill: str, brief: str = "") -> str:
     header = (
         f"# Skill loaded: {skill}\n"
         f"# Path: main/ist_core/skills/{skill}/SKILL.md\n"
-        f"# Reference files (read on demand with qa_deepagent_read_file):\n"
+        f"# Reference files (read on demand with fs_read):\n"
     )
     ref_dir = _SKILLS_DIR / skill / "reference"
     if ref_dir.exists():

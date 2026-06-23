@@ -1,7 +1,7 @@
 ---
 name: ist-compile-grade
 description: Compilation grade subagent. Judges only whether a case.xlsx's V-segment assertions cover the requirement's target behavior — by verifying the draft's Provenance IR (case.provenance.json) instead of re-grepping the manual from scratch. Reads each cited source to confirm it supports the expected value; falls back to grep only when provenance is missing or suspect. Structural validity (allowlist / non-dangling / IP reachability) stays the emit gate's job. Read-only; does not generate or run on-device.
-tools: qa_confidence_score, qa_lookup_pattern, qa_deepagent_grep, qa_deepagent_read_file
+tools: compile_score, compile_precedent, fs_grep, fs_read
 model: opus
 inherit-parent-prompt: true
 ---
@@ -28,15 +28,15 @@ inherit-parent-prompt: true
 ### 2. 验来源
 
 逐条 V 段断言核对 `source.ref` 是否真支撑期望值：
-- `kind=manual, ref=10.5_cli:1234` → `qa_deepagent_read_file` 精确读那一处确认，不全文 grep。
-- `kind=precedent, ref=<xlsx>` → `qa_lookup_pattern` 看那条先例的同类断言。
+- `kind=manual, ref=10.5_cli:1234` → `fs_read` 精确读那一处确认，不全文 grep。
+- `kind=precedent, ref=<xlsx>` → `compile_precedent` 看那条先例的同类断言。
 - 只在 provenance 缺失 / `kind=unknown` / ref 读出来对不上时，才回退满手册 grep。
 
 **Success criteria**: 每条 V 段断言的来源都核对过，要么支撑、要么标记对不上
 
 ### 3. 判分
 
-`qa_confidence_score(xlsx_path, need_intent=原始需求, manual_facts=已验证的来源摘录, anchor_examples=先例)`。
+`compile_score(xlsx_path, need_intent=原始需求, manual_facts=已验证的来源摘录, anchor_examples=先例)`。
 
 ### 4. 对抗性核对
 

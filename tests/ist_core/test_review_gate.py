@@ -1,7 +1,7 @@
 """测试 review_gate 节点（Step 4 硬闸节点）.
 
 覆盖场景：
-1. 非评审场景（没调过 qa_invoke_skill）→ passed 透传
+1. 非评审场景（没调过 invoke_skill）→ passed 透传
 2. 评审场景 + verifier 没调 → pending 重路由 + retry+1
 3. 评审场景 + verifier 调了但无 VERDICT → pending 重路由
 4. 评审场景 + verifier 调了 + VERDICT/LEVEL 齐 → passed
@@ -29,12 +29,12 @@ from main.ist_core.nodes.review_gate import (
 
 
 def _make_invoke_skill_msg() -> AIMessage:
-    """主 agent 调 qa_invoke_skill('test-list-review') 的 AIMessage."""
+    """主 agent 调 invoke_skill('test-list-review') 的 AIMessage."""
     return AIMessage(
         content="我来调 review skill",
         tool_calls=[
             {
-                "name": "qa_invoke_skill",
+                "name": "invoke_skill",
                 "args": {"skill": "test-list-review"},
                 "id": "skill_call_1",
                 "type": "tool_call",
@@ -50,7 +50,7 @@ def _real_brief() -> str:
         "bug_id: BUG-121100\n"
         "bug_summary: cookie 加密功能新增 enc_name/enc_ip/smode/passwd 参数\n"
         "cli_command: slb mode ircookie\n"
-        "evidence_collected: [Phase 1 web_bug_search 结果, Phase 2 grep product/]\n"
+        "evidence_collected: [Phase 1 kb_bug_search 结果, Phase 2 grep product/]\n"
         "draft_findings: [Segment WebUI 100% 重复, smode 缺口, 密码强度负面缺]\n"
         "draft_level: P4\n\n"
         "Independently verify each finding. Try to break my draft."
@@ -58,12 +58,12 @@ def _real_brief() -> str:
 
 
 def _make_verifier_call_msg(brief: str = None, tool_call_id: str = "task_1") -> AIMessage:
-    """主 agent 调 qa_invoke_skill('review-verification') 的 AIMessage."""
+    """主 agent 调 invoke_skill('review-verification') 的 AIMessage."""
     return AIMessage(
         content="提交给 verifier",
         tool_calls=[
             {
-                "name": "qa_invoke_skill",
+                "name": "invoke_skill",
                 "args": {
                     "skill": "review-verification",
                     "brief": brief if brief is not None else _real_brief(),
@@ -100,7 +100,7 @@ def _make_verifier_response(
 
 
 def test_gate_passes_when_no_review_skill_invoked():
-    """非评审场景（没调过 qa_invoke_skill）→ passed 透传."""
+    """非评审场景（没调过 invoke_skill）→ passed 透传."""
     state = {"messages": [HumanMessage(content="一般 QA 问题")]}
     result = review_gate(state)
     assert result["gate_status"] == "passed"
@@ -196,7 +196,7 @@ def test_has_invoked_review_skill_returns_false_when_skill_is_other():
             content="",
             tool_calls=[
                 {
-                    "name": "qa_invoke_skill",
+                    "name": "invoke_skill",
                     "args": {"skill": "other-skill"},
                     "id": "x",
                     "type": "tool_call",

@@ -1,30 +1,30 @@
 """IST-Core 通用工具导出。
 
 包级别暴露通用工具：
-- ``qa_deepagent_*``: 文件浏览（ls / glob / grep / read_file）+ 写入（write_file / edit_file）
-- ``qa_exec`` / ``qa_bash``: 受沙箱限制的执行工具（cwd 锁在 knowledge/data/）
+- ``fs_*``: 文件浏览（ls / glob / grep / read_file）+ 写入（write_file / edit_file）
+- ``run_python`` / ``run_shell``: 受沙箱限制的执行工具（cwd 锁在 knowledge/data/）
 """
 
 from main.ist_core.tools.deepagent import (
-    qa_deepagent_edit_file,
-    qa_deepagent_glob,
-    qa_deepagent_grep,
-    qa_deepagent_ls,
-    qa_deepagent_read_file,
-    qa_deepagent_write_file,
+    fs_edit,
+    fs_glob,
+    fs_grep,
+    fs_ls,
+    fs_read,
+    fs_write,
 )
-from main.ist_core.tools.deepagent.exec_tools import qa_bash, qa_exec
-from main.ist_core.tools.device import qa_restapi, qa_ssh
+from main.ist_core.tools.deepagent.exec_tools import run_shell, run_python
+from main.ist_core.tools.device import dev_rest, dev_ssh
 
 __all__ = [
-    "qa_deepagent_edit_file",
-    "qa_deepagent_glob",
-    "qa_deepagent_grep",
-    "qa_deepagent_ls",
-    "qa_deepagent_read_file",
-    "qa_deepagent_write_file",
-    "qa_bash",
-    "qa_exec",
-    "qa_ssh",
-    "qa_restapi",
+    "fs_edit",
+    "fs_glob",
+    "fs_grep",
+    "fs_ls",
+    "fs_read",
+    "fs_write",
+    "run_shell",
+    "run_python",
+    "dev_ssh",
+    "dev_rest",
 ]

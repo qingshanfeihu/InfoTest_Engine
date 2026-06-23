@@ -1,4 +1,4 @@
-"""``web_bug_search`` agent tool — bug ticket 检索（本地优先，远端兜底）。
+"""``kb_bug_search`` agent tool — bug ticket 检索（本地优先，远端兜底）。
 
 设计参考 Anthropic ``web_search`` 范式：
 
@@ -192,17 +192,17 @@ def _remote_fetch_and_parse(
 
         if code == "login_required" and not _retry_after_login:
             logger.info(
-                "web_bug_search: cookie expired for %s, auto-refreshing login ...",
+                "kb_bug_search: cookie expired for %s, auto-refreshing login ...",
                 backend,
             )
             ok = refresh_login_sync(backend)
             if ok:
-                logger.info("web_bug_search: login refreshed, retrying fetch ...")
+                logger.info("kb_bug_search: login refreshed, retrying fetch ...")
                 return _remote_fetch_and_parse(
                     ticket_id, backend, _retry_after_login=True
                 )
             logger.warning(
-                "web_bug_search: refresh_login_sync(%s) failed; returning login_required",
+                "kb_bug_search: refresh_login_sync(%s) failed; returning login_required",
                 backend,
             )
 
@@ -284,7 +284,7 @@ def _probe_one_backend(
         }
 
     logger.info(
-        "web_bug_search: %s not in local kb, fetching from %s ...",
+        "kb_bug_search: %s not in local kb, fetching from %s ...",
         fetch_id,
         probe_backend,
     )
@@ -344,8 +344,8 @@ def _merge_single_hit_compat(
 
 
 
-@tool("web_bug_search")
-def web_bug_search(ticket_id: str) -> dict[str, Any]:
+@tool("kb_bug_search")
+def kb_bug_search(ticket_id: str) -> dict[str, Any]:
     """按 ticket id 在全缺陷平台检索详情（本地优先，远端兜底）。
 
     **不按前缀猜平台**：对 bugzilla、zentao（PLM 缺陷搜索）、zentao_story（需求）

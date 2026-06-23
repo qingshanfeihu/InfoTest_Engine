@@ -38,12 +38,12 @@ description: 一句话功能描述（不含 TRIGGER/SKIP，那些放 when_to_use
 user-invocable: true
 effort: high
 allowed-tools:
-  - qa_deepagent_read_file
-  - qa_deepagent_grep(knowledge/data/markdown/product/*)
-  - qa_deepagent_grep(knowledge/data/markdown/qa/*)
-  - qa_deepagent_ls
-  - web_bug_search
-  - qa_footprint_lookup
+  - fs_read
+  - fs_grep(knowledge/data/markdown/product/*)
+  - fs_grep(knowledge/data/markdown/qa/*)
+  - fs_ls
+  - kb_bug_search
+  - kb_footprint
   - task(review-verification)
 when_to_use: |
   Use when ...
@@ -59,7 +59,7 @@ context: inline
 1. `description` 只保留功能描述，触发/跳过条件移到 `when_to_use`
 2. `allowed-tools` 改列表语法，加 path 模式（桶隔离）
 3. 被架构替代的工具删掉（如 `qa_sanity_check` → `task(review-verification)`）
-4. 通用工具不需要列（如 `qa_ask_user`，主 agent 本身就能用）
+4. 通用工具不需要列（如 `ask_user`，主 agent 本身就能用）
 5. 新增 `effort`、`context`、`user-invocable` 等元数据字段
 
 ## 三、`<Role>` 段迁移
@@ -220,7 +220,7 @@ grep `cli__part*.md`，找到相关命令的完整参数表，确认参数间依
 | 旧工具 | 新架构替代 | 说明 |
 |--------|-----------|------|
 | `qa_sanity_check` | `task(review-verification)` | 字面自检 → 独立 subagent 交叉验证 |
-| `qa_ask_user`（skill 专属列出） | 不列入 allowed-tools | 主 agent 本身就有此能力 |
+| `ask_user`（skill 专属列出） | 不列入 allowed-tools | 主 agent 本身就有此能力 |
 | 手动 checkbox 进度 | `write_todos` (Step 0) | Plan 面板自动展示 |
 | 直接输出报告 | verifier tool_result 透传 | 主 agent 静音收尾 |
 

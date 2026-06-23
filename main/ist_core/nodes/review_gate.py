@@ -1,7 +1,7 @@
 """review_gate 节点：评审场景的硬闸。
 
-触发信号：主 agent 调过 qa_invoke_skill('test-list-review')
-检测目标：qa_invoke_skill(skill='review-verification') 是否被调过 +
+触发信号：主 agent 调过 invoke_skill('test-list-review')
+检测目标：invoke_skill(skill='review-verification') 是否被调过 +
   返回的 ToolMessage content 含 VERDICT: + LEVEL: 行
 重路由：注入 HumanMessage 提示，state 走 pending → 回 qa_node 重试
 retry 上限 2，超限走 failed 写错误 final_answer
@@ -34,7 +34,7 @@ def review_gate(state: dict[str, Any]) -> dict[str, Any]:
     retry = (state.get("gate_retry_count") or 0) + 1
     if retry > 2:
         msg = (
-            "[gate] 已重试 2 次仍未调 qa_invoke_skill(skill='review-verification') "
+            "[gate] 已重试 2 次仍未调 invoke_skill(skill='review-verification') "
             "+ 返回 VERDICT/LEVEL，强制终止。请检查 SKILL.md 是否包含调用指令。"
         )
         logger.warning(msg)
@@ -45,11 +45,11 @@ def review_gate(state: dict[str, Any]) -> dict[str, Any]:
         }
 
     inject_text = (
-        f"[review_gate] You MUST call qa_invoke_skill(skill='review-verification', brief=<full draft>) "
+        f"[review_gate] You MUST call invoke_skill(skill='review-verification', brief=<full draft>) "
         f"and wait for VERDICT + LEVEL lines before producing the final review. "
         f"Without an explicit VERDICT from the verifier, no review report is "
         f"allowed. After it returns, do NOT call any more tools or add findings. "
-        f"Call qa_invoke_skill now. (重试 {retry}/2)"
+        f"Call invoke_skill now. (重试 {retry}/2)"
     )
     return {
         "gate_retry_count": retry,
@@ -58,25 +58,25 @@ def review_gate(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 def _has_invoked_review_skill(msgs: list) -> bool:
-    """触发信号：主 agent 是否调过 qa_invoke_skill('test-list-review')."""
+    """触发信号：主 agent 是否调过 invoke_skill('test-list-review')."""
     for m in msgs:
         if not isinstance(m, AIMessage):
             continue
         for tc in (m.tool_calls or []):
             name = (tc.get("name") or "")
             args = tc.get("args") or {}
-            if name == "qa_invoke_skill" and args.get("skill") == "test-list-review":
+            if name == "invoke_skill" and args.get("skill") == "test-list-review":
                 return True
     return False
 
 def _has_verifier_call_with_verdict(msgs: list) -> bool:
-    """检测 qa_invoke_skill(skill='review-verification') + ToolMessage 含 VERDICT."""
+    """检测 invoke_skill(skill='review-verification') + ToolMessage 含 VERDICT."""
     target_tool_use_id = None
     for m in reversed(msgs):
         if not isinstance(m, AIMessage):
             continue
         for tc in (m.tool_calls or []):
-            if tc.get("name") != "qa_invoke_skill":
+            if tc.get("name") != "invoke_skill":
                 continue
             args = tc.get("args") or {}
             if args.get("skill") != "review-verification":

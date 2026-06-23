@@ -1,4 +1,4 @@
-"""V3 编译驱动：对一个脑图直接调确定性流水线 qa_compile_pipeline（不经主 agent，免编排 churn）。
+"""V3 编译驱动：对一个脑图直接调确定性流水线 compile_pipeline（不经主 agent，免编排 churn）。
 
 产出 workspace/outputs/<out_name>/case.xlsx——含 draft 诚实留空的 <RUNTIME> 槽位（不可知期望值）。
 上机回填走 ist_verify（另起）。
@@ -18,11 +18,11 @@ def main():
         return 2
     mindmap, version = sys.argv[1], sys.argv[2]
     out_name = sys.argv[3] if len(sys.argv) > 3 else ""
-    from main.ist_core.tools.device.compile_pipeline import qa_compile_pipeline
+    from main.ist_core.tools.device.compile_pipeline import compile_pipeline
 
     t0 = time.time()
     print(f"[compile] mindmap={mindmap} version={version} out_name={out_name or '(默认脑图名)'}", flush=True)
-    out = qa_compile_pipeline.invoke(
+    out = compile_pipeline.invoke(
         {"mindmap_path": mindmap, "product_version": version, "out_name": out_name})
     print(out, flush=True)
     print(f"[compile] 耗时 {time.time()-t0:.0f}s", flush=True)

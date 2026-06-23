@@ -18,7 +18,7 @@ def test_anthropic_official_subagent_format(tmp_path, monkeypatch):
         """---
 name: code-reviewer
 description: Reviews code for quality and best practices
-tools: qa_deepagent_read_file, qa_deepagent_grep
+tools: fs_read, fs_grep
 model: sonnet
 ---
 
@@ -41,7 +41,7 @@ on quality, security, and best practices.
     assert spec["model"] == "sonnet"
     assert "code reviewer" in spec["system_prompt"].lower()
     
-    assert "qa_deepagent_read_file" in str(spec["tools_spec"])
+    assert "fs_read" in str(spec["tools_spec"])
 
 
 def test_anthropic_official_fork_skill_format(tmp_path, monkeypatch):

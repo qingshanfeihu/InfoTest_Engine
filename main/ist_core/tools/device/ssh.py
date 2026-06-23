@@ -1,6 +1,6 @@
-"""qa_ssh tool: SSH to APV devices under strict safety controls.
+"""dev_ssh tool: SSH to APV devices under strict safety controls.
 
-Runs in-process (not via qa_exec subprocess), bypassing the sandbox network
+Runs in-process (not via run_python subprocess), bypassing the sandbox network
 block for the specific purpose of device verification and safe configuration.
 
 Safety gates (applied in order):
@@ -126,7 +126,7 @@ def _validate_command(command: str, mode: str) -> tuple[bool, str]:
     # 1. Shell metachar check
     for mc in _DENIED_METACHARS:
         if mc in command:
-            return False, f"shell metachar not allowed in qa_ssh: {mc!r}"
+            return False, f"shell metachar not allowed in dev_ssh: {mc!r}"
 
     # 2. High-risk blacklist check
     cmd_lower = " ".join(command.lower().split())
@@ -170,7 +170,7 @@ def _get_apv_ssh_client_class():
 
 
 @tool(parse_docstring=True)
-def qa_ssh(
+def dev_ssh(
     host: str,
     command: str,
     username: str = "",
@@ -182,8 +182,8 @@ def qa_ssh(
 ) -> str:
     """SSH to an APV device and execute a CLI command under strict safety controls.
 
-    **PREFER qa_restapi instead.** REST API is faster (single HTTP call, no
-    shell interaction). Only use this tool when qa_restapi is unavailable
+    **PREFER dev_rest instead.** REST API is faster (single HTTP call, no
+    shell interaction). Only use this tool when dev_rest is unavailable
     (connection refused, HTTP 401, or device doesn't support REST API).
     SSH is the fallback — not the first choice.
 
@@ -296,11 +296,11 @@ def qa_ssh(
 
     # 7. Format output
     if not results:
-        return f"=== qa_ssh ===\nhost={host}  mode={mode}\ncommand: {command}\nstatus: no results"
+        return f"=== dev_ssh ===\nhost={host}  mode={mode}\ncommand: {command}\nstatus: no results"
 
     r = results[0]
     header = (
-        f"=== qa_ssh ===\n"
+        f"=== dev_ssh ===\n"
         f"host={host}  mode={mode}\n"
         f"command: {r['command']}\n"
         f"status: {r['status']}\n"

@@ -1,8 +1,8 @@
 """PerTurnSkillReminder listing 过滤。
 
-只过滤 disable-model-invocation: true（完全不可见，qa_invoke_skill 也拒）。
+只过滤 disable-model-invocation: true（完全不可见，invoke_skill 也拒）。
 user-invocable: false 的 fork 子流程（ist_compile_draft/grade、review-verification）
-仍进主 agent listing——它们由 inline 编排 skill 的 body 引导主 agent 经 qa_invoke_skill
+仍进主 agent listing——它们由 inline 编排 skill 的 body 引导主 agent 经 invoke_skill
 派发，派发者就是主 agent，必须对模型可见；只是不进 TUI /skill 用户菜单。
 """
 
@@ -35,7 +35,7 @@ def test_load_skills_from_dir_includes_fork_subflows():
     """fork 子流程 skill（user-invocable: false）仍进主 agent listing。
 
     它们由 inline 编排 skill（ist_compile / test-list-review）的 body 引导
-    主 agent 经 qa_invoke_skill 派发，派发者是主 agent，必须对模型可见。
+    主 agent 经 invoke_skill 派发，派发者是主 agent，必须对模型可见。
     listing 唯一过滤条件是 disable-model-invocation: true。
     """
     skills_dir = Path(__file__).resolve().parents[3] / "main" / "ist_core" / "skills"

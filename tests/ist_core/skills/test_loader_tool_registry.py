@@ -7,7 +7,7 @@ from main.ist_core.skills.loader import _get_tool_registry
 
 def test_fork_tool_registry_includes_knowledge_tools():
     reg = _get_tool_registry()
-    assert "web_bug_search" in reg
-    assert "qa_footprint_lookup" in reg
-    assert getattr(reg["web_bug_search"], "name", None) == "web_bug_search"
-    assert getattr(reg["qa_footprint_lookup"], "name", None) == "qa_footprint_lookup"
+    assert "kb_bug_search" in reg
+    assert "kb_footprint" in reg
+    assert getattr(reg["kb_bug_search"], "name", None) == "kb_bug_search"
+    assert getattr(reg["kb_footprint"], "name", None) == "kb_footprint"

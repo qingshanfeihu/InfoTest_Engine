@@ -467,13 +467,13 @@ def _read_spreadsheet(path: Path, *, offset: int, limit: int) -> str:
     return _format_page(lines, offset=offset, limit=limit)
 
 @tool(parse_docstring=True)
-def qa_deepagent_ls(path: str = ".", max_entries: int = 200) -> str:
+def fs_ls(path: str = ".", max_entries: int = 200) -> str:
     """List files and directories under the project root.
 
     This is a generic DeepAgents-style ``ls`` tool for phase-one static review.
     It is read-only, concurrency-safe, and does not run project code. Use it
     to inspect the repository layout or a known evidence directory before
-    narrowing to ``qa_deepagent_read_file`` / ``qa_deepagent_grep``.
+    narrowing to ``fs_read`` / ``fs_grep``.
 
     Boundaries:
     - Generic read-only project exploration tool.
@@ -558,7 +558,7 @@ def _rg_glob(base: Path, pattern: str, *, max_results: int, offset: int) -> tupl
     return window, truncated
 
 @tool(parse_docstring=True)
-def qa_deepagent_glob(pattern: str, path: str = ".", max_results: int = 200, offset: int = 0) -> str:
+def fs_glob(pattern: str, path: str = ".", max_results: int = 200, offset: int = 0) -> str:
     """Find files by glob pattern under the project root.
 
     This is a generic DeepAgents-style ``glob`` tool for locating candidate
@@ -567,7 +567,7 @@ def qa_deepagent_glob(pattern: str, path: str = ".", max_results: int = 200, off
     Boundaries:
     - Generic read-only tool for locating candidate files.
     - Concurrency-safe.
-    - Does not read file contents; use ``qa_deepagent_read_file`` for that.
+    - Does not read file contents; use ``fs_read`` for that.
     - Denies secret/runtime directories.
 
     Args:
@@ -754,7 +754,7 @@ def _rg_grep(
     return window, truncated, None
 
 @tool(parse_docstring=True)
-def qa_deepagent_grep(
+def fs_grep(
     pattern: str,
     path: str = ".",
     glob: str = "**/*",
@@ -927,7 +927,7 @@ def _atomic_write(target: Path, data: bytes) -> None:
         raise
 
 @tool(parse_docstring=True)
-def qa_deepagent_read_file(path: str, offset: int = 0, limit: int = 200) -> str:
+def fs_read(path: str, offset: int = 0, limit: int = 200) -> str:
     """Read a project file with line-oriented pagination.
 
     This is the phase-one generic equivalent of DeepAgents ``read_file``. It
@@ -954,7 +954,7 @@ def qa_deepagent_read_file(path: str, offset: int = 0, limit: int = 200) -> str:
     try:
         target = _resolve_inside_root(path, must_exist=True)
         if target.is_dir():
-            return qa_deepagent_ls.invoke({"path": _project_rel(target), "max_entries": limit})
+            return fs_ls.invoke({"path": _project_rel(target), "max_entries": limit})
         suffix = target.suffix.lower()
         if suffix in _SPREADSHEET_SUFFIXES:
             return _read_spreadsheet(target, offset=offset, limit=limit)
@@ -967,7 +967,7 @@ def qa_deepagent_read_file(path: str, offset: int = 0, limit: int = 200) -> str:
         return f"error: {exc}"
 
 @tool(parse_docstring=True)
-def qa_deepagent_write_file(path: str, content: str, overwrite: bool = False) -> str:
+def fs_write(path: str, content: str, overwrite: bool = False) -> str:
     """Write content to a file inside the agent sandbox.
 
     All writes go to ``workspace/outputs/``. Pass a bare filename like
@@ -1011,7 +1011,7 @@ def qa_deepagent_write_file(path: str, content: str, overwrite: bool = False) ->
         return f"error: {exc}"
 
 @tool(parse_docstring=True)
-def qa_deepagent_edit_file(
+def fs_edit(
     path: str, old_string: str, new_string: str, replace_all: bool = False
 ) -> str:
     """Edit an existing file by replacing exact string matches.

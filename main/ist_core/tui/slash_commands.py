@@ -314,9 +314,9 @@ def _cmd_style(args: str, app: "IstApp") -> SlashCommandResult:
 def _cmd_init(args: str, app: "IstApp") -> SlashCommandResult:
     return InjectResult(prompt=(
         "请帮我做项目初始化分析：\n"
-        "1. 用 qa_deepagent_ls 看顶级目录\n"
+        "1. 用 fs_ls 看顶级目录\n"
         "2. 读关键文档(README.md、AGENTS.md)\n"
-        "3. 用 qa_deepagent_glob 找 Python 包结构\n"
+        "3. 用 fs_glob 找 Python 包结构\n"
         "4. 给一份项目能力总结报告(5 段以内)"
     ))
 

@@ -107,7 +107,7 @@
 |---|---|---|---|
 | 权限规则 4 层（rules / modes / hooks / classifier） | ✅ | ❌ 仅沙箱根校验 | 简化 |
 | 工具白名单（按 skill 限制工具池） | ✅ allowed-tools 严格执行 | ⚠️ allowed-tools 是指引性（不强制） | 待补（评审场景低风险） |
-| 命令黑名单（rm / sudo / ssh / curl 等） | ✅ | ✅ qa_bash 黑名单 | 一致 |
+| 命令黑名单（rm / sudo / ssh / curl 等） | ✅ | ✅ run_shell 黑名单 | 一致 |
 | 写文件路径白名单（只能落 outputs/） | ✅ | ✅ `_resolve_writable_path` | 一致 |
 
 ## 八、TUI / 输出

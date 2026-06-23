@@ -1,7 +1,7 @@
 """技能诱导:把 agent 上机 pass 的成功 case 蒸馏成可复用技能(Voyager add_new_skill 的精神)。
 
 抄 Voyager voyager.py:357 `if info["success"]: add_new_skill` + AWM 诱导原则:
-- 只有**上机 pass** 才入库(success gate = qa_run_case verdict)。
+- 只有**上机 pass** 才入库(success gate = dev_run_case verdict)。
 - 蒸馏成**可复用范式**(描述 + 断言做法),可变部分参数化、不写死具体 IP/域名。
 - 落成 SKILL.md 进 knowledge/induced_skills/<name>/(source=induced,与人写 skill 分离)。
 - 检索时只看描述(retrieve),命中当参考,agent 仍自走验证不冻结。

@@ -56,7 +56,7 @@ _SYSTEM_PROMPT = """\
   - **同一命令的 no/show/clear/配置 是不同的 cli_command 各自提取**：`slb real http <rs>`、`no slb real http`、`show slb real http` 是三条命令，cli_syntax 各填完整签名，它们会自动归到同一节点
 - **decision_rule**: `condition`（触发条件）+ `decision`（结论/默认值/限制）**两边都必填**。如果原文没有明确"条件 → 结论"两段，**改用 behavior**。
 - **behavior**: 必填 `content`（一句话功能行为）。**注意：behavior 必须是某条 CLI 命令的行为说明**。如果内容是架构概念/设计术语/项目代号（如"Ustack 是 XX 堆栈的代号"），它**不是 CLI 命令也不是命令行为，不要提取为 fact**——产品知识树只收 CLI 命令及其相关事实，不收架构名词解释
-- **known_issue**: 必填 `issue_id`（BUG-XXXXX 格式）+ **必填 `issue_title`**。`issue_title` 直接照抄 `web_bug_search` 返回的 `title` 字段原文，**一字不改、不要概括、不要留空**。可选 `affected_versions`
+- **known_issue**: 必填 `issue_id`（BUG-XXXXX 格式）+ **必填 `issue_title`**。`issue_title` 直接照抄 `kb_bug_search` 返回的 `title` 字段原文，**一字不改、不要概括、不要留空**。可选 `affected_versions`
 
 ## evidence 字段（cli_command / decision_rule / behavior 必填，known_issue 不需要）
 
@@ -64,7 +64,7 @@ _SYSTEM_PROMPT = """\
 - `evidence_quote`: cli/rule/behavior 必填。**必须是 evidence_file 里的原文片段**，未经任何改写、合并、概括。merger 会用 grep 验证：如果 evidence_quote 在 evidence_file 里 grep 不到，整条 fact 会被丢弃
   - 取**最能直接证明这条事实的那段原文**，而不是任意能 grep 到的文字。对 cli_command，引命令定义/语法呈现的那一行（哪怕它在文档里是残缺形态）；对 decision_rule/behavior，引陈述该规则或行为的那句。不要用章节标题、泛泛的导语或不相关的旁支句来充数。
   - cli_syntax 与 evidence_quote 角色不同：cli_syntax 是你综合还原的完整签名，evidence_quote 是文档里支撑它的原始呈现，两者不必逐字相同。
-- **known_issue 类型不需要 evidence_file / evidence_quote**：有 issue_id 就够了。BUG 数据来自 web_bug_search API 而非磁盘文件，无需提供文件路径
+- **known_issue 类型不需要 evidence_file / evidence_quote**：有 issue_id 就够了。BUG 数据来自 kb_bug_search API 而非磁盘文件，无需提供文件路径
 - 对于 cli/rule/behavior：如果原文找不到对应字面证据，宁可不提取这条 fact，也不要为了凑结构化用自己的话改写
 
 注意：condition / decision / content 这三个字段可以是你的概括，但 evidence_quote 必须是引用原文。

@@ -1,4 +1,4 @@
-"""qa_ask_user 的 TUI 交互式问答会话。
+"""ask_user 的 TUI 交互式问答会话。
 
 把"渲染选项 + 键盘导航 + 提交答案"从 ist_app（已 2000 行）里拆出来，
 ist_app 只在 _handle_key 顶部拦截、把按键委托给本模块。
@@ -27,7 +27,7 @@ _OTHER_VALUE = "__other__"
 
 
 class AskUserSession:
-    """单次 qa_ask_user 调用的交互状态机。
+    """单次 ask_user 调用的交互状态机。
 
     一次调用可含 1-4 个问题，逐题导航。每题维护高亮 index + 已选集合。
     """

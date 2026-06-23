@@ -36,17 +36,17 @@ from main.ist_core.ink.parse_keypress import (
 
 
 _TOOL_SHORT_NAMES: dict[str, str] = {
-    "qa_deepagent_read_file": "Read",
-    "qa_deepagent_grep": "Grep",
-    "qa_deepagent_glob": "Glob",
-    "qa_deepagent_ls": "Ls",
-    "qa_deepagent_write_file": "Write",
-    "qa_deepagent_edit_file": "Edit",
-    "qa_bash": "Bash",
-    "qa_exec": "Exec",
-    "qa_invoke_skill": "Skill",
-    "qa_footprint_lookup": "Footprint",
-    "web_bug_search": "BugSearch",
+    "fs_read": "Read",
+    "fs_grep": "Grep",
+    "fs_glob": "Glob",
+    "fs_ls": "Ls",
+    "fs_write": "Write",
+    "fs_edit": "Edit",
+    "run_shell": "Bash",
+    "run_python": "Exec",
+    "invoke_skill": "Skill",
+    "kb_footprint": "Footprint",
+    "kb_bug_search": "BugSearch",
     "write_todos": "TodoWrite",
     "task": "Agent",
 }
@@ -59,7 +59,7 @@ def _tool_short_name(raw: str) -> str:
 def _is_known_fork_skill(skill_name: str) -> bool:
     """从 reducer 的 fork-skill 缓存查 skill 是不是 fork。
 
-    fork skill 的 qa_invoke_skill 调用显示为 Agent(<skill>)（对齐 task → Agent）。
+    fork skill 的 invoke_skill 调用显示为 Agent(<skill>)（对齐 task → Agent）。
     """
     try:
         from main.ist_core.tui.reducer import _get_fork_skill_names
@@ -82,27 +82,27 @@ def _tool_display_arg(name: str, args: dict) -> str:
     """工具特定参数摘要。"""
     if not args:
         return ""
-    if name in ("qa_deepagent_read_file", "qa_deepagent_write_file",
-                "qa_deepagent_edit_file", "qa_deepagent_ls"):
+    if name in ("fs_read", "fs_write",
+                "fs_edit", "fs_ls"):
         path = (args.get("file_path") or args.get("path")
                 or _extract_from_raw(args, "path")
                 or _extract_from_raw(args, "file_path"))
         if isinstance(path, str) and path:
             parts = path.replace("\\", "/").split("/")
             return "/".join(parts[-2:]) if len(parts) > 2 else path
-    if name == "qa_deepagent_grep":
+    if name == "fs_grep":
         pattern = (args.get("pattern") or args.get("query")
                    or _extract_from_raw(args, "pattern")
                    or _extract_from_raw(args, "query"))
         return str(pattern)[:60] if pattern else ""
-    if name == "qa_deepagent_glob":
+    if name == "fs_glob":
         pattern = args.get("pattern") or _extract_from_raw(args, "pattern")
         return str(pattern)[:60] if pattern else ""
-    if name in ("qa_bash", "qa_exec"):
+    if name in ("run_shell", "run_python"):
         cmd = args.get("command") or _extract_from_raw(args, "command") or ""
         cmd = str(cmd)
         return (cmd[:60] + "…") if len(cmd) > 60 else cmd
-    if name == "qa_invoke_skill":
+    if name == "invoke_skill":
         skill = args.get("skill") or _extract_from_raw(args, "skill") or ""
         return str(skill)[:40]
     first_val = next(iter(args.values()), "")
@@ -113,10 +113,10 @@ def _tool_display_arg(name: str, args: dict) -> str:
 
 def _tool_result_summary(name: str, output: str) -> list[str] | None:
     """工具特定结果摘要。返回 None = 通用截断；返回 list = 摘要替代。"""
-    if name == "qa_deepagent_read_file":
+    if name == "fs_read":
         n = output.count("\n") + (1 if output and not output.endswith("\n") else 0)
         return [f"Read \x1b[1m{n}\x1b[0m lines"]
-    if name == "qa_deepagent_glob":
+    if name == "fs_glob":
         matches = [l for l in output.split("\n") if l.strip()]
         if len(matches) <= 6:
             return matches or ["(no matches)"]
@@ -212,7 +212,7 @@ class IstInkApp:
         self._last_thinking_text: str = ""
         self._tool_output_blocks: list[dict] = []
         self._load_tui_config()
-        # qa_ask_user 交互式问答的活跃会话（None=非问答模式）
+        # ask_user 交互式问答的活跃会话（None=非问答模式）
         self._ask_user: Any = None
         
         
@@ -402,7 +402,7 @@ class IstInkApp:
         """Handle keyboard events."""
         import time as _time
 
-        # qa_ask_user 问答模式：拦截按键到会话（Other 文本输入态除外，
+        # ask_user 问答模式：拦截按键到会话（Other 文本输入态除外，
         # 那时放行给 PromptInput 收文本，enter/esc 在此处理提交/取消）。
         if getattr(self, "_ask_user", None) is not None:
             if self._ask_user.in_other_input:
@@ -1071,15 +1071,15 @@ class IstInkApp:
 
             if raw_name == "write_todos":
                 return
-            # qa_ask_user 的交互与结果完全由 ask_user 面板负责，
+            # ask_user 的交互与结果完全由 ask_user 面板负责，
             # 不渲染标准工具行（避免重复 + 暴露内部工具名/参数）。
-            if raw_name == "qa_ask_user":
+            if raw_name == "ask_user":
                 return
             args = dict(block.input) if block.input else {}
             display_name = _tool_short_name(raw_name)
             
             
-            if raw_name == "qa_invoke_skill":
+            if raw_name == "invoke_skill":
                 skill_name = args.get("skill") or _extract_from_raw(args, "skill") or ""
                 if skill_name and _is_known_fork_skill(skill_name):
                     display_name = "Agent"
@@ -1111,15 +1111,15 @@ class IstInkApp:
 
         elif block.type == BLOCK_TOOL_RESULT:
             self._ai_stream_idx = -1
-            # qa_ask_user 结果由 ask_user 面板的完成提示负责，跳过标准结果行
-            if (block.name or "") == "qa_ask_user":
+            # ask_user 结果由 ask_user 面板的完成提示负责，跳过标准结果行
+            if (block.name or "") == "ask_user":
                 return
             if block.output:
                 raw_name = block.name or ""
                 tuid = getattr(block, "tool_use_id", "") or ""
                 # fork skill (verifier) 完成：折叠为单行 Done
                 if (
-                    raw_name == "qa_invoke_skill"
+                    raw_name == "invoke_skill"
                     and "VERDICT:" in block.output
                     and "LEVEL:" in block.output
                 ):
@@ -1179,7 +1179,7 @@ class IstInkApp:
             )
 
     def _begin_ask_user(self, question_id: str, questions: list) -> None:
-        """进入 qa_ask_user 交互式问答模式（渲染到固定面板，不入 transcript）。"""
+        """进入 ask_user 交互式问答模式（渲染到固定面板，不入 transcript）。"""
         if not question_id or not questions:
             return
         from main.ist_core.ink.components.ask_user_view import AskUserSession

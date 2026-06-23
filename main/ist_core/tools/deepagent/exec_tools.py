@@ -1,4 +1,4 @@
-"""通用执行工具：qa_bash + qa_exec.
+"""通用执行工具：run_shell + run_python.
 
 Sandbox（
 
@@ -6,10 +6,10 @@ Sandbox（
   （
   反向解析；InfoTest_Engine 没有用户 ``cd`` 概念，直接选目标所在根）
 - 子进程 env 不透传 ``PYTHONPATH``，切断 ``import main.*`` 路径
-- ``qa_bash`` 路径参数走 ``_resolve_inside_root`` 多根校验，拒绝出沙箱
-- ``qa_bash`` 命令黑名单拦截网络外联 / 提权 / 破坏性文件操作
+- ``run_shell`` 路径参数走 ``_resolve_inside_root`` 多根校验，拒绝出沙箱
+- ``run_shell`` 命令黑名单拦截网络外联 / 提权 / 破坏性文件操作
 - 拒绝 shell 元字符（``|`` ``>`` ``<`` ``;`` ``&`` ``${`` ``$()`` 等）
-- ``qa_exec`` 仅拒绝网络外联（socket / urllib / requests / http / ftp / smtp）
+- ``run_python`` 仅拒绝网络外联（socket / urllib / requests / http / ftp / smtp）
 - 子进程超时（默认 30s，上限 120s）
 
 安全设计：不做通用代码内容过滤，
@@ -99,7 +99,7 @@ def _safe_env() -> dict[str, str]:
     显式不传 ``PYTHONPATH`` 与 ``PYTHONHOME``，切断 ``import main.*`` 的路径，
     强制子进程只能 import 三方包与标准库。
 
-    额外注入 ``IST_AGENT_ROOT`` / ``IST_WORKSPACE_ROOT`` 绝对路径，让 qa_exec
+    额外注入 ``IST_AGENT_ROOT`` / ``IST_WORKSPACE_ROOT`` 绝对路径，让 run_python
     子进程能用 ``os.environ['IST_WORKSPACE_ROOT']`` 跨根读取（如读
     ``workspace/inputs/<.xlsx>``），不依赖固定 cwd。仅暴露这两根（不暴露
     ``_PROJECT_ROOT``），避免放大可读路径攻击面。延迟读 ``file_tools``
@@ -271,7 +271,7 @@ def _format_summary_imports(code: str) -> str:
 
 
 @tool(parse_docstring=True)
-def qa_exec(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
+def run_python(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     """Run a Python snippet inside the agent sandbox for structured analysis.
 
     Sandbox: cwd locked to ``knowledge/data/``; child process env strips
@@ -290,7 +290,7 @@ def qa_exec(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     Use this for parsing xlsx via openpyxl, counting rows with
     ``collections.Counter``, summarising JSON, running subprocess for
     file conversion, etc. To read an arbitrary file prefer
-    ``qa_deepagent_read_file`` — this tool is for *analysis*, not
+    ``fs_read`` — this tool is for *analysis*, not
     file fetching.
 
     Boundaries:
@@ -326,7 +326,7 @@ def qa_exec(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
         stderr = _truncate_output(completed.stderr or "", label="stderr")
         hint = _format_summary_imports(code)
         body = (
-            f"=== qa_exec ===\n"
+            f"=== run_python ===\n"
             f"returncode={completed.returncode} elapsed_ms={elapsed_ms}\n"
         )
         if hint:
@@ -338,19 +338,19 @@ def qa_exec(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     except subprocess.TimeoutExpired:
         elapsed_ms = int((time.time() - started) * 1000)
         return (
-            f"=== qa_exec ===\n"
+            f"=== run_python ===\n"
             f"returncode=-1 elapsed_ms={elapsed_ms}\n"
             f"--- error ---\nTimeout after {timeout}s"
         )
     except Exception as exc:  # noqa: BLE001
-        return f"error: qa_exec subprocess failed: {exc}"
+        return f"error: run_python subprocess failed: {exc}"
 
 @tool(parse_docstring=True)
-def qa_bash(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
+def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     """Run a single shell command inside the agent sandbox.
 
     Sandbox: cwd locked to ``knowledge/data/``; path arguments validated via
-    the same white-list as ``qa_deepagent_*`` tools; network commands, privilege
+    the same white-list as ``fs_*`` tools; network commands, privilege
     escalation, and destructive file operations are denied; no shell metachars,
     no pipes, no redirects.
 
@@ -447,7 +447,7 @@ def qa_bash(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
         stdout = _truncate_output(completed.stdout or "", label="stdout")
         stderr = _truncate_output(completed.stderr or "", label="stderr")
         body = (
-            f"=== qa_bash ===\n"
+            f"=== run_shell ===\n"
             f"$ {command}\n"
             f"returncode={completed.returncode} elapsed_ms={elapsed_ms}\n"
             f"--- stdout ---\n" + stdout
@@ -458,13 +458,13 @@ def qa_bash(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     except subprocess.TimeoutExpired:
         elapsed_ms = int((time.time() - started) * 1000)
         return (
-            f"=== qa_bash ===\n"
+            f"=== run_shell ===\n"
             f"$ {command}\n"
             f"returncode=-1 elapsed_ms={elapsed_ms}\n"
             f"--- error ---\nTimeout after {timeout}s"
         )
     except Exception as exc:  # noqa: BLE001
-        return f"error: qa_bash subprocess failed: {exc}"
+        return f"error: run_shell subprocess failed: {exc}"
 
 
 
@@ -472,11 +472,11 @@ def qa_bash(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
 
 def get_exec_tools() -> Iterable:
     """Return the tools list for ``build_default_registry()`` integration."""
-    return [qa_exec, qa_bash]
+    return [run_python, run_shell]
 
 __all__ = [
-    "qa_exec",
-    "qa_bash",
+    "run_python",
+    "run_shell",
     "get_exec_tools",
     "_validate_bash_command",
     "_validate_bash_paths",

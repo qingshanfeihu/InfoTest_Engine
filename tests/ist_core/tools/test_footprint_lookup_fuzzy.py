@@ -1,4 +1,4 @@
-"""qa_footprint_lookup 查找/回退算法的行为契约。
+"""kb_footprint 查找/回退算法的行为契约。
 
 用**受控合成 footprint** 测，不碰生产知识库（生产数据随手册重解析漂移，
 硬编码其值会假红假绿）。每个节点的 feature_id / 命令都由测试自己定义。
@@ -47,7 +47,7 @@ def _make_index(tmp_path, monkeypatch, nodes: list[dict]) -> FootprintIndex:
 
 
 def _lookup(q: str) -> str:
-    return fl.qa_footprint_lookup.invoke({"command": q})
+    return fl.kb_footprint.invoke({"command": q})
 
 
 # A. 精确命中叶子 → 展开该节点，不触发回退

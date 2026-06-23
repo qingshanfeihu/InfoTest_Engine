@@ -31,14 +31,14 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import HumanMessage
 
 _SKILL_LISTING_TEMPLATE = """<system-reminder>
-The following skills are available for use with the qa_invoke_skill tool:
+The following skills are available for use with the invoke_skill tool:
 
 {skill_list}
 
 RULES (BLOCKING REQUIREMENT):
-- When a skill matches the user's request, your response MUST invoke that skill via qa_invoke_skill BEFORE doing anything else about the task. Pass the user's raw question/request as the brief — the skill handles all file reading, document lookup, generation, and on-device steps internally.
-- This applies at ANY point, not just the first tool_call: if you are about to read files / write scripts / call qa_exec / qa_bash / qa_emit_xlsx to do work that a listed skill covers, STOP and invoke the skill instead. Do NOT hand-roll what a skill already does.
-- NEVER mention or describe a skill without actually calling qa_invoke_skill.
+- When a skill matches the user's request, your response MUST invoke that skill via invoke_skill BEFORE doing anything else about the task. Pass the user's raw question/request as the brief — the skill handles all file reading, document lookup, generation, and on-device steps internally.
+- This applies at ANY point, not just the first tool_call: if you are about to read files / write scripts / call run_python / run_shell / compile_emit to do work that a listed skill covers, STOP and invoke the skill instead. Do NOT hand-roll what a skill already does.
+- NEVER mention or describe a skill without actually calling invoke_skill.
 - Only skip a skill if the task genuinely falls outside every skill's description, or the user explicitly said not to use one.
 </system-reminder>"""
 
@@ -139,11 +139,11 @@ def _parse_skill_frontmatter(skill_md_path: Path) -> dict[str, str] | None:
 def _skill_eligible_for_listing(meta: dict[str, str]) -> bool:
     """决定一个 skill 是否进**主 agent 的 listing**（模型每轮看到的清单）。
 
-    只过滤 disable-model-invocation: true（完全不可见，qa_invoke_skill 也拒）。
+    只过滤 disable-model-invocation: true（完全不可见，invoke_skill 也拒）。
 
     **user-invocable: false 仍进 listing**：这类是 fork 子流程（ist_compile_draft/grade、
     review-verification），由 inline 编排 skill（ist_compile / test-list-review）的
-    body 引导**主 agent** 经 qa_invoke_skill 派发——派发者就是主 agent 本身，故必须对模型可见，
+    body 引导**主 agent** 经 invoke_skill 派发——派发者就是主 agent 本身，故必须对模型可见，
     否则主 agent 按 body 指示调用时找不到。它们只是不进 TUI `/skill` 用户菜单（user-invocable
     语义由菜单层控制）。防"主 agent 越过编排器直调子流程"靠编排 skill 的 body 纪律 + prompt
     引导，不靠从 listing 隐藏（隐藏会连合法派发路径一起切断）。
@@ -155,7 +155,7 @@ def _skill_eligible_for_listing(meta: dict[str, str]) -> bool:
 
 
 def _load_skills_from_dir(skills_dir: Path) -> list[dict[str, str]]:
-    """扫 skills_dir/*/SKILL.md，仅返回可经 qa_invoke_skill 调用的 inline skill."""
+    """扫 skills_dir/*/SKILL.md，仅返回可经 invoke_skill 调用的 inline skill."""
     out: list[dict[str, str]] = []
     if not skills_dir.exists() or not skills_dir.is_dir():
         return out

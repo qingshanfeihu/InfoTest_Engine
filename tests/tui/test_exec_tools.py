@@ -1,10 +1,10 @@
-"""qa_bash / qa_exec 单测：黑名单 + 网络防护 + 沙箱越权回归 + subprocess 隔离。
+"""run_shell / run_python 单测：黑名单 + 网络防护 + 沙箱越权回归 + subprocess 隔离。
 
 不依赖网络。不调真 graph。验证：
 - ``_validate_bash_command``: 黑名单 + 元字符
 - ``_validate_bash_paths``: 路径参数 _resolve_inside_root 校验
 - ``_validate_python_code``: 网络逃逸拒绝
-- ``qa_exec`` / ``qa_bash`` 在合法输入时返回 stdout
+- ``run_python`` / ``run_shell`` 在合法输入时返回 stdout
 - ``cwd=_AGENT_ROOT`` 沙箱 + ``PYTHONPATH`` 切断
 - 超时保护
 """
@@ -20,8 +20,8 @@ from main.ist_core.tools.deepagent.exec_tools import (
     _validate_bash_command,
     _validate_bash_paths,
     _validate_python_code,
-    qa_bash,
-    qa_exec,
+    run_shell,
+    run_python,
 )
 
 
@@ -224,63 +224,63 @@ def test_python_empty_code_rejected():
 
 
 
-def test_qa_exec_runs_simple_print():
-    result = qa_exec.invoke({"code": "print('hello-tui')", "timeout": 10})
+def test_run_python_runs_simple_print():
+    result = run_python.invoke({"code": "print('hello-tui')", "timeout": 10})
     assert "returncode=0" in result
     assert "hello-tui" in result
 
 
-def test_qa_exec_returns_stdout_and_stderr_blocks():
+def test_run_python_returns_stdout_and_stderr_blocks():
     code = textwrap.dedent("""
         import sys
         print('stdout-line', flush=True)
         sys.stderr.write('stderr-line\\n')
         sys.stderr.flush()
     """).strip()
-    result = qa_exec.invoke({"code": code, "timeout": 10})
+    result = run_python.invoke({"code": code, "timeout": 10})
     assert "stdout-line" in result
     assert "stderr-line" in result
     assert "--- stderr ---" in result
 
 
-def test_qa_exec_propagates_nonzero_returncode():
+def test_run_python_propagates_nonzero_returncode():
     code = "import sys; sys.exit(7)"
-    result = qa_exec.invoke({"code": code, "timeout": 10})
+    result = run_python.invoke({"code": code, "timeout": 10})
     assert "returncode=7" in result
 
 
-def test_qa_exec_timeout_is_enforced():
+def test_run_python_timeout_is_enforced():
     code = textwrap.dedent("""
         import time
         time.sleep(5)
         print('should-not-reach')
     """).strip()
-    result = qa_exec.invoke({"code": code, "timeout": 1})
+    result = run_python.invoke({"code": code, "timeout": 1})
     assert "Timeout" in result
     assert "should-not-reach" not in result
 
 
-def test_qa_exec_allows_subprocess():
+def test_run_python_allows_subprocess():
     """subprocess 在沙箱内允许——安全靠 cwd + env 隔离。"""
-    result = qa_exec.invoke({"code": "import subprocess; print(subprocess.run(['echo', 'hi'], capture_output=True, text=True).stdout)", "timeout": 5})
+    result = run_python.invoke({"code": "import subprocess; print(subprocess.run(['echo', 'hi'], capture_output=True, text=True).stdout)", "timeout": 5})
     assert "returncode=0" in result
     assert "hi" in result
 
 
-def test_qa_exec_pythonpath_stripped_blocks_main_import():
-    """qa_exec 子进程 env 剥离 PYTHONPATH。
+def test_run_python_pythonpath_stripped_blocks_main_import():
+    """run_python 子进程 env 剥离 PYTHONPATH。
     注：editable install 下 import main 仍可能成功（site-packages 有 .pth），
     但生产部署（非 editable）时会失败。此测试仅验证不在 validate 阶段拒绝。"""
     code = "import main.ist_core.agents._prompt"
-    result = qa_exec.invoke({"code": code, "timeout": 10})
+    result = run_python.invoke({"code": code, "timeout": 10})
     
     assert not result.startswith("error:")
 
 
-def test_qa_exec_cwd_is_agent_root():
-    """qa_exec 子进程 cwd 必须是 ``knowledge/data/``。"""
+def test_run_python_cwd_is_agent_root():
+    """run_python 子进程 cwd 必须是 ``knowledge/data/``。"""
     code = "import os; print(os.getcwd())"
-    result = qa_exec.invoke({"code": code, "timeout": 10})
+    result = run_python.invoke({"code": code, "timeout": 10})
     assert "returncode=0" in result
     assert "knowledge/data" in result
 
@@ -290,51 +290,51 @@ def test_qa_exec_cwd_is_agent_root():
 
 
 
-def test_qa_bash_runs_echo():
-    result = qa_bash.invoke({"command": "echo hello-bash", "timeout": 5})
+def test_run_shell_runs_echo():
+    result = run_shell.invoke({"command": "echo hello-bash", "timeout": 5})
     assert "hello-bash" in result
     assert "returncode=0" in result
 
 
-def test_qa_bash_rejects_pipe():
-    result = qa_bash.invoke({"command": "echo hi | wc -l", "timeout": 5})
+def test_run_shell_rejects_pipe():
+    result = run_shell.invoke({"command": "echo hi | wc -l", "timeout": 5})
     assert result.startswith("error:")
 
 
-def test_qa_bash_rejects_rm():
-    result = qa_bash.invoke({"command": "rm -rf /tmp/foo", "timeout": 5})
+def test_run_shell_rejects_rm():
+    result = run_shell.invoke({"command": "rm -rf /tmp/foo", "timeout": 5})
     assert result.startswith("error:")
 
 
-def test_qa_bash_rejects_traversal_path_arg():
-    result = qa_bash.invoke({"command": "cat ../main/ist_core/agents/_prompt.py", "timeout": 5})
+def test_run_shell_rejects_traversal_path_arg():
+    result = run_shell.invoke({"command": "cat ../main/ist_core/agents/_prompt.py", "timeout": 5})
     assert result.startswith("error:")
     assert "traversal" in result.lower() or "rejected" in result.lower()
 
 
-def test_qa_bash_rejects_repo_root_platform_dir():
+def test_run_shell_rejects_repo_root_platform_dir():
     """``ls tests`` 必须被沙箱挡掉——这是用户实跑日志里看到的越权场景。"""
-    result = qa_bash.invoke({"command": "ls tests", "timeout": 5})
+    result = run_shell.invoke({"command": "ls tests", "timeout": 5})
     assert result.startswith("error:")
     assert "rejected" in result.lower()
 
 
-def test_qa_bash_rejects_platform_metadata_file():
+def test_run_shell_rejects_platform_metadata_file():
     """``cat pytest.ini`` / ``cat requirements.txt`` 必须拒——日志里漏掉的越权点。"""
     for cmd in ["cat pytest.ini", "cat requirements.txt", "cat ARCHITECTURE.md"]:
-        result = qa_bash.invoke({"command": cmd, "timeout": 5})
+        result = run_shell.invoke({"command": cmd, "timeout": 5})
         assert result.startswith("error:"), f"{cmd!r} should be rejected"
 
 
-def test_qa_bash_rejects_absolute_outside_sandbox():
-    result = qa_bash.invoke({"command": "cat /etc/passwd", "timeout": 5})
+def test_run_shell_rejects_absolute_outside_sandbox():
+    result = run_shell.invoke({"command": "cat /etc/passwd", "timeout": 5})
     assert result.startswith("error:")
 
 
-def test_qa_bash_cwd_is_agent_root(tmp_path, monkeypatch):
+def test_run_shell_cwd_is_agent_root(tmp_path, monkeypatch):
     """``ls .`` 必须看到 knowledge/data 内容，看不到 main/ tests/ 等仓库根目录。"""
     
-    result = qa_bash.invoke({"command": "ls .", "timeout": 5})
+    result = run_shell.invoke({"command": "ls .", "timeout": 5})
     assert "returncode=0" in result
     
     assert "main" not in result.split("--- stdout ---")[1].split("\n")[:5][0] if "--- stdout ---" in result else True
@@ -344,10 +344,10 @@ def test_get_exec_tools_returns_qa_pair():
     from main.ist_core.tools.deepagent.exec_tools import get_exec_tools
     tools = list(get_exec_tools())
     names = {t.name for t in tools}
-    assert names == {"qa_exec", "qa_bash"}
+    assert names == {"run_python", "run_shell"}
 
 
-def test_qa_exec_xlsx_parse_smoke(tmp_path, monkeypatch):
+def test_run_python_xlsx_parse_smoke(tmp_path, monkeypatch):
     """xlsx 解析必须能在沙箱内工作（业务核心场景）。
 
     把 xlsx 放到沙箱内（_AGENT_ROOT），用相对路径打开。
@@ -381,7 +381,7 @@ def test_qa_exec_xlsx_parse_smoke(tmp_path, monkeypatch):
         print('rows=', len(rows))
         print('types=', dict(types))
     """).strip()
-    result = qa_exec.invoke({"code": code, "timeout": 15})
+    result = run_python.invoke({"code": code, "timeout": 15})
     assert "returncode=0" in result, result
     assert "rows=" in result
     assert "Functional" in result

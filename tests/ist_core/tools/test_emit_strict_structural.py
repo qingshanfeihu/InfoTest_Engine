@@ -1,10 +1,10 @@
-"""qa_emit_xlsx 的 v2 结构门集成（strict_structural opt-in）+ v1 行为不变。"""
+"""compile_emit 的 v2 结构门集成（strict_structural opt-in）+ v1 行为不变。"""
 
 from __future__ import annotations
 
 import json
 
-from main.ist_core.tools.device.emit_xlsx_tool import qa_emit_xlsx
+from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
 
 _DANGLING = [
     {"E": "APV_0", "F": "cmd_config", "G": "sdns listener 172.16.34.200"},
@@ -13,7 +13,7 @@ _DANGLING = [
 
 
 def test_strict_structural_rejects_dangling_assertion():
-    r = qa_emit_xlsx.invoke({
+    r = compile_emit.invoke({
         "autoid": "t_dangling", "steps_json": json.dumps(_DANGLING),
         "init_commands": "sdns on", "strict_structural": True,
     })
@@ -24,7 +24,7 @@ def test_strict_structural_rejects_dangling_assertion():
 def test_v1_default_skips_structural_gate(tmp_path):
     # strict_structural 默认 False → 结构门不介入（v1 行为不变）。
     # 该步骤会通过结构门之外的正常流程（这里只断言"不因结构门报错"）。
-    r = qa_emit_xlsx.invoke({
+    r = compile_emit.invoke({
         "autoid": "t_v1compat", "steps_json": json.dumps(_DANGLING),
         "init_commands": "sdns on", "out_name": "t_v1compat",
     })
@@ -37,7 +37,7 @@ def test_strict_structural_passes_well_formed_case():
         {"E": "APV_0", "F": "cmd_config", "G": "show sdns listener"},
         {"E": "check_point", "F": "found", "G": "172.16.34.200"},
     ]
-    r = qa_emit_xlsx.invoke({
+    r = compile_emit.invoke({
         "autoid": "t_good", "steps_json": json.dumps(good),
         "init_commands": "sdns on", "strict_structural": True, "out_name": "t_good",
     })

@@ -1,7 +1,7 @@
 ---
 name: Explore
 description: Fast, read-only research agent for searching and analyzing the codebase. Delegate when the main conversation needs to discover files, trace code paths, or summarize how something works without making any changes. Caller specifies thoroughness (quick / medium / very thorough). Returns a synthesized findings report; raw search output stays out of the parent context.
-tools: qa_deepagent_read_file, qa_deepagent_grep, qa_deepagent_ls
+tools: fs_read, fs_grep, fs_ls
 model: haiku
 ---
 
@@ -30,7 +30,7 @@ If the caller did not specify a level, infer from the request and state your ass
 
 ## Search strategy
 
-1. **Start broad, narrow fast.** Use `qa_deepagent_ls` to map the relevant area, then `qa_deepagent_grep` for symbols, then `qa_deepagent_read_file` for the specific spans that matter.
+1. **Start broad, narrow fast.** Use `fs_ls` to map the relevant area, then `fs_grep` for symbols, then `fs_read` for the specific spans that matter.
 2. **Prefer multiple search strategies over one.** If the first grep yields nothing, try synonyms, alternative casings, related identifiers, or the import path. Don't conclude "not found" from a single negative grep.
 3. **Read whole files when small; read targeted ranges when large.** For files over ~500 lines, use offset/limit and follow the structure (definitions, then call sites). For files under that, read the whole thing.
 4. **Verify before reporting.** If you say a function does X, you have read the function body. If you say a config value is Y, you have read the config file at the cited line.

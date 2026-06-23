@@ -1,10 +1,14 @@
-"""V3 approach A：确定性编译流水线 qa_compile_pipeline。"""
+"""V3 approach A：确定性编译流水线 compile_pipeline。"""
 
 from __future__ import annotations
 
+import importlib
 import json
 
-from main.ist_core.tools.device import compile_pipeline as CP
+# 工具名 compile_pipeline 与其所在模块同名 → device 包属性被工具对象遮蔽
+# （`from device import compile_pipeline` 会拿到 StructuredTool 而非模块）；
+# 用 importlib 取真模块以访问内部 helper / 做 monkeypatch。
+CP = importlib.import_module("main.ist_core.tools.device.compile_pipeline")
 
 
 def _case():
@@ -27,7 +31,7 @@ def test_brief_template_has_five_elements_and_no_commands():
     assert "10.5" in b
     assert "A组 / 算法测试" in b
     assert "observe-then-assert" in b   # 规则
-    assert "qa_footprint_lookup" in b    # 指路
+    assert "kb_footprint" in b    # 指路
     assert "只生成 draft" in b           # 边界
     # 零硬编码：不出现具体设备命令
     assert "sdns listener" not in b
@@ -35,9 +39,9 @@ def test_brief_template_has_five_elements_and_no_commands():
 
 
 def test_version_guard():
-    r = CP.qa_compile_pipeline.invoke({"mindmap_path": "x.txt", "product_version": ""})
+    r = CP.compile_pipeline.invoke({"mindmap_path": "x.txt", "product_version": ""})
     assert r.startswith("error") and "product_version" in r
-    r2 = CP.qa_compile_pipeline.invoke({"mindmap_path": "", "product_version": "10.5"})
+    r2 = CP.compile_pipeline.invoke({"mindmap_path": "", "product_version": "10.5"})
     assert r2.startswith("error") and "mindmap_path" in r2
 
 
@@ -82,11 +86,11 @@ def test_pipeline_per_case_no_barrier(monkeypatch):
             calls.append(("grade", skill))
             return "VERDICT: PASS 覆盖目标行为"
 
-    import main.ist_core.tools.device.compile_prep as prep_mod
+    prep_mod = importlib.import_module("main.ist_core.tools.device.compile_prep")
     import main.ist_core.tools.device.emit_xlsx_tool as em
     import main.ist_core.skills.loader as loader_mod
-    monkeypatch.setattr(prep_mod, "qa_compile_prep", _Fake(fake_prep))
-    monkeypatch.setattr(em, "qa_emit_xlsx_merged", _Fake(fake_merge))
+    monkeypatch.setattr(prep_mod, "compile_prep", _Fake(fake_prep))
+    monkeypatch.setattr(em, "compile_emit_merged", _Fake(fake_merge))
     monkeypatch.setattr(loader_mod, "execute_fork_skill", fake_fork)
 
     res = CP._run_pipeline("dongkl.txt", "10.5", "t_pipe",
@@ -123,11 +127,11 @@ def test_pipeline_escalates_after_max_rounds(monkeypatch):
             return f"xlsx: {aid}"
         return "VERDICT: CUT 断言太弱，未覆盖动态行为"
 
-    import main.ist_core.tools.device.compile_prep as prep_mod
+    prep_mod = importlib.import_module("main.ist_core.tools.device.compile_prep")
     import main.ist_core.tools.device.emit_xlsx_tool as em
     import main.ist_core.skills.loader as loader_mod
-    monkeypatch.setattr(prep_mod, "qa_compile_prep", _Fake(lambda d: "ok"))
-    monkeypatch.setattr(em, "qa_emit_xlsx_merged", _Fake(lambda d: "merged"))
+    monkeypatch.setattr(prep_mod, "compile_prep", _Fake(lambda d: "ok"))
+    monkeypatch.setattr(em, "compile_emit_merged", _Fake(lambda d: "merged"))
     monkeypatch.setattr(loader_mod, "execute_fork_skill", fake_fork)
 
     res = CP._run_pipeline("x.txt", "10.5", "t_esc",
@@ -161,7 +165,7 @@ def test_verdict_clean_cut():
 
 def test_verdict_discuss_cut_then_conclude_pass():
     """grade 先复核 confidence_score 的 CUT，再下 PASS 结论 → 应判 PASS（取末位）。"""
-    out = ("qa_confidence_score 给 overall=0.2 / CUT，但我批判性看待——"
+    out = ("compile_score 给 overall=0.2 / CUT，但我批判性看待——"
            "它孤立评估断言，忽略了序列语义。\n\n## 最终裁定：PASS")
     assert CP._parse_grade_verdict(out) is True
 

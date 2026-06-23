@@ -29,7 +29,7 @@ def test_glob_uses_rg_shape_and_keeps_denied_dirs_out(tmp_path, monkeypatch):
     (tmp_path / ".venv").mkdir()
     (tmp_path / ".venv" / "hidden.py").write_text("print('hidden')\n", encoding="utf-8")
 
-    out = file_tools.qa_deepagent_glob.invoke({"pattern": "**/*.py", "max_results": 1})
+    out = file_tools.fs_glob.invoke({"pattern": "**/*.py", "max_results": 1})
 
     assert "pkg/" in out
     assert ".venv" not in out
@@ -45,20 +45,20 @@ def test_grep_supports_files_content_and_count_modes(tmp_path, monkeypatch):
     (tmp_path / ".venv").mkdir()
     (tmp_path / ".venv" / "secret.py").write_text("needle secret\n", encoding="utf-8")
 
-    files = file_tools.qa_deepagent_grep.invoke(
+    files = file_tools.fs_grep.invoke(
         {"pattern": "needle", "output_mode": "files_with_matches", "head_limit": 10}
     )
     assert "pkg/a.py" in files
     assert "pkg/b.txt" in files
     assert ".venv" not in files
 
-    content = file_tools.qa_deepagent_grep.invoke(
+    content = file_tools.fs_grep.invoke(
         {"pattern": "needle", "glob": "**/*.py", "output_mode": "content", "head_limit": 10}
     )
     assert "pkg/a.py:2:" in content
     assert "pkg/b.txt" not in content
 
-    counts = file_tools.qa_deepagent_grep.invoke(
+    counts = file_tools.fs_grep.invoke(
         {"pattern": "needle", "output_mode": "count", "head_limit": 10}
     )
     assert "pkg/a.py:1" in counts
@@ -74,7 +74,7 @@ def test_grep_falls_back_to_python_when_rg_unavailable(tmp_path, monkeypatch):
     )
     (agent_root / "a.py").write_text("needle\n", encoding="utf-8")
 
-    out = file_tools.qa_deepagent_grep.invoke({"pattern": "needle", "output_mode": "content"})
+    out = file_tools.fs_grep.invoke({"pattern": "needle", "output_mode": "content"})
 
     assert "a.py:1: needle" in out
 
@@ -85,7 +85,7 @@ def test_read_file_streams_line_range_for_large_files(tmp_path, monkeypatch):
     target = agent_root / "large.txt"
     target.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
 
-    out = file_tools.qa_deepagent_read_file.invoke({"path": "large.txt", "offset": 2, "limit": 2})
+    out = file_tools.fs_read.invoke({"path": "large.txt", "offset": 2, "limit": 2})
 
     assert "total_lines=5, offset=2, returned=2, next_offset=4" in out
     assert "3: three" in out
@@ -108,7 +108,7 @@ def test_ls_does_not_list_repo_root_platform_dirs(tmp_path, monkeypatch):
     (tmp_path / "tests").mkdir()
     (tmp_path / "scripts").mkdir()
 
-    out = file_tools.qa_deepagent_ls.invoke({"path": "."})
+    out = file_tools.fs_ls.invoke({"path": "."})
 
     assert "markdown/" in out
     assert "main/" not in out
@@ -125,7 +125,7 @@ def test_grep_cannot_reach_main_package(tmp_path, monkeypatch):
     (tmp_path / "main").mkdir()
     (tmp_path / "main" / "secret.py").write_text("__SECRET_NOT_FOR_AGENT__\n", encoding="utf-8")
 
-    out = file_tools.qa_deepagent_grep.invoke(
+    out = file_tools.fs_grep.invoke(
         {"pattern": "__SECRET_NOT_FOR_AGENT__", "path": ".", "output_mode": "content"}
     )
 
@@ -139,7 +139,7 @@ def test_read_file_rejects_path_outside_knowledge_data(tmp_path, monkeypatch):
     target = tmp_path / "main" / "secret.py"
     target.write_text("LEAKED\n", encoding="utf-8")
 
-    out = file_tools.qa_deepagent_read_file.invoke({"path": "main/secret.py"})
+    out = file_tools.fs_read.invoke({"path": "main/secret.py"})
 
     assert "platform-denied directory: main/" in out
     assert "LEAKED" not in out
@@ -148,7 +148,7 @@ def test_read_file_rejects_path_outside_knowledge_data(tmp_path, monkeypatch):
 def test_glob_pattern_cannot_traverse_up(tmp_path, monkeypatch):
     _setup_sandbox(tmp_path, monkeypatch)
 
-    out = file_tools.qa_deepagent_glob.invoke({"pattern": "../../**/*.py"})
+    out = file_tools.fs_glob.invoke({"pattern": "../../**/*.py"})
 
     assert "traversal not allowed" in out
 
@@ -156,7 +156,7 @@ def test_glob_pattern_cannot_traverse_up(tmp_path, monkeypatch):
 def test_absolute_path_outside_sandbox_rejected(tmp_path, monkeypatch):
     _setup_sandbox(tmp_path, monkeypatch)
 
-    out = file_tools.qa_deepagent_read_file.invoke({"path": "/etc/passwd"})
+    out = file_tools.fs_read.invoke({"path": "/etc/passwd"})
 
     assert "outside agent sandbox" in out or "platform-denied" in out
 
@@ -182,8 +182,8 @@ def test_platform_denylist_blocks_all_listed_dirs(tmp_path, monkeypatch, denied)
     (tmp_path / denied).mkdir()
     (tmp_path / denied / "leak.py").write_text("LEAK\n", encoding="utf-8")
 
-    ls_out = file_tools.qa_deepagent_ls.invoke({"path": denied})
-    read_out = file_tools.qa_deepagent_read_file.invoke({"path": f"{denied}/leak.py"})
+    ls_out = file_tools.fs_ls.invoke({"path": denied})
+    read_out = file_tools.fs_read.invoke({"path": f"{denied}/leak.py"})
 
     assert f"platform-denied directory: {denied}/" in ls_out
     assert f"platform-denied directory: {denied}/" in read_out
@@ -208,7 +208,7 @@ def test_platform_denylist_blocks_metadata_files(tmp_path, monkeypatch, filename
     target = tmp_path / filename
     target.write_text("PLATFORM_META\n", encoding="utf-8")
 
-    out = file_tools.qa_deepagent_read_file.invoke({"path": filename})
+    out = file_tools.fs_read.invoke({"path": filename})
 
     assert f"platform metadata file: {filename}" in out
     assert "PLATFORM_META" not in out

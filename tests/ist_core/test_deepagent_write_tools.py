@@ -1,4 +1,4 @@
-"""Tests for qa_deepagent_write_file and qa_deepagent_edit_file."""
+"""Tests for fs_write and fs_edit."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _setup_sandbox(tmp_path, monkeypatch):
 class TestWriteFile:
     def test_write_new_file(self, tmp_path, monkeypatch):
         _, workspace = _setup_sandbox(tmp_path, monkeypatch)
-        result = file_tools.qa_deepagent_write_file.invoke(
+        result = file_tools.fs_write.invoke(
             {"path": "bug1.md", "content": "# Bug 1\ndetails"}
         )
         assert "wrote" in result
@@ -39,7 +39,7 @@ class TestWriteFile:
     def test_write_refuses_overwrite_by_default(self, tmp_path, monkeypatch):
         _, workspace = _setup_sandbox(tmp_path, monkeypatch)
         (workspace / "outputs" / "existing.md").write_text("old")
-        result = file_tools.qa_deepagent_write_file.invoke(
+        result = file_tools.fs_write.invoke(
             {"path": "existing.md", "content": "new"}
         )
         assert "error" in result
@@ -49,7 +49,7 @@ class TestWriteFile:
     def test_write_overwrite_true(self, tmp_path, monkeypatch):
         _, workspace = _setup_sandbox(tmp_path, monkeypatch)
         (workspace / "outputs" / "existing.md").write_text("old")
-        result = file_tools.qa_deepagent_write_file.invoke(
+        result = file_tools.fs_write.invoke(
             {"path": "existing.md", "content": "new", "overwrite": True}
         )
         assert "wrote" in result
@@ -57,7 +57,7 @@ class TestWriteFile:
 
     def test_write_sandbox_traversal(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
-        result = file_tools.qa_deepagent_write_file.invoke(
+        result = file_tools.fs_write.invoke(
             {"path": "../main/evil.py", "content": "bad"}
         )
         assert "error" in result
@@ -65,7 +65,7 @@ class TestWriteFile:
 
     def test_write_non_writable_subdir(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
-        result = file_tools.qa_deepagent_write_file.invoke(
+        result = file_tools.fs_write.invoke(
             {"path": "workspace/inputs/test.txt", "content": "data"}
         )
         assert "error" in result
@@ -73,7 +73,7 @@ class TestWriteFile:
 
     def test_write_to_root_rejected(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
-        result = file_tools.qa_deepagent_write_file.invoke(
+        result = file_tools.fs_write.invoke(
             {"path": "workspace/root.md", "content": "bad"}
         )
         assert "error" in result
@@ -81,7 +81,7 @@ class TestWriteFile:
     def test_write_content_too_large(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
         big = "x" * (1024 * 1024 + 1)
-        result = file_tools.qa_deepagent_write_file.invoke(
+        result = file_tools.fs_write.invoke(
             {"path": "report.md", "content": big}
         )
         assert "error" in result
@@ -89,7 +89,7 @@ class TestWriteFile:
 
     def test_write_binary_suffix_rejected(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
-        result = file_tools.qa_deepagent_write_file.invoke(
+        result = file_tools.fs_write.invoke(
             {"path": "payload.exe", "content": "data"}
         )
         assert "error" in result
@@ -97,7 +97,7 @@ class TestWriteFile:
 
     def test_write_no_extension_rejected(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
-        result = file_tools.qa_deepagent_write_file.invoke(
+        result = file_tools.fs_write.invoke(
             {"path": "noext", "content": "data"}
         )
         assert "error" in result
@@ -105,7 +105,7 @@ class TestWriteFile:
 
     def test_write_parent_not_exist(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
-        result = file_tools.qa_deepagent_write_file.invoke(
+        result = file_tools.fs_write.invoke(
             {"path": "deep/nested/file.md", "content": "data"}
         )
         assert "wrote" in result
@@ -119,7 +119,7 @@ class TestEditFile:
     def test_edit_single_replacement(self, tmp_path, monkeypatch):
         _, workspace = _setup_sandbox(tmp_path, monkeypatch)
         (workspace / "outputs" / "bug.md").write_text("hello world")
-        result = file_tools.qa_deepagent_edit_file.invoke(
+        result = file_tools.fs_edit.invoke(
             {"path": "bug.md", "old_string": "hello", "new_string": "goodbye"}
         )
         assert "replaced 1" in result
@@ -128,7 +128,7 @@ class TestEditFile:
     def test_edit_replace_all(self, tmp_path, monkeypatch):
         _, workspace = _setup_sandbox(tmp_path, monkeypatch)
         (workspace / "outputs" / "doc.md").write_text("foo bar foo baz foo")
-        result = file_tools.qa_deepagent_edit_file.invoke({
+        result = file_tools.fs_edit.invoke({
             "path": "doc.md",
             "old_string": "foo",
             "new_string": "qux",
@@ -140,7 +140,7 @@ class TestEditFile:
     def test_edit_uniqueness_check(self, tmp_path, monkeypatch):
         _, workspace = _setup_sandbox(tmp_path, monkeypatch)
         (workspace / "outputs" / "dup.md").write_text("aaa bbb aaa")
-        result = file_tools.qa_deepagent_edit_file.invoke(
+        result = file_tools.fs_edit.invoke(
             {"path": "dup.md", "old_string": "aaa", "new_string": "ccc"}
         )
         assert "error" in result
@@ -150,7 +150,7 @@ class TestEditFile:
     def test_edit_not_found(self, tmp_path, monkeypatch):
         _, workspace = _setup_sandbox(tmp_path, monkeypatch)
         (workspace / "outputs" / "f.md").write_text("hello")
-        result = file_tools.qa_deepagent_edit_file.invoke(
+        result = file_tools.fs_edit.invoke(
             {"path": "f.md", "old_string": "xyz", "new_string": "abc"}
         )
         assert "error" in result
@@ -158,7 +158,7 @@ class TestEditFile:
 
     def test_edit_file_not_exist(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
-        result = file_tools.qa_deepagent_edit_file.invoke(
+        result = file_tools.fs_edit.invoke(
             {"path": "ghost.md", "old_string": "a", "new_string": "b"}
         )
         assert "error" in result
@@ -167,7 +167,7 @@ class TestEditFile:
     def test_edit_same_string_rejected(self, tmp_path, monkeypatch):
         _, workspace = _setup_sandbox(tmp_path, monkeypatch)
         (workspace / "outputs" / "f.md").write_text("hello")
-        result = file_tools.qa_deepagent_edit_file.invoke(
+        result = file_tools.fs_edit.invoke(
             {"path": "f.md", "old_string": "hello", "new_string": "hello"}
         )
         assert "error" in result
@@ -175,7 +175,7 @@ class TestEditFile:
 
     def test_edit_sandbox_denied(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
-        result = file_tools.qa_deepagent_edit_file.invoke(
+        result = file_tools.fs_edit.invoke(
             {"path": "workspace/inputs/doc.md", "old_string": "a", "new_string": "b"}
         )
         assert "error" in result
@@ -183,7 +183,7 @@ class TestEditFile:
 
     def test_edit_traversal_denied(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
-        result = file_tools.qa_deepagent_edit_file.invoke(
+        result = file_tools.fs_edit.invoke(
             {"path": "../main/x.py", "old_string": "a", "new_string": "b"}
         )
         assert "error" in result

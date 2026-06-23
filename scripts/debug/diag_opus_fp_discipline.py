@@ -11,13 +11,13 @@ from main.langchain_env import langchain_load_dotenv_if_present
 
 def main():
     langchain_load_dotenv_if_present()
-    from main.ist_core.tools.knowledge.footprint_lookup import qa_footprint_lookup
+    from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
     from main.ist_core.agents._llm import build_agent_chat_model, ist_core_tier_model
 
     fp = []
     for cmd in ["sdns on", "sdns host", "sdns pool", "sdns service ip", "sdns listener"]:
         try:
-            fp.append(qa_footprint_lookup.invoke({"command": cmd}))
+            fp.append(kb_footprint.invoke({"command": cmd}))
         except Exception as ex:
             fp.append(f"({cmd}: {ex})")
     fpctx = "\n\n".join(fp)[:6000]
@@ -51,17 +51,17 @@ def main():
               "host pool", "pool method", "rr", "listener"]:
         print(f"  {k}: " + ("有" if k in low else "缺!"))
 
-    from main.ist_core.tools.device.emit_xlsx_tool import qa_emit_xlsx
-    from main.ist_core.tools.device.run_case import qa_run_case
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
+    from main.ist_core.tools.device.run_case import dev_run_case
     lines = [l.strip() for l in cfg.split("\n") if l.strip() and l.strip().lower().startswith(("sdns", "no "))]
     steps = [{"E": "APV_0", "F": "cmds_config", "G": "\n".join(lines)},
              {"E": "APV_0", "F": "cmd_config", "G": "show sdns listener"},
              {"E": "check_point", "F": "found", "G": "172.16.34.70"},
              {"E": "test_env", "F": "routera", "G": "dig @172.16.34.70 autotest.com"},
              {"E": "check_point", "F": "found", "G": "172.16.35.231"}]
-    qa_emit_xlsx.invoke({"autoid": "888disc", "steps_json": json.dumps(steps),
+    compile_emit.invoke({"autoid": "888disc", "steps_json": json.dumps(steps),
                          "init_commands": "", "out_name": "opus_disc_test"})
-    o = qa_run_case.invoke({"xlsx_path": "workspace/outputs/opus_disc_test/case.xlsx", "autoid": "888disc"})
+    o = dev_run_case.invoke({"xlsx_path": "workspace/outputs/opus_disc_test/case.xlsx", "autoid": "888disc"})
     v = re.search(r"verdict: (\w+)", o)
     caus = [l.strip()[:90] for l in o.splitlines() if "Num" in l or "172.16.35.231" in l]
     print("\n=== 上机 verdict:", v.group(1) if v else "?", "===")

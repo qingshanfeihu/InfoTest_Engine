@@ -112,13 +112,13 @@ def test_record_main_activity_writes_jsonl(tmp_path, monkeypatch):
     log = tmp_path / "main_activity.jsonl"
     monkeypatch.setenv("IST_MAIN_ACTIVITY", "1")
     monkeypatch.setattr(R, "_MAIN_ACTIVITY_PATH", str(log))
-    R.record_main_activity("tool_start", tool_name="qa_compile_prep", detail="dongkl.txt")
-    R.record_main_activity("tool_end", tool_name="qa_compile_prep")
+    R.record_main_activity("tool_start", tool_name="compile_prep", detail="dongkl.txt")
+    R.record_main_activity("tool_end", tool_name="compile_prep")
     lines = log.read_text().strip().splitlines()
     assert len(lines) == 2
     r0 = json.loads(lines[0])
     assert r0["event"] == "tool_start"
-    assert r0["tool"] == "qa_compile_prep"
+    assert r0["tool"] == "compile_prep"
     assert "dongkl" in r0["detail"]
 
 
@@ -129,8 +129,8 @@ def test_record_main_activity_updates_heartbeat_note(tmp_path, monkeypatch):
     hb = R.Heartbeat(path=tmp_path / "hb.json", interval_s=10)
     R.set_active_heartbeat(hb)
     try:
-        R.record_main_activity("tool_start", tool_name="qa_cluster_intents")
-        assert hb._note == "tool=qa_cluster_intents"
+        R.record_main_activity("tool_start", tool_name="compile_pipeline")
+        assert hb._note == "tool=compile_pipeline"
     finally:
         R.set_active_heartbeat(None)
 

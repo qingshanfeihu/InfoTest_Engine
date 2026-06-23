@@ -3,12 +3,12 @@
 唯一用途:对照实验。生产默认 Arm-L(完整分层),本模块不改变任何默认行为。
 
 通过环境变量 `IST_ABLATION_ARM` 切换:
-  - 'L'(默认/缺省):完整分层流水线。qa_lookup_pattern 正常检索先例(G 段)、
-    qa_emit_xlsx 正常做可达性校验(E 段)、qa_confidence_score 正常判分(V 段质量门)。
+  - 'L'(默认/缺省):完整分层流水线。compile_precedent 正常检索先例(G 段)、
+    compile_emit 正常做可达性校验(E 段)、compile_score 正常判分(V 段质量门)。
   - 'E':基线裸生成。模拟"业界默认的 LLM 自由整写":
-    * G 段:qa_lookup_pattern 不返回先例(模拟无先例约束)
-    * E 段:qa_emit_xlsx 跳过可达性校验门(模拟无拓扑查表)
-    * V 段质量门:qa_confidence_score 直接放行(模拟无质量审批)
+    * G 段:compile_precedent 不返回先例(模拟无先例约束)
+    * E 段:compile_emit 跳过可达性校验门(模拟无拓扑查表)
+    * V 段质量门:compile_score 直接放行(模拟无质量审批)
 
 设计红线:
   - 默认 'L',任何非 'E' 取值都按 'L' 处理——生产永不受影响。

@@ -4,7 +4,7 @@
 `knowledge/framework/mirror_intent_index.json`（`{xlsx文件名: [intent_path,...]}`）。
 一个 xlsx 可对多意图。纯数据生成，不改任何代码逻辑。
 
-qa_lookup_pattern 的 intent 轴检索读这个索引：传了 intent 时，除 config Jaccard 外，
+compile_precedent 的 intent 轴检索读这个索引：传了 intent 时，除 config Jaccard 外，
 再算 intent 与该 xlsx 的 intent_path 文本相似度，让"没想好配啥命令但知道要测啥"也能检索到。
 
 用法：

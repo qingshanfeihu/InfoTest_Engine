@@ -1,4 +1,4 @@
-"""web_bug_search 全平台探测单元测试（无 Playwright）。"""
+"""kb_bug_search 全平台探测单元测试（无 Playwright）。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from main.ist_core.tools.knowledge import web_bug_search as wbs
+from main.ist_core.tools.knowledge import kb_bug_search as wbs
 
 
 def test_extract_numeric_id_variants():
@@ -25,9 +25,9 @@ def test_fetch_id_for_probe():
 
 
 def test_web_bug_search_invalid_input():
-    assert wbs.web_bug_search.invoke({"ticket_id": ""})["error_code"] == "invalid_input"
+    assert wbs.kb_bug_search.invoke({"ticket_id": ""})["error_code"] == "invalid_input"
     assert (
-        wbs.web_bug_search.invoke({"ticket_id": "abc"})["error_code"] == "invalid_input"
+        wbs.kb_bug_search.invoke({"ticket_id": "abc"})["error_code"] == "invalid_input"
     )
 
 
@@ -55,7 +55,7 @@ def test_web_bug_search_single_local_hit():
         }
 
     with patch.object(wbs, "_probe_one_backend", side_effect=fake_probe):
-        out = wbs.web_bug_search.invoke({"ticket_id": "100"})
+        out = wbs.kb_bug_search.invoke({"ticket_id": "100"})
 
     assert out["status"] == "ok"
     assert out["hits_count"] == 1
@@ -92,7 +92,7 @@ def test_web_bug_search_multi_platform_hits():
         }
 
     with patch.object(wbs, "_probe_one_backend", side_effect=fake_probe):
-        out = wbs.web_bug_search.invoke({"ticket_id": "200"})
+        out = wbs.kb_bug_search.invoke({"ticket_id": "200"})
 
     assert out["status"] == "ok"
     assert out["multi_platform"] is True
@@ -112,7 +112,7 @@ def test_web_bug_search_all_miss():
         }
 
     with patch.object(wbs, "_probe_one_backend", side_effect=fake_probe):
-        out = wbs.web_bug_search.invoke({"ticket_id": "99999"})
+        out = wbs.kb_bug_search.invoke({"ticket_id": "99999"})
 
     assert out["status"] == "error"
     assert out["error_code"] == "not_found"

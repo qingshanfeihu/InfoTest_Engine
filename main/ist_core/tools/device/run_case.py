@@ -1,12 +1,12 @@
-"""qa_run_case tool: 把一个 case.xlsx 下发到跳转机 pytest 框架并上机运行,回 pass/fail + 日志。
+"""dev_run_case tool: 把一个 case.xlsx 下发到跳转机 pytest 框架并上机运行,回 pass/fail + 日志。
 
 这是 agent 调查循环的"上机验证"一手——agent 合成/改写一个 case 后,用本工具真机跑一次,
 拿 pass/fail(设备说了算,非 agent 自评)+ 失败日志尾,据此诊断、改方案、重跑。
 
-与 qa_ssh 的区别:
-- qa_ssh = 直连 APV 设备发**单条 CLI**,看一条命令的回显(细粒度探查)。
-- qa_run_case = 把**整个 case.xlsx** 交框架跑完整流程(deliver→run→MySQL 取 result),
-  拿这个 case 的整体裁决。agent 通常先 qa_ssh 探命令语法,再 qa_run_case 验整 case。
+与 dev_ssh 的区别:
+- dev_ssh = 直连 APV 设备发**单条 CLI**,看一条命令的回显(细粒度探查)。
+- dev_run_case = 把**整个 case.xlsx** 交框架跑完整流程(deliver→run→MySQL 取 result),
+  拿这个 case 的整体裁决。agent 通常先 dev_ssh 探命令语法,再 dev_run_case 验整 case。
 
 凭据:跳转机 SSH 口令从 env IST_JUMPHOST_PASS / JUMPHOST_PASS 取(device_mcp_client 内部),
 不落盘不回显。复用 case_compiler.device_mcp_client.FrameworkMCPClient(单一事实源,不重造)。
@@ -27,7 +27,7 @@ _MAX_MAX_S = 1200
 
 
 @tool(parse_docstring=True)
-def qa_run_case(
+def dev_run_case(
     xlsx_path: str,
     autoid: str,
     module: str = "",
@@ -41,9 +41,9 @@ def qa_run_case(
     用例描述错/手册描述错),改方案再跑,直到 pass 或确诊为产品缺陷。
 
     **何时用**:你已经产出/改好一个 case.xlsx,要知道它在真机上到底过不过。
-    **何时不用**:只想看一条 CLI 命令的回显或语法对不对 → 用 qa_ssh(更快,单命令)。
+    **何时不用**:只想看一条 CLI 命令的回显或语法对不对 → 用 dev_ssh(更快,单命令)。
     **前置**:断言期望值要先有出处(作者意图/已声明资源/框架先例),别凭空编;CLI 语法
-    拿不准先 grep ``knowledge/data/markdown/product/*cli__part*.md`` 或 qa_ssh 探一下。
+    拿不准先 grep ``knowledge/data/markdown/product/*cli__part*.md`` 或 dev_ssh 探一下。
 
     框架流程(本工具内部完成,你只看结果):
     1. deliver:把 xlsx 落到跳转机 staging 目录(框架自动 xlsx→python)。
@@ -86,7 +86,7 @@ def qa_run_case(
     if p is None or not Path(p).is_file():
         return (f"error: xlsx 不存在: {xlsx_path}(已试 agent 沙箱多根解析 + "
                 f"knowledge/data 重定向均未命中;确认你 write_file 的真实落盘路径,"
-                f"用 qa_deepagent_ls 看一下)")
+                f"用 fs_ls 看一下)")
     p = Path(p)
     autoid = (autoid or "").strip()
     if not autoid:
@@ -117,16 +117,16 @@ def qa_run_case(
         with FrameworkMCPClient() as client:
             dres = client.deliver(module, autoid, str(p))
             if dres.get("error"):
-                return (f"=== qa_run_case ===\nautoid={autoid}\nverdict: error\n"
+                return (f"=== dev_run_case ===\nautoid={autoid}\nverdict: error\n"
                         f"--- deliver 失败 ---\n{dres.get('error')}")
             run = client.run_and_wait(module, autoid, build, [autoid], max_s=max_s)
             if run.get("busy") or run.get("error") == "device_busy":
                 # 设备正在验证上一个用例——显式 verdict=busy + 正在跑的 autoid/已跑时长，
                 # 让 agent 知道环境忙(而非编译错)，自行决定等待/稍后重试/上报。
-                return (f"=== qa_run_case ===\nautoid={autoid}\nverdict: busy\n"
+                return (f"=== dev_run_case ===\nautoid={autoid}\nverdict: busy\n"
                         f"--- 环境忙 ---\n{run.get('message') or '正在验证上一个用例'}")
             if run.get("error"):
-                return (f"=== qa_run_case ===\nautoid={autoid}\nverdict: error\n"
+                return (f"=== dev_run_case ===\nautoid={autoid}\nverdict: error\n"
                         f"--- 提交/运行失败 ---\n{run.get('error')}")
             verdict = (run.get("results") or {}).get(autoid) or run.get("result") or "unknown"
             task_id = run.get("task_id", "")
@@ -159,7 +159,7 @@ def qa_run_case(
                        "或者根本没有有效的 check_point。看下面执行明细定位卡在哪一步。)")
 
     return (
-        f"=== qa_run_case ===\n"
+        f"=== dev_run_case ===\n"
         f"autoid={autoid}  module={module}  build={build}\n"
         f"verdict: {verdict}\n"
         f"task_id: {task_id}\n"
@@ -179,16 +179,16 @@ def qa_run_case(
 
 
 @tool(parse_docstring=True)
-def qa_probe_show(command: str) -> str:
+def dev_probe(command: str) -> str:
     """经跳转机在被测 APV 设备上跑**单条只读 show/get 命令**,取真实设备回显。
 
     **本测试床网络拓扑(关键)**:APV 被测设备只能经跳转机访问,你本地/直连
-    (qa_ssh / qa_restapi 直打 APV IP)**不通**——那不是设备掉线,是拓扑使然。
+    (dev_ssh / dev_rest 直打 APV IP)**不通**——那不是设备掉线,是拓扑使然。
     要看设备上某条命令的真实回显(探查配置生效没、show 输出长什么样、确认命令语法),
-    用本工具(它经跳转机到设备),不要用 qa_ssh 直连 APV。
+    用本工具(它经跳转机到设备),不要用 dev_ssh 直连 APV。
 
     限制:硬白名单,首 token 必须是 show 或 get(只读探针,不改设备状态)。
-    要改配置 + 跑断言看 pass/fail → 用 qa_run_case(整 case 上机)。
+    要改配置 + 跑断言看 pass/fail → 用 dev_run_case(整 case 上机)。
 
     **关键策略——把"难直接断言的动态行为"转成"可文本查找的稳定输出"**:
     当某行为用断言难以直接表达(运行时才知道的动态值、时序行为、跨步骤状态变化,
@@ -215,7 +215,7 @@ def qa_probe_show(command: str) -> str:
         return "error: empty command"
     first = cmd.split()[0].lower() if cmd.split() else ""
     if first not in ("show", "get"):
-        return f"error: probe 只允许 show/get 开头的只读命令,收到 {first!r}。改配置请用 qa_run_case 整 case 上机。"
+        return f"error: probe 只允许 show/get 开头的只读命令,收到 {first!r}。改配置请用 dev_run_case 整 case 上机。"
 
     try:
         from main.case_compiler.device_mcp_client import FrameworkMCPClient
@@ -237,10 +237,10 @@ def qa_probe_show(command: str) -> str:
         return f"error: 设备探针异常: {exc}"
 
     if isinstance(res, dict) and res.get("error"):
-        return f"=== qa_probe_show ===\ncommand: {cmd}\nstatus: error\n{res.get('error')}"
+        return f"=== dev_probe ===\ncommand: {cmd}\nstatus: error\n{res.get('error')}"
     output = res.get("output") if isinstance(res, dict) else res
     return (
-        f"=== qa_probe_show ===\n"
+        f"=== dev_probe ===\n"
         f"command: {cmd}\n"
         f"--- 设备回显(经跳转机)---\n"
         f"{output if output else '(无输出)'}"

@@ -1,5 +1,5 @@
 """直连跳转机框架跑合并后的 yzg excel——不走 ist-core agent,自己调 FrameworkMCPClient。
-照搬 qa_run_batch 的串行 deliver+run_and_wait 逻辑,采集每个 case 的框架真实裁决。
+照搬 dev_run_batch 的串行 deliver+run_and_wait 逻辑,采集每个 case 的框架真实裁决。
 """
 import json
 import re

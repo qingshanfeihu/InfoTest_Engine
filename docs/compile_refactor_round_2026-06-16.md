@@ -14,7 +14,7 @@
 通过解 `ist_core.sqlite` checkpoint + stream 日志，实证了原架构的失败链（详见 `memory/compile-3txt-run-observation.md`）：
 
 1. **入口选错**：`infotest -p "把3个txt转excel"` 时，主 agent 命中 `ist_compile_orchestrate`（单条编排器）的触发词 `txt转excel/脑图转excel` 即停（#1 reasoning_content 逐字为证），没比对 `ist_compile_batch`。两个 skill 触发词高度重叠，batch 是 orchestrate 的子集。
-2. **单条编排器被喂批量**：`qa_invoke_skill(ist_compile_draft, brief="将dongkl的34个用例编译成excel")`。
+2. **单条编排器被喂批量**：`invoke_skill(ist_compile_draft, brief="将dongkl的34个用例编译成excel")`。
 3. **draft 硬扛 34 条**：单步 reasoning 2.8 万字符，context 从 2万涨到 7.6万 token。
 4. **产物粒度全错**：33 个独立 `<autoid>/case.xlsx`，用户要 3 个脑图级 excel。
 5. **后续暴露**：即使入口修对走 batch，原"双绿才 merged"设计把"上机通过"当成"进 excel"硬前置 → 环境瞬态 fail（SSH/dig/DNS）→ 大批 case escalated → 出不了 excel。
@@ -31,7 +31,7 @@
 ### 编译/上机解耦
 - `ist_compile_batch/SKILL.md`：流程改 `prep→fanout-draft→fanout-grade(审批)→grade-PASS即merged出excel`，run 移出编译链；判定改 grade-PASS 即交付（不再要求上机 pass）；第4步明确"部分PASS部分CUT是常态、自主决策不问用户"（修非交互 ask_user 空转）
 - `main/ist_core/skills/ist_compile_grade/SKILL.md` + `main/ist_core/agents/ist-compile-grade.md`：device verdict 改可选输入，支持无上机静态断言审批
-- **新增** `main/ist_core/skills/ist_verify/SKILL.md`：独立 inline+user-invocable skill，对成品 excel 用 `qa_run_batch` 串行上机、采集真实裁决、区分"真实断言失败"vs"环境瞬态失败"；末尾 ask_user 闭环（修复失败回流重编译）
+- **新增** `main/ist_core/skills/ist_verify/SKILL.md`：独立 inline+user-invocable skill，对成品 excel 用 `dev_run_batch` 串行上机、采集真实裁决、区分"真实断言失败"vs"环境瞬态失败"；末尾 ask_user 闭环（修复失败回流重编译）
 - `_prompt.py` + `_LISTING_PRIORITY`：加 ist_verify 引导；batch 触发词移除"上机验证"（归 ist_verify，消除新触发词冲突）
 
 ### 可观测性
@@ -58,13 +58,13 @@
 ## 四、端到端实证数据
 
 ### 4.1 入口修复验证（stream 直接证据）
-两次运行首个 tool_call 均 `qa_invoke_skill(ist_compile_batch)` → `qa_compile_prep` → 产出 `dongkl/yzg/zhaiyq` 三脑图 manifest（113 case，零命令契约：init_commands/steps 全 null）。**原"选错入口→碎文件"根因已修**。
+两次运行首个 tool_call 均 `invoke_skill(ist_compile_batch)` → `compile_prep` → 产出 `dongkl/yzg/zhaiyq` 三脑图 manifest（113 case，零命令契约：init_commands/steps 全 null）。**原"选错入口→碎文件"根因已修**。
 
 ### 4.2 解耦验证（编译链不上机）
-yzg 解耦跑：全程 `run` 类调用（qa_run_case/qa_run_batch/ist_compile_run）= **0**，draft fanout 26/26 全产出，grade 26 审批。编译链确实不被上机阻塞。
+yzg 解耦跑：全程 `run` 类调用（dev_run_case/dev_run_batch/ist_compile_run）= **0**，draft fanout 26/26 全产出，grade 26 审批。编译链确实不被上机阻塞。
 
 ### 4.3 合并 + 框架直跑（不走 ist-core）
-- **合并**：`qa_emit_xlsx_merged.func` 把 26 draft 合并 → `workspace/outputs/yzg/case.xlsx`（26 case + 哨兵，65 check_point，round-trip 过）
+- **合并**：`compile_emit_merged.func` 把 26 draft 合并 → `workspace/outputs/yzg/case.xlsx`（26 case + 哨兵，65 check_point，round-trip 过）
 - **正确跑法实跑**（deliver 1次+run 1次）：框架 state=done，但**只跑前 4 个 case 就整包中断**：655154/173/188 fail（各 S=2 F=2），655203 崩（TypeError），后 22 个 no_log
 - **655203 崩溃根因（实证）**：`check_point found "sdns on"` 紧跟无回显的配置命令 → `lib/check_point.py:24 regexp.search(None)` TypeError → **中断整包后续**
 - **3 个 fail 模式**：`successed to find sdns listener`（配置断言过）+ `fail to find 172.16.35.231`（dig 无有效响应，172.16.35.231 经核实是框架真实后端 IP，非臆造）

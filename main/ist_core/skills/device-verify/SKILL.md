@@ -9,13 +9,13 @@ when_to_use: |
   Trigger phrases: 上机, SSH执行, 设备验证, 下发配置, 跑命令, 确认生效, 实测
   SKIP when: 设备不可达且用户不愿手动执行。
 allowed-tools:
-  - qa_deepagent_read_file
-  - qa_deepagent_grep(knowledge/data/markdown/product/*)
-  - qa_deepagent_ls
-  - qa_exec
-  - qa_bash
-  - qa_ssh
-  - qa_restapi
+  - fs_read
+  - fs_grep(knowledge/data/markdown/product/*)
+  - fs_ls
+  - run_python
+  - run_shell
+  - dev_ssh
+  - dev_rest
 effort: medium
 ---
 
@@ -27,16 +27,16 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 - 待执行/验证的命令列表
 - 目标设备 IP（可从 `knowledge/data/auto_env/network_topology_rag.md` 获取）
-- SSH 凭据（默认 admin/admin，未提供时 qa_ask_user 询问）
+- SSH 凭据（默认 admin/admin，未提供时 ask_user 询问）
 
 ## Principles
 
-- **执行优先用 qa_restapi 而非 qa_ssh**：REST API 比 SSH 快得多（单次 HTTP 调用 vs shell 交互），且无需 enable/config 模式。SSH 仅作为 REST API 不可用时的降级方案
+- **执行优先用 dev_rest 而非 dev_ssh**：REST API 比 SSH 快得多（单次 HTTP 调用 vs shell 交互），且无需 enable/config 模式。SSH 仅作为 REST API 不可用时的降级方案
 - **高危命令一律拒绝**，不准下发，不准静默跳过（详见下方黑名单）
 - **CLI 手册优先于设备试错**：任何命令（含 show）必须先 grep `knowledge/data/markdown/product/*cli__part*.md` 或 `cli_74__part*.md` 查语法。严禁在设备上用错误命令试探——设备不是命令发现工具，手册才是唯一权威
 - **禁止假设命令名**：设备运行 InfosecOS，不是 Cisco IOS。不要用 `show ip interface brief`、`show vlan`、`show interface` 等 Cisco 风格命令名，必须从 CLI 手册中查找 InfosecOS 的正确命令
 - 配置下发时，前一条失败不准继续执行后续命令
-- SSH 凭据不准硬编码，用 qa_ask_user 或环境变量获取
+- SSH 凭据不准硬编码，用 ask_user 或环境变量获取
 - 连接超时/失败最多重试 3 次，超过标注「设备不可达」
 - SSH 执行模板见 `main/ist_core/skills/device-verify/reference/ssh_template.md`，封装实现见 `main/ist_core/skills/device-verify/scripts/apv_ssh_client.py`
 
@@ -60,7 +60,7 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 **Execution**: Direct
 
-判定场景（只读验证 vs 配置下发）。从 `knowledge/data/auto_env/network_topology_rag.md` 确定目标设备 IP（APV0: 172.16.34.70 / APV1: 172.16.34.71 等）。未提供凭据时 qa_ask_user。
+判定场景（只读验证 vs 配置下发）。从 `knowledge/data/auto_env/network_topology_rag.md` 确定目标设备 IP（APV0: 172.16.34.70 / APV1: 172.16.34.71 等）。未提供凭据时 ask_user。
 
 **Success criteria**: 场景判定明确 + 目标设备 IP + 凭据就绪
 **Artifacts**: scenario, target_device_ip
@@ -69,7 +69,7 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 **Execution**: Direct
 
-对每条待下发命令，对照黑名单逐条检查。命中黑名单 → 拒绝并说明原因。命中白名单 → 通过。不确定 → qa_ask_user 确认。
+对每条待下发命令，对照黑名单逐条检查。命中黑名单 → 拒绝并说明原因。命中白名单 → 通过。不确定 → ask_user 确认。
 
 **Rules**: 即使配置中包含高危命令也必须拒绝，不可静默跳过
 **Success criteria**: 每条命令标记 safe/blocked/uncertain
@@ -105,13 +105,13 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 ### 4. 执行命令
 
-**Execution**: Direct（qa_restapi 优先 → qa_ssh 降级）或 [human]（qa_ask_user 手动）
+**Execution**: Direct（dev_rest 优先 → dev_ssh 降级）或 [human]（ask_user 手动）
 
-**优先级**：`qa_restapi` > `qa_ssh` > 手动执行
+**优先级**：`dev_rest` > `dev_ssh` > 手动执行
 
-1. **首选 `qa_restapi`**：REST API 最快（单次 HTTP round-trip），无 SSH 握手开销，支持 `\n` 交互式命令。show 和 config 命令统一 POST 即可，无需区分模式
-2. **降级 `qa_ssh`**：REST API 不可用（连接失败/401/设备不支持）时使用 SSH
-3. **兜底人工**：以上都不可用时 qa_ask_user 请用户手动执行，参考 `main/ist_core/skills/device-verify/reference/ssh_template.md`
+1. **首选 `dev_rest`**：REST API 最快（单次 HTTP round-trip），无 SSH 握手开销，支持 `\n` 交互式命令。show 和 config 命令统一 POST 即可，无需区分模式
+2. **降级 `dev_ssh`**：REST API 不可用（连接失败/401/设备不支持）时使用 SSH
+3. **兜底人工**：以上都不可用时 ask_user 请用户手动执行，参考 `main/ist_core/skills/device-verify/reference/ssh_template.md`
 
 **Human checkpoint**: 配置下发前，确认用户已知晓将修改设备配置（列出目标设备 + 待下发命令清单）
 

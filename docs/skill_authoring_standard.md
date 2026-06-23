@@ -70,11 +70,11 @@ arguments:                                    # 可选，参数列表
 | --- | --- | --- |
 | `name` | YES | kebab-case，与目录名一致 |
 | `description` | YES | 一句话；**首句含用户会用的词**（如"脑图/txt/excel/编译"）放在前 ~60 字符；≤**250 字符**（超出在 listing 被截断）；设计动机/防御说明移到 body，不占 description 预算 |
-| `allowed-tools` | YES | 列表语法；工具名后可加 path 模式限制（如 `qa_deepagent_grep(qa/*)`） |
+| `allowed-tools` | YES | 列表语法；工具名后可加 path 模式限制（如 `fs_grep(qa/*)`） |
 | `when_to_use` | YES | 四行格式：`Use when ...` + `Examples: ...` + `Trigger keywords: ...`（行首独立）+ `SKIP when: ...` |
-| `context` | NO | `inline`（默认，注入主对话）或 `fork`（独立 subagent，经 `qa_invoke_skill` 派发） |
-| `user-invocable` | NO | `true`（默认，进 TUI `/skill` 用户菜单）或 `false`（fork 子流程，不进用户菜单）。**注意：`false` 仍进主 agent 的 model listing**——fork 子流程由 inline 编排 skill 的 body 引导主 agent 经 `qa_invoke_skill` 派发，派发者是主 agent，必须对模型可见 |
-| `disable-model-invocation` | NO | `true` 时 `qa_invoke_skill` 直接 ERROR 拒绝该 skill（主 agent 与编排 skill 都调不动）。**这是 model listing 的唯一过滤条件**。慎用：会切断所有派发路径 |
+| `context` | NO | `inline`（默认，注入主对话）或 `fork`（独立 subagent，经 `invoke_skill` 派发） |
+| `user-invocable` | NO | `true`（默认，进 TUI `/skill` 用户菜单）或 `false`（fork 子流程，不进用户菜单）。**注意：`false` 仍进主 agent 的 model listing**——fork 子流程由 inline 编排 skill 的 body 引导主 agent 经 `invoke_skill` 派发，派发者是主 agent，必须对模型可见 |
+| `disable-model-invocation` | NO | `true` 时 `invoke_skill` 直接 ERROR 拒绝该 skill（主 agent 与编排 skill 都调不动）。**这是 model listing 的唯一过滤条件**。慎用：会切断所有派发路径 |
 | `argument-hint` / `arguments` | NO | 仅在 skill 接受用户参数时用 |
 
 `when_to_use` 是 **CRITICAL** 字段——决定 LLM 何时自动触发这个 skill。
@@ -130,7 +130,7 @@ arguments:                                    # 可选，参数列表
 每轮对话开始时，`PerTurnSkillReminderMiddleware` 把已注册 skill 列表注入为 `<system-reminder>`：
 
 ```text
-The following skills are available for use with the qa_invoke_skill tool:
+The following skills are available for use with the invoke_skill tool:
 
 - **<skill-name>**: <description>
   _When to use_: <when_to_use 完整内容含 SKIP>
@@ -138,15 +138,15 @@ The following skills are available for use with the qa_invoke_skill tool:
   _When to use_: ...
 
 When a skill's description matches the user's current request, this is a 
-BLOCKING REQUIREMENT: invoke the relevant qa_invoke_skill tool BEFORE 
+BLOCKING REQUIREMENT: invoke the relevant invoke_skill tool BEFORE 
 generating any other response or calling any other tool about the task.
 ```
 
-LLM 拿到用户请求 → 比对 skill description / when_to_use → 命中则调 `qa_invoke_skill(skill="...")`。
+LLM 拿到用户请求 → 比对 skill description / when_to_use → 命中则调 `invoke_skill(skill="...")`。
 
 ### 5.2 SKILL.md 内容注入
 
-`qa_invoke_skill` 工具被调用时，返回 SKILL.md 完整内容（含 reference 文件路径列表）作为 ToolMessage。LLM 拿到后**严格按 Steps 顺序执行**。
+`invoke_skill` 工具被调用时，返回 SKILL.md 完整内容（含 reference 文件路径列表）作为 ToolMessage。LLM 拿到后**严格按 Steps 顺序执行**。
 
 ### 5.3 Subagent 调用（评审 / 验证类 skill 专用）
 
@@ -184,14 +184,14 @@ should see.
 
 - Skill：`kebab-case`（如 `test-case-review`）
 - Subagent：`kebab-case`（如 `review-verification`、`explore`）
-- Tool：`snake_case`（如 `qa_deepagent_grep`、`qa_invoke_skill`）
+- Tool：`snake_case`（如 `fs_grep`、`invoke_skill`）
 
 ### 工具白名单 path 模式
 
 ```yaml
 allowed-tools:
-  - qa_deepagent_grep                                # 通用，无路径限制
-  - qa_deepagent_grep(knowledge/data/markdown/qa/*)  # 限定到 qa/ 桶
+  - fs_grep                                # 通用，无路径限制
+  - fs_grep(knowledge/data/markdown/qa/*)  # 限定到 qa/ 桶
   - task(review-verification)                        # 限定调指定 subagent
 ```
 

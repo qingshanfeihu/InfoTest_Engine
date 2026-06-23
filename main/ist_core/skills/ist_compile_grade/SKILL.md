@@ -10,8 +10,8 @@ user-invocable: false
 
 评估下面这个 case.xlsx 的 V 段断言是否真覆盖需求要测的行为——靠核对 draft 记的来源，不从零 grep 手册：
 
-- 读 `case.provenance.json`，聚焦 V 层步。逐条核对 `source.ref` 是否支撑期望值：`kind=manual` 就精确读那一处，`kind=precedent` 就 `qa_lookup_pattern` 看同类断言。只在来源缺失 / 可疑 / `kind=unknown` 时才回退满手册 grep。
-- `qa_confidence_score` 判分，再对照需求核心行为做对抗性核对：断言覆盖的是动态 / 关系，还是只验了静态单点？
+- 读 `case.provenance.json`，聚焦 V 层步。逐条核对 `source.ref` 是否支撑期望值：`kind=manual` 就精确读那一处，`kind=precedent` 就 `compile_precedent` 看同类断言。只在来源缺失 / 可疑 / `kind=unknown` 时才回退满手册 grep。
+- `compile_score` 判分，再对照需求核心行为做对抗性核对：断言覆盖的是动态 / 关系，还是只验了静态单点？
 - 只判 V 段语义。命令合法 / 断言非悬空 / IP 可达归 emit 结构门，不归你。
 
 ## `<RUNTIME>` 占位＝诚实弃权，**不当弱断言砍**（关键）

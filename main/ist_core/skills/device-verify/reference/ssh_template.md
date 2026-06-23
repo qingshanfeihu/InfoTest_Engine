@@ -1,6 +1,6 @@
 # SSH 执行模板
 
-## 方式一：qa_exec + paramiko（推荐）
+## 方式一：run_python + paramiko（推荐）
 
 ```python
 import paramiko, time, re, json
@@ -57,7 +57,7 @@ send_cmd('enable', 2.0)
 ssh.close()
 ```
 
-## 方式二：qa_ask_user 手动
+## 方式二：ask_user 手动
 
 ```
 ssh -o StrictHostKeyChecking=no <user>@<IP>

@@ -3,7 +3,7 @@
 新架构：
 - skills/review-verification/SKILL.md     fork skill 任务定义（agent: review-verifier）
 - agents/review-verifier.md                subagent 容器（system_prompt + tools + model）
-- qa_invoke_skill 检测 context: fork → 调 execute_fork_skill → spawn subagent
+- invoke_skill 检测 context: fork → 调 execute_fork_skill → spawn subagent
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ def test_review_verifier_forbids_recursive_subagents():
 def test_main_agent_no_longer_registers_review_verification(monkeypatch):
     """build_main_agent() 不再把 review-verification 注册为 deepagents subagent。
 
-    新架构：fork skill 通过 qa_invoke_skill 执行，不进 deepagents subagents 列表。
+    新架构：fork skill 通过 invoke_skill 执行，不进 deepagents subagents 列表。
     """
     import sys
 
@@ -115,8 +115,8 @@ def test_main_agent_no_longer_registers_review_verification(monkeypatch):
     assert "review-verifier" not in subagent_names
 
 
-def test_qa_invoke_skill_routes_to_execute_fork_skill(monkeypatch):
-    """qa_invoke_skill 检测 context: fork → execute_fork_skill。"""
+def test_invoke_skill_routes_to_execute_fork_skill(monkeypatch):
+    """invoke_skill 检测 context: fork → execute_fork_skill。"""
     captured: dict = {}
 
     def _stub_execute_fork_skill(skill: str, brief: str = "") -> str:
@@ -129,9 +129,9 @@ def test_qa_invoke_skill_routes_to_execute_fork_skill(monkeypatch):
         _stub_execute_fork_skill,
     )
 
-    from main.ist_core.tools.skills import qa_invoke_skill
+    from main.ist_core.tools.skills import invoke_skill
 
-    out = qa_invoke_skill.invoke(
+    out = invoke_skill.invoke(
         {"skill": "review-verification", "brief": "test brief"}
     )
     assert out == "STUB FORK RESULT"

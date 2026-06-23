@@ -2,7 +2,7 @@
 
 流程对应用户两条铁律：
   首跑(采集设备真实输出) → 抽 golden 值(受限 LLM,抽不出=CANNOT→留空,绝不猜)
-  → qa_fill_runtime 锁死回填 → 复跑确认(回填断言现应 pass) → 报数。
+  → compile_runtime_fill 锁死回填 → 复跑确认(回填断言现应 pass) → 报数。
 
 设备串行（框架全局锁），用底层 FrameworkMCPClient 一条会话跑 + 取全量明细。
 LLM 只做"从设备真实输出里抽出 <RUNTIME> 那段真实值"，绝不编。

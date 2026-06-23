@@ -118,7 +118,7 @@ def is_user_invocable(name: str) -> bool:
 
 
 def is_callable_by_model(name: str) -> bool:
-    """模型是否可通过 qa_invoke_skill 调用此 skill。
+    """模型是否可通过 invoke_skill 调用此 skill。
 
     True: state in ('on', 'name-only')
     （'user-invocable-only' 模型不可见也不可调，'off' 完全禁用）

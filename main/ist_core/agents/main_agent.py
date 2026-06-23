@@ -18,18 +18,14 @@ from main.ist_core.tools.deepagent import (
     fs_write,
 )
 from main.ist_core.tools.deepagent.exec_tools import run_shell, run_python
-from main.ist_core.tools.device import dev_rest, dev_ssh, dev_run_case, dev_probe, compile_emit
+from main.ist_core.tools.device import dev_rest, dev_ssh, dev_run_case, dev_probe
 from main.ist_core.tools.device import (
-    compile_prep,
-    compile_fanout,
     dev_run_batch,
-    compile_emit_merged,
     compile_attribute,
     compile_pipeline,
     compile_runtime_slots,
     compile_runtime_fill,
 )
-from main.ist_core.tools.device.precedent_tools import compile_score, compile_precedent
 from main.ist_core.tools.knowledge.kb_bug_search import kb_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
 from main.ist_core.tools.skills import invoke_skill
@@ -55,19 +51,15 @@ def _default_generic_tools() -> list[Any]:
         dev_rest,
         dev_run_case,
         dev_probe,
-        compile_emit,
-        compile_precedent,
-        compile_score,
 
-        # 批量编译工具(ist_compile 编译链/compile_pipeline)用：解析清单 + fan-out + 串行上机 + 合并打包
-        compile_prep,
-        compile_fanout,
+        # 编译/上机：主 agent 只编排不手搓——编译机器（compile_prep/fanout/emit/
+        # emit_merged/precedent/score）下放到 compile_pipeline 内部 + draft/grade fork，
+        # 主 agent 仅调 compile_pipeline 一次；ist_verify 上机验证链用下面这组。
         dev_run_batch,
-        compile_emit_merged,
         compile_attribute,   # 上机 fail 四层归因
-        compile_pipeline,  # v3 approach A：确定性编译流水线（主 agent 只调一次）
-        compile_runtime_slots,  # v3：列 <RUNTIME> 待回填槽位
-        compile_runtime_fill,        # v3：上机真实值锁死回填（不反复改）
+        compile_pipeline,  # 确定性编译流水线（主 agent 只调一次；prep/fanout/merge 锁在工具内）
+        compile_runtime_slots,  # 列 <RUNTIME> 待回填槽位
+        compile_runtime_fill,  # 上机真实值锁死回填（不反复改）
 
         kb_bug_search,
 

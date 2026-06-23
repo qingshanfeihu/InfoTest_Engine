@@ -49,6 +49,7 @@ def _steps_to_caseir(autoid: str, steps: list, *, title: str = ""):
 
     ist_steps = []
     has_cp = False
+    seen_vars: set[str] = set()   # 前序步骤捕获过的变量名(H/save_as)
     for i, s in enumerate(steps):
         if not isinstance(s, dict):
             return None, f"step[{i}] 不是 dict"
@@ -56,11 +57,21 @@ def _steps_to_caseir(autoid: str, steps: list, *, title: str = ""):
         f = str(s.get("F", "")).strip()
         if not e or not f:
             return None, f"step[{i}] 缺 E 或 F"
+        g_val = str(s.get("G", "") or "")
+        h_val = s.get("H") or None
+        i_val = str(s.get("I")) if s.get("I") is not None else None
+        # 归一化(correct-by-construction):check_point 引用捕获变量若误放 G 列(字面)→自动移到 H 列(寄存器查找)。
+        # draft 常把"比对 v1"写成 G="v1"(框架按字面找串"v1",IP 输出里没有→上机必 fail);
+        # 只有 H 列(row[7])才被 test_xlsx 当寄存器 locals[v1] 取捕获值。仅当 G 恰是前序捕获过的变量名才移,安全。
+        if e == "check_point" and not h_val and g_val in seen_vars:
+            h_val, g_val = g_val, ""
         if e == "check_point":
             has_cp = True
-        row = Row(test_object=e, method=f, data=str(s.get("G", "") or ""),
-                  save_as=(s.get("H") or None),
-                  input_var=(str(s.get("I")) if s.get("I") is not None else None))
+        elif h_val:  # 非 check_point 的 H = 把本步输出捕获进变量,登记供后续 check_point 引用
+            seen_vars.add(str(h_val))
+        row = Row(test_object=e, method=f, data=g_val,
+                  save_as=h_val,
+                  input_var=i_val)
         ist_steps.append(Step(stmt_type=2 + i, description=str(s.get("desc", "") or ""),
                               rows=[row]))
     if not has_cp:
@@ -313,11 +324,10 @@ def _gate_unreachable_listener(autoid: str, steps: list, init: str = "") -> str 
     facts = get_env_facts()
     if not facts.devices:
         return None
-    blind = set(facts.unreachable_lb_ips())
-    if not blind:
-        return None
     import re as _re
     _ip_re = _re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
+    # --- denylist(原逻辑):已知 APV 接口 IP 落「触发够不着」段(listener/VIP/dig/curl 都查)---
+    blind = set(facts.unreachable_lb_ips())
     texts: list[str] = []
     if init:
         texts.append(init)
@@ -326,24 +336,39 @@ def _gate_unreachable_listener(autoid: str, steps: list, init: str = "") -> str 
             continue
         e = str(s.get("E", "")).strip()
         f = str(s.get("F", "")).strip()
-        # 配置 listener/VIP 的 APV 步骤 + 触发(dig/curl)步骤都查
         if (e.startswith("APV") and f in ("cmd_config", "cmds_config")) or e == "test_env":
             texts.append(str(s.get("G", "") or ""))
     hit: list[str] = []
-    for t in texts:
-        for m in _ip_re.finditer(t):
-            ip = m.group(1)
-            if ip in blind and ip not in hit:
-                hit.append(ip)
-    if not hit:
+    if blind:
+        for t in texts:
+            for m in _ip_re.finditer(t):
+                ip = m.group(1)
+                if ip in blind and ip not in hit:
+                    hit.append(ip)
+    # --- allowlist(C 兜底):test_env 的 dig/curl 目标(@IP 或 ://IP)必须 ∈ ★ listener ∪ 后端 service。
+    # 治"凭空编的、落可达子网但非任何真实接口 IP"(如 172.16.35.100)——denylist 抓不到(它不是已知接口)。
+    # 仅当拓扑能派生 ★ 时启用(空 ★ → 降级放行,不误杀);只查 dig/curl 的目标 IP(@/://后),不查命令里其它 IP。
+    allow = set(facts.listener_ips()) | set(facts.service_ips())
+    _tgt_re = _re.compile(r"@(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})")
+    bad_target: list[str] = []
+    if facts.listener_ips():
+        for s in steps:
+            if not isinstance(s, dict) or str(s.get("E", "")).strip() != "test_env":
+                continue
+            for m in _tgt_re.finditer(str(s.get("G", "") or "")):
+                ip = m.group(1) or m.group(2)
+                if ip and ip not in allow and ip not in bad_target:
+                    bad_target.append(ip)
+    if not hit and not bad_target:
         return None
     listener = facts.listener_ips()
-    return (f"case {autoid} 把 listener/VIP 或 dig/curl 目标配到了「触发够不着」的 APV 接口 IP: "
-            f"{', '.join(hit)}\n"
-            f"这些接口所在网段没有路由器/客户端(触发源),dig/curl 发不到,上机必不解析(断言全 fail)。\n"
-            f"改用触发设备够得着的 APV 接口 IP(listener 与 dig/curl 目标须一致): "
-            f"{', '.join(listener)}\n\n"
-            f"{facts.summary_for_agent()}")
+    lines = [f"case {autoid} 触发可达性不合法:"]
+    if hit:
+        lines.append(f"- listener/VIP 或 dig/curl 目标落在「触发够不着」的 APV 接口段: {', '.join(hit)}")
+    if bad_target:
+        lines.append(f"- dig/curl 目标 IP 不是测试床的 ★ 可达 listener(也非已知后端): {', '.join(bad_target)}(多半凭空编)")
+    lines.append(f"dig/curl 目标必须取 ★ 可达 listener IP(与配置的 listener 一致): {', '.join(listener)}")
+    return "\n".join(lines) + "\n\n" + facts.summary_for_agent()
 
 
 
@@ -366,10 +391,11 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
     - ``G`` 数据(**数据类型=字面文本/正则字符串,不是变量、不是 Python 表达式、不是数值**):
       配置步骤=CLI命令原文;check_point=要在上一步输出里**文本查找**的期望文本/正则。
       框架拿 G **原样**匹配——写一个变量名(如 init_ip)它就去找字面 "init_ip" 这几个字符,永远找不到。
-    - ``H`` save_as(可选)/``I`` input_var(可选): 跨步骤传值。但 H 存的是**整段命令输出文本**,
-      **不能提取其中某字段(如某个IP)再做数值相等比对**——xlsx DSL 没有 re.findall/算术。
-      所以"第一次dig返回哪个IP、后续跟它比"这类**运行时动态值比对,xlsx 表达不了**;遇到这种,
-      改用"设备 show 命令把该行为转成稳定可查找的输出"再 found(先用 dev_probe 探有没有这种命令)。
+    - ``H`` save_as(可选)/``I`` input_var(可选): **捕获+比较**(框架原生,会话保持/亲和性/同-异成员的正确形态)。
+      触发步加 H="v1" 把该步**整段输出捕获**进寄存器 v1;后续 check_point 加 H="v1" 把 v1 当 expect——
+      ``found``=本次结果与首次捕获**相同**(同池/亲和保持)、``not_found``=**不同**(换池/超时),此时 G 留空。
+      "第一次 dig 命中谁、后续跟它比同/不同"这类**跨观测关系比对完全可表达**(dig 用 +short 让捕获值干净,
+      命中啥存啥、不用预测)。真限制只有一条:H 存的是整段输出文本,不能抽其中单字段做**数值算术**比对。
     - ``desc``(可选): 步骤描述
 
     check_point 自动校验**上一个非 check_point 步骤的输出**,所以断言前要先有产出输出的步骤

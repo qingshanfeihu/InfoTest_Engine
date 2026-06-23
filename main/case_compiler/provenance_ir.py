@@ -30,6 +30,8 @@ _VALID_SOURCE_KINDS = (
     "env_facts",      # E：拓扑事实源
     "manual",         # V：手册行
     "intent",         # V：作者意图（脑图原文）
+    "config_derived", # V_K：期望值是作者写的 config 的确定后果（池IP/超时/删后状态/rr按序命中）→ 编译期常量
+    "captured_relation", # V_R：跨观测关系断言（会话保持/同-异），check_point 用 H 寄存器引用前序捕获做 found/not_found，无 <RUNTIME>
     "skeleton",       # G：族骨架（步骤3 族首产出，族内复用）
     "device_runtime", # V：期望值离线不可知（落点依赖探活/哈希/会话/脚本运行时），值填 <RUNTIME> 占位
     "device_verified",# V：device_runtime 槽位已由 ist_verify 上机回填真实值并锁死（不再含 <RUNTIME>）

@@ -131,7 +131,11 @@ def _intent_similarity(intent: str, intent_paths: list[str]) -> float:
 
 
 def _load_case_rows(xlsx_path: str) -> list[dict]:
-    """读 case.xlsx 数据区为 [{E,F,G}...],遇哨兵 case(999...)停。"""
+    """读 case.xlsx 数据区为 [{E,F,G,H}...],遇哨兵 case(999...)停。
+
+    H 列(save_as/寄存器引用)必读:捕获+比较关系断言(会话保持等)靠它,grade 据此识别关系断言、
+    不误判为弱。非捕获行 H 为空串,下游 .get('H') 向后兼容。
+    """
     import openpyxl
     ws = openpyxl.load_workbook(xlsx_path, data_only=True).active
     rows = []
@@ -142,8 +146,9 @@ def _load_case_rows(xlsx_path: str) -> list[dict]:
         E = str(ws.cell(r, 5).value or "").strip()
         F = str(ws.cell(r, 6).value or "").strip()
         G = str(ws.cell(r, 7).value or "").strip()
+        H = str(ws.cell(r, 8).value or "").strip()
         if E or F:
-            rows.append({"E": E, "F": F, "G": G})
+            rows.append({"E": E, "F": F, "G": G, "H": H})
     return rows
 
 

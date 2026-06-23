@@ -74,6 +74,31 @@ def test_gate_also_catches_curl_target(synth_facts):
     assert msg is not None and "10.0.2.10" in msg
 
 
+def test_gate_rejects_invented_nonstar_dig_target(synth_facts):
+    """C 兜底:dig 目标落在可达子网内、但非 ★ listener、非后端 → 凭空编的 IP,打回。
+
+    denylist 抓不到(10.0.1.50 不是任何已知接口、也不在盲段);allowlist 兜住。
+    """
+    from main.ist_core.tools.device.emit_xlsx_tool import _gate_unreachable_listener
+    steps = [
+        {"E": "APV_0", "F": "cmd_config", "G": "sdns listener 10.0.1.10 53"},   # listener 取了 ★
+        {"E": "test_env", "F": "routera", "G": "dig @10.0.1.50 www.x.com +short"},  # 但 dig 打了个编的 .50
+    ]
+    msg = _gate_unreachable_listener("c5", steps)
+    assert msg is not None
+    assert "10.0.1.50" in msg
+    assert "10.0.1.10" in msg   # 指出正确 ★
+
+
+def test_gate_allows_backend_as_target(synth_facts):
+    """后端 service IP 作 curl/dig 目标不误拦(它是合法的真实可达后端)。"""
+    from main.ist_core.tools.device.emit_xlsx_tool import _gate_unreachable_listener
+    steps = [
+        {"E": "test_env", "F": "clientc", "G": "curl http://10.0.2.50/health"},  # 10.0.2.50 = srv0 后端
+    ]
+    assert _gate_unreachable_listener("c6", steps) is None
+
+
 def test_empty_topology_degrades_open(tmp_path, monkeypatch):
     """JSON 缺失 → 宽松降级不拦(与其它门一致)。"""
     import main.ist_core.tools._shared.env_facts as ef

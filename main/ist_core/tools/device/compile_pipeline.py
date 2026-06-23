@@ -278,6 +278,17 @@ def _build_case_brief(case: dict, *, product_version: str, manual_glob: str,
 轮询类(rr/wrr)断言轮转命中分布;ga(全局可用性)是优先级故障切换→断言「始终命中最高优先级成员」、
 用 sdns pool member priority 设优先级,不是轮转。"""
 
+    # ★ 可达 IP 事实(确定性 env_facts)本被 compile_precedent 捆进先例文本;先例为空(新意图/相似度<0.20
+    # 被跳过,如会话保持)时 ★ 列表会一起消失→draft 没 IP 锚点会探设备失败后瞎编(实测 533097 撞此坑)。
+    # 解耦:先例不带 ★ 时独立注入 env_facts(永远可用);先例已带则不重复。
+    env_block = ""
+    if not (precedent_text and precedent_text.strip()):
+        try:
+            from main.ist_core.tools._shared.env_facts import get_env_facts
+            env_block = "\n\n" + get_env_facts().summary_for_agent()
+        except Exception:  # noqa: BLE001
+            env_block = ""
+
     return f"""需求：autoid={autoid}，标题={title}
 脑图步骤 + 期望：
 {steps_block}
@@ -285,13 +296,12 @@ def _build_case_brief(case: dict, *, product_version: str, manual_glob: str,
 现状：目标产品+版本={product_version}；对版本手册 glob={manual_glob}；
 本 case 属分组「{group_str}」。同组若有共享基线，纳入本 case 自包含 init。
 
-规则：期望值溯源先例/手册/作者意图，不许 observe-then-assert（不看设备这次输出啥就抄成期望）；
-轮询/会话保持类按确定顺序逐次断言不同命中值；每个 case 自包含（init 自建全部前置）。
-写不准就留空（绝不编）：期望值离线根本无法定（运行时才产生——dig 轮转解析的具体 IP、Hit/统计计数、
-会话/连接保持的具体值、哈希、脚本运行时值）时，**不许凭空编一个值**。优先写部分模式
-（前缀溯源手册/先例，只把不可知值槽位留 <RUNTIME>，如 "Hits:\\s*<RUNTIME>"）；连结构都无从溯源
-才整值填 <RUNTIME>。这类步标 source.kind=device_runtime（<RUNTIME>⟺device_runtime 自洽，emit 强制）。
-真实值由后续 ist_verify 上机回填锁死——draft 只负责诚实留空，不为过机编值。
+规则：期望值溯源先例/手册/作者意图/**你自己写的配置**，不许 observe-then-assert（不看设备这次输出啥就抄成期望）；每个 case 自包含（init 自建全部前置）。
+**期望值按来源三分诊（决定怎么写，条件于你正在写的这份配置——你配的东西你就知道，不是未知）**：
+  ① 配置可推导值（池成员 IP、超时秒数、删除/清除后状态、rr 按配置顺序的命中、协议固定响应）——**写常量**，IP 用 \\b…\\b 加词边界 + 转义点（防 1.1.1.1 误匹配 1.1.1.10）。绝不因"运行时才显示"就当不可知。
+  ② 跨观测关系（会话保持/亲和性/同-异成员/前后对比）——断言是"两次观测的**关系**"不是"某个值"，**绝不留 <RUNTIME>**（占位只能填一个值，表达不了关系）。用**捕获+比较**：触发步加 H=v1 捕获首次输出（命中啥存啥、**不用预测是哪个池**），后续 check_point 加 H=v1，found=与首次同/not_found=与首次异；dig 用 +short 去时间戳噪声。
+  ③ 设备生成的不透明单值（auto-gen 名/PID/抓包间隔/哈希种子）——能 execute 提取就提取；纯不透明才留 <RUNTIME>（部分模式如 "Hits:\\s*<RUNTIME>"，或整值），标 source.kind=device_runtime（<RUNTIME>⟺device_runtime 自洽，emit 强制），由 ist_verify 上机回填锁死。
+红线：会话保持/同-异 **走②捕获、绝不走 <RUNTIME>**；配置可推导走①常量、不留 <RUNTIME>；只有真·设备不透明单值才 <RUNTIME>。绝不凭空编一个对不上来源的值。
 
 指路（先例已为你预检索，见下方「预检索先例」）：**优先照预检索先例的完整配置基线改写**——
 启用步如 sdns on、数据中心/池法/监听器等基线步一个不能漏（漏了服务不起、dig 零解析、断言全 fail）；
@@ -301,7 +311,7 @@ IP 取下方「本测试床网络事实源」的可达值，绝不照抄示例 I
 **listener/VIP 选址(dig/curl 必须够得着)**：listener/VIP 的 IP、以及 check 步骤里 dig/curl 的
 目标 IP 必须**一致**，且只能取事实源里标 ★ 的「触发设备够得着的 APV 接口 IP」。标 ⚠ 的接口段
 没有路由器/客户端(触发源够不着)，配上去上机必不解析、断言全 fail——绝不能用。
-{_precedent_block(precedent_text)}{persist_block}{algo_block}
+{env_block}{_precedent_block(precedent_text)}{persist_block}{algo_block}
 
 边界：只生成 draft（emit 必须 strict_structural=True + 传 provenance_json），不上机、不自评。"""
 

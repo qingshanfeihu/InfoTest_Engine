@@ -81,16 +81,18 @@ def _build_chat_model(model_name: str, **kwargs: Any):
     extra_body = dict(kwargs.pop("extra_body", None) or {})
     base_url, api_key = _resolve_endpoint()
 
-    # 深度思考显式锁定(不再靠 MiMo 默认,防默认变更)。MiMo: thinking.type=enabled/disabled。
-    # IST_THINKING=on|off 控制;默认 on(mimo-v2.5-pro 本就默认开,且 reasoning_content 回填基建已就绪)。
-    # 已显式传 extra_body.thinking 的不覆盖。env=off 或非 MiMo 端点(deepseek)不注入。
+    # 深度思考显式锁定(不再靠端点默认,防默认变更)。MiMo 与 DeepSeek 同用 thinking.type=enabled/disabled
+    # (extra_body 传)。IST_THINKING=on|off 控制;默认 on。**v4-pro 默认思考开→慢;agentic loop 应 off**
+    # (用 pro 的能力 + chat 的速度)。已显式传 extra_body.thinking 的不覆盖;不支持该参数的端点不注入。
     if "thinking" not in extra_body:
         _think = (os.environ.get("IST_THINKING") or "on").strip().lower()
-        _is_mimo = "mimo" in base_url.lower() or "xiaomi" in base_url.lower()
-        if _think in ("on", "1", "true", "enabled") and _is_mimo:
-            extra_body["thinking"] = {"type": "enabled"}
-        elif _think in ("off", "0", "false", "disabled") and _is_mimo:
-            extra_body["thinking"] = {"type": "disabled"}
+        _bl = base_url.lower()
+        _supports_thinking = any(k in _bl for k in ("mimo", "xiaomi", "deepseek"))
+        if _supports_thinking:
+            if _think in ("on", "1", "true", "enabled"):
+                extra_body["thinking"] = {"type": "enabled"}
+            elif _think in ("off", "0", "false", "disabled"):
+                extra_body["thinking"] = {"type": "disabled"}
 
     kwargs.setdefault("temperature", 0.0)
     kwargs.setdefault("top_p", 0.5)
@@ -137,6 +139,14 @@ def build_explore_model(**kwargs: Any):
     kwargs.setdefault("request_timeout", timeout)
     kwargs.setdefault("max_retries", retries)
     extra_body = dict(kwargs.pop("extra_body", None) or {})
+    # 思考模式锁定(同 _build_chat_model):IST_THINKING=off 时对 MiMo/DeepSeek 关思考(快)。
+    if "thinking" not in extra_body:
+        _think = (os.environ.get("IST_THINKING") or "on").strip().lower()
+        if any(k in base_url.lower() for k in ("mimo", "xiaomi", "deepseek")):
+            if _think in ("on", "1", "true", "enabled"):
+                extra_body["thinking"] = {"type": "enabled"}
+            elif _think in ("off", "0", "false", "disabled"):
+                extra_body["thinking"] = {"type": "disabled"}
     kwargs["extra_body"] = extra_body
 
     cls = _get_chat_openai_with_reasoning()

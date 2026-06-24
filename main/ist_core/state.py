@@ -34,6 +34,12 @@ class IstCoreState(TypedDict, total=False):
     gate_status: Literal["pending", "passed", "failed"]
     gate_missing_reason: str
 
+    # /goal 自治循环（opt-in；见 nodes/goal_gate.py）。
+    # goal_text 由 --goal / 未来 /goal 注入；空 或 IST_GOAL_ENABLED=0 → 透传不影响现有行为。
+    goal_text: str
+    goal_status: Literal["inactive", "met", "unmet", "exhausted"]
+    goal_retry_count: int
+
     
     
     final_review: dict[str, Any]

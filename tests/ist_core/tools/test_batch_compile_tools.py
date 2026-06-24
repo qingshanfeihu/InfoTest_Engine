@@ -121,6 +121,10 @@ class _FakeClient:
         self.calls.append(("ctx", inner_autoid))
         return self._ctx
 
+    def fetch_task_log_errors(self, task_id, max_chars=2800):
+        self.calls.append(("task_log", task_id))
+        return getattr(self, "_task_log", "")
+
 
 def _make_merged_xlsx(tmp_path):
     """产一个真合并 xlsx，返回 (路径, autoids)。"""

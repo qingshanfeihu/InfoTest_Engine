@@ -278,6 +278,14 @@ def dev_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
                     if run_err and not d:
                         rec["detail_tail"] = (f"(无 case 日志；run state={run_err})\n" + rec["detail_tail"])
                 out.append(rec)
+            # 文件级崩溃可见性：有 unknown（某 case 把整份 pytest 搞崩、后续全不跑）→ 取框架 task 日志
+            # 的 traceback 附到 unknown 上，让 agent 看到“崩在哪一行/什么异常”，而非只看到一堆无解释的 unknown。
+            if task_id and any(r["verdict"] == "unknown" for r in out):
+                tb = client.fetch_task_log_errors(task_id)
+                if tb:
+                    for r in out:
+                        if r["verdict"] == "unknown":
+                            r["framework_traceback"] = tb
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"error": f"批量上机异常: {exc}", "partial": out}, ensure_ascii=False)
 

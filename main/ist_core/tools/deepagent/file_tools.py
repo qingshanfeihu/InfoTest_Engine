@@ -21,6 +21,15 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 from main import knowledge_paths as _kp
 _AGENT_ROOT = _kp.KNOWLEDGE_DATA_ROOT.resolve()
 _WORKSPACE_ROOT = _kp.WORKSPACE_ROOT.resolve()
+# 框架源码镜像（只读参考根；写路径不含它）——见 _agent_roots()。
+_FRAMEWORK_MIRROR_ROOT = _kp.KNOWLEDGE_FRAMEWORK_MIRROR.resolve()
+# mirror 目录里混有明文测试口令（conftest.py/lib/mysqldb.py/lib/apv/apv_ssh.py）与内网元数据
+# （.sync_meta.json）。只放行**理解断言机制必需**的少数文件，其余一律拒——默认拒、最小暴露面
+# （安全评审要求）。要扩需同样评审。路径为相对 mirror 根的 posix 串。
+_FRAMEWORK_MIRROR_READ_ALLOW = frozenset({
+    "lib/test_xlsx.py",
+    "lib/check_point.py",
+})
 
 def _agent_roots() -> tuple[Path, ...]:
     """返回 agent 可访问的根目录列表（按优先级排序）。
@@ -32,13 +41,17 @@ def _agent_roots() -> tuple[Path, ...]:
     roots: list[Path] = [_AGENT_ROOT]
     if _WORKSPACE_ROOT.is_dir():
         roots.append(_WORKSPACE_ROOT)
-        
-        
-        
-        
+
+
+
+
         inputs = _WORKSPACE_ROOT / "inputs"
         if inputs.is_dir():
             roots.append(inputs)
+    # 框架源码镜像（只读参考）：agent 读 test_xlsx.py/check_point.py 理解断言机制，与人工诊断对等。
+    # 只进**读**根（_agent_roots / _resolve_inside_root）；写路径（_resolve_writable_path）不含它 → 仍只 workspace/outputs 可写。
+    if _FRAMEWORK_MIRROR_ROOT.is_dir():
+        roots.append(_FRAMEWORK_MIRROR_ROOT)
     session = os.environ.get("IST_SESSION_DIR")
     if session:
         p = Path(session).resolve()
@@ -226,10 +239,17 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
 
     for root in _agent_roots():
         try:
-            resolved.relative_to(root)
-            break
+            rel = resolved.relative_to(root)
         except ValueError:
             continue
+        # 框架 mirror 是只读参考根，但目录里混有明文测试口令/内网元数据 → 只放行断言机制白名单文件，
+        # 命中 mirror 根但不在白名单一律拒（默认拒、最小暴露面；安全评审要求）。
+        if root == _FRAMEWORK_MIRROR_ROOT and rel.as_posix() not in _FRAMEWORK_MIRROR_READ_ALLOW:
+            raise PermissionError(
+                "framework mirror 只放行断言机制文件 "
+                f"({', '.join(sorted(_FRAMEWORK_MIRROR_READ_ALLOW))})；requested: {raw_path}"
+            )
+        break
     else:
         raise PermissionError(
             "path outside agent sandbox; agent can only read paths under "

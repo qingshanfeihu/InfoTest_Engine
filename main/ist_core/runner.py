@@ -79,6 +79,7 @@ def run_single(
     stream: bool = False,
     verbose: bool = False,
     checkpointer: Any | bool = True,
+    goal: str = "",
 ) -> dict[str, Any]:
     """单次调用 Graph，返回最终 state。
 
@@ -103,6 +104,15 @@ def run_single(
         "user_input": user_input,
         "messages": [],
     }
+    # /goal 自治循环：传了目标就开 goal_gate（opt-in）。外层图默认 recursion_limit=25，
+    # 每轮 qa_node→review_gate→goal_gate 约 3 步，N 轮会超 → 按上限放宽外层 limit。
+    if (goal or "").strip():
+        initial_state["goal_text"] = goal.strip()
+        try:
+            _cap = max(1, int(os.environ.get("IST_GOAL_MAX_ROUNDS") or 8))
+        except (TypeError, ValueError):
+            _cap = 8
+        config["recursion_limit"] = max(25, _cap * 4 + 20)
 
     if stream:
 

@@ -105,6 +105,11 @@ CACHE_JSON = KNOWLEDGE_INTERMEDIATE / ".cache.json"
 KNOWLEDGE_FOOTPRINTS = KNOWLEDGE_ROOT / "footprints"
 KNOWLEDGE_FOOTPRINTS_NODES = KNOWLEDGE_FOOTPRINTS / "nodes"
 
+# 自动化框架源码镜像（test_xlsx.py / check_point.py / apv/…）——只读参考。
+# agent 读它理解框架真实断言机制（found 当正则 vs abs_found 用 re.escape、found_times 分派只传2参等），
+# 与人工诊断对等。加入 file_tools._agent_roots() 只读白名单（写路径不含它，仍只 workspace/outputs）。
+KNOWLEDGE_FRAMEWORK_MIRROR = KNOWLEDGE_ROOT / "framework" / "mirror"
+
 
 # auto_env：设备自动化环境资产（网络拓扑 RAG 等），历史上在 5 处文件各自硬编码。
 KNOWLEDGE_AUTO_ENV = KNOWLEDGE_DATA_ROOT / "auto_env"

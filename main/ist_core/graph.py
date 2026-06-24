@@ -558,29 +558,39 @@ def build_ist_core_graph(
     （仅在 ``checkpointer is True`` 时生效）。runner.py print 模式必须传
     ``"sync"``，TUI / langgraph dev / streaming 走默认 ``"async"``。
     """
+    from main.ist_core.nodes.goal_gate import goal_gate
     from main.ist_core.nodes.review_gate import review_gate
 
     g = StateGraph(IstCoreState)
     g.add_node("normalize_input", normalize_input)
     g.add_node("qa_node", qa_node)
     g.add_node("review_gate", review_gate)
+    g.add_node("goal_gate", goal_gate)
     g.add_node("finalize", finalize)
 
     g.add_edge(START, "normalize_input")
     g.add_edge("normalize_input", "qa_node")
-    
     g.add_edge("qa_node", "review_gate")
-    
-    
-    
-    
+
+    # review_gate passed → 进 goal_gate（/goal 自治循环闸；无 goal 时透传到 finalize）。
     g.add_conditional_edges(
         "review_gate",
         lambda s: s.get("gate_status", "passed"),
         {
-            "passed": "finalize",
+            "passed": "goal_gate",
             "pending": "qa_node",
             "failed": "finalize",
+        },
+    )
+    # goal_gate：达成/无目标/超上限 → finalize；未达成 → 注入反馈回 qa_node 继续。
+    g.add_conditional_edges(
+        "goal_gate",
+        lambda s: s.get("goal_status", "inactive"),
+        {
+            "inactive": "finalize",
+            "met": "finalize",
+            "exhausted": "finalize",
+            "unmet": "qa_node",
         },
     )
     g.add_edge("finalize", END)

@@ -223,19 +223,21 @@ class FrameworkMCPClient:
         return out
 
     def fetch_device_context_under(self, submit_autoid: str, inner_autoid: str,
-                                   max_chars: int = 9000) -> str:
+                                   max_chars: int = 14000) -> str:
         """取**某内层 case** 的完整设备上下文(配置会话 + 触发端 dig),路径在 submit_autoid 的
         staging 下(整份单跑语义)。与 fetch_device_context 同义,只是 base 指向 submit staging。
         """
         base = (f"/home/test/apv_src/report/*/*/ist_staging_*/{submit_autoid}"
                 f"/test_xlsx/case.xlsx/{inner_autoid}")
         sources = [
+            # 框架逐步执行 + 每个 check_point 明细 + **case 内异常/traceback**（最富信息，放最前）。
+            ("框架逐步执行+断言明细+异常", f"{base}/{inner_autoid}.txt"),
             ("设备配置会话(每条命令+设备响应)", f"{base}/apv_*.txt"),
             ("触发端会话 RouterA(dig 真实输出)", f"{base}/RouterA.txt"),
             ("触发端会话 RouterB(dig 真实输出)", f"{base}/RouterB.txt"),
             ("触发端会话 clientc", f"{base}/clientc.txt"),
         ]
-        per = max(1200, max_chars // max(1, len(sources)))
+        per = max(1500, max_chars // max(1, len(sources)))
         parts: list[str] = []
         try:
             for label, g in sources:
@@ -282,4 +284,24 @@ class FrameworkMCPClient:
         except Exception:
             return ""
         return "\n\n".join(parts)
+
+    def fetch_task_log_errors(self, task_id: str, max_chars: int = 2800) -> str:
+        """取框架 task 日志里的 pytest 异常/traceback——**文件级崩溃**真因。
+
+        某个 case 的断言让整份 pytest 崩（如 found_times 缺 times 的 TypeError、found(None)
+        的 TypeError）时，崩溃点之后的 case 全 ``unknown``，而**逐 case 日志看不到这个崩因**
+        （它崩在框架层、写在 ``tasks/<task_id>.log`` 里）。这里把它取出来，让 agent 知道
+        “不是这些 case 本身错，是前面某个 case 把整份 pytest 搞崩了，traceback 指向哪一行”。
+        """
+        if not task_id:
+            return ""
+        log = f"/home/test/mcp_server/tasks/{task_id}.log"
+        try:
+            cmd = (f"grep -nE 'Traceback|Error|Exception|FAILED|test_xlsx\\.py:|missing .* argument' "
+                   f"'{log}' 2>/dev/null | tail -40; echo '--- log tail ---'; tail -20 '{log}' 2>/dev/null")
+            _i, o, _e = self._c.exec_command(cmd, timeout=20)
+            text = o.read().decode("utf-8", "replace")
+            return text[-max_chars:] if text.strip() else ""
+        except Exception:  # noqa: BLE001
+            return ""
 

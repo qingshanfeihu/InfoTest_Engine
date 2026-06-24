@@ -53,6 +53,10 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="显式指定 thread-id（与 --resume 同义）")
     parser.add_argument("--task", choices=["qa", "review", "QA", "Review"], default="qa",
                         help="任务类型提示（agent 仍可覆盖；默认 qa）")
+    parser.add_argument("--goal", type=str, default="",
+                        help="/goal 自治循环：给一个完成条件（如『3个脑图编译到上机全过』），"
+                             "agent 每轮结束自动核验，没达成就带反馈继续干，直到达成或撞 "
+                             "IST_GOAL_MAX_ROUNDS（默认8）。仅 print 模式；不传=单轮（行为不变）。")
     parser.add_argument("--log-level", default=None,
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="日志级别（默认：TUI 模式 ERROR / print 模式 WARNING）")
@@ -80,7 +84,7 @@ def _resolve_initial_query(args: argparse.Namespace) -> str | dict | None:
     return args.query
 
 
-def _run_print_mode(query, *, task_type: str, thread_id: str | None) -> int:
+def _run_print_mode(query, *, task_type: str, thread_id: str | None, goal: str = "") -> int:
     """非交互 print 模式——直接调 runner.run_single，不启 TUI。
 
     用 ``InMemorySaver`` 而非默认共享 SqliteSaver：print 是单次执行，不需要持久化
@@ -105,6 +109,7 @@ def _run_print_mode(query, *, task_type: str, thread_id: str | None) -> int:
         stream=False,
         verbose=False,
         checkpointer=InMemorySaver(),
+        goal=goal,
     )
     final = result.get("final_answer") or "（无回答）"
     print(final)
@@ -289,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         if initial_query is None:
             print("❌ -p print 模式必须提供 query 或 --input", file=sys.stderr)
             return 2
-        return _run_print_mode(initial_query, task_type=task_type, thread_id=thread_id)
+        return _run_print_mode(initial_query, task_type=task_type, thread_id=thread_id, goal=args.goal)
 
     
     initial_text = None

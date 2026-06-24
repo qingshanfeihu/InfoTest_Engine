@@ -22,6 +22,16 @@ import pytest
 import main.ist_core.tools.deepagent.file_tools as file_tools
 
 
+@pytest.fixture(autouse=True)
+def _isolate_framework_mirror(tmp_path, monkeypatch):
+    """本文件验 session/user/workspace 根逻辑；框架 mirror 根（真实存在于仓库）正交，
+    统一隔离成不存在路径，避免它被追加进 roots 污染精确断言。
+    mirror 根本身的注册由 test_framework_mirror_registered_when_exists 单独验。
+    """
+    monkeypatch.setattr(file_tools, "_FRAMEWORK_MIRROR_ROOT",
+                        tmp_path / "no_mirror_here", raising=False)
+
+
 def _setup_multi_root(tmp_path, monkeypatch):
     """模拟远程 TUI 部署：knowledge/data + sessions/<id> + users/<u>。
 
@@ -54,6 +64,50 @@ def test_no_env_falls_back_to_single_root(tmp_path, monkeypatch):
 
     roots = file_tools._agent_roots()
     assert roots == (agent_root,)
+
+
+def test_framework_mirror_registered_when_exists(tmp_path, monkeypatch):
+    """框架源码 mirror 根存在时被注册进只读根（与人工诊断对等：agent 能读 test_xlsx.py 等）。"""
+    agent_root = tmp_path / "knowledge" / "data"
+    agent_root.mkdir(parents=True)
+    mirror = tmp_path / "knowledge" / "framework" / "mirror"
+    mirror.mkdir(parents=True)
+    monkeypatch.setattr(file_tools, "_AGENT_ROOT", agent_root)
+    monkeypatch.setattr(file_tools, "_WORKSPACE_ROOT", tmp_path / "workspace_nonexist")
+    monkeypatch.setattr(file_tools, "_FRAMEWORK_MIRROR_ROOT", mirror)  # 覆盖 autouse 隔离
+    monkeypatch.delenv("IST_SESSION_DIR", raising=False)
+    monkeypatch.delenv("IST_USER_DIR", raising=False)
+    roots = file_tools._agent_roots()
+    assert roots == (agent_root, mirror)
+
+
+def test_framework_mirror_read_allowlist(tmp_path, monkeypatch):
+    """mirror 只放行断言机制白名单文件（lib/test_xlsx.py、lib/check_point.py）；
+    含明文口令的 conftest.py/mysqldb.py/apv_ssh.py 与元数据 .sync_meta.json 一律拒
+    （默认拒、最小暴露面——安全评审要求）。"""
+    mirror = tmp_path / "knowledge" / "framework" / "mirror"
+    (mirror / "lib" / "apv").mkdir(parents=True)
+    (mirror / "smoke_test").mkdir(parents=True)
+    (mirror / "lib" / "check_point.py").write_text("def found(): pass", encoding="utf-8")
+    (mirror / "lib" / "test_xlsx.py").write_text("# dispatch", encoding="utf-8")
+    (mirror / "lib" / "mysqldb.py").write_text("password='click1'", encoding="utf-8")
+    (mirror / "lib" / "apv" / "apv_ssh.py").write_text("passwd='click1'", encoding="utf-8")
+    (mirror / "smoke_test" / "conftest.py").write_text("passwd='click1'", encoding="utf-8")
+    (mirror / ".sync_meta.json").write_text('{"source":"10.4.127.103"}', encoding="utf-8")
+    (tmp_path / "knowledge" / "data").mkdir(parents=True)
+    monkeypatch.setattr(file_tools, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(file_tools, "_AGENT_ROOT", tmp_path / "knowledge" / "data")
+    monkeypatch.setattr(file_tools, "_WORKSPACE_ROOT", tmp_path / "ws_none")
+    monkeypatch.setattr(file_tools, "_FRAMEWORK_MIRROR_ROOT", mirror)  # 覆盖 autouse 隔离
+    monkeypatch.delenv("IST_SESSION_DIR", raising=False)
+    monkeypatch.delenv("IST_USER_DIR", raising=False)
+    # 白名单内放行
+    assert file_tools._resolve_inside_root(str(mirror / "lib" / "check_point.py"), must_exist=True)
+    assert file_tools._resolve_inside_root(str(mirror / "lib" / "test_xlsx.py"), must_exist=True)
+    # 含口令/内网元数据一律拒
+    for bad in ("lib/mysqldb.py", "lib/apv/apv_ssh.py", "smoke_test/conftest.py", ".sync_meta.json"):
+        with pytest.raises(PermissionError):
+            file_tools._resolve_inside_root(str(mirror / bad), must_exist=True)
 
 
 def test_session_and_user_roots_added_when_env_set(tmp_path, monkeypatch):

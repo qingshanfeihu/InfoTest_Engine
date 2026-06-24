@@ -131,10 +131,14 @@ def _intent_similarity(intent: str, intent_paths: list[str]) -> float:
 
 
 def _load_case_rows(xlsx_path: str) -> list[dict]:
-    """读 case.xlsx 数据区为 [{E,F,G,H}...],遇哨兵 case(999...)停。
+    """读 case.xlsx 数据区为 [{E,F,G,H,I?,desc?}...],遇哨兵 case(999...)停。
 
     H 列(save_as/寄存器引用)必读:捕获+比较关系断言(会话保持等)靠它,grade 据此识别关系断言、
     不误判为弱。非捕获行 H 为空串,下游 .get('H') 向后兼容。
+    **I 列(input_var / found_times 次数)必读**:否则 compile_pipeline 的 merge 回读时,
+    found_times 的次数 / input_var 引用会被丢成 None——found_times(expect,result,times=None)
+    上机 `count==None` 恒 False、该 case **永远 fail**(且 grade 验的是 merge 前版本,完全不可见)。
+    D 列(步骤描述)一并读回保真,merge 后步骤描述不丢。I/desc 仅在非空时入字典(向后兼容)。
     """
     import openpyxl
     ws = openpyxl.load_workbook(xlsx_path, data_only=True).active
@@ -143,12 +147,19 @@ def _load_case_rows(xlsx_path: str) -> list[dict]:
         A = ws.cell(r, 1).value
         if A and str(A).startswith("999999"):
             break
+        D = str(ws.cell(r, 4).value or "").strip()
         E = str(ws.cell(r, 5).value or "").strip()
         F = str(ws.cell(r, 6).value or "").strip()
         G = str(ws.cell(r, 7).value or "").strip()
         H = str(ws.cell(r, 8).value or "").strip()
+        I = str(ws.cell(r, 9).value or "").strip()
         if E or F:
-            rows.append({"E": E, "F": F, "G": G, "H": H})
+            row = {"E": E, "F": F, "G": G, "H": H}
+            if I:
+                row["I"] = I
+            if D:
+                row["desc"] = D
+            rows.append(row)
     return rows
 
 
@@ -262,6 +273,11 @@ def compile_precedent(my_config: str, limit: int = 3, intent: str = "") -> str:
                "数据中心/池法/监听器等基线步**一个都不能漏**——漏了设备服务起不来、dig 零解析、断言全 fail。"
                "先例'怎么配(完整基线)+怎么触发(dig 类型/次数)+怎么断言'是配套的,照它整条链写。"
                "期望值溯源到先例+手册;离线不可知的运行时值(dig 解析出的具体 IP 等)留 <RUNTIME>,别编。")
+    out.append("⚠ **命令格式逐字照抄最像的先例,只改值(IP/域名/名称),别改格式**:先例命令的"
+               "**引号、参数个数与顺序**是上机跑通的——它给某个参数加了双引号(如 `\"24\"`)你就照样加,"
+               "它没加你也别加;**绝不自己'规范化'引号、绝不发明先例没有的参数组合**(如先例只到掩码、"
+               "你别凭空加 query_type)。先例没覆盖的形态查 footprint/手册定格式,拿不准就留给上机 verify "
+               "用设备 `^` 报错/`show` 回显兜底校验——别自己猜一个会被设备拒的写法。")
     # 契约:先例 G 列可能混有不可达示例 IP(1.1.1.1 等历史脏数据)。在同一返回里附上本测试床
     # 真实可达集合,让你写 IP 时取真值,别照抄先例的示例 IP——emit 出口会按此校验,不可达必打回。
     try:

@@ -166,6 +166,38 @@ class EnvFacts:
                     out.append(ip)
         return out
 
+    def listener_trigger_pairs(self) -> list[tuple[str, list[str]]]:
+        """每个可达 listener IP → 能 dig/curl 够到它的触发机名字(与该 listener 同段的触发设备)。
+
+        关键事实(治 A1 类失败):dig/curl 源必须与 listener **同段**(L2 直连)才够得着。
+        ★ 可达列表只说"该 IP 可达",但**没说从哪台触发机发**——同一台 APV 不同接口在不同段
+        (如 .32.70 在 .32 段、.34.70 在 .34 段),而 routerA 只在 .34 段、routerB 只在 .32 段。
+        用 routerA dig .32.70 必 "no servers could be reached"。这里把"哪台触发机能到哪个
+        listener 段"逐 IP 派生出来,供 draft 选对 test_env 主机。全部从拓扑 type+CIDR 派生,零硬编码。
+        """
+        out: list[tuple[str, list[str]]] = []
+        for ip, net in self._lb_ips_with_subnet():
+            trig: list[str] = []
+            for dev in self.devices:
+                if not any(t in dev.get("type", "") for t in _TRIGGER_TYPES):
+                    continue
+                for cidr in dev.get("ipv4", []):
+                    try:
+                        addr = ipaddress.IPv4Address(cidr.split("/")[0])
+                    except ValueError:
+                        continue
+                    if addr in net:
+                        # **小写**：test_env 步的 F 列 = 框架 Env 方法名,框架按 getattr(env, F)
+                        # 分派且**不 .lower()**(实证 test_xlsx.py),设备显示名 "routerB" 必须降为
+                        # "routerb" 才能命中方法,否则 AttributeError、dig 不执行、无回显。
+                        name = dev.get("name", "").strip().lower()
+                        if name and name not in trig:
+                            trig.append(name)
+                        break
+            if trig:  # 只列有同段触发机的(即 ★ 可达 listener)
+                out.append((ip, trig))
+        return out
+
     def summary_for_agent(self) -> str:
         """给 draft 子 agent 的事实摘要:listener 选址 + 后端真实 IP + 设备清单。"""
         listener = self.listener_ips()
@@ -178,6 +210,14 @@ class EnvFacts:
                 "★ listener/VIP 必须用这些 APV 接口 IP(触发设备 dig/curl 够得着的网段): "
                 + ", ".join(listener)
             )
+        pairs = self.listener_trigger_pairs()
+        if pairs:
+            lines.append(
+                "★ 触发机配对(dig/curl 必须从**与目标 listener 同段**的触发机发起,"
+                "否则上机 'no servers could be reached'、断言全 fail):"
+            )
+            for ip, trig in pairs:
+                lines.append(f"    dig/curl 目标 {ip} → 必须用 test_env 主机 {' 或 '.join(trig)}")
         if blind:
             lines.append(
                 "⚠ 这些 APV 接口 IP 禁止配 listener/VIP(所在网段没有路由器/客户端,"
@@ -190,6 +230,9 @@ class EnvFacts:
         lines.append(
             "选址规则:listener/VIP 的 IP、以及 check 步骤里 dig/curl 的目标 IP "
             "必须一致且来自上面的 ★ 列表;后端用服务器真实 IP。"
+            "**dig/curl 步骤的 test_env 主机(F 列)必须按上面「★ 触发机配对」选,且用小写**——"
+            "目标 IP 在哪段就用哪台同段触发机(如 .32 段用 routerb、.34 段用 routera);框架按方法名"
+            "精确分派(不转小写),写成 routerB 大写会 AttributeError、dig 不执行。选错段必不解析。"
         )
         lines.append("禁止裸用 1.1.1.1/2.2.2.2/10.x/192.168.x 等示例 IP——它们不可达,上机 dig 必失败。")
         return "\n".join(lines)

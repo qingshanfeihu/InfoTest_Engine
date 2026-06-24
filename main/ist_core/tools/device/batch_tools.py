@@ -155,36 +155,42 @@ def compile_fanout(skill: str, briefs_json: str, concurrency: int = 0) -> str:
     return json.dumps(ordered, ensure_ascii=False)
 
 
-# 上机串行超时上限（单 case），与 dev_run_case 对齐。
+# 上机超时。整份 xlsx **一次**提交即跑完其中全部 case(框架把整份当套件整跑),故超时是**整份级**、
+# 随 case 数自适应(单 case 含 sleep/多 dig 约 ~45s),夹紧到总上限,防大文件跑不完被误判超时。
 _RUN_DEFAULT_MAX_S = 600
-_RUN_MAX_MAX_S = 1200
+_RUN_MAX_MAX_S = 1200          # 兼容旧签名(单 case 语义)的夹紧上限
+_PER_CASE_BUDGET_S = 45        # 整份估时:每 case 预算秒
+_RUN_TOTAL_CAP_S = 2400        # 整份总超时硬上限(40min)
 
 
 @tool(parse_docstring=True)
 def dev_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
                  build: str = "", max_s_each: int = _RUN_DEFAULT_MAX_S) -> str:
-    """把**一个合并 xlsx 里的多个 case** 顺序上机，逐个回 verdict + 框架真实裁决。
+    """把**一个合并 xlsx 整份上机一次**，回每个 case 的 verdict + 框架真实裁决。
 
-    **串行执行**（这是硬约束，不是选择）：跳转机框架有全局运行锁，同一时刻只允许
-    一个上机任务；且设备配置/统计是全局共享态，并发上机会互相污染。本工具内部就是
-    一个 for 循环，复用一条 SSH 会话顺序 deliver+run+取明细——物理上不会并发上机。
+    **整份单跑（O(N) 关键修复）**：框架 ``test_xlsx.py`` 把交付的整份 xlsx 当一个**套件整跑**
+    ——提交**一个** autoid 就会顺序执行文件里**所有** case，全部内层 case 的逐 check_point 日志
+    都落在该提交 autoid 的 staging 下。故本工具**只 deliver+run 一次**，再从该 staging 一把读回
+    所有 autoid 的裁决；绝不按 autoid 逐个重复整跑（旧实现 O(N²)、且大文件撞 600s 轮询上限拿不到
+    结果——"跑 20 分钟无结果"的根因）。
 
-    与 dev_run_case 的区别：dev_run_case 跑单个 autoid；本工具跑同一个 xlsx 里的一批
-    autoid（批量编译合并产物的上机验证），少开 N-1 次 SSH 会话，省连接开销。
+    **串行硬约束仍在**：跳转机框架有全局运行锁、设备态全局共享，同一时刻只允许一个上机任务；
+    本工具一次只提交一份 xlsx，物理上不并发。
 
-    verdict 语义同 dev_run_case：来自框架 MySQL 每个 check_point 结果，pass 条件 =
-    fail num 全 0 且 success>0。pytest "1 passed" 不代表断言通过。
+    verdict 取每个 case 专属日志的逐 check_point 结果：``#### Fail Num`` 全无且 ``#### Success
+    Num`` >0 → pass；有 Fail → fail；无日志 → unknown（未执行到/被跳过）。含 ``<RUNTIME>`` 占位
+    的 case 首跑必 fail（框架找字面 "<RUNTIME>"），属预期待回填，由 ist_verify 回填后复跑。
 
     Args:
         xlsx_path: 合并后的 case.xlsx 本地路径（含多个真 case + 尾部哨兵）。
-        autoids_json: JSON 数组字符串，要上机的 autoid 列表（顺序即上机顺序）。
+        autoids_json: JSON 数组字符串，xlsx 里要取裁决的 autoid 列表。
         module: staging 子模块（默认取 compiler config staging_module）。
         build: 目标设备 build（默认取 compiler config build）。
-        max_s_each: 单个 case 上机轮询超时秒（默认 600，夹紧 1200）。
+        max_s_each: 兼容旧签名——传入则按"整份预算下限"对待；整份总超时 = clamp(max(它, N×45s), …, 2400s)。
 
     Returns:
         JSON 数组字符串，每项 {"autoid", "verdict", "task_id", "causality"(check_point
-        真实裁决行), "detail_tail"}。串行，按输入顺序。某 case error 不中断后续。
+        真实裁决行), "detail_tail", 非pass附 "device_context"}，按输入顺序。
     """
     import re as _re
     from pathlib import Path
@@ -222,56 +228,55 @@ def dev_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"error": f"读取 compiler config 失败: {exc}"}, ensure_ascii=False)
 
+    # 整份总超时随 case 数自适应（单 case 含 sleep/多 dig ~45s），夹紧到硬上限。
     try:
-        max_s_each = max(30, min(int(max_s_each or _RUN_DEFAULT_MAX_S), _RUN_MAX_MAX_S))
+        floor = int(max_s_each or _RUN_DEFAULT_MAX_S)
     except (TypeError, ValueError):
-        max_s_each = _RUN_DEFAULT_MAX_S
+        floor = _RUN_DEFAULT_MAX_S
+    total_max = max(floor, len(autoids) * _PER_CASE_BUDGET_S)
+    total_max = max(_RUN_DEFAULT_MAX_S, min(total_max, _RUN_TOTAL_CAP_S))
 
     try:
         from main.case_compiler.device_mcp_client import FrameworkMCPClient
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"error": f"加载 FrameworkMCPClient 失败: {exc}"}, ensure_ascii=False)
 
+    submit = autoids[0]   # 整份只用一个 autoid 提交，框架据它建 staging 并整跑全文件
     out: list[dict] = []
     try:
         with FrameworkMCPClient() as client:
-            for autoid in autoids:  # ← 串行：一条 SSH 会话顺序跑，绝不并发
-                rec = {"autoid": autoid, "verdict": "error", "task_id": "",
-                       "causality": "", "detail_tail": ""}
-                try:
-                    dres = client.deliver(module, autoid, str(p))
-                    if dres.get("error"):
-                        rec["detail_tail"] = f"deliver 失败: {dres.get('error')}"
-                        out.append(rec)
-                        continue
-                    run = client.run_and_wait(module, autoid, build, [autoid], max_s=max_s_each)
-                    if run.get("busy") or run.get("error") == "device_busy":
-                        # 设备正在验证上一个用例——把 busy 信号显式标出，agent 可据此决定
-                        # 等待/重试/上报，而非误判为编译错误。串行循环内正常不会撞，多为
-                        # 外部并发上机抢锁。
-                        rec["verdict"] = "busy"
-                        rec["detail_tail"] = run.get("message") or "环境忙：正在验证上一个用例"
-                        out.append(rec)
-                        continue
-                    if run.get("error"):
-                        rec["detail_tail"] = f"提交/运行失败: {run.get('error')}"
-                        out.append(rec)
-                        continue
-                    rec["verdict"] = ((run.get("results") or {}).get(autoid)
-                                      or run.get("result") or "unknown")
-                    rec["task_id"] = run.get("task_id", "")
-                    detail = client.fetch_case_detail(autoid)
-                    causality = [ln.rstrip() for ln in (detail or "").splitlines()
-                                 if _re.search(r"(Success|Fail)\s*Num|fail to find|successed to find",
-                                               ln, _re.IGNORECASE)]
-                    rec["causality"] = "\n".join(causality[-12:]) if causality else ""
-                    rec["detail_tail"] = (detail or "")[-2500:]
-                    # 非 pass：附完整设备上下文(配置会话每条命令的设备响应 + dig 真实输出),
-                    # 供 agent 据此改配置 / 填 <RUNTIME>。pass 的不附(省体积)。
-                    if rec["verdict"] != "pass":
-                        rec["device_context"] = client.fetch_device_context(autoid)
-                except Exception as exc:  # noqa: BLE001
-                    rec["detail_tail"] = f"上机异常: {exc}"
+            dres = client.deliver(module, submit, str(p))
+            if dres.get("error"):
+                return json.dumps({"error": f"deliver 失败: {dres.get('error')}"}, ensure_ascii=False)
+            run = client.run_and_wait(module, submit, build, autoids, max_s=total_max)
+            if run.get("busy") or run.get("error") == "device_busy":
+                return json.dumps({"error": "device_busy", "busy": True,
+                                   "message": run.get("message") or "环境忙：正在验证上一个用例，请稍后重试。"},
+                                  ensure_ascii=False)
+            task_id = run.get("task_id", "")
+            run_err = run.get("error")
+            # 无论 run 是否 done（可能撞总超时仍 running），都尽量读回已写出的逐 case 日志。
+            details = client.fetch_batch_details(submit)
+            for autoid in autoids:
+                d = details.get(autoid, "")
+                succ = len(_re.findall(r"#### Success\s*Num", d))
+                fail = len(_re.findall(r"#### Fail\s*Num", d))
+                if fail > 0:
+                    verdict = "fail"
+                elif succ > 0:
+                    verdict = "pass"
+                else:
+                    verdict = "unknown"   # 无日志：未执行到/被跳过(如 test_env 主机不支持)/超时未跑到
+                causality = [ln.rstrip() for ln in d.splitlines()
+                             if _re.search(r"(Success|Fail)\s*Num|fail to find|successed to find",
+                                           ln, _re.IGNORECASE)]
+                rec = {"autoid": autoid, "verdict": verdict, "task_id": task_id,
+                       "causality": "\n".join(causality[-12:]) if causality else "",
+                       "detail_tail": d[-2500:]}
+                if verdict != "pass":
+                    rec["device_context"] = client.fetch_device_context_under(submit, autoid)
+                    if run_err and not d:
+                        rec["detail_tail"] = (f"(无 case 日志；run state={run_err})\n" + rec["detail_tail"])
                 out.append(rec)
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"error": f"批量上机异常: {exc}", "partial": out}, ensure_ascii=False)

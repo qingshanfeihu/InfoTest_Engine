@@ -108,12 +108,15 @@ main/ist_core/tools/
 - **统一编排** `ist_compile`（inline skill，唯一编译入口）：main agent 对每个脑图调一次 `compile_pipeline`，工具内部确定性跑完——`compile_prep` 解析脑图→manifest（只含需求，零命令）→ 每 case 独立流水线（draft 产 provenance → grade 验 provenance → CUT 带反馈重做 ≤3 轮，N case 并发无屏障）→ `compile_emit_merged` 合并打包。**不上机**（上机走 ist_verify）。主 agent **不自己拆步调 prep/fanout/merge**——固定序列锁在 pipeline 工具内（自由度只在 draft/grade fork 内现场查命令）。
 - **两个 fork 子流程**（编译链内，独立 fresh subagent，彼此隔离，消除"自生成自评估"）：
   - `ist_compile_draft`（agent `ist-compile-draft`）：核查前置 → 检索先例 → `compile_emit` 生成 xlsx 草稿。
-  - `ist_compile_grade`（agent `ist-compile-grade`）：`compile_score` 判断断言是否覆盖目标行为 + 给重做意见。**断言质量审批，不依赖上机裁决**（device verdict 可选输入）。
-- **独立上机验证** `ist_verify`（inline skill，user-invocable）：对成品 excel 用 `dev_run_batch` 串行上机、采集框架真实裁决。先 `compile_runtime_fill` 用设备真实输出回填 draft 留空的 `<RUNTIME>` 断言并锁死，再用 `compile_attribute` 对每个 fail 做四层归因（G错/E错/V错/瞬态）——G/E/V 错带层级反馈回流 `ist_compile` 重编对应层、瞬态不回流；上机真 PASS 的 case 把 G 段文法写回 footprint。不信 verdict 字符串，以框架逐 check_point 明细为准。
+  - `ist_compile_grade`（agent `ist-compile-grade`）：`compile_score` 判断断言是否覆盖目标行为 + 给重做意见。**断言质量审批，不依赖上机裁决**（device verdict 可选输入）。grade fork 末行输出机读裁定标记 `判定：PASS|CUT`，`compile_pipeline._parse_grade_verdict` 优先认它（治"CUT 重做意见里含 PASS 字样被误读"）。
+- **emit 出口 correct-by-construction 归一化 + 结构门**（`emit_xlsx_tool` + `structural_gate`，与 grade 语义评分独立的确定性强制，**都有框架源码/footprint 实证**，不靠 prompt 自觉）：
+  - **crash-gate（H 感知悬空断言门）**：check_point 的被测值取框架 `result`；带 H(save_as) 的步只存寄存器**不更新 result**、配置步返回 None → 若断言紧前没有「不带 H 的观测步」则 `found(None)` 抛 TypeError **崩整份文件**。门要求捕获比较走三步式 `dig(H=v1)→dig(无H)→check_point(H=v1)`。
+  - **found_times 拒绝门**：框架 xlsx 分派只传 2 参，`found_times(expect,result,times)` 需 3 参 → 必崩。拒绝并要求改 `found`/`abs_found`。
+  - **found→abs_found（捕获比较）**：check_point 引用 H 寄存器时自动转——框架 `found` 把 expect 当正则、捕获值含 `+`/`.`/`@` 元字符自匹配都 fail；`abs_found` 用 `re.escape` 字面匹配。
+  - **test_env 主机名小写**：框架 `getattr(env, F)` 不转小写，`routerB` 大写 → AttributeError、dig 不执行。
+  - **persistence 断言掩码 prefix→点分**：`show sdns host persistence` 回显掩码是点分 `255.255.255.0` 非 prefix `24`，断言据此归一。
+- **独立上机验证** `ist_verify`（inline skill，user-invocable）：对成品 excel 用 `dev_run_batch` 上机、采集框架真实裁决。`dev_run_batch` **整份单跑 O(N)**：框架把整份 xlsx 当一个套件整跑，故只 deliver+run 一次（用首个 autoid 提交），再从该 staging 一把读回全部 case 裁决；超时随 case 数自适应（`clamp(max(floor, N×45s), 600, 2400)`）。旧逐 autoid 跑法 O(N²)+撞 600s 上限（"跑 20min 无结果"根因）已废。先 `compile_runtime_fill` 用设备真实输出回填 draft 留空的 `<RUNTIME>` 断言并锁死，再用 `compile_attribute` 对每个 fail 做四层归因（G错/E错/V错/瞬态）——G/E/V 错带层级反馈回流 `ist_compile` 重编对应层、瞬态不回流；上机真 PASS 的 case 把 G 段文法写回 footprint。不信 verdict 字符串，以框架逐 check_point 明细为准。
 - **交付门槛是 grade 断言质量**（弱断言/未覆盖 CUT，不救场）；上机 pass 不再是交付前置——环境瞬态失败不挡 excel 产出。verify 发现的真实断言问题可回流重编译。连续 N 轮 CUT 则 escalate/ask_user 上报。
-- **case_compiler 现存活件**（早期确定性管线已删）：`case_ir`+`xlsx_emit`（xlsx 数据结构与产出）/`confidence_f`（LLM 置信判分，非硬编码规则）/`corpus`+`object_normalizer`（先例语料与 E 列对象名规范化）/`config`/`device_mcp_client`（跳转机通道）。
-- **关键工具**：`compile_precedent`（按配置结构相似度检索已验证先例，无 embedding）/`compile_score`（判分，返回结构化 JSON）/`compile_emit`/`dev_run_case`/`dev_probe`/`compile_prep`/`compile_fanout`/`dev_run_batch`/`compile_emit_merged`——均在 `skills/loader.py` 的 `_TOOL_REGISTRY` 注册供 fork 子流程取用。检索与置信工具在 `tools/device/precedent_tools.py`，批量编排工具在 `tools/device/batch_tools.py`+`compile_prep.py`。
-- **红线**：skill/agent 定义零写死的 sdns/APV 具体命令（领域内容靠 LLM 现场查手册 `*cli__part*.md`/先例）；断言期望值溯源先例/手册，不 observe-then-assert。
 - **case_compiler 现存活件**（早期确定性管线已删）：`case_ir`+`xlsx_emit`（xlsx 数据结构与产出）/`confidence_f`（LLM 置信判分，非硬编码规则）/`corpus`+`object_normalizer`（先例语料与 E 列对象名规范化）/`config`/`device_mcp_client`（跳转机通道）。
 - **关键工具**：`compile_precedent`（按配置结构相似度检索已验证先例，无 embedding）/`compile_score`（判分，返回结构化 JSON）/`compile_emit`/`dev_run_case`/`dev_probe`/`compile_prep`/`compile_fanout`/`dev_run_batch`/`compile_emit_merged`——均在 `skills/loader.py` 的 `_TOOL_REGISTRY` 注册供 fork 子流程取用。检索与置信工具在 `tools/device/precedent_tools.py`，批量编排工具在 `tools/device/batch_tools.py`+`compile_prep.py`。
 - **红线**：skill/agent 定义零写死的 sdns/APV 具体命令（领域内容靠 LLM 现场查手册 `*cli__part*.md`/先例）；断言期望值溯源先例/手册，不 observe-then-assert。
@@ -196,6 +199,7 @@ main/ist_core/tools/
 - `QA_WEB_SEARCH_REPEAT_LIMIT` / `QA_WEB_SEARCH_REPEAT_WINDOW_S`（默认 2 / 600s）— `qa_web_search` 同 query 重复调用上限
 - `CAPTCHA_OCR_RETRY`（默认 10）— `defect_fetch_on_demand` 验证码识别重试次数
 - `NO_PROGRESS=1` — 非 TTY 环境禁用进度条
+- `IST_LLM_STREAMING`（默认 `1` 开）— `_build_chat_model`/`build_explore_model` 是否流式。TUI `astream_events` 需开；**`0` 关流式**用于不稳定端点的批量 agent 跑（如 `infotest -p` 跑编译流水线）：某些 OpenAI 兼容网关流式会周期性发空 chunk、令 httpx 每 chunk 重置读超时 → 整体永不完成也永不超时（0% CPU 死挂）。非流式走单次请求 + 干净的整体 `request_timeout`，遇 stall 按时超时重试。
 
 ## 技术栈
 

@@ -71,10 +71,11 @@ def test_run_batch_rejects_missing_xlsx():
 
 
 # ---------------------------------------------------------------------------
-# 串行上机核心逻辑（mock FrameworkMCPClient，不碰真设备，与端到端跑零冲突）
+# 整份单跑核心逻辑（mock FrameworkMCPClient，不碰真设备，与端到端跑零冲突）
 #
-# dev_run_batch 的硬约束：一条 SSH 会话内 for 循环顺序 deliver+run+取明细；某 case
-# error 不中断后续；verdict 来自框架真实裁决。下面用假 client 验证这些不变量。
+# dev_run_batch 的新契约（O(N) 修复）：整份 xlsx **只 deliver+run 一次**（框架把整份当套件
+# 整跑），再从 submit staging 一把读回所有 case 的逐 check_point 裁决；verdict 取每 case 专属
+# 日志的 #### Success/Fail Num；非 pass 附 device_context。下面用假 client 验证这些不变量。
 # ---------------------------------------------------------------------------
 
 import re as _re  # noqa: E402
@@ -83,17 +84,19 @@ import pytest  # noqa: E402
 
 
 class _FakeClient:
-    """记录调用顺序的假框架 client，按 autoid 脚本化返回。
+    """假框架 client：整份只提交一次，fetch_batch_details 一把返回所有 case 日志。
 
-    instances 类属性记录"开了几个 client"——串行复用单会话应只开 1 个。
+    instances 记录开了几个 client（单会话应只 1 个）。
     """
 
     instances: list["_FakeClient"] = []
 
-    def __init__(self, scripts):
-        # scripts: {autoid: {"deliver": {...}, "run": {...}, "detail": "..."}}
-        self._scripts = scripts
-        self.calls: list[tuple[str, str]] = []  # (op, autoid) 全局顺序
+    def __init__(self, *, deliver=None, run=None, details=None, ctx="dev-ctx"):
+        self._deliver = deliver or {}
+        self._run = run if run is not None else {"task_id": "T1"}
+        self._details = details or {}     # {inner_autoid: detail_text}
+        self._ctx = ctx
+        self.calls: list[tuple[str, str]] = []
         _FakeClient.instances.append(self)
 
     def __enter__(self):
@@ -104,15 +107,19 @@ class _FakeClient:
 
     def deliver(self, module, autoid, path):
         self.calls.append(("deliver", autoid))
-        return self._scripts.get(autoid, {}).get("deliver", {})
+        return self._deliver
 
     def run_and_wait(self, module, autoid, build, autoids, max_s):
         self.calls.append(("run", autoid))
-        return self._scripts.get(autoid, {}).get("run", {"results": {autoid: "pass"}})
+        return self._run
 
-    def fetch_case_detail(self, autoid):
-        self.calls.append(("detail", autoid))
-        return self._scripts.get(autoid, {}).get("detail", "")
+    def fetch_batch_details(self, submit_autoid):
+        self.calls.append(("batch_details", submit_autoid))
+        return self._details
+
+    def fetch_device_context_under(self, submit_autoid, inner_autoid):
+        self.calls.append(("ctx", inner_autoid))
+        return self._ctx
 
 
 def _make_merged_xlsx(tmp_path):
@@ -128,18 +135,18 @@ def _make_merged_xlsx(tmp_path):
 def _patch_client(monkeypatch):
     _FakeClient.instances = []
 
-    def _install(scripts):
+    def _install(**kwargs):
         import main.case_compiler.device_mcp_client as dmc
         monkeypatch.setattr(dmc, "FrameworkMCPClient",
-                            lambda *a, **k: _FakeClient(scripts))
+                            lambda *a, **k: _FakeClient(**kwargs))
     return _install
 
 
-def test_run_batch_serial_order_single_session(tmp_path, _patch_client):
-    """三个 case 必须按输入顺序 deliver→run→detail，且只开一条会话。"""
+def test_run_batch_one_submit_collects_all(tmp_path, _patch_client):
+    """整份只 deliver+run 一次（O(N) 关键），再一把读回全部 case 裁决。"""
     path, autoids = _make_merged_xlsx(tmp_path)
-    _patch_client({a: {"run": {"results": {a: "pass"}}, "detail": "Success Num: 1"}
-                   for a in autoids})
+    _patch_client(run={"task_id": "T1"},
+                  details={a: "#### Success Num 1: ok" for a in autoids})
 
     out = dev_run_batch.invoke({"xlsx_path": path, "autoids_json": json.dumps(autoids),
                                "module": "sdns", "build": "b1"})
@@ -147,65 +154,60 @@ def test_run_batch_serial_order_single_session(tmp_path, _patch_client):
     assert [r["autoid"] for r in recs] == autoids
     assert all(r["verdict"] == "pass" for r in recs)
 
-    # 只开 1 个 client（复用单 SSH 会话）
-    assert len(_FakeClient.instances) == 1
-    # 每个 autoid 严格 deliver→run→detail，且 case 间不交错（串行）
+    assert len(_FakeClient.instances) == 1   # 单会话
     calls = _FakeClient.instances[0].calls
-    assert calls == [
-        ("deliver", "B100"), ("run", "B100"), ("detail", "B100"),
-        ("deliver", "B101"), ("run", "B101"), ("detail", "B101"),
-        ("deliver", "B102"), ("run", "B102"), ("detail", "B102"),
-    ]
+    # 整份只 deliver 一次、run 一次（不再 per-autoid 重复整跑）
+    assert len([c for c in calls if c[0] == "deliver"]) == 1
+    assert len([c for c in calls if c[0] == "run"]) == 1
+    assert ("batch_details", "B100") in calls   # 用首个 autoid 作 submit/staging
 
 
-def test_run_batch_error_does_not_halt_remaining(tmp_path, _patch_client):
-    """中间 case deliver 失败，后续 case 仍必须继续上机。"""
+def test_run_batch_verdict_from_per_case_log(tmp_path, _patch_client):
+    """verdict 取每 case 专属日志的 #### Success/Fail Num；无日志→unknown；非 pass 附 device_context。"""
     path, autoids = _make_merged_xlsx(tmp_path)
-    _patch_client({
-        "B100": {"run": {"results": {"B100": "pass"}}, "detail": "Success Num: 1"},
-        "B101": {"deliver": {"error": "deliver boom"}},  # 中间炸
-        "B102": {"run": {"results": {"B102": "fail"}}, "detail": "Fail Num: 2"},
+    _patch_client(run={"task_id": "T1"}, details={
+        "B100": "#### Success Num 1: ok\n#### Success Num 2: ok",   # pass
+        "B101": "#### Fail Num 1: fail to find X in: ",             # fail
+        # B102 无日志 → unknown（未执行到/被跳过）
     })
     out = dev_run_batch.invoke({"xlsx_path": path, "autoids_json": json.dumps(autoids)})
-    recs = json.loads(out)
-    assert len(recs) == 3  # 三条都有记录，不中断
-    assert recs[0]["verdict"] == "pass"
-    assert recs[1]["verdict"] == "error" and "deliver" in recs[1]["detail_tail"]
-    assert recs[2]["verdict"] == "fail"  # 中间炸后第三个照常跑
-    # B101 run 不应被调用（deliver 失败即 continue）
-    calls = _FakeClient.instances[0].calls
-    assert ("run", "B101") not in calls
-    assert ("run", "B102") in calls
+    by = {r["autoid"]: r for r in json.loads(out)}
+    assert by["B100"]["verdict"] == "pass"
+    assert by["B101"]["verdict"] == "fail"
+    assert by["B102"]["verdict"] == "unknown"
+    # 非 pass 附 device_context，pass 不附（省体积）
+    assert "device_context" in by["B101"] and "device_context" in by["B102"]
+    assert "device_context" not in by["B100"]
 
 
-def test_run_batch_extracts_verdict_and_causality(tmp_path, _patch_client):
-    """verdict 取框架 results；causality 抽 Success/Fail Num 行。"""
+def test_run_batch_extracts_causality(tmp_path, _patch_client):
+    """causality 抽 Success/Fail Num 行；task_id 透传。"""
     path, autoids = _make_merged_xlsx(tmp_path)
-    _patch_client({
-        "B100": {"run": {"results": {"B100": "pass"}, "task_id": "T1"},
-                 "detail": "noise\nSuccess Num: 3\nFail Num: 0\nmore noise"},
-        "B101": {"run": {"results": {"B101": "pass"}}, "detail": "x"},
-        "B102": {"run": {"results": {"B102": "pass"}}, "detail": "x"},
+    _patch_client(run={"task_id": "T1"}, details={
+        "B100": "noise\n#### Success Num 3: ok\n#### Fail Num 0\nmore noise",
+        "B101": "#### Success Num 1: ok",
+        "B102": "#### Success Num 1: ok",
     })
     out = dev_run_batch.invoke({"xlsx_path": path, "autoids_json": json.dumps(autoids)})
-    recs = json.loads(out)
-    r0 = recs[0]
+    r0 = json.loads(out)[0]
     assert r0["task_id"] == "T1"
-    assert "Success Num: 3" in r0["causality"] and "Fail Num: 0" in r0["causality"]
+    assert "Success Num 3" in r0["causality"]
 
 
-def test_run_batch_marks_busy_verdict_when_device_locked(tmp_path, _patch_client):
-    """run_and_wait 撞锁返回 busy 时，run_batch 标 verdict=busy(非 error)，且不中断后续。"""
+def test_run_batch_busy_on_submit(tmp_path, _patch_client):
+    """整份提交撞全局锁 → 整批返回 busy 结构（agent 据此等待/重试），不误判为编译错误。"""
     path, autoids = _make_merged_xlsx(tmp_path)
-    _patch_client({
-        "B100": {"run": {"results": {"B100": "pass"}}, "detail": "Success Num: 1"},
-        # B101 撞锁：run_and_wait 返回 busy 结构
-        "B101": {"run": {"busy": True, "error": "device_busy",
-                         "message": "环境忙：正在验证用例 B100，已运行 50s"}},
-        "B102": {"run": {"results": {"B102": "pass"}}, "detail": "Success Num: 1"},
-    })
+    _patch_client(run={"busy": True, "error": "device_busy",
+                       "message": "环境忙：正在验证上一个用例，已运行 50s"})
     out = dev_run_batch.invoke({"xlsx_path": path, "autoids_json": json.dumps(autoids)})
-    recs = json.loads(out)
-    assert recs[0]["verdict"] == "pass"
-    assert recs[1]["verdict"] == "busy" and "环境忙" in recs[1]["detail_tail"]
-    assert recs[2]["verdict"] == "pass"   # busy 不中断后续
+    res = json.loads(out)
+    assert res.get("busy") is True and "环境忙" in res.get("message", "")
+
+
+def test_run_batch_deliver_fail_errors(tmp_path, _patch_client):
+    """deliver 失败（整份交付不上去）→ 直接报错，不继续。"""
+    path, autoids = _make_merged_xlsx(tmp_path)
+    _patch_client(deliver={"error": "deliver boom"})
+    out = dev_run_batch.invoke({"xlsx_path": path, "autoids_json": json.dumps(autoids)})
+    res = json.loads(out)
+    assert "error" in res and "deliver" in res["error"]

@@ -31,6 +31,8 @@ user-invocable: false
 
 结论给 PASS（真覆盖且来源可信，含"runtime 槽位弃权合理"）或 CUT（弱断言 / 未覆盖 / 来源对不上 / 该溯源的值躲成 `<RUNTIME>`，附具体到能改的重做意见）。证据引用 xlsx 行号 + `source.ref` + 需求原文。不自评、不重做、不上机。
 
+**输出的最后一行必须是机读裁定标记，单独成行**：`判定：PASS` 或 `判定：CUT`（编排器靠它判定，重做意见写在此行之前）。
+
 ## Brief from orchestrator
 
 $ARGUMENTS

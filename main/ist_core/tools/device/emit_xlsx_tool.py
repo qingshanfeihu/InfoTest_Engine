@@ -39,6 +39,27 @@ def _build_sentinel():
     )
 
 
+_PREFIX_TO_DOTTED = {"8": r"255\.0\.0\.0", "16": r"255\.255\.0\.0",
+                     "24": r"255\.255\.255\.0", "32": r"255\.255\.255\.255"}
+
+
+def _persistence_netmask_to_dotted(g: str) -> str:
+    """断言里 sdns host persistence 的 ipv4 掩码字段 prefix→点分（correct-by-construction）。
+
+    `show sdns host persistence` 回显把掩码显示成**点分 netmask**(255.255.255.0)，不是配置时的
+    prefix(24)。断言(check_point G)若写 prefix `"24"` 必与 show 输出不匹配、断言 fail（实证 zhaiyq
+    netmask 类 fail）。这里把 persistence 断言里 host 之后那个 1-2 位数字掩码字段转成点分正则。
+    只动断言、不动配置命令(配置用 prefix 合法)。
+    """
+    if "persistence" not in g:
+        return g
+    return _re_dev.sub(
+        r'(persistence\s+\d+\s+"[^"]*"\s+)"(8|16|24|32)"',
+        lambda m: m.group(1) + '"' + _PREFIX_TO_DOTTED.get(m.group(2), m.group(2)) + '"',
+        g,
+    )
+
+
 def _steps_to_caseir(autoid: str, steps: list, *, title: str = ""):
     """把 [{E,F,G,H?,I?,desc?}, ...] 步骤列表转成一个 CaseIR。
 
@@ -57,6 +78,12 @@ def _steps_to_caseir(autoid: str, steps: list, *, title: str = ""):
         f = str(s.get("F", "")).strip()
         if not e or not f:
             return None, f"step[{i}] 缺 E 或 F"
+        # 归一化(correct-by-construction):test_env 步的 F=触发机主机名,框架按 getattr(env, F)
+        # 精确分派且**不转小写**(实证 test_xlsx.py)。draft 偶尔写成 "routerB" 大写 → AttributeError、
+        # dig 不执行、无回显。这里强制降为小写(合法 test_env 主机名 routera/routerb/clientc… 全小写),
+        # 保证可分派——不靠 prompt 自觉。
+        if e == "test_env":
+            f = f.lower()
         g_val = str(s.get("G", "") or "")
         h_val = s.get("H") or None
         i_val = str(s.get("I")) if s.get("I") is not None else None
@@ -67,6 +94,16 @@ def _steps_to_caseir(autoid: str, steps: list, *, title: str = ""):
             h_val, g_val = g_val, ""
         if e == "check_point":
             has_cp = True
+            # 捕获比较归一化(correct-by-construction):check_point 引用 H 寄存器作期望值时,
+            # found → abs_found。框架 found() 把 expect 当**正则**(re.compile(expect));而捕获值是
+            # dig 整段输出,含 +short 的 `+`、IP 的 `.`、`@` 等正则元字符 → 连自匹配都 fail
+            # (实证 re.search(v1, v1)=False、re.search(re.escape(v1), v1)=True)。abs_found() 用
+            # re.escape(expect) **字面**匹配,捕获比较"同值"才判得对。not_found 不转(无 abs_not_found)。
+            if h_val and f == "found":
+                f = "abs_found"
+            # persistence 断言掩码 prefix→点分(匹配 show 回显);只动断言不动配置
+            if g_val and "persistence" in g_val:
+                g_val = _persistence_netmask_to_dotted(g_val)
         elif h_val:  # 非 check_point 的 H = 把本步输出捕获进变量,登记供后续 check_point 引用
             seen_vars.add(str(h_val))
         row = Row(test_object=e, method=f, data=g_val,

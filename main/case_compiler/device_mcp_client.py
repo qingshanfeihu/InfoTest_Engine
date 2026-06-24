@@ -191,6 +191,66 @@ class FrameworkMCPClient:
         except Exception:
             return ""
 
+    def fetch_batch_details(self, submit_autoid: str, max_chars_each: int = 3500) -> dict[str, str]:
+        """整份 xlsx 一次上机后,从 **submit_autoid 的 staging** 读回**所有内层 case** 的逐
+        check_point 明细。返回 {inner_autoid: detail_text}。
+
+        关键(实证):框架把交付的整份 xlsx 当套件整跑,所有内层 case 的日志都落在**提交时那个
+        autoid** 的 staging 下:``ist_staging_*/{submit_autoid}/test_xlsx/case.xlsx/<inner>/<inner>.txt``
+        ——不是各自 autoid 的独立 staging。故一次提交后用本方法一把捞齐,**不必逐 autoid 重复整跑**
+        (旧 dev_run_batch O(N²) 的根因)。一条 SSH 命令带分隔符 cat 全部,减少往返。
+        """
+        base_glob = (f"/home/test/apv_src/report/*/*/ist_staging_*/{submit_autoid}"
+                     f"/test_xlsx/case.xlsx")
+        cmd = (f"base=$(ls -dt {base_glob} 2>/dev/null | head -1); "
+               f"[ -z \"$base\" ] && exit 0; "
+               f"for d in \"$base\"/*/; do a=$(basename \"$d\"); "
+               f"if [ -f \"$d/$a.txt\" ]; then echo \"<<<CASE:$a>>>\"; cat \"$d/$a.txt\"; fi; done")
+        out: dict[str, str] = {}
+        try:
+            _i, o, _e = self._c.exec_command(cmd, timeout=120)
+            raw = o.read().decode("utf-8", "replace")
+        except Exception:
+            return out
+        for chunk in raw.split("<<<CASE:")[1:]:
+            mark = chunk.find(">>>")
+            if mark < 0:
+                continue
+            aid = chunk[:mark].strip()
+            body = chunk[mark + 3:]
+            if aid:
+                out[aid] = body[-max_chars_each:]
+        return out
+
+    def fetch_device_context_under(self, submit_autoid: str, inner_autoid: str,
+                                   max_chars: int = 9000) -> str:
+        """取**某内层 case** 的完整设备上下文(配置会话 + 触发端 dig),路径在 submit_autoid 的
+        staging 下(整份单跑语义)。与 fetch_device_context 同义,只是 base 指向 submit staging。
+        """
+        base = (f"/home/test/apv_src/report/*/*/ist_staging_*/{submit_autoid}"
+                f"/test_xlsx/case.xlsx/{inner_autoid}")
+        sources = [
+            ("设备配置会话(每条命令+设备响应)", f"{base}/apv_*.txt"),
+            ("触发端会话 RouterA(dig 真实输出)", f"{base}/RouterA.txt"),
+            ("触发端会话 RouterB(dig 真实输出)", f"{base}/RouterB.txt"),
+            ("触发端会话 clientc", f"{base}/clientc.txt"),
+        ]
+        per = max(1200, max_chars // max(1, len(sources)))
+        parts: list[str] = []
+        try:
+            for label, g in sources:
+                _i, o, _e = self._c.exec_command(f"ls -t {g} 2>/dev/null | head -1", timeout=20)
+                path = o.read().decode("utf-8", "replace").strip()
+                if not path:
+                    continue
+                _i, o, _e = self._c.exec_command(f"cat '{path}'", timeout=20)
+                text = o.read().decode("utf-8", "replace")
+                if text.strip():
+                    parts.append(f"=== {label} ({path.split('/')[-1]}) ===\n{text[-per:]}")
+        except Exception:
+            return ""
+        return "\n\n".join(parts)
+
     def fetch_device_context(self, autoid: str, max_chars: int = 9000) -> str:
         """拉**完整设备上下文**（上机失败诊断用，喂给 agent 让它知道怎么改/怎么填）。
 

@@ -229,7 +229,7 @@ def _check_variant_fidelity(case: dict, xlsx_path: "Path") -> str:
 
 
 def _build_case_brief(case: dict, *, product_version: str, manual_glob: str,
-                      groups: dict, precedent_text: str = "") -> str:
+                      precedent_text: str = "") -> str:
     """从 manifest 的一个 case 机械生成 draft 的五要素 brief（模板，非语义判断）。
 
     五要素：需求(autoid/title/step_intents) + 现状(模块/版本/分组+组级基线) +
@@ -337,15 +337,25 @@ def _extract_xlsx_path(fork_output: str, autoid: str, since: float = 0.0) -> Pat
     return cand
 
 
+# grade fork 末尾的结构化裁定标记（机读）：`判定：PASS` / `裁定: CUT` 等。
+# 优先认它，治朴素 rfind 的双向误读——尤其 CUT 结论后跟"…改成 X 才能 PASS"的重做意见
+# 会把 PASS 顶到最后、被 rfind 误读成通过、把弱断言 case 放进 merge。
+_VERDICT_MARKER_RE = re.compile(r"(?:判定|裁定)\s*[:：]\s*(PASS|CUT)", re.IGNORECASE)
+
+
 def _parse_grade_verdict(out: str) -> bool:
     """解析 grade fork 的最终裁定是否 PASS。
 
-    grade 报告会**先讨论** compile_score 工具给的分（可能含 "CUT"），**再下**自己的
-    结论。朴素的 `"PASS" in out and "CUT" not in out` 会把"工具说 CUT 但我判 PASS"误读成
-    重做 → 无谓 churn。改为取**最后出现**的裁定词（结论总在末尾），ERROR 一律不通过。
+    **优先认结构化标记** `判定/裁定：PASS|CUT`（取最后一个，结论在末尾）——grade 的 CUT
+    重做意见常写"…改成 X 才能 PASS",朴素的"最后出现的 PASS/CUT"会把这种 PASS 误读成通过。
+    无结构化标记时回退到"最后出现的裁定词"（向后兼容旧 grade 输出 + fake fork 测试），
+    ERROR 一律不通过。
     """
     if not out or out.startswith("ERROR:"):
         return False
+    marks = _VERDICT_MARKER_RE.findall(out)
+    if marks:
+        return marks[-1].upper() == "PASS"
     last_pass = out.rfind("PASS")
     last_cut = out.rfind("CUT")
     if last_pass < 0 and last_cut < 0:
@@ -357,7 +367,6 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
                   *, draft_skill: str, grade_skill: str) -> dict:
     """确定性跑完 prep→draft→grade→筛→merge。返回结构化结果 dict（不抛，错误进 result）。"""
     from main.ist_core.tools.device.compile_prep import compile_prep
-    from main.ist_core.tools.device.batch_tools import compile_fanout
     from main.ist_core.tools.device.emit_xlsx_tool import compile_emit_merged
     from main.ist_core.tools.device.precedent_tools import _load_case_rows
 
@@ -374,7 +383,6 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
         return result
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     cases = manifest.get("cases", [])
-    groups = manifest.get("groups", {})
     result["phases"].append(f"prep: {len(cases)} cases")
     if not cases:
         result["errors"].append("manifest 无 case")
@@ -410,7 +418,7 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
     def _draft_once(case: dict, aid: str, feedback: str, rnd: int,
                     precedent_text: str = "") -> Path | None:
         brief = _build_case_brief(case, product_version=product_version,
-                                  manual_glob=manual_glob, groups=groups,
+                                  manual_glob=manual_glob,
                                   precedent_text=precedent_text)
         if feedback:
             brief += (f"\n\n重做（第{rnd}轮）：上一版 grade 反馈——{feedback}\n"
@@ -491,7 +499,9 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
             except Exception as e:  # noqa: BLE001
                 result["errors"].append(f"{aid} 读回 steps 失败: {e}")
                 continue
-            # init = 首个 APV cmds_config（_load_case_rows 不含 init 行，留空让 merge 用默认）
+            # _load_case_rows 已含 init 行（C=1 的 APV cmds_config，有 E/F 会被读回）
+            # + 各步骤（E/F/G/H/I/desc 全读回）。直接当 steps 喂 merge：init 作为首步保留，
+            # 基线不丢，故不另传 init 键（传了反会与读回的 init 行重复）。
             merged_cases.append({"autoid": aid, "title": info["case"].get("title", ""),
                                  "steps": rows})
         if merged_cases:

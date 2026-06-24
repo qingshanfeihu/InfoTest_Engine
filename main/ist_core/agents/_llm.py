@@ -39,6 +39,19 @@ def _resolve_timeout_retries() -> tuple[float, int]:
     return timeout, retries
 
 
+def _resolve_streaming() -> bool:
+    """是否用流式请求。默认 True（TUI astream_events 需要）；``IST_LLM_STREAMING=0`` 关。
+
+    关流式用于**不稳定端点**的批量 agent 跑（如 print 模式跑编译流水线）：某些 OpenAI 兼容
+    网关流式会周期性发空 chunk、令 httpx 每 chunk 重置读超时 → 整体响应永不完成也永不超时
+    （观测到 0% CPU 死挂）。非流式是单次请求 + 干净的整体 request_timeout，遇 stall 会按时
+    超时重试，不会无限挂。
+    """
+    return (os.environ.get("IST_LLM_STREAMING") or "1").strip().lower() not in (
+        "0", "false", "off", "no",
+    )
+
+
 def resolve_llm_base_url() -> str:
     """OpenAI 兼容 API 根；留空走默认 MiMo CN 集群。"""
     return (os.environ.get("OPENAI_BASE_URL") or DEFAULT_OPENAI_BASE_URL).strip()
@@ -81,8 +94,9 @@ def _build_chat_model(model_name: str, **kwargs: Any):
 
     kwargs.setdefault("temperature", 0.0)
     kwargs.setdefault("top_p", 0.5)
-    kwargs.setdefault("streaming", True)
-    kwargs.setdefault("stream_usage", True)
+    _stream = _resolve_streaming()
+    kwargs.setdefault("streaming", _stream)
+    kwargs.setdefault("stream_usage", _stream)
     timeout, retries = _resolve_timeout_retries()
     kwargs.setdefault("request_timeout", timeout)
     kwargs.setdefault("max_retries", retries)
@@ -116,8 +130,9 @@ def build_explore_model(**kwargs: Any):
 
     kwargs.setdefault("temperature", 0.0)
     kwargs.setdefault("top_p", 0.5)
-    kwargs.setdefault("streaming", True)
-    kwargs.setdefault("stream_usage", True)
+    _stream = _resolve_streaming()
+    kwargs.setdefault("streaming", _stream)
+    kwargs.setdefault("stream_usage", _stream)
     timeout, retries = _resolve_timeout_retries()
     kwargs.setdefault("request_timeout", timeout)
     kwargs.setdefault("max_retries", retries)

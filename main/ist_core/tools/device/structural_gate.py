@@ -163,40 +163,83 @@ def _is_observation_step(step: dict) -> bool:
 
 
 def _check_dangling_assertions(steps: list, result: StructuralResult) -> None:
-    """断言非悬空：每个 check_point 前必须存在**某个前序观测算子步骤**产出可匹配的回显。
+    """断言的 result 来源必须有效——否则框架 ``found(None)`` 抛 TypeError、**整份文件崩溃**
+    （pytest 用例异常退出，该 case 之后的 case 全不执行；实证一个坏断言拖垮 31→只跑 4）。
 
-    框架契约：check_point 校验“上一个非 check_point 步骤”的输出。若某 check_point 之前
-    最近的非 check_point 步骤不是观测算子（如紧跟在一条写配置后、或开篇就断言），
-    则断言无回显可匹配 → 悬空 → 上机 Hit=0 必 fail（655203 崩溃类）。与意图无关、机械可判。
+    框架契约（实证 lib/test_xlsx.py + check_point.py）：
+    - 非 check_point 步**仅当不带 H(save_as)** 时 `result = func(...)`；带 H 的步只把输出存进
+      寄存器、**不更新 result**。
+    - 配置步 `cmds_config/cmd_config` 的 func() 返回 None（不产回显）。
+    - check_point 若 I 列(row[8])空，被测值 = 框架 `result`；`re.search(expect, None)` → TypeError 崩溃。
+    ⟹ check_point(I 空) 的 result 非 None ⟺ 它**之前最近的「不带 H 的步」是观测算子**(dig/show 产回显)。
+      若最近的不带 H 步是配置步(result=None)、或前面的观测步都带了 H(没更新 result) → 崩溃。
+
+    与意图无关、机械可判。捕获比较的正确三步式：dig(H=v1 捕获基线) → dig(**无 H**，设 result) →
+    check_point(H=v1)；draft 漏掉中间「无 H 观测步」时本门拦下。
     """
-    seen_observation = False
+    result_is_observe = False   # 框架 `result` 当前是否持有观测回显（非 None 可被 re.search）
     for i, s in enumerate(steps):
         if not isinstance(s, dict):
             continue
         e = str(s.get("E", "")).strip()
+        h = str(s.get("H", "") or "").strip()
+        i_col = str(s.get("I", "") or "").strip()
         if e == "check_point":
-            if not seen_observation:
+            # I 列非空时被测值取 I 寄存器（另一路径，此处不判）；I 空时取框架 result。
+            if not i_col and not result_is_observe:
                 result.add(
                     "dangling_assertion",
-                    "该断言之前没有任何观测算子步骤（show/dig/统计类产出回显）"
-                    "——断言无输出可匹配，上机 Hit=0 必 fail。"
-                    "在断言前加一个产出回显的观测步骤（如 show / dig）。",
+                    "该断言取的 result 无有效观测回显 → 框架 result=None、found(None) 抛 TypeError "
+                    "**崩溃整份文件**(该 case 之后全不跑)。成因:断言紧前最近的「不带 H 步」是配置步"
+                    "(cmds_config 返回 None)、或前面的观测步都带了 H(save_as 不更新 result)。"
+                    "修法:断言**紧前**放一个**不带 H** 的观测步(dig/show)让其回显成为 result;"
+                    "捕获比较用三步式 dig(H=v1) → dig(无H) → check_point(H=v1)。",
                     i,
                 )
-            # check_point 不改变 seen_observation（它消费上一步输出，不产出新回显）
+            # check_point 不改变 result（它消费 result，不产出新回显）
         else:
-            seen_observation = _is_observation_step(s)
+            if not h:
+                # 不带 H → 框架 `result = func()`;观测步→字符串(有效),配置步→None(无效)
+                result_is_observe = _is_observation_step(s)
+            # 带 H → 仅存寄存器、不更新 result → result_is_observe 不变
 
 
 def check_structural_constraints(autoid: str, steps: list, init: str = "") -> StructuralResult:
     """v2 结构约束门入口：命令 allowlist + 断言非悬空（IP 可达由 emit 既有门做）。
 
     返回 StructuralResult；ok=False 时 emit 应拒绝并把 render() 反馈给 draft 让它改。
+
+    注（为何不做「引号/参数格式门」）：实证 `sdns host persistence` 先例**逐位置且不一致**
+    （域名从不加引号、掩码总加引号），且先例集**不完整**（不覆盖 query_type 的 arity-5 合法形态）。
+    任何静态格式门要么漏报、要么误杀合法形态。命令的参数格式正确性靠：①照最像先例**逐字复制**
+    （compile_precedent 已强调）；②查 footprint/手册；③上机 verify 用设备 `^`/show 反馈兜底回流。
     """
     result = StructuralResult()
     if not isinstance(steps, list):
         return result
     _check_command_allowlist(steps, init, result)
     _check_dangling_assertions(steps, result)
+    _check_no_found_times(steps, result)
     return result
+
+
+def _check_no_found_times(steps: list, result: StructuralResult) -> None:
+    """拒绝 found_times 断言——框架 xlsx 分派**不支持**它,必崩整份文件。
+
+    实证(lib/test_xlsx.py 无任何 found_times/times 特殊处理):check_point 一律走 generic 2 参分派
+    `func(expect, result)`,而 `check_point.found_times(expect, result, times)` 需 3 参 →
+    `TypeError: found_times() missing 1 required positional argument: 'times'` → pytest 崩、
+    该 case 之后全不跑(实证 yzg 10 pass 后崩、14 不执行)。
+    改用 `found`(出现即可)或 `abs_found`(字面);要"恰好 N 次"语义,框架表达不了,换断言。
+    """
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        if str(s.get("E", "")).strip() == "check_point" and str(s.get("F", "")).strip() == "found_times":
+            result.add(
+                "found_times_unsupported",
+                "found_times 框架 xlsx 流不支持(分派只传 2 参、缺 times)→ TypeError 崩整份文件。"
+                "改用 found(出现即可)/abs_found(字面匹配);'恰好 N 次'语义本框架表达不了。",
+                i,
+            )
 

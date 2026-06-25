@@ -62,7 +62,37 @@ def test_extract_cli_derives_path_from_syntax():
     }]}
     facts = extract_facts("thread_id: t\n", llm_chat=lambda s, u, t=None: mock)
     assert len(facts) == 1
-    
-    
+
+
     assert facts[0].feature_path[:3] == ["ha", "synconfig", "bootup"]
     assert facts[0].cli_syntax == "ha synconfig bootup on"
+
+
+def test_extract_noncommand_strips_op_prefix():
+    """非命令 fact(behavior/rule/issue)的 feature_path 也要剥前导 no/show/clear。
+    LLM 常把动词写进 path(如"clear config all 的行为"），不剥就生成 clear.config.all
+    这类动词影子节点,与规范裸节点 config.all 分裂、且每次 dream 再生。"""
+    mock = {"facts": [{
+        "fact_kind": "behavior",
+        "feature_path": ["clear", "config", "all"],
+        "fact_key": "reset_all",
+        "content": "该命令重置设备上所有配置。",
+        "evidence_file": "x.md", "evidence_quote": "重置所有配置",
+    }]}
+    facts = extract_facts("thread_id: t\n", llm_chat=lambda s, u, t=None: mock)
+    assert len(facts) == 1
+    assert facts[0].feature_path == ["config", "all"]   # 前导 clear 已剥
+
+
+def test_extract_noncommand_all_verb_path_preserved():
+    """整条 path 都是动词(异常输入)→ 保留原样,不剥成空而丢掉该 fact。"""
+    mock = {"facts": [{
+        "fact_kind": "behavior",
+        "feature_path": ["clear"],
+        "fact_key": "k",
+        "content": "x",
+        "evidence_file": "x.md", "evidence_quote": "x",
+    }]}
+    facts = extract_facts("thread_id: t\n", llm_chat=lambda s, u, t=None: mock)
+    assert len(facts) == 1
+    assert facts[0].feature_path == ["clear"]

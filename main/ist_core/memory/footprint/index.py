@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 _TOKEN_SPLIT_RE = re.compile(r"[^\w一-鿿]+")
 _BUG_RE = re.compile(r"BUG-\d+", re.IGNORECASE)
 
+# CLI legend 的操作前缀(保留词,仅这 3 个)。extractor 铸 feature_id 时剥掉它们,
+# 故 lookup 的 verb 回退须用同一集合,保持铸造端/查询端一致。见 extractor._OP_PREFIXES。
+_OP_PREFIXES = ("no", "show", "clear")
+
 
 def _command_pattern_matches(pattern: str, concrete: str) -> bool:
     """concrete 命令(如 ``sdns on``)是否匹配存储的命令模式(如 ``sdns {on|off}``)。
@@ -135,10 +139,28 @@ class FootprintIndex:
         - 找不到: None
 
         children 优先用 reconcile 写入磁盘的字段（自包含）；缺失时回退前缀匹配。
+
+        verb 回退：feature_id 由 extractor 剥 `no`/`show`/`clear` 后铸造（裸命令主体），
+        但 agent 常按手册原样查 `no/show/clear <cmd>`（命令本身就这么写）。先按**原样**查
+        （护住 `show.statistics` / `clear.config` / `no.acl` 等真以动词起头的节点），原样
+        miss 再剥前导动词重试一次，把 `no sdns session persistence` 映回 `sdns.session.persistence`。
         """
         self._ensure_loaded()
         if not command:
             return None
+        result = self._lookup_key(command)
+        if result is not None:
+            return result
+        toks = command.lower().split()
+        j = 0
+        while j < len(toks) and toks[j] in _OP_PREFIXES:
+            j += 1
+        if 0 < j < len(toks):  # 确有前导动词且剥后非空 → 用裸命令主体再查一次
+            return self._lookup_key(" ".join(toks[j:]))
+        return None
+
+    def _lookup_key(self, command: str) -> dict | None:
+        """按命令**原样**（不剥动词）做 精确 key → 前缀 branch → alternation 三级查找。"""
         key = ".".join(command.lower().split())
 
         if key in self._nodes:
@@ -265,7 +287,10 @@ def get_footprint_index() -> FootprintIndex:
     global _FOOTPRINT_INDEX_SINGLETON
     if _FOOTPRINT_INDEX_SINGLETON is None:
         from main import knowledge_paths as kp
-        fp_dir = kp.KNOWLEDGE_FOOTPRINTS
+        # 扫描根必须是 nodes/ 子目录,不是 footprints/ 父目录:_ensure_loaded 用 rglob 递归,
+        # 指父目录会把 footprints/.archive_*/ 里的旧/畸形节点一并加载(归档清理形同虚设、
+        # 同 fid 两份还会按 rglob 顺序互相 shadow)。与 reconcile(footprint_dir/nodes) 对齐。
+        fp_dir = kp.KNOWLEDGE_FOOTPRINTS_NODES
         _FOOTPRINT_INDEX_SINGLETON = FootprintIndex(fp_dir)
     return _FOOTPRINT_INDEX_SINGLETON
 

@@ -133,6 +133,51 @@ def test_G_genuine_miss(tmp_path, monkeypatch):
     assert "未找到" in r
 
 
+# H. 带 no/show/clear 动词前缀的查询 → 剥动词回退到裸 feature_id 叶子。
+#    feature_id 由 extractor 剥动词后铸造(裸命令主体),但 agent 照手册原样
+#    `no/show/clear <cmd>` 查 → 原样 key 对不上,须剥动词重试才精确命中,不该落模糊。
+def test_H_verb_prefixed_query_strips_to_bare_feature(tmp_path, monkeypatch):
+    _make_index(tmp_path, monkeypatch, [
+        _node("sdns.session.persistence",
+              ["show sdns session persistence [host_name]",
+               "no sdns session persistence <host_name> <network>",
+               "clear sdns session persistence [host_name]"]),
+    ])
+    for q in ("no sdns session persistence",
+              "show sdns session persistence",
+              "clear sdns session persistence"):
+        r = _lookup(q)
+        assert "sdns.session.persistence" in r, q   # 精确命中裸 feature_id
+        assert "模糊" not in r and "父节点" not in r, q
+
+
+# I. feature_id 本就以 show/no/clear 起头的真节点(纯展示/清除命令,无配置对偶)→
+#    原样精确命中,不被动词剥离误伤成裸形式而落空(治回退误伤这 20 个真·动词节点)。
+def test_I_verb_led_feature_id_hit_as_is(tmp_path, monkeypatch):
+    _make_index(tmp_path, monkeypatch, [
+        _node("show.statistics.sdns.query", ["show statistics sdns query"]),
+        _node("clear.config.all", ["clear config all"]),
+    ])
+    r = _lookup("show statistics sdns query")
+    assert "show.statistics.sdns.query" in r
+    assert "show statistics sdns query" in r
+    assert "模糊" not in r
+    r2 = _lookup("clear config all")
+    assert "clear.config.all" in r2
+    assert "模糊" not in r2
+
+
+# J. 原样既无动词节点、剥动词后裸主体也不存在 → 仍回 None(交给上层模糊),不误命中。
+def test_J_verb_prefix_strip_still_miss_falls_to_fuzzy(tmp_path, monkeypatch):
+    _make_index(tmp_path, monkeypatch, [
+        _node("demo.svc.method", ["demo svc method <a>"]),
+    ])
+    # "no demo svc method rr": 原样 no.demo.* 无; 剥 no → demo.svc.method.rr 仍无节点/前缀 → 模糊
+    r = _lookup("no demo svc method rr")
+    assert "模糊匹配" in r
+    assert "demo svc method <a>" in r
+
+
 # 子节点计数只数带命令的（空子节点不计入展开列表）
 def test_child_count_excludes_empty_children(tmp_path, monkeypatch):
     _make_index(tmp_path, monkeypatch, [

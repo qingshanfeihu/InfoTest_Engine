@@ -314,7 +314,15 @@ def _parse_llm_response(raw: Any, thread_id: str) -> list[RawFact]:
         if kind == "cli_command":
             path = _feature_path_from_syntax(cli_syntax)
         else:
-            path = [p.lower() for p in _coerce_str_list(item.get("feature_path")) if p]
+            # 非命令 fact(behavior/rule/issue)用 LLM 给的 feature_path,但要与 cli_command
+            # 路径对齐剥前导操作动词 no/show/clear:LLM 常把它们写进 path(如"clear config all
+            # 的行为"→ ["clear","config","all"]),不剥就生成 clear.config.all 这类动词影子节点,
+            # 与规范裸节点 config.all 分裂、且每次 dream 再生。剥后为空(整条都是动词)则保留原样不丢 fact。
+            raw_path = [p.lower() for p in _coerce_str_list(item.get("feature_path")) if p]
+            j = 0
+            while j < len(raw_path) and raw_path[j] in _OP_PREFIXES:
+                j += 1
+            path = raw_path[j:] if 0 < j < len(raw_path) else raw_path
         if not path:
             continue
 

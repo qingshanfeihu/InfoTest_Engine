@@ -8,7 +8,8 @@
 → 返回 `inactive` 透传到 finalize，现有单轮行为完全不变。
 
 **评判只认证据**：prompt 强约束「依据工具/上机真实返回（如 `dev_run_batch` 的逐 case verdict）判，
-绝不接受 agent 仅口头声称完成」。评判器出错 → **失败安全地放行**（视为达成），不把 agent 困死。
+绝不接受 agent 仅口头声称完成」。评判器出错 / 输出解析不确定 → **保守判未达成**（让其回流多跑
+一轮，受 `IST_GOAL_MAX_ROUNDS` 上限兜底不困死）——绝不在唯一危险方向（误判达成、提前收手）fail-open。
 """
 
 from __future__ import annotations
@@ -90,8 +91,52 @@ _SYS = (
 )
 
 
-def _render_tail(messages: list, *, limit: int = 16, per_msg: int = 600) -> str:
-    """把最近若干条消息渲染成紧凑文本，保留工具调用名 + 工具返回内容（证据所在）。"""
+def _summarize_tool_verdicts(content: str) -> str | None:
+    """若 ToolMessage 内容是 dev_run_batch 风格的逐 case JSON（每条含 verdict），产出
+    **永不截断**的紧凑裁决摘要——保证『是否全部 pass』这一裁判最关键信号不被 per_msg 截没
+    （N 个 case 的数组远超单条 per_msg，fail 又常排在数组后段）。解析不出则返回 None。"""
+    try:
+        data = json.loads(content)
+    except Exception:  # noqa: BLE001
+        return None
+    records: list | None = None
+    if isinstance(data, list):
+        records = data
+    elif isinstance(data, dict):
+        for k in ("results", "cases", "details", "items", "verdicts"):
+            if isinstance(data.get(k), list):
+                records = data[k]
+                break
+    if not records or not all(isinstance(r, dict) for r in records):
+        return None
+    if not any("verdict" in r for r in records):
+        return None
+    counts: dict[str, int] = {}
+    non_pass: list[str] = []
+    for r in records:
+        v = str(r.get("verdict") or "?").lower()
+        counts[v] = counts.get(v, 0) + 1
+        if v != "pass":
+            aid = r.get("autoid") or r.get("id") or r.get("task_id") or "?"
+            non_pass.append(f"{aid}({v})")
+    tally = " / ".join(f"{v}:{n}" for v, n in sorted(counts.items()))
+    out = f"逐case裁决 共{len(records)}: {tally}"
+    if non_pass:
+        shown, extra = non_pass[:60], max(0, len(non_pass) - 60)
+        out += f"；非pass[{len(non_pass)}]: " + ", ".join(shown)
+        if extra:
+            out += f" …(+{extra} 省略)"
+    return out
+
+
+def _render_tail(
+    messages: list, *, limit: int = 16, per_msg: int = 600, tool_per_msg: int = 4000
+) -> str:
+    """把最近若干条消息渲染成紧凑文本，保留工具调用名 + 工具返回内容（证据所在）。
+
+    工具返回是裁判的硬证据，给更大的 ``tool_per_msg`` 额度；且对 dev_run_batch 风格的逐 case
+    裁决额外附一条**永不截断**的摘要，防止 fail 排在数组后段被截没导致裁判误判『全过』。
+    """
     lines: list[str] = []
     for m in (messages or [])[-limit:]:
         if isinstance(m, AIMessage):
@@ -107,7 +152,10 @@ def _render_tail(messages: list, *, limit: int = 16, per_msg: int = 600) -> str:
                 lines.append(f"[AI] {c[:per_msg]}")
         elif isinstance(m, ToolMessage):
             c = m.content if isinstance(m.content, str) else str(m.content)
-            lines.append(f"[工具返回] {c[:per_msg]}")
+            digest = _summarize_tool_verdicts(c)
+            if digest:
+                lines.append(f"[工具返回·裁决摘要] {digest}")
+            lines.append(f"[工具返回] {c[:tool_per_msg]}")
         elif isinstance(m, HumanMessage):
             c = m.content if isinstance(m.content, str) else str(m.content)
             lines.append(f"[用户/反馈] {c[:per_msg]}")
@@ -115,7 +163,7 @@ def _render_tail(messages: list, *, limit: int = 16, per_msg: int = 600) -> str:
 
 
 def _evaluate_goal(goal: str, messages: list) -> dict[str, Any]:
-    """调 haiku 评判目标是否达成。异常→失败安全放行（met=True），不困住 agent。"""
+    """调 haiku 评判目标是否达成。异常→保守判未达成（met=False），受 retry 上限兜底不困住 agent。"""
     try:
         from langchain_core.messages import SystemMessage
 
@@ -142,20 +190,47 @@ def _evaluate_goal(goal: str, messages: list) -> dict[str, Any]:
                                   "判未达成。请真正用工具/上机验证拿到结果后再下结论,不要只口头声称完成。"}
         return verdict
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[goal] 评判器异常，失败安全放行（视为达成）：%s", exc)
-        return {"met": True, "reason": f"评判器异常：{exc}"}
+        # 保守判未达成（不在唯一危险方向「误判达成提前收手」fail-open）：让其回流多跑一轮，
+        # 受 IST_GOAL_MAX_ROUNDS 上限兜底不会困死 agent。
+        logger.warning("[goal] 评判器异常，保守判未达成（受 max_rounds 兜底）：%s", exc)
+        return {"met": False, "reason": f"评判器异常，保守判未达成（受 max_rounds 兜底，不困死）：{exc}"}
 
 
 def _parse_verdict(raw: str) -> dict[str, Any]:
-    """从模型输出抽 {met, reason}；抽不到 JSON 时退回关键词判定。"""
+    """从模型输出抽 ``{met, reason}``。
+
+    **证据纪律（对应裁判唯一危险失败方向：误判达成）**：只认**含 ``met`` 字段的合法 JSON**；
+    抽不到就一律**默认未达成**（``met=False``），让其回流多跑一轮（受 retry 上限兜底，不困死）——
+    绝不用脆弱子串去『抢救』一个 ``true``（旧实现 ``'"met": true' in low`` 会被复述目标、截断
+    JSON、举例块误命中；旧贪婪 ``\\{.*\\}`` 又会跨多块匹配致解析失败）。
+    """
     s = (raw or "").strip()
-    m = re.search(r"\{.*\}", s, re.DOTALL)
-    if m:
-        try:
-            d = json.loads(m.group(0))
+
+    def _coerce(d: Any) -> dict[str, Any] | None:
+        if isinstance(d, dict) and "met" in d:
             return {"met": bool(d.get("met")), "reason": str(d.get("reason") or "")}
+        return None
+
+    # 1) 整串就是干净 JSON
+    try:
+        hit = _coerce(json.loads(s))
+        if hit is not None:
+            return hit
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 2) 文本里逐块（非贪婪）抽 {...}，取**最后一个**含 met 的合法 JSON 对象（结论块通常在末尾）
+    last: dict[str, Any] | None = None
+    for mt in re.finditer(r"\{[^{}]*\}", s, re.DOTALL):
+        try:
+            hit = _coerce(json.loads(mt.group(0)))
         except Exception:  # noqa: BLE001
-            pass
-    low = s.lower()
-    met = ('"met": true' in low) or ('"met":true' in low) or low.strip() in ("true", "yes")
-    return {"met": met, "reason": s[:300]}
+            continue
+        if hit is not None:
+            last = hit
+    if last is not None:
+        return last
+
+    # 3) 抽不到含 met 的合法 JSON → 保守判未达成（绝不子串抢救 true）
+    logger.info("[goal] 评判输出无法解析出含 met 的 JSON → 保守判未达成。raw=%s", s[:200])
+    return {"met": False, "reason": (s[:300] or "评判输出无法解析，保守判未达成")}

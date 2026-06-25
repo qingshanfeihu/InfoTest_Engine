@@ -261,7 +261,9 @@ def test_filter_completions_with_slash_prefix_strips_it():
 def test_filter_completions_partial_match():
     completions = filter_completions("co")
     names = {c.name for c in completions}
-    assert names == {"continue", "compact", "cost"}
+    # 内置 co* 命令必须全部命中;user-invocable 技能(如 config-answer)现也作为
+    # /<skill> 补全出现,故用子集断言而非精确相等。
+    assert {"continue", "compact", "cost"} <= names
 
 
 def test_filter_completions_no_match_returns_empty():

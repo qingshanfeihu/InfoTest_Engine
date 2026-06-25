@@ -8,7 +8,6 @@ from __future__ import annotations
 from .dom import DOMElement, DOMNode, NodeType, Rect, TextNode
 from .output import Output
 from .screen import CharPool, StylePool
-from .string_width import string_width
 
 
 def render_tree(
@@ -53,22 +52,31 @@ def _render_node(
     content_y = abs_y + node.style.padding_top + border_w
 
     
+    # 内容可用宽度(始终算):text 软换行行数据此定位下一个 child,必须和 output._apply_write
+    # 的软换行、transcript._content_height_rows 的滚动高度用同一算法(wrapped_row_count)。
+    content_w = rect.width - 2 * border_w - node.style.padding_left - node.style.padding_right
+
     clip_pushed = False
+    viewport_h: int | None = None
     if node.style.overflow in ("hidden", "scroll"):
-        content_w = rect.width - 2 * border_w - node.style.padding_left - node.style.padding_right
         content_h = rect.height - 2 * border_w - node.style.padding_top - node.style.padding_bottom
         output.push_clip(content_x, content_y, content_w, content_h)
         clip_pushed = True
+        viewport_h = content_h
 
-    
+
     scroll_offset = node.scroll_top if node.style.overflow == "scroll" else 0
     text_y_offset = 0
     for child in node.children:
         if isinstance(child, TextNode):
-            _render_text(child, output, style_pool, content_x, content_y - scroll_offset + text_y_offset)
-            
-            lines = child.value.count("\n") + 1 if child.value else 1
-            text_y_offset += lines
+            # 软换行感知行数(缓存在节点上,大 transcript 不每帧重算 string_width)。
+            rows = child.wrapped_rows(content_w)
+            # 跳过完全在可视区外的行(仅裁剪容器):省掉屏外 write op + _apply_write 逐字符
+            # 裁剪 —— 大 transcript 滚轮翻页才不卡。top = child 相对内容区顶部的起始行。
+            top = text_y_offset - scroll_offset
+            if viewport_h is None or (top + rows > 0 and top < viewport_h):
+                _render_text(child, output, style_pool, content_x, content_y - scroll_offset + text_y_offset)
+            text_y_offset += rows
         elif isinstance(child, DOMElement):
             _render_node(child, output, char_pool, style_pool, content_x, content_y - scroll_offset)
             text_y_offset = 0

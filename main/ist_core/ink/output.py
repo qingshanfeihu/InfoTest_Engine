@@ -147,9 +147,17 @@ class Output:
                     col = op.x
                 if row_y >= self._height:
                     break
+                # 软换行续接列:保留本逻辑行的前导缩进,让续接对齐到内容列而非回到 op.x。
+                # ⎿ 工具结果块的续接行有 5 空格缩进 → 软换行后仍对齐到内容列(和 Claude Code 一致);
+                # ⎿ 块外的普通行无缩进(indent=0)→ 续接回 op.x(第 0 列)从头另起。
+                # 这正是"长行尾字(如'线')跑到最左列"的根因:旧实现一律回 op.x,丢掉了缩进。
+                n_lead = len(line) - len(line.lstrip(" "))
+                wrap_col = op.x + n_lead
+                if wrap_col >= self._width:  # 极端缩进吃满整行宽 → 退回 op.x 防止续接无处可写
+                    wrap_col = op.x
                 for ch in line:
                     if col >= self._width:
-                        col = op.x
+                        col = wrap_col
                         row_y += 1
                         if row_y >= self._height:
                             break

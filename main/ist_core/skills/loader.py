@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -131,6 +132,39 @@ def _trace_fork(skill_name: str, brief: str, elapsed_s: float, summary: dict, er
         )
     except Exception:  # noqa: BLE001 — 可观测性绝不能影响主流程
         logger.debug("fork trace 写入失败", exc_info=True)
+
+
+def _dump_full_trace(skill_name: str, messages: list) -> None:
+    """``IST_FORK_TRACE_FULL=1`` 时，把 fork **完整对话**（每轮 AI 推理文本 + 工具调用 args +
+    工具返回摘要）落到 ``fork_full_trace.log``，供诊断「fork 一步步在想什么、为什么反复查 footprint」。
+    默认关；失败静默，绝不影响主流程。"""
+    if (os.environ.get("IST_FORK_TRACE_FULL") or "0").strip().lower() not in ("1", "true", "on", "yes"):
+        return
+    try:
+        import json as _json
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        lines = [f"\n{'='*72}", f"[{ts}] FORK={skill_name}  全程思考（{len(messages)} 条消息）", "=" * 72]
+        step = 0
+        for m in messages:
+            mtype = getattr(m, "type", "")
+            if mtype == "ai":
+                step += 1
+                content = m.content if isinstance(m.content, str) else str(m.content)
+                if content.strip():
+                    lines.append(f"\n[AI#{step} 推理] {content.strip()}")
+                for tc in (getattr(m, "tool_calls", None) or []):
+                    name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+                    args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})
+                    lines.append(f"   → 调用 {name}({_json.dumps(args, ensure_ascii=False)[:300]})")
+            elif mtype == "tool":
+                c = m.content if isinstance(m.content, str) else str(m.content)
+                lines.append(f"   ← 返回 {c.strip()[:300]}")
+        path = Path(_FORK_TRACE_PATH).parent / "fork_full_trace.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception:  # noqa: BLE001
+        logger.debug("fork full trace 写入失败", exc_info=True)
 
 
 _MODEL_MAP = {
@@ -366,7 +400,7 @@ def get_subagent_runnable(name: str) -> Any | None:
             system_prompt=spec["system_prompt"],
             tools=tools,
             name=spec["name"],
-        ).with_config({"recursion_limit": 200})
+        ).with_config({"recursion_limit": int(os.environ.get("IST_FORK_RECURSION_LIMIT") or 120)})
 
         _SUBAGENT_RUNNABLE_CACHE[spec["name"]] = runnable
         return runnable
@@ -397,7 +431,242 @@ def list_subagents() -> list[dict[str, str]]:
 
 
 
-def execute_fork_skill(skill_name: str, brief: str = "") -> str:
+def _fork_step_emit_enabled() -> bool:
+    return os.environ.get("IST_FORK_STEP_EMIT", "1") != "0"
+
+
+# fastlog 式 evidence:fork 步骤行**全速追加写日志文件**,TUI 自己定时 tail 渲染
+# (见 ist_app._start_evidence_tailer)。彻底解耦"高频 evidence 产出"与"TUI 渲染"——
+# 不论 N case(如 53)并发写多快,TUI 都按固定节奏(~300ms)读、不会被刷卡;且文件
+# 可被外部 `tail -f` 直接看运行过程。线程池 worker 并发调用,故共享句柄 + 加锁。
+_EV_LOG_FH = None
+_EV_LOG_LOCK = threading.Lock()
+
+
+def _evidence_log_path() -> str:
+    """evidence 实时日志路径(IST_EVIDENCE_LOG 可覆盖;默认 runtime/logs/)。"""
+    p = os.environ.get("IST_EVIDENCE_LOG")
+    if p:
+        return p
+    return str(Path(__file__).resolve().parents[3] / "runtime" / "logs" / "compile_evidence.live.log")
+
+
+def reset_evidence_log() -> None:
+    """清空 evidence 日志(TUI 启动时调,每会话从干净开始)。失败静默。"""
+    global _EV_LOG_FH
+    try:
+        with _EV_LOG_LOCK:
+            if _EV_LOG_FH is not None:
+                try:
+                    _EV_LOG_FH.close()
+                except Exception:
+                    pass
+                _EV_LOG_FH = None
+            path = Path(_evidence_log_path())
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _fork_emit(text: str) -> None:
+    """把 fork 内部一步可观测信息**追加到 evidence 日志文件**(fastlog:producer 全速
+    写、TUI 定时读)。共享句柄 + 锁(线程池并发);flush 让 tail 端及时见。
+    失败静默——可观测性不能拖垮编译。"""
+    global _EV_LOG_FH
+    try:
+        with _EV_LOG_LOCK:
+            if _EV_LOG_FH is None:
+                path = Path(_evidence_log_path())
+                path.parent.mkdir(parents=True, exist_ok=True)
+                _EV_LOG_FH = open(path, "a", encoding="utf-8")
+            _EV_LOG_FH.write(text + "\n")
+            _EV_LOG_FH.flush()
+    except Exception:
+        pass
+
+
+# fork token 用量累计:compile 期主 agent 阻塞在 compile_pipeline、footer token 冻结,
+# 实际烧的是 draft/grade fork 的 LLM 调用。这里累加,供 TUI footer 单独显示真实成本。
+_FORK_TOKENS = [0, 0]  # [input, output]
+_FORK_TOKENS_LOCK = threading.Lock()
+
+
+def _accumulate_fork_tokens(msg: Any) -> None:
+    try:
+        um = getattr(msg, "usage_metadata", None) or {}
+        it = um.get("input_tokens", 0) or 0
+        ot = um.get("output_tokens", 0) or 0
+        if it or ot:
+            with _FORK_TOKENS_LOCK:
+                _FORK_TOKENS[0] += it
+                _FORK_TOKENS[1] += ot
+    except Exception:
+        pass
+
+
+def get_fork_tokens() -> tuple[int, int]:
+    """返回 (input, output) fork token 累计(供 TUI 显示)。"""
+    with _FORK_TOKENS_LOCK:
+        return (_FORK_TOKENS[0], _FORK_TOKENS[1])
+
+
+def reset_fork_tokens() -> None:
+    with _FORK_TOKENS_LOCK:
+        _FORK_TOKENS[0] = 0
+        _FORK_TOKENS[1] = 0
+
+
+# 路径类参数:只展示尾部(basename/末两段)——项目绝对路径前缀对所有调用都一样、无信息量。
+_FORK_PATH_KEYS = ("path", "file_path", "xlsx_path", "provenance_path", "mindmap_path")
+# 取值优先级:语义参数(搜什么/查什么)排在路径前——如 fs_grep 显示搜索 pattern 比显示手册路径有用。
+_FORK_ARG_KEYS = (
+    "command", "query", "pattern", "glob", "feature_id", "skill", "name", "autoid",
+    "path", "file_path", "xlsx_path", "provenance_path", "mindmap_path",
+)
+
+
+def _short_fork_args(args: Any, limit: int = 48) -> str:
+    """从 tool_call 的 args 取一个有代表性的标量参数,截断成单行展示。
+
+    路径类参数只显示尾部文件名(前缀对项目内所有绝对路径都一样、纯噪声);
+    语义参数(pattern/query/command)优先于路径(fs_grep 显示"搜什么"比"在哪搜"有用)。
+    """
+    if not isinstance(args, dict) or not args:
+        return ""
+    for k in _FORK_ARG_KEYS:
+        v = args.get(k)
+        if isinstance(v, str) and v.strip():
+            s = v.strip().replace("\n", " ")
+            if k in _FORK_PATH_KEYS and "/" in s:
+                parts = [p for p in s.split("/") if p]
+                if len(parts) > 2:
+                    s = "…/" + "/".join(parts[-2:])
+            return "(" + s[:limit] + ")"
+    for v in args.values():
+        if isinstance(v, (str, int, float)) and str(v).strip():
+            return "(" + str(v).strip().replace("\n", " ")[:limit] + ")"
+    return ""
+
+
+def _short_fork_result(content: Any, limit: int = 140) -> str:
+    """把工具结果压成单行简洁预览,带上**实质内容**而不只是节点标识。
+
+    footprint 输出是 `## {feature_id} ({level}, verified Nx)` + `  - {命令}` 列表,
+    旧版只抓首行 → 预览只剩节点名(`sdns.host.persistence (leaf, verified 7x)`),
+    draft 真正查到的**命令语法**全丢了(用户反馈"footprint 结果都是空")。改为
+    `{feature_id}: {首条命令}  (+N)`,让"查到什么命令"可见。dev_probe 设备回显 /
+    precedent 条数 / emit 产出·被拒原因(无 `  - ` 列表)行为不变:仍取首行真内容。"""
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict):
+                parts.append(b.get("text") or b.get("content") or "")
+            else:
+                parts.append(str(b))
+        content = " ".join(p for p in parts if p)
+    s = str(content or "").strip()
+    if not s:
+        return ""
+    # 跳过工具自带的头部横幅/分隔线 + 元数据标签行,抓第一行**真内容**(如 dev_probe 的设备回显)。
+    # dev_probe 格式:`=== dev_probe ===` / `command: {cmd}` / `--- 设备回显 ---` / `{真实输出}`
+    # —— 不跳 `command:` 就只会显示命令回显而非设备响应(用户要看的是"查到什么")。
+    _META = ("command:", "status:", "exit_code:", "host=", "mode=", "key=")
+    head = ""           # 首行真内容(footprint 节点头 / dev_probe 回显 / precedent 摘要)
+    bullets: list[str] = []  # footprint 的 `  - {命令/规则}` 列表项 = 实质内容
+    for ln in s.splitlines():
+        t = ln.strip()
+        if not t:
+            continue
+        if t.startswith("===") or t.startswith("---") or all(c in "=-_* #" for c in t):
+            continue
+        # kb_footprint 对每个子命令查询都前置同一句「⚠ 模块总开关…必须先执行」(enable_hint),
+        # 跳过它才能露出查询特定的 `## {feature_id}` 节点行——否则所有 footprint 预览看着一样。
+        if t.startswith("⚠"):
+            continue
+        if t.lower().startswith(_META):
+            continue
+        if t.startswith("- ") or t.startswith("• "):  # 列表项(命令/规则)= footprint 实质内容
+            bullets.append(t[2:].strip())
+            continue
+        if not head:
+            head = t.lstrip("#").strip()  # 去掉 `## ` markdown 头标记
+            # 去掉 footprint 头的 `(leaf, verified Nx)` 后缀,留干净的 feature_id
+            if head.endswith(")") and "(" in head:
+                base, paren = head.rsplit("(", 1)
+                if "verified" in paren:
+                    head = base.strip()
+    if head and bullets:
+        sep = "" if head.endswith((":", "：")) else ": "
+        out = f"{head}{sep}{bullets[0]}"
+        if len(bullets) > 1:
+            out += f"  (+{len(bullets) - 1})"
+    elif head:
+        out = head
+    elif bullets:
+        out = bullets[0] + (f"  (+{len(bullets) - 1})" if len(bullets) > 1 else "")
+    else:  # 整段都是横幅/前言(极少)→ 回退第一非空行
+        out = next((ln.strip() for ln in s.splitlines() if ln.strip()), s)
+    out = " ".join(out.split())
+    return out[:limit] + ("…" if len(out) > limit else "")
+
+
+def _fork_step_lines(label: str, msg: Any) -> list[str]:
+    """从一条新消息提取要展示的 fork 步骤:
+    - AIMessage 的每个 tool_call → 调用行 ``↳ {label}: {tool}({arg})``
+    - ToolMessage 的结果 → 结果预览行 ``  ⤷ {tool} → {首行/截断}``(让"查到什么"可见)。
+    """
+    lines: list[str] = []
+    tcs = getattr(msg, "tool_calls", None) or []
+    for tc in tcs:
+        if isinstance(tc, dict):
+            name = tc.get("name") or "tool"
+            targs = tc.get("args") or {}
+        else:
+            name = getattr(tc, "name", "") or "tool"
+            targs = getattr(tc, "args", {}) or {}
+        lines.append(f"↳ {label}: {name}{_short_fork_args(targs)}")
+    is_tool_result = (
+        getattr(msg, "type", "") == "tool" or msg.__class__.__name__ == "ToolMessage"
+    )
+    if is_tool_result:
+        preview = _short_fork_result(getattr(msg, "content", ""))
+        if preview:
+            tname = getattr(msg, "name", "") or ""
+            head = f"{tname} → " if tname else ""
+            lines.append(f"  ⤷ {head}{preview}")
+    return lines
+
+
+def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str) -> dict:
+    """跑 fork 并把内部每个工具调用实时发到主 bus(让 TUI 看到 draft/grade 运行过程)。
+
+    用 ``stream(stream_mode='values')``——每个 superstep 吐全量 state,取最后一个作为
+    与 ``invoke()`` 等价的最终返回值(同一 runnable 已 baked recursion_limit,行为不变)。
+    ``IST_FORK_STEP_EMIT=0`` 可关实时步骤(只留编排层的轮次标记)。"""
+    from langchain_core.messages import HumanMessage
+    inp = {"messages": [HumanMessage(content=rendered_body)]}
+    stream = getattr(runnable, "stream", None)
+    if not callable(stream) or not _fork_step_emit_enabled():
+        # runnable 不支持流式 或 关了步骤显示(IST_FORK_STEP_EMIT=0)→ 退回阻塞 invoke,
+        # 行为与旧版完全一致(只是看不到实时步骤)。
+        return runnable.invoke(inp)
+    final_state: dict = {}
+    seen = 0
+    for state in stream(inp, stream_mode="values"):
+        if not isinstance(state, dict):
+            continue
+        final_state = state
+        msgs = state.get("messages", []) or []
+        for m in msgs[seen:]:
+            for line in _fork_step_lines(label, m):
+                _fork_emit(line)
+            _accumulate_fork_tokens(m)
+        seen = len(msgs)
+    return final_state
+
+
+def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "") -> str:
     """执行 fork skill 的定义逻辑。
 
     流程：
@@ -439,13 +708,17 @@ def execute_fork_skill(skill_name: str, brief: str = "") -> str:
 
     rendered_body = _render_skill_body(parsed["body"], brief)
 
-    from langchain_core.messages import HumanMessage
-
     _t0 = time.monotonic()
+    _label = (tag or skill_name.replace("ist_compile_", "")).strip() or skill_name
     try:
-        result = runnable.invoke({"messages": [HumanMessage(content=rendered_body)]})
+        result = _invoke_fork_streamed(runnable, rendered_body, _label)
     except Exception as exc:
-        logger.exception("Fork skill %s execution failed", skill_name)
+        # 递归上限是「已处理」的预期情况(compile_pipeline 会捕获 → CUT 重做),
+        # 只记简讯不打 traceback;其它异常才打完整栈。日志已统一进文件(TUI 不糊屏)。
+        if exc.__class__.__name__ == "GraphRecursionError":
+            logger.warning("Fork skill %s 触发递归上限(已处理:将 CUT 重做)", skill_name)
+        else:
+            logger.exception("Fork skill %s execution failed", skill_name)
         _elapsed = time.monotonic() - _t0
         _trace_fork(skill_name, brief, _elapsed, {}, error=str(exc)[:120])
         _record_fork_status(skill_name, agent_name, _elapsed, {}, ok=False,
@@ -457,6 +730,7 @@ def execute_fork_skill(skill_name: str, brief: str = "") -> str:
     _summary = _summarize_fork_messages(messages)
     # 可观测性：落 fork 内部工具调用分布/轮数/耗时到 fork_trace.log
     _trace_fork(skill_name, brief, _elapsed, _summary)
+    _dump_full_trace(skill_name, messages)  # IST_FORK_TRACE_FULL=1 时落完整思考
 
     output = ""
     for msg in reversed(messages):

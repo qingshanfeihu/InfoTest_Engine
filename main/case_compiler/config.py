@@ -154,6 +154,97 @@ def get_config(reload: bool = False) -> CompilerConfig:
     return _CACHED
 
 
+# ── 自动化环境池（多跳板机并行 runner）────────────────────────────────────────
+# 4 套**独立设备床**的并行环境(2026-06-24 实测确认:跳板机/OS/凭据一致,框架走 Path A
+# 克隆旧 mcp_server 到新机)。每个环境 = 一台跳板机 + 各自的框架 stdio MCP server。
+# 默认**只用现役 103**(零行为变化);``IST_ENV_POOL_ENABLED`` 真值才启用 4 机池。
+# 设备床是「隔离但地址相同」的克隆,故 4 个环境共用同一份 network_topology.json。
+
+# 默认 4 机(末位=环境 id 后缀)；可被 IST_ENV_POOL_HOSTS(逗号分隔)或 runtime 配置覆盖。
+_DEFAULT_POOL_HOSTS = ["10.4.127.103", "10.4.127.93", "10.4.127.79", "10.4.127.105"]
+
+
+@dataclass
+class Environment:
+    """单个自动化运行环境（跳板机 + 框架 stdio MCP server）。口令仍从 ``pass_env`` 读,不落盘。"""
+
+    id: str
+    jumphost: str
+    ssh_user: str = "test"
+    ssh_port: int = 22
+    pass_env: str = "IST_JUMPHOST_PASS"
+    apv_src: str = "/home/test/apv_src"
+    server_path: str = "/home/test/mcp_server/server.py"
+    py38: str = "/home/test/apv_src/.python3.8/bin/python"
+    mcp_url: str = ""                          # http://<host>:8000/mcp（HTTP 传输备用，当前走 stdio）
+    topology: str = "network_topology.json"    # knowledge/data/auto_env/ 下的拓扑文件（克隆环境共用）
+
+    @property
+    def server_cmd(self) -> str:
+        return f"cd {self.apv_src} && {self.py38} {self.server_path}"
+
+
+def _pool_enabled() -> bool:
+    """环境池总开关。默认**关**（只用现役单环境 103，零行为变化）；置真值才启用 4 机池。"""
+    return (os.environ.get("IST_ENV_POOL_ENABLED") or "0").strip().lower() in (
+        "1", "true", "on", "yes",
+    )
+
+
+def load_environments() -> list["Environment"]:
+    """返回环境列表。
+
+    - 池**关**（默认）：返回单环境 = 现役跳板机（沿用 JumphostConfig，行为同今天）。
+    - 池**开**：runtime/compiler_config.json 的 ``environments`` 列表优先；否则
+      ``IST_ENV_POOL_HOSTS``（逗号分隔）；再否则内置 4 机默认。所有环境沿用现役
+      JumphostConfig 的 user/路径（Path A 克隆，完全一致）。
+    """
+    cfg = get_config()
+    jh = cfg.jumphost
+
+    def _mk(host: str) -> Environment:
+        host = host.strip()
+        return Environment(
+            id=f"env-{host.rsplit('.', 1)[-1]}",
+            jumphost=host, ssh_user=jh.user, pass_env=jh.password_env,
+            apv_src=jh.apv_src, server_path=jh.server_path, py38=jh.py38,
+            mcp_url=f"http://{host}:8000/mcp",
+        )
+
+    if not _pool_enabled():
+        return [_mk(jh.host)]
+
+    fc = _load_file_config()
+    raw = fc.get("environments")
+    if isinstance(raw, list) and raw:
+        out: list[Environment] = []
+        for item in raw:
+            if not isinstance(item, dict) or not item.get("jumphost"):
+                continue
+            host = str(item["jumphost"]).strip()
+            out.append(Environment(
+                id=str(item.get("id") or f"env-{host.rsplit('.', 1)[-1]}"),
+                jumphost=host,
+                ssh_user=str(item.get("ssh_user") or jh.user),
+                ssh_port=int(item.get("ssh_port") or 22),
+                pass_env=str(item.get("pass_env") or jh.password_env),
+                apv_src=str(item.get("apv_src") or jh.apv_src),
+                server_path=str(item.get("server_path") or jh.server_path),
+                py38=str(item.get("py38") or jh.py38),
+                mcp_url=str(item.get("mcp_url") or f"http://{host}:8000/mcp"),
+                topology=str(item.get("topology") or "network_topology.json"),
+            ))
+        if out:
+            return out
+
+    env_hosts = (os.environ.get("IST_ENV_POOL_HOSTS") or "").strip()
+    hosts = [h.strip() for h in env_hosts.split(",") if h.strip()] if env_hosts else list(_DEFAULT_POOL_HOSTS)
+    # 去重保序
+    seen: set[str] = set()
+    hosts = [h for h in hosts if not (h in seen or seen.add(h))]
+    return [_mk(h) for h in hosts]
+
+
 def detect_xlsx_layout(grid: list[list[Any]], cfg: Optional[CompilerConfig] = None) -> XlsxLayout:
     """从已读 grid 动态探测表头行/数据起始行（不写死 R28/R29）。
 

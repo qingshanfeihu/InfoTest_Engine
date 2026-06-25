@@ -73,7 +73,7 @@ def test_pipeline_per_case_no_barrier(monkeypatch):
 
     # execute_fork_skill(skill, brief)：draft brief 含"需求："→落 xlsx 返回路径；
     # grade brief 含"xlsx_path="→返回 PASS。
-    def fake_fork(skill, brief):
+    def fake_fork(skill, brief, tag=""):
         if skill == "ist_compile_draft":
             # 从 brief 提 autoid
             aid = brief.split("autoid=")[1].split("，")[0].strip()
@@ -117,7 +117,7 @@ def test_pipeline_escalates_after_max_rounds(monkeypatch):
         def __init__(self, fn): self._fn = fn
         def invoke(self, d): return self._fn(d)
 
-    def fake_fork(skill, brief):
+    def fake_fork(skill, brief, tag=""):
         if skill == "ist_compile_draft":
             n_draft["n"] += 1
             aid = brief.split("autoid=")[1].split("，")[0].strip()

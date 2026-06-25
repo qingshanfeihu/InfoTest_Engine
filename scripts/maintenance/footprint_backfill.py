@@ -42,8 +42,10 @@ _CMD_HEAD_RE = re.compile(r"^(no |show |clear )?[a-z][a-z0-9_]*( |$)")
 _QUERY_CMD_RE = re.compile(r"^(show|clear|no|write|config) [a-z][a-z0-9_ ]*$")
 
 
-def _is_signature(line: str) -> bool:
+def _is_signature(line: str, *, bold_only: bool = False) -> bool:
     """是否命令签名锚行。
+
+    ``bold_only``：文档用 markdown 粗体约定标命令主体时（新手册），只认粗体行为命令定义。
 
     锚行两类（确定性，不含语义字典）：
     1. 命令头 + 含 <param>/[param]/{a|b} 记法（如 ``sdns listener <ip> [port]``）；
@@ -52,7 +54,16 @@ def _is_signature(line: str) -> bool:
     （``sdns listener 172.16.34.70``）无记法、非查询 → 不作锚（仍留在片体里给 LLM 看）。
     """
     s = line.strip()
+    had_bold = "**" in s
+    # 剥 markdown 粗体标记 `**`/`__`：手册命令行是 `**命令主体** _斜体参数_` 格式（表1-1），
+    # 行首的 `**` 会让 _CMD_HEAD_RE（要求行首小写命令 token）匹配失败。检测按纯文本判，
+    # 片体仍保留原 markdown 供 LLM 用粗体/斜体约定区分命令与参数。
+    s = s.replace("**", "").replace("__", "").strip()
     if not s or _CJK_RE.search(s):
+        return False
+    # bold_only（新手册按表1-1 用粗体标命令主体）：非粗体行是示例/输出/引用，不是命令定义，
+    # 不作签名锚（否则 "config file"/"write file" 等示例会被误切成命令）。
+    if bold_only and not had_bold:
         return False
     if not _CMD_HEAD_RE.match(s):
         return False
@@ -80,6 +91,9 @@ def slice_manual(md_path: Path, rel_path: str) -> list[Chunk]:
     到下一签名行或下一 `##` 标题止。无签名锚的纯叙述章节被跳过（不产片）。
     """
     lines = md_path.read_text(encoding="utf-8").split("\n")
+    # 自动检测：文档是否用 markdown 粗体约定标命令主体（新手册格式，表1-1）。
+    # 是则只认粗体行为命令定义（剔除示例/输出等非粗体噪声行）；否则用纯文本启发式（MinerU 兼容）。
+    bold_doc = sum(1 for ln in lines if ln.lstrip().startswith("**")) >= 10
     chunks: list[Chunk] = []
     section = ""
     cur: list[str] | None = None
@@ -97,7 +111,7 @@ def slice_manual(md_path: Path, rel_path: str) -> list[Chunk]:
             flush()
             section = ln.strip()
             continue
-        if _is_signature(ln):
+        if _is_signature(ln, bold_only=bold_doc):
             flush()
             cur = [ln]
             continue
@@ -145,13 +159,23 @@ def render_batch(batch: list[Chunk]) -> str:
 # 加一句适配、不重写（PLAN §五-2）。
 _MANUAL_ADAPT_SUFFIX = """
 
-## 本次输入是产品 CLI 手册段落（非对话工作记忆）
+## 本次输入是产品 CLI / APP 手册段落（非对话工作记忆）
 
-上面提供的 evidence_file 路径就是这些命令的来源手册，evidence_file 字段直接填它。
-逐条命令签名提取 cli_command：cli_syntax 用手册原文的 <param>/[param]/{a|b} 记法，
-parameters 从紧随的参数表逐行提取（name/required/default/value_range/type/desc 按原文给）。
-"注意"段里的"条件→结论/限制"提取为 decision_rule。
-evidence_quote 必须是手册原文里的命令签名行或规则句，未经改写。
+上面提供的 evidence_file 路径就是来源手册，evidence_file 字段直接填它。
+
+### 手册命令行符号约定（表1-1，据此解析命令与参数）
+- **粗体** = 命令行主体（命令本身）；*斜体* = 命令参数。**feature_path 只取命令主体（粗体）的 token**，
+  斜体参数一律不进 feature_path。
+- `<param>` 必选参数；`[param]` 可选参数；`{ x | y | … }` 从多个选项选一或多个；
+  `[ x | y | … ]` 从多个选项选一或不选。这些记法只进 cli_syntax，不进 feature_path。
+- `no` / `show` / `clear` 是操作子命令前缀，feature_path 要剥掉（配置/no/show/clear 各提一条 cli_command）。
+- 参数取值（具体值、正则表达式）是参数的取值，不是命令 token，绝不写进命令主体。
+
+### 提取要点
+- 逐条命令提取 cli_command：cli_syntax = 粗体命令主体 + 斜体参数（按原文记法还原完整签名）；
+  parameters 从紧随的参数表逐行提取（name/required/default/value_range/type/desc 按原文给）。
+- "注意" / "说明"段里的"条件 → 结论/默认值/限制"提取为 decision_rule。
+- evidence_quote 必须是手册原文片段（命令签名行 / 规则句），未经改写。
 """
 
 
@@ -183,13 +207,14 @@ def build_backfill_llm():
     session = requests.Session()
     logger.info("backfill LLM: model=%s base_url=%s", model, base_url)
 
-    def _call(system_prompt: str, user_prompt: str):
+    def _call(system_prompt: str, user_prompt: str, tool: dict | None = None):
         try:
             return chat_completion(
                 session, api_key,
                 system_prompt + _MANUAL_ADAPT_SUFFIX, user_prompt,
                 model=model, base_url=base_url,
                 max_tokens=8192, temperature=0.1, top_p=0.1,
+                tool=tool,
             )
         except TruncationError:
             logger.warning("LLM 输出截断，跳过该批")
@@ -210,7 +235,8 @@ class RunStats:
 
 
 def run_backfill(*, dry_run: bool = False, limit: int = 0,
-                 manuals: list[Path] | None = None) -> RunStats:
+                 manuals: list[Path] | None = None,
+                 existing_facts: dict | None = None) -> RunStats:
     from main import knowledge_paths as kp
     from main.ist_core.memory.footprint import (
         extract_facts, route_facts, merge_fact, reconcile,
@@ -249,8 +275,9 @@ def run_backfill(*, dry_run: bool = False, limit: int = 0,
     footprint_dir = kp.KNOWLEDGE_FOOTPRINTS
     kp.KNOWLEDGE_FOOTPRINTS_NODES.mkdir(parents=True, exist_ok=True)
 
-    # existing_facts 快照（启动时取一次；供 LLM 复用 fact_key，避免每批重载 O(n²)）
-    existing = _load_existing_facts(footprint_dir)
+    # existing_facts 快照（启动时取一次；供 LLM 复用 fact_key，避免每批重载 O(n²)）。
+    # 传入 existing_facts 可覆盖（如范围化重生成时只传相关子树，避免把全树塞进 prompt）。
+    existing = existing_facts if existing_facts is not None else _load_existing_facts(footprint_dir)
 
     # 并发提取
     def _extract(batch: list[Chunk]):

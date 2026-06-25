@@ -29,6 +29,13 @@ def _format_elapsed(seconds: float) -> str:
     return f"{h}h {m}m"
 
 
+def _format_token_count(n: int) -> str:
+    """≥1k 时缩为 XX.Xk，便于扫读大用量。"""
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return f"{n:,}"
+
+
 class FooterPane:
     """Fixed-height footer showing status, tokens, and model."""
 
@@ -49,6 +56,9 @@ class FooterPane:
         self.model: str = ""
         self.input_tokens: int = 0
         self.output_tokens: int = 0
+        self.fork_input: int = 0      # fork(draft/grade)累计用量 → 合并进总 token + 成本显示
+        self.fork_output: int = 0
+        self._latest_evidence: str = ""   # 最新一条 fork 步骤,塞进 busy 状态行(单行,不刷 transcript)
         self._cache_hit_tokens: int = 0
         self._llm_phase: str = ""
         self._output_token_count: int = 0
@@ -75,6 +85,9 @@ class FooterPane:
         model: str | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
+        fork_input: int | None = None,
+        fork_output: int | None = None,
+        latest_evidence: str | None = None,
         llm_phase: str | None = None,
         output_token_count: int | None = None,
         cache_hit_tokens: int | None = None,
@@ -95,6 +108,12 @@ class FooterPane:
             self.input_tokens = input_tokens
         if output_tokens is not None:
             self.output_tokens = output_tokens
+        if fork_input is not None:
+            self.fork_input = fork_input
+        if fork_output is not None:
+            self.fork_output = fork_output
+        if latest_evidence is not None:
+            self._latest_evidence = latest_evidence
         if llm_phase is not None:
             self._llm_phase = llm_phase
         if output_token_count is not None:
@@ -165,13 +184,17 @@ class FooterPane:
         花费按 cache 拆分精确算：hit = 会话累计命中，miss = 总输入 − hit。
         未知模型（定价表无）显示 ¥0.00。
         """
-        hit = min(self._cache_hit_tokens, self.input_tokens)
-        miss = max(self.input_tokens - hit, 0)
-        parts = [f"↑ {self.input_tokens:,} · ↓ {self.output_tokens:,} tokens"]
+        total_in = self.input_tokens + self.fork_input
+        total_out = self.output_tokens + self.fork_output
+        hit = min(self._cache_hit_tokens, total_in)
+        miss = max(total_in - hit, 0)
+        parts = [
+            f"↑ {_format_token_count(total_in)} · ↓ {_format_token_count(total_out)} tokens"
+        ]
         if self.model:
             parts.append(self.model)
         cost = compute_cost_rmb(
-            self.model, input_miss=miss, input_hit=hit, output=self.output_tokens
+            self.model, input_miss=miss, input_hit=hit, output=total_out
         )
         parts.append("¥0.00" if cost is None else f"¥{cost:.4f}")
         return " · ".join(parts)
@@ -199,13 +222,14 @@ class FooterPane:
         if self._timer_running and self._busy_since:
             elapsed = time.time() - self._busy_since
             elapsed_str = _format_elapsed(elapsed)
+            _in = self.input_tokens + self.fork_input
+            _out = self.output_tokens + self.fork_output
             if self._llm_phase == "output":
-                thinking_text = f"✶ Generating… ({elapsed_str} · ↓ {self._output_token_count:,} tokens · {self.model})"
+                thinking_text = f"✶ Generating… ({elapsed_str} · ↓ {_format_token_count(self._output_token_count)} tokens · {self.model})"
             elif self._llm_phase == "input":
-                thinking_text = f"✶ Processing… ({elapsed_str} · ↑ {self.input_tokens:,} tokens · {self.model})"
+                thinking_text = f"✶ Processing… ({elapsed_str} · ↑ {_format_token_count(_in)} tokens · {self.model})"
             else:
-                thinking_text = f"✶ {self._verb}… ({elapsed_str} · ↑ {self.input_tokens:,} · ↓ {self.output_tokens:,} tokens · {self.model})"
-            
+                thinking_text = f"✶ {self._verb}… ({elapsed_str} · ↑ {_format_token_count(_in)} · ↓ {_format_token_count(_out)} tokens · {self.model})"
             if self._thinking_cb:
                 self._thinking_cb(thinking_text)
         else:

@@ -6,12 +6,7 @@ Supports overflow scroll with sticky-scroll (auto-pin to bottom).
 
 from __future__ import annotations
 
-import re
-
 from ..dom import DOMElement, NodeType, TextNode, create_element, create_text
-from ..string_width import string_width
-
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class Transcript:
@@ -33,7 +28,22 @@ class Transcript:
         self._messages.append(text)
         msg_node = create_text(text)
         self._node.append_child(msg_node)
-        
+
+        if self._node.sticky_scroll:
+            self._scroll_to_bottom()
+
+    def append_messages(self, texts: list[str]) -> None:
+        """批量追加多行,只在末尾 sticky-scroll **一次**。
+
+        高频 evidence(并发 fork 步骤合并后)逐行追加时,逐行 _scroll_to_bottom 会
+        每行触发一次 O(N) 高度重算(N=历史行数)→ 整批 O(N²)。批量末尾只滚一次,
+        降到 O(N)。空 texts 直接返回。
+        """
+        if not texts:
+            return
+        for text in texts:
+            self._messages.append(text)
+            self._node.append_child(create_text(text))
         if self._node.sticky_scroll:
             self._scroll_to_bottom()
 
@@ -68,7 +78,8 @@ class Transcript:
             return
         viewport_h = self._node.rect.height if self._node.rect.height > 0 else 20
         content_h = self._content_height_rows()
-        max_top = max(0, content_h - viewport_h)
+        # +1:底部留 1 行空白,最后一行内容不贴 thinking/footer bar(和 _scroll_to_bottom 一致)
+        max_top = max(0, content_h - viewport_h + 1)
         new_top = max(0, min(max_top, self._node.scroll_top + delta))
         self._node.scroll_top = new_top
         self._node.sticky_scroll = new_top >= max_top
@@ -111,28 +122,23 @@ class Transcript:
         return len(self._messages)
 
     def _content_height_rows(self) -> int:
-        """真实视觉行数：考虑消息内 \\n 拆行 + 终端宽度软换行。
+        """真实视觉行数(含 ``\\n`` 拆行 + 软换行)。与 render._render_node 的 text_y_offset、
+        output._apply_write 共用同一行数算法(``TextNode.wrapped_rows`` → ``wrapped_row_count``)
+        ——三处单一事实源,否则滚动 max 与渲染高度对不上、向下划过露空白。
 
-        老实现 ``len(self._messages)`` 把多行 AI 独白当 1 行，导致长输出
-        被滚出 viewport 外。
+        遍历节点用**每节点缓存**的行数(``wrapped_rows`` 按 width 缓存),避免每次滚动都对
+        几千行重算 ``string_width`` 把滚轮翻页拖卡。
         """
         width = self._node.rect.width if self._node.rect.width > 0 else 80
-        total = 0
-        for msg in self._messages:
-            if not msg:
-                total += 1
-                continue
-            for line in msg.split("\n"):
-                stripped = _ANSI_RE.sub("", line)
-                w = string_width(stripped)
-                if width <= 0 or w == 0:
-                    total += 1
-                else:
-                    total += max(1, (w + width - 1) // width)
-        return total
+        return sum(
+            child.wrapped_rows(width)
+            for child in self._node.children
+            if isinstance(child, TextNode)
+        )
 
     def _scroll_to_bottom(self) -> None:
         content_h = self._content_height_rows()
         viewport_h = self._node.rect.height if self._node.rect.height > 0 else 20
-        self._node.scroll_top = max(0, content_h - viewport_h)
+        # +1:底部留 1 行空白,最后一行内容不贴 thinking/footer bar(和 scroll_by 一致)
+        self._node.scroll_top = max(0, content_h - viewport_h + 1)
 

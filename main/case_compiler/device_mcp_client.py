@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -23,28 +24,82 @@ JUMPHOST_USER = os.environ.get("IST_JUMPHOST_USER", _cfg.jumphost.user)
 SERVER_CMD = _cfg.jumphost.server_cmd
 
 
-def _password() -> str:
-    for k in ("IST_JUMPHOST_PASS", "JUMPHOST_PASS"):
+def _password(env: Any = None) -> str:
+    keys: list[str] = []
+    if env is not None and getattr(env, "pass_env", ""):
+        keys.append(env.pass_env)
+    keys += ["IST_JUMPHOST_PASS", "JUMPHOST_PASS"]
+    for k in keys:
         v = os.environ.get(k)
         if v:
             return v
     raise RuntimeError("跳转机口令未提供：设置 IST_JUMPHOST_PASS 环境变量")
 
 
-def _connect():
+def _connect(env: Any = None):
+    """连跳转机。``env``（config.Environment）给定则用其 host/port/user；否则用模块级现役单环境。"""
     import paramiko
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(JUMPHOST, port=22, username=JUMPHOST_USER, password=_password(),
+    host = env.jumphost if env is not None else JUMPHOST
+    user = env.ssh_user if env is not None else JUMPHOST_USER
+    port = int(env.ssh_port) if env is not None else 22
+    c.connect(host, port=port, username=user, password=_password(env),
               timeout=15, look_for_keys=False, allow_agent=False)
     return c
+
+
+def framework_ready(env: Any, timeout: int = 8) -> bool:
+    """只读探活：env 跳板机 SSH 可达 **且** 框架 stdio ``server.py`` 存在。
+
+    环境池 health-check 用——Path A 克隆部署到新机前，新机没有这个 server.py，探活返回
+    False、池自动跳过它；ops 部署后自动加入可用池。任何异常一律 False（保守）。
+    """
+    import paramiko
+    c = paramiko.SSHClient()
+    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        c.connect(env.jumphost, port=int(env.ssh_port), username=env.ssh_user,
+                  password=_password(env), timeout=timeout, banner_timeout=timeout,
+                  auth_timeout=timeout, look_for_keys=False, allow_agent=False)
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        _i, o, _e = c.exec_command(f"test -f {env.server_path} && echo OK", timeout=timeout)
+        return o.read().decode("utf-8", "replace").strip() == "OK"
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        try:
+            c.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# 设备/task 日志原样回灌 agent 上下文前过一道**凭据脱敏**：mask 掉口令/密钥/token 的值，
+# 守红线「禁止在日志中打印 Token/口令」。**故意不脱敏 IP**——dig 真实输出里解析出的 IP 是
+# agent 填 <RUNTIME> 断言的必需信息，脱了就废了核心功能；内网 IP 与设备数据同信任边界。
+_SECRET_RE = re.compile(
+    r"(?i)\b(password|passwd|pwd|secret|api[\s_-]?key|apikey|access[\s_-]?token|auth[\s_-]?token|credential|community)\b"
+    r"(\s*[:=]\s*|\s+)"
+    r"(\"[^\"\n]*\"|'[^'\n]*'|\S+)"
+)
+
+
+def _redact(text: str | None) -> str:
+    """对设备/task 日志做凭据脱敏（值替成 ****）；保留 IP 等诊断必需信息。"""
+    if not text:
+        return text or ""
+    return _SECRET_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}****", text)
 
 
 class FrameworkMCPClient:
     """经 SSH 驱动跳转机 stdio MCP server。每次调用开一个 server 会话（无状态命令）。"""
 
-    def __init__(self):
-        self._c = _connect()
+    def __init__(self, env: Any = None):
+        self._env = env
+        self._c = _connect(env)
+        self._server_cmd = env.server_cmd if env is not None else SERVER_CMD
 
     def close(self):
         try:
@@ -72,7 +127,7 @@ class FrameworkMCPClient:
                          "params": {"name": name, "arguments": args}})
             idmap[nid] = name
             nid += 1
-        si, so, se = self._c.exec_command(SERVER_CMD, timeout=120)
+        si, so, se = self._c.exec_command(self._server_cmd, timeout=120)
         si.write("\n".join(json.dumps(m) for m in msgs) + "\n")
         si.flush()
         si.channel.shutdown_write()
@@ -186,7 +241,7 @@ class FrameworkMCPClient:
                 _i, o, _e = self._c.exec_command(f"cat '{path}'", timeout=30)
                 text = o.read().decode("utf-8", "replace")
                 if text.strip():
-                    return text[-max_chars:]
+                    return _redact(text[-max_chars:])  # 与 fetch_batch_details 一致:回灌前脱敏
             return ""
         except Exception:
             return ""
@@ -219,7 +274,7 @@ class FrameworkMCPClient:
             aid = chunk[:mark].strip()
             body = chunk[mark + 3:]
             if aid:
-                out[aid] = body[-max_chars_each:]
+                out[aid] = _redact(body[-max_chars_each:])
         return out
 
     def fetch_device_context_under(self, submit_autoid: str, inner_autoid: str,
@@ -251,7 +306,7 @@ class FrameworkMCPClient:
                     parts.append(f"=== {label} ({path.split('/')[-1]}) ===\n{text[-per:]}")
         except Exception:
             return ""
-        return "\n\n".join(parts)
+        return _redact("\n\n".join(parts))
 
     def fetch_device_context(self, autoid: str, max_chars: int = 9000) -> str:
         """拉**完整设备上下文**（上机失败诊断用，喂给 agent 让它知道怎么改/怎么填）。
@@ -283,7 +338,7 @@ class FrameworkMCPClient:
                     parts.append(f"=== {label} ({path.split('/')[-1]}) ===\n{text[-per:]}")
         except Exception:
             return ""
-        return "\n\n".join(parts)
+        return _redact("\n\n".join(parts))
 
     def fetch_task_log_errors(self, task_id: str, max_chars: int = 2800) -> str:
         """取框架 task 日志里的 pytest 异常/traceback——**文件级崩溃**真因。
@@ -301,7 +356,7 @@ class FrameworkMCPClient:
                    f"'{log}' 2>/dev/null | tail -40; echo '--- log tail ---'; tail -20 '{log}' 2>/dev/null")
             _i, o, _e = self._c.exec_command(cmd, timeout=20)
             text = o.read().decode("utf-8", "replace")
-            return text[-max_chars:] if text.strip() else ""
+            return _redact(text[-max_chars:]) if text.strip() else ""
         except Exception:  # noqa: BLE001
             return ""
 

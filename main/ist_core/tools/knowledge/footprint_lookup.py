@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 
 from langchain_core.tools import tool
 
@@ -22,30 +23,47 @@ _ENABLE_CMD_RE = re.compile(
 )
 
 
-def _module_enable_hint(idx, command: str) -> str:
-    """子功能查询时,上溯模块根节点、带回它的「启用/总开关」命令。
+def _ancestor_enable_deps(idx, command: str) -> list[str]:
+    """沿命令的**祖先节点链**收集"启用/总开关"命令作为前置依赖（结构化推导）。
 
-    根因(实测): `sdns on` 是 `sdns {on|off}` 的形态,存在模块根节点 `sdns` 里;查子功能
-    (sdns host/pool…)时检索不到它 → draft 漏总开关 → 服务不起、上机全 fail。这里对任何
-    `<module> <sub...>` 查询,把模块根的启用命令作为"需先执行"附上。通用(任何模块同理),
-    不写死具体命令。
+    footprint 是按命令前缀组织的树。查 `sdns host persistence` 时，其祖先节点
+    `sdns` / `sdns.host` 若挂着启用型命令（`{on|off}` / `{enable|disable}` / 结尾 on|enable），
+    即为该命令的**前置依赖**——必须先执行否则不生效。沿整条祖先链遍历，能抓到**多级**总开关
+    （如 `sdns` 模块开关 + `sdns.service` 子模块开关两层），比只查根 token 更全。
+
+    依赖完全从**树结构 + 已抽取的 cli_command** 确定性推导，不靠 LLM 抽散文、不写死具体命令。
+    返回顺序：从外层模块到内层（即应当的先后启用顺序）。
     """
     toks = (command or "").lower().split()
-    if len(toks) < 2:
-        return ""  # 查的就是根本身,无需提示
-    root = toks[0]
-    try:
-        rnode = idx.lookup(root)
-    except Exception:  # noqa: BLE001
+    while toks and toks[0] in ("no", "show", "clear"):
+        toks = toks[1:]
+    deps: list[str] = []
+    seen: set[str] = set()
+    # 祖先 = 命令的所有真前缀 feature_id（前缀长度 1..len-1，不含命令自身）
+    for i in range(1, len(toks)):
+        fid = ".".join(toks[:i])
+        try:
+            node = idx.lookup(fid)
+        except Exception:  # noqa: BLE001
+            continue
+        if not node:
+            continue
+        for cm in (node.get("cli", {}) or {}).get("commands", []):
+            c = cm.get("command", "") if isinstance(cm, dict) else str(cm)
+            if c and _ENABLE_CMD_RE.search(c) and c not in seen:
+                seen.add(c)
+                deps.append(c)
+    return deps
+
+
+def _module_enable_hint(idx, command: str) -> str:
+    """把祖先链推导出的前置依赖渲染成提示串（空则返回空串）。"""
+    deps = _ancestor_enable_deps(idx, command)
+    if not deps:
         return ""
-    if not rnode:
-        return ""
-    for cm in (rnode.get("cli", {}) or {}).get("commands", []):
-        c = cm.get("command", "") if isinstance(cm, dict) else str(cm)
-        if c and _ENABLE_CMD_RE.search(c):
-            return (f"⚠ 模块总开关(用任何 {root} 功能前**必须先执行**,否则配了也不生效、"
-                    f"服务不起、上机全 fail): {c}\n\n")
-    return ""
+    body = deps[0] if len(deps) == 1 else "；".join(deps) + "（按从外层到内层顺序先执行）"
+    return (f"⚠ 前置依赖（来自上级模块开关，**必须先执行**，否则配了也不生效、服务不起、"
+            f"上机 fail）: {body}\n\n")
 
 
 def _format_node(data: dict) -> str:
@@ -93,6 +111,13 @@ def _format_node(data: dict) -> str:
     return "\n".join(lines)
 
 
+# 共享 footprint 缓存:并发 draft 反复查**同一命令**(各自孤立 fork、互不知道查过了)→
+# 命中即返回。footprint 索引在一次 run 内静态 → 缓存安全;让重复查询即时返回、结果一致。
+_FP_CACHE: dict[str, str] = {}
+_FP_CACHE_LOCK = threading.Lock()
+_FP_CACHE_IDX_ID = None  # 缓存对应的 index 对象 id;index 重载/换(含测试换 index)→ id 变 → 清缓存防 stale
+
+
 @tool(parse_docstring=True)
 def kb_footprint(command: str) -> str:
     """查询 CLI 命令的产品知识（已验证的规则、行为、缺陷）。
@@ -111,6 +136,25 @@ def kb_footprint(command: str) -> str:
         匹配的 footprint 内容（CLI 语法、决策规则、行为、已知缺陷），
         或 "未找到" 提示。
     """
+    from main.ist_core.memory.footprint import get_footprint_index
+    idx_id = id(get_footprint_index())
+    key = (command or "").strip().lower()
+    global _FP_CACHE_IDX_ID
+    with _FP_CACHE_LOCK:
+        if idx_id != _FP_CACHE_IDX_ID:   # 索引重载/换 index → 清缓存(防 stale + 保测试隔离)
+            _FP_CACHE.clear()
+            _FP_CACHE_IDX_ID = idx_id
+        if key in _FP_CACHE:
+            return _FP_CACHE[key]
+    result_text = _kb_footprint_compute(command)
+    if key:
+        with _FP_CACHE_LOCK:
+            _FP_CACHE[key] = result_text
+    return result_text
+
+
+def _kb_footprint_compute(command: str) -> str:
+    """kb_footprint 的实际计算(被共享缓存包裹;并发 draft 反复查同命令时只算一次)。"""
     try:
         from main.ist_core.memory.footprint import get_footprint_index
         idx = get_footprint_index()

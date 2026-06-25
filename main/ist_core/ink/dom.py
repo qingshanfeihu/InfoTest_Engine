@@ -138,11 +138,27 @@ class TextNode(DOMNode):
     def __init__(self, value: str = "") -> None:
         super().__init__("#text")
         self.value = value
+        self._rows_cache: tuple[int, int] | None = None  # (width, 行数):软换行行数缓存
 
     def set_value(self, value: str) -> None:
         if self.value != value:
             self.value = value
+            self._rows_cache = None
             self.mark_dirty()
+
+    def wrapped_rows(self, width: int) -> int:
+        """本节点在给定列宽下占的视觉行数(含 \\n + 软换行),按 width 缓存。
+
+        渲染每帧 + 内容高度都要对全部子节点求行数来定位/算滚动高度;若每次重算
+        ``string_width`` 在大 transcript(几千行)下会让滚轮翻页特别卡 → 缓存。
+        """
+        c = self._rows_cache
+        if c is not None and c[0] == width:
+            return c[1]
+        from .string_width import wrapped_row_count
+        n = wrapped_row_count(self.value, width) if self.value else 1
+        self._rows_cache = (width, n)
+        return n
 
 
 def create_element(node_type: NodeType = NodeType.BOX, **attrs: Any) -> DOMElement:

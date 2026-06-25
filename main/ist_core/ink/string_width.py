@@ -5,7 +5,10 @@ Handles CJK, emoji, and other double-wide characters.
 
 from __future__ import annotations
 
+import re
 import unicodedata
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def string_width(s: str) -> int:
@@ -14,6 +17,31 @@ def string_width(s: str) -> int:
     for ch in s:
         width += char_width(ch)
     return width
+
+
+def wrapped_row_count(text: str, width: int) -> int:
+    """文本在给定列宽下占的**视觉行数**:含 ``\\n`` 拆行 + 缩进感知的软换行。
+
+    **单一事实源**:渲染定位(render.py ``text_y_offset``)、内容高度
+    (transcript ``_content_height_rows``)、实际写格(output ``_apply_write``)三处
+    必须用同一算法,否则错位——长行软换行若被某处算成 1 行、另一处算成多行,会导致
+    下一行盖住续接 + 滚动 max 算多、向下能划过最后一行露出空白。
+    """
+    if not text:
+        return 1
+    total = 0
+    for line in text.split("\n"):
+        stripped = _ANSI_RE.sub("", line)
+        w = string_width(stripped)
+        if width <= 0 or w == 0 or w <= width:
+            total += 1
+        else:
+            n_lead = len(stripped) - len(stripped.lstrip(" "))
+            cont_w = width - n_lead
+            if cont_w <= 0:
+                cont_w = width
+            total += 1 + ((w - width) + cont_w - 1) // cont_w
+    return total
 
 
 def char_width(ch: str) -> int:

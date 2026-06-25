@@ -60,7 +60,7 @@ def test_extract_cli_derives_path_from_syntax():
         "cli_syntax": "ha synconfig bootup on",
         "evidence_file": "x.md", "evidence_quote": "ha synconfig bootup on",
     }]}
-    facts = extract_facts("thread_id: t\n", llm_chat=lambda s, u: mock)
+    facts = extract_facts("thread_id: t\n", llm_chat=lambda s, u, t=None: mock)
     assert len(facts) == 1
     
     

@@ -4,42 +4,83 @@ description: "把人工测试用例（脑图 / txt）编译成自动化 case.xls
 context: inline
 user-invocable: true
 source: hand
-version: "3"
+version: "4"
 effort: high
 when_to_use: |
   Use when 用户要把人工测试用例（脑图 / txt）编译成自动化 case.xlsx。
   Examples: "把这批脑图编译成 excel"、"编译这个 txt 用例"、"用例编译"、"脑图转 case.xlsx"。
-  Trigger keywords: 编译用例, 脑图转excel, txt转excel, 用例编译, provenance编译, 闭环编译。
-  SKIP when: 只查一条 CLI 回显用 dev_probe；对已编译 excel 上机验证走 ist_verify。
+  Trigger keywords: 编译用例, 脑图转excel, txt转excel, 用例编译, provenance编译, 闭环编译, case.xlsx。
+  SKIP when: 只查一条 CLI 回显用 dev_probe；对已编译 excel 做上机复验走 ist_verify。
 ---
 
 # 编译编排
 
-把人工用例编译成自动化 case.xlsx。编译流水线（prep→draft→grade→合并）是固定序列，已锁进确定性工具 `compile_pipeline`——你只负责确认版本、对每个脑图调它一次、汇报结果，不自己拆步调 prep/fanout/merge。
+## Overview
+
+把人工用例（脑图 / txt）编译成断言真覆盖目标行为的自动化 `case.xlsx`。你是**编排器**：确认版本 → 对每个脑图调一次确定性流水线 `compile_pipeline` → 汇报。
+
+编译序列（prep→draft 并发→grade 并发→合并）是**固定的，已锁进 `compile_pipeline` 工具**——你不自己拆步调 `compile_prep` / `compile_fanout` / `compile_emit_merged`。流水线内部派两个**严格有序**的 fork 子流程，各有自己的流程纪律：
+
+- **`ist_compile_draft`**（生成草稿）：先探明设备真实行为 → 再设计 G→E→V 断言。详见 `ist_compile_draft/SKILL.md`。
+- **`ist_compile_grade`**（语义审批）：先验 draft 记的来源 → 再判断言覆盖度。详见 `ist_compile_grade/SKILL.md`。
+
+**本 skill 只产 excel，不上机。** 上机复验（采框架真实裁决 + 四层归因 + 回填 `<RUNTIME>`）走独立的 `ist_verify`。
+
+## Quick Start
+
+确认版本后，对每个脑图调一次：
+
+```
+compile_pipeline(mindmap_path="<脑图.txt>", product_version="<版本，如 10.5>", out_name="<脑图名>")
+```
+
+工具内部确定性跑完：解析 manifest → 每 case 独立流水线（draft 产 provenance → grade 验 provenance → CUT 带反馈重做 ≤3 轮）→ N case 并发**无屏障**（case A 在 grade 时 case B 还能 draft）→ grade-PASS 合并成一个 excel。命令 / 断言全由 draft fork **现场查**（零硬编码）。
 
 ## Steps
 
-### 0. 确认版本
-从用户请求提取产品版本（如 APV 10.5）。没写就 `ask_user` 问，别猜——版本决定查哪个手册，错了 draft 查到的文法就是错的。
+### 0. 确认版本（先探明，别猜）
 
-**Success criteria**: 拿到明确版本号（如 "10.5"）
+从用户请求提取产品版本（如 "10.5"）。
+
+**IMPORTANT**: 没写就 `ask_user` 问，**绝不猜**。版本错 → draft 查错版本手册 → 整批文法全错。版本是 draft 查哪个手册 glob 的唯一依据，宁可多问一句。
+
+**Success criteria**: 拿到明确版本号。
 
 ### 1. 逐脑图调流水线
-对每个脑图 txt 调一次：
-```
-compile_pipeline(mindmap_path="<脑图.txt>", product_version="<版本>", out_name="<脑图名>")
-```
-工具内部确定性跑完：解析 manifest → 每个 case 独立流水线（draft 产 provenance → grade 验 provenance → CUT 带反馈重做 ≤3 轮）→ N case 并发且**无屏障**（case A 在 grade 时 case B 还能 draft，不必等全部 draft 完才开 grade）→ grade-PASS 合并成一个 excel。命令/断言全由 draft fork 现场查（零硬编码）。
 
-**Success criteria**: 每个脑图返回 done 数 + excel 路径
-**Rules**: 多脑图逐个调（每脑图一次），不要一次喂多个；不要自己调 compile_prep / compile_fanout / compile_emit_merged——那是流水线内部的事
+对每个脑图 txt 调一次 `compile_pipeline`（见 Quick Start）。
+
+**Rules**:
+- 多脑图**逐个调**（每脑图一次），不要一次喂多个。
+- 不自己调 `compile_prep` / `compile_fanout` / `compile_emit_merged`——那是流水线内部的事。
+
+**Success criteria**: 每个脑图返回 done 数 + excel 路径。
 
 ### 2. 汇报
-列出每个脑图产出的 excel 路径 + case 数（done / escalated）。非交互（`infotest -p`）直接报完成；交互模式可问用户是否上机验证（`ist_verify` 四层归因 + 闭环写回）。
 
-**Success criteria**: 每脑图一行（excel 路径 + done/escalated 数）
+每脑图一行：excel 路径 + case 数（done / escalated）。非交互（`infotest -p`）直接报完成；交互模式可问用户是否要 `ist_verify` 上机复验。
+
+**Success criteria**: 每脑图一行（excel 路径 + done/escalated 数）。
+
+## Quick Reference
+
+| 任务 | 怎么做 |
+|------|--------|
+| 缺版本 | `ask_user` 问，不猜 |
+| 编译一个脑图 | `compile_pipeline(mindmap_path, product_version, out_name)` |
+| 多脑图 | 逐个调，每脑图一次 |
+| 生成草稿的内部流程 | 流水线自动派 `ist_compile_draft`（见其 SKILL.md） |
+| 审批断言的内部流程 | 流水线自动派 `ist_compile_grade`（见其 SKILL.md） |
+| 上机复验成品 excel | 走 `ist_verify`（本 skill 不上机） |
+
+## Next Steps
+
+- 草稿生成的有序流程（先探设备再设计断言）：见 `ist_compile_draft/SKILL.md`
+- 断言审批的有序流程（先验来源再判覆盖）：见 `ist_compile_grade/SKILL.md`
+- 成品 excel 上机复验 + 四层归因 + 回填 `<RUNTIME>`：走 `ist_verify`
 
 ## 红线
-- 上机解耦：本 skill 只产 excel，不调 dev_run_batch / run。上机走 ist_verify。
-- 不做意图族摊销/族骨架（实测负收益，论文证明骨架层无稳健收益、收益在 grounding）。
-- escalated（≤3 轮仍 CUT）如实上报，不拿弱产物充数。
+
+- **上机解耦**：本 skill 只产 excel，不调 `dev_run_batch` / run。上机走 `ist_verify`。
+- **不做意图族摊销 / 族骨架**（实测负收益，论文证明骨架层无稳健收益、收益在 grounding）。
+- **escalated 如实上报**（≤3 轮仍 CUT），不拿弱产物充数。

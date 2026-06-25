@@ -17,6 +17,28 @@ _TOKEN_SPLIT_RE = re.compile(r"[^\w一-鿿]+")
 _BUG_RE = re.compile(r"BUG-\d+", re.IGNORECASE)
 
 
+def _command_pattern_matches(pattern: str, concrete: str) -> bool:
+    """concrete 命令(如 ``sdns on``)是否匹配存储的命令模式(如 ``sdns {on|off}``)。
+
+    **只认 ``{a|b|c}`` alternation 选支**:concrete token 必须是某选支之一;其余 token
+    一律字面相等(``<x>``/``[x]`` 占位符**不通配**,否则 "demo svc method rr" 会误匹配
+    "demo svc method <a>" 把本该 fuzzy 回退的自然短语吞掉)。concrete 可短于 pattern
+    (前缀匹配:查 ``sdns service enable`` 命中 ``sdns service {enable|disable} <name>``)。
+    专治"on|off 竖线匹配不上 concrete 'on'"——查 ``sdns on`` 找不到 ``sdns {on|off}`` 节点。
+    """
+    ptoks = pattern.lower().split()
+    ctoks = concrete.lower().split()
+    if not ptoks or not ctoks or len(ctoks) > len(ptoks):
+        return False
+    for p, c in zip(ptoks, ctoks):
+        if p.startswith("{") and p.endswith("}"):
+            if c not in [a.strip() for a in p[1:-1].split("|")]:
+                return False
+        elif p != c:
+            return False
+    return True
+
+
 def _format_footprint(data: dict) -> str:
     """将 footprint JSON 格式化为简洁摘要（注入用）。"""
     lines: list[str] = []
@@ -142,6 +164,23 @@ class FootprintIndex:
                 "children": prefix_matches,
                 "summary": f"找到 {len(prefix_matches)} 个子节点",
             }
+        # exact + 前缀都没中:试 alternation —— query `sdns on` 是祖先节点命令
+        # `sdns {on|off}` 的具体实例(竖线 {a|b} 选支 / <x> 占位 / [x] 可选 展开匹配)。
+        return self._alternation_lookup(command)
+
+    def _alternation_lookup(self, command: str) -> dict | None:
+        """exact key miss 时沿命令 token 前缀回溯:若某祖先节点的某条命令(展开
+        ``{a|b}``/``<x>``/``[x]`` 后)能匹配整条 concrete 查询,返回该节点(经 lookup 拿全 children)。
+        治 ``sdns on`` 找不到 ``sdns {on|off}`` 节点(on|off 竖线匹配不上 concrete 'on')。"""
+        toks = command.lower().split()
+        for i in range(len(toks) - 1, 0, -1):
+            parent_key = ".".join(toks[:i])
+            node = self._nodes.get(parent_key)
+            if not node:
+                continue
+            for cmd in (node.get("cli", {}) or {}).get("commands", []):
+                if _command_pattern_matches(cmd.get("command", ""), command):
+                    return self.lookup(parent_key)
         return None
 
     def search(self, query: str, *, top_k: int = 3) -> list[tuple[str, str]]:

@@ -270,7 +270,24 @@ def main(argv: list[str] | None = None) -> int:
 
     
     log_level = args.log_level or ("WARNING" if args.print else "ERROR")
-    logging.basicConfig(level=log_level, format="%(levelname)s %(name)s: %(message)s")
+    if args.print:
+        # 无 TUI(-p / headless):日志到 stderr 正常
+        logging.basicConfig(level=log_level, format="%(levelname)s %(name)s: %(message)s")
+    else:
+        # 交互式 TUI:Textual 独占终端,任何日志走 stderr 都会糊进屏幕(整窗乱序)。
+        # 强制改 FileHandler(runtime/logs/tui.log),force=True 清掉任何已有 stderr handler。
+        from pathlib import Path as _Path
+        try:
+            _logdir = _Path(__file__).resolve().parents[2] / "runtime" / "logs"
+            _logdir.mkdir(parents=True, exist_ok=True)
+            logging.basicConfig(
+                level=log_level,
+                format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+                handlers=[logging.FileHandler(_logdir / "tui.log", encoding="utf-8")],
+                force=True,
+            )
+        except Exception:
+            logging.basicConfig(level=log_level, format="%(levelname)s %(name)s: %(message)s")
     _ensure_env()
 
     
@@ -292,8 +309,14 @@ def main(argv: list[str] | None = None) -> int:
     
     if args.print:
         if initial_query is None:
-            print("❌ -p print 模式必须提供 query 或 --input", file=sys.stderr)
-            return 2
+            if (args.goal or "").strip():
+                # 只给 --goal（无 query）：用 goal 文本当初始 query，让 agent **首轮即开干**，
+                # goal_gate 仍据 goal 核验达成。治：① goal-only 被拒；② 否则首轮空 query 白跑一轮、
+                # 任务只能靠 goal 评估器 reason 间接传达（qa_node 不注入 goal_text）。
+                initial_query = args.goal.strip()
+            else:
+                print("❌ -p print 模式必须提供 query 或 --input（或 --goal）", file=sys.stderr)
+                return 2
         return _run_print_mode(initial_query, task_type=task_type, thread_id=thread_id, goal=args.goal)
 
     

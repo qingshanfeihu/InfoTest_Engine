@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -27,9 +28,27 @@ from langchain_core.tools import tool
 logger = logging.getLogger(__name__)
 
 _MAX_REWORK_ROUNDS = 3
+# Guard（防 merge 卡死）：per-case 墙钟截止——churner（footprint/dev_probe 过度探索撞满轮次的
+# 难 case）超时即 escalate，保证个别难 case 不会永久 gate 整脑图的 compile_emit_merged。
+_CASE_DEADLINE_S = float(os.environ.get("IST_CASE_DEADLINE_S") or 540)
 # transient 端点错误(丢连接/限流/流中断)退避重试：与"质量重做≤3轮"分开，不消耗质量预算。
 _TRANSIENT_RETRIES = 4
 _TRANSIENT_BASE_SLEEP = 3.0
+
+
+def _emit_progress(text: str) -> None:
+    """把流水线进度推到默认 EventBus → TUI 实时渲染（evidence_added → '· …' 行）。
+
+    compile_pipeline 是单个同步工具，内部跑 prep/draft/grade/CUT 的 fork 不会向主
+    EventBus 发事件 → TUI 整段编译期间零输出、spinner 像冻住。这里在关键节点显式 emit，
+    让用户看到 prep/draft/grade/CUT/merge 实时进展。fork 在线程池里跑，emit 从 worker
+    线程经 TuiSink 跨线程投递到 UI（bus seq 有锁、post 线程安全）。失败一律静默，不挡流水线。
+    """
+    try:
+        from main.ist_core.events import get_default_bus
+        get_default_bus().emit("evidence_added", payload={"text": text})
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _project_root() -> Path:
@@ -399,11 +418,12 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
     ceiling = _resolve_concurrency(0, n_items=len(cases))   # env 可设上限；默认 auto
     limiter = AdaptiveLimiter(start=max(2, ceiling // 2), min_limit=1, max_limit=ceiling)
 
-    def _fork_call(skill: str, brief: str) -> str:
-        """调 fork：遇 transient 端点错误(丢连接/限流/流中断)→降并发+退避重试，非真失败。"""
+    def _fork_call(skill: str, brief: str, tag: str = "") -> str:
+        """调 fork：遇 transient 端点错误(丢连接/限流/流中断)→降并发+退避重试，非真失败。
+        tag 传给 fork runner,让其内部工具调用实时发到主 bus(TUI 看到 draft/grade 运行过程)。"""
         last = ""
         for attempt in range(_TRANSIENT_RETRIES + 1):
-            out = execute_fork_skill(skill, brief)
+            out = execute_fork_skill(skill, brief, tag=tag)
             if isinstance(out, str) and out.startswith("ERROR:") and is_transient_error(out):
                 limiter.record_overload()
                 last = out
@@ -424,7 +444,7 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
             brief += (f"\n\n重做（第{rnd}轮）：上一版 grade 反馈——{feedback}\n"
                       "基于上一版针对问题改，保留正确部分。")
         t0 = _time.time()                       # 开工时间戳，校验产物新鲜度（治旧草稿污染）
-        out = _fork_call(draft_skill, brief)
+        out = _fork_call(draft_skill, brief, tag=f"{aid[-6:]} draft")
         if isinstance(out, str) and out.startswith("ERROR:"):
             return None
         return _extract_xlsx_path(out, aid, since=t0)
@@ -435,7 +455,7 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
         need = "; ".join(f"{s.get('desc','')}→{s.get('expected','')}" for s in intents)
         brief = (f"xlsx_path={xp}\nprovenance_path={prov if prov.exists() else '(无)'}\n"
                  f"原始需求={need}")
-        out = _fork_call(grade_skill, brief) or ""
+        out = _fork_call(grade_skill, brief, tag=f"{aid[-6:]} grade") or ""
         is_pass = _parse_grade_verdict(out)
         return is_pass, out
 
@@ -445,28 +465,43 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
         用自适应限流器 acquire/release 闸住并发——名额随端点健康自动伸缩。
         """
         aid = str(case["autoid"])
+        tag = f"{aid[-6:]} {str(case.get('title','') or '')[:20]}"
         precedent_text = _preretrieve_precedent(case)   # 确定性预检索一次（轨迹缩减）
         with limiter:                       # 阻塞直到有名额（名额数=当前自适应 limit）
             feedback = ""
+            case_t0 = _time.time()
             for rnd in range(_MAX_REWORK_ROUNDS):
+                # Guard：超墙钟截止就 escalate，不再 redo——churner 不再永久 gate 整脑图 merge。
+                if rnd > 0 and (_time.time() - case_t0) > _CASE_DEADLINE_S:
+                    _emit_progress(f"⏱ {tag} · 超 {int(_CASE_DEADLINE_S)}s 未过 → escalate")
+                    return {"autoid": aid, "case": case, "state": "escalated",
+                            "reason": f"超 {int(_CASE_DEADLINE_S)}s 仍未通过 → escalate（防个别难 case 永久 gate merge）"}
+                _emit_progress(f"✎ {tag} · draft 第 {rnd+1}/{_MAX_REWORK_ROUNDS} 轮…")
                 xp = _draft_once(case, aid, feedback, rnd, precedent_text)
                 if xp is None:
+                    _emit_progress(f"✎ {tag} · draft 第 {rnd+1} 轮未出 xlsx（递归/失败），重试")
                     feedback = "draft 未产出 xlsx（生成失败），重试"
                     continue
                 # B 层保真:需求点名的变体(算法/保存)不许偷换;违规当回流反馈重做
                 vfb = _check_variant_fidelity(case, xp)
                 if vfb:
+                    _emit_progress(f"✎ {tag} · 变体保真不符 → 重做")
                     feedback = vfb
                     continue
+                _emit_progress(f"⚖ {tag} · grade 评分中…")
                 ok, gout = _grade_once(case, aid, xp)
                 if ok:
+                    _emit_progress(f"✓ {tag} · grade PASS → 交付草稿")
                     return {"autoid": aid, "case": case, "xlsx": xp, "state": "done"}
+                _emit_progress(f"✂ {tag} · grade CUT：{gout.strip()[:60]}")
                 feedback = gout[:600]
+            _emit_progress(f"⏹ {tag} · 连续 {_MAX_REWORK_ROUNDS} 轮未过 → escalate")
             return {"autoid": aid, "case": case,
                     "state": "escalated", "reason": (feedback[:200] or "连续重做仍未通过")}
 
     result["phases"].append(
         f"per-case pipeline: {len(cases)} cases, 自适应并发(start={limiter.current} max={ceiling})")
+    _emit_progress(f"▶ prep 完成，开始编译 {len(cases)} 个 case（并发 {limiter.current}/{ceiling}）")
     done: dict[str, dict] = {}
     escalated: dict[str, str] = {}
     import concurrent.futures as _cf
@@ -505,6 +540,7 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
             merged_cases.append({"autoid": aid, "title": info["case"].get("title", ""),
                                  "steps": rows})
         if merged_cases:
+            _emit_progress(f"⛓ merge：{len(merged_cases)} 个 case 合并打包 → {out_name}/case.xlsx")
             merge_out = compile_emit_merged.invoke(
                 {"cases_json": json.dumps(merged_cases, ensure_ascii=False), "out_name": out_name})
             result["phases"].append(f"merge: {len(merged_cases)} cases → {out_name}/case.xlsx")

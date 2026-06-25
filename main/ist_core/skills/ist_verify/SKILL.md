@@ -28,7 +28,8 @@ when_to_use: |
 - **失败必看 `device_context`**：`dev_run_batch` 对非 pass case 返回它——含 ① 框架逐步执行 + 断言明细 + case 内异常 ② 设备配置会话原文（每条命令 + 设备真实响应，含 `^` 语法错 / `Failed to execute X because Y` → 哪条命令被拒/为什么）③ 触发端 RouterA/RouterB/clientc dig 真实输出（ANSWER SECTION / 实际解析 IP）。`unknown` 的 case 还附 `framework_traceback`（**文件级崩溃**真因：某 case 把整份 pytest 搞崩、后续全不跑 → 先修 traceback 指的那一个，别误判后续 case 本身错）。**改配置 / 填值 / 写 reflow brief 都基于它，不靠猜。**
 - **拿不准框架断言行为就读框架源码**（只读，沙箱已放行这两个文件）：`knowledge/framework/mirror/lib/check_point.py`（`found`=`re.compile` 当**正则**；`abs_found`=`re.escape` 当**字面**；`found_times` 需 3 参）+ `lib/test_xlsx.py`（check_point 分派只传 2 参 → `found_times` 必崩；带 H 的步只存寄存器不更新 `result`；`getattr(env,F)` 不转小写）。断言为何匹配/不匹配/崩，**以源码为准**。
 - **归因如实，不救场**：不把环境失败粉饰成通过，也不把断言失败甩锅给环境。
-- 上机**串行**（框架有全局锁），只走 `dev_run_batch`，不并发。
+- **单环境内串行**：框架对**一套设备床**有全局锁，同一环境同一时刻只能跑一份 `dev_run_batch`（撞了回 `device_busy`）。
+- **多份 excel 跨环境并行**（启用环境池 `IST_ENV_POOL_ENABLED=1` 时）：一轮**并行发多个 `dev_run_batch`**（每个一份 excel），池会把它们**自动分到不同的空闲环境**（各自独立设备床，互不撞锁）→ N 机 N 路并行，总时长≈最慢一份而非求和。并发数超过就绪环境数时多出来的自动排队等空闲，绝不撞同一设备。**池未启用（单环境）时仍串行**：一份接一份，别并发（会 `device_busy`）。
 
 ## Steps
 

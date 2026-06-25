@@ -70,6 +70,16 @@ def resolve_chat_completions_url(base_url: str | None) -> str:
     return f"{root}{_CHAT_COMPLETIONS_SUFFIX}"
 
 
+def _supports_thinking_toggle(url: str) -> bool:
+    """端点是否认 `thinking` 开关（MiMo / 小米 / DeepSeek 系）。
+
+    实测：思考模式下 tool_call 会以私有文本格式返回、且占满 token 致截断 → 拿不到
+    结构化 tool_calls。对工具调用（结构化抽取）须关思考。与 agents/_llm 一致。
+    """
+    u = (url or "").lower()
+    return any(k in u for k in ("mimo", "xiaomi", "deepseek"))
+
+
 def chat_completion(
     session: requests.Session,
     api_key: str,
@@ -82,6 +92,7 @@ def chat_completion(
     temperature: float = DEFAULT_TEMPERATURE,
     top_p: float = DEFAULT_TOP_P,
     max_retries: int = 3,
+    tool: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call LLM and return parsed JSON dict.
 
@@ -90,14 +101,24 @@ def chat_completion(
 
     ``base_url`` 为 OpenAI 兼容 API 根（如 ``https://api.deepseek.com`` 或
     DashScope ``.../compatible-mode/v1``）；已含 ``/chat/completions`` 时原样使用。
+
+    ``tool``（OpenAI function 定义 ``{"type":"function","function":{...}}``）非空时走
+    **function calling** 结构化输出：强制 ``tool_choice`` 调该工具、解析 ``tool_calls``
+    里的 ``arguments``（schema 作硬约束，比 json_object 更可靠）。MiMo/DeepSeek 端点会
+    自动关思考（思考模式下 tool_call 以文本返回、且占满 token 截断，拿不到结构化）。
+    ``tool`` 为空时维持 json_object 模式（向后兼容，行为不变）。
     """
     use_model = model or CHAT_MODEL
     use_url = resolve_chat_completions_url(base_url)
+    cache_key_system = (
+        system_prompt if tool is None
+        else system_prompt + "\x00tool\x00" + json.dumps(tool, sort_keys=True, ensure_ascii=False)
+    )
 
     cache = _get_llm_cache()
     if cache is not None:
         cached = cache.get(
-            system=system_prompt,
+            system=cache_key_system,
             user=user_prompt,
             model=use_model,
             max_tokens=max_tokens,
@@ -116,11 +137,20 @@ def chat_completion(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "response_format": {"type": "json_object"},
         "temperature": temperature,
         "top_p": top_p,
         "max_tokens": max_tokens,
     }
+    if tool is not None:
+        body["tools"] = [tool]
+        body["tool_choice"] = {
+            "type": "function",
+            "function": {"name": tool["function"]["name"]},
+        }
+        if _supports_thinking_toggle(use_url):
+            body["thinking"] = {"type": "disabled"}
+    else:
+        body["response_format"] = {"type": "json_object"}
 
     last_err: Exception | None = None
     for attempt in range(max_retries):
@@ -143,7 +173,7 @@ def chat_completion(
 
             choice = data["choices"][0]
             finish_reason = choice.get("finish_reason", "")
-            content = choice["message"]["content"]
+            message = choice["message"]
 
             usage = data.get("usage", {})
             prompt_tok = usage.get("prompt_tokens", "?")
@@ -159,11 +189,21 @@ def chat_completion(
                     f"completion={usage.get('completion_tokens')})"
                 )
 
+            if tool is not None:
+                tool_calls = message.get("tool_calls") or []
+                if not tool_calls:
+                    # 工具模式却没回结构化 tool_calls（端点偶发，如把工具调用塞进 content）→
+                    # 当 JSON 错误走重试路径，不直接挂。
+                    raise json.JSONDecodeError("tool mode: no tool_calls in response", "", 0)
+                content = tool_calls[0].get("function", {}).get("arguments", "") or ""
+            else:
+                content = message["content"]
+
             result = json.loads(content)
             if cache is not None:
                 cache.put(
                     result=result,
-                    system=system_prompt,
+                    system=cache_key_system,
                     user=user_prompt,
                     model=use_model,
                     max_tokens=max_tokens,

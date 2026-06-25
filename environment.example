@@ -42,6 +42,9 @@ IST_OPUS_MODEL=mimo-v2.5-pro
 IST_SONNET_MODEL=mimo-v2.5-pro
 IST_HAIKU_MODEL=mimo-v2.5
 IST_ALLOWED_MODELS=mimo-v2.5-pro,mimo-v2.5
+# IST_THINKING=off          # 深度思考开关（MiMo/DeepSeek 经 extra_body.thinking）；on（默认）| off。
+#                           # agentic loop 建议 off：快（1s/次 vs 分钟级）+ 确定性（思考模式下
+#                           # 端点会强制 temperature=1.0/top_p=0.95，忽略自定义值）。
 
 
 
@@ -163,3 +166,18 @@ APV_RESTAPI_PORT=9997
 LINUX_TEST_HOST=
 LINUX_SSH_USERNAME=
 LINUX_SSH_PASSWORD=
+
+
+# =============================================================================
+# 十、自动化环境池（多跳板机并行 verify；默认关）
+#
+# 跳板机 = 框架 stdio MCP server 入口（FrameworkMCPClient 经 SSH 驱动 dev_run_batch）。
+# 池**关**（默认）：只用现役单跳板机（IST_JUMPHOST_HOST / config 默认），行为同今天。
+# 池**开**：4 机各自独立设备床并行；health-check 只派给框架就绪的机（未就绪自动跳过、
+#   部署后自动加入）；同一时刻每机最多一份 dev_run_batch（框架设备级全局锁）。
+# 详见 CLAUDE.md「自动化环境池」+ scripts/maintenance/deploy_framework_to_envs.py。
+# =============================================================================
+IST_JUMPHOST_PASS=                                # 跳板机 SSH 口令（必填；勿留弱口令）
+# IST_JUMPHOST_HOST=10.4.127.103                  # 现役单跳板机（池关时用；缺省见 config.py）
+# IST_ENV_POOL_ENABLED=1                          # 开启 4 机并行池（默认关）
+# IST_ENV_POOL_HOSTS=10.4.127.103,10.4.127.93,10.4.127.79,10.4.127.105   # 池主机列表（缺省=内置 4 机）

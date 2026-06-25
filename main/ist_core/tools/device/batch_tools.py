@@ -243,8 +243,26 @@ def dev_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
 
     submit = autoids[0]   # 整份只用一个 autoid 提交，框架据它建 staging 并整跑全文件
     out: list[dict] = []
+    import contextlib as _ctx
     try:
-        with FrameworkMCPClient() as client:
+        from main.case_compiler import env_pool as _pool
+    except Exception:  # noqa: BLE001
+        _pool = None
+    try:
+        with _ctx.ExitStack() as _stack:
+            # 环境池：启用时认领一个空闲就绪环境（各自独立设备床→真并行）；
+            # 未启用/池异常→ env=None 回退现役单环境（行为同今天）；全忙→device_busy。
+            env = None
+            if _pool is not None and _pool.is_enabled():
+                try:
+                    env = _stack.enter_context(_pool.acquire(timeout=300))
+                except TimeoutError:
+                    return json.dumps({"error": "device_busy", "busy": True,
+                                       "message": "所有自动化环境都忙，请稍后重试。"},
+                                      ensure_ascii=False)
+                except Exception:  # noqa: BLE001
+                    env = None
+            client = _stack.enter_context(FrameworkMCPClient(env))
             dres = client.deliver(module, submit, str(p))
             if dres.get("error"):
                 return json.dumps({"error": f"deliver 失败: {dres.get('error')}"}, ensure_ascii=False)

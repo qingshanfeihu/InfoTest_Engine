@@ -566,7 +566,7 @@ class DreamTask:
 
         session, api_key, base_url, model = setup
 
-        def _call(system_prompt: str, user_prompt: str):
+        def _call(system_prompt: str, user_prompt: str, tool: dict | None = None):
             try:
                 return chat_completion(
                     session,
@@ -578,6 +578,7 @@ class DreamTask:
                     max_tokens=8192,
                     temperature=0.1,
                     top_p=0.1,
+                    tool=tool,
                 )
             except TruncationError:
                 logger.warning("footprint LLM 输出被截断，跳过")

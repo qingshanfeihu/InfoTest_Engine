@@ -18,112 +18,159 @@ logger = logging.getLogger(__name__)
 _THREAD_ID_RE = re.compile(r"thread_id:\s*(\S+)")
 
 _SYSTEM_PROMPT = """\
-你是 IST-Core 的产品知识提取助手。阅读 agent 的工作记忆（含 tool 调用、AI 思考），
-提取**已被 CLI 文档或 BUG 数据验证过的产品事实**，按下列严格 JSON 输出。
+你是 IST-Core 的产品知识提取助手。阅读给定文本（产品 CLI 文档 / agent 工作记忆），
+提取**有原文证据支撑的产品事实**，调用 `emit_facts` 工具按其参数 schema 提交。
+输出结构由工具 schema 强约束——你只做语义判断：抽什么、归到哪个 feature_path、引哪句证据。
 
-## 输出契约
+## 各 fact_kind 何时用、填哪些字段
 
-```json
-{
-  "facts": [
-    {
-      "fact_kind": "cli_command | decision_rule | behavior | known_issue",
-      "feature_path": ["http","rewrite","body"],
-      "fact_key": "<同一 feature_path 下该 fact 的唯一短标识，雪花式 snake_case>",
+- **cli_command**（一条 CLI 命令的语法）：填 `cli_syntax` = **完整调用签名**（命令主体 + 全部参数，
+  按正确顺序，用记法表示参数：必填 `<param>`、可选 `[param]`、枚举 `{a|b}`）。只写命令本身，
+  禁止描述句、引号、中文标点、"用于"/"语法为"。
+  - 签名要**完整规范**。文档对同一命令常分散呈现：标题行可能只列主体加个别参数，真正的参数集要
+    结合紧随的参数表/说明才完整；规范定义与使用示例也常并存。综合还原出完整规范签名，不要照抄某一行
+    残片，也不要把示例里选定的具体取值当成命令的一部分。
+  - 参数值不是命令路径：枚举值 / 模式名 / 具体地址等是参数取值，只出现在记法里，绝不作独立命令 token。
+  - 命令带命名参数且原文有参数表/说明 → 填 `parameters`（每参数一对象，`name` 必填作去重键；其余字段
+    按原文如实给，如 `type`/`required`/`default`/`value_range`/`desc`，不限于此）。纯枚举开关直接写进
+    `cli_syntax` 即可、`parameters` 留空。原文无参数信息就留空，不要编造或猜测取值范围。
+  - **同一命令的 配置 / no / show / clear 各自是独立 cli_command**：分别给完整签名，它们 feature_path
+    相同、代码会自动归到同一节点。
+- **decision_rule**：`condition`（触发条件）+ `decision`（结论/默认值/限制）**两者都必填**。原文没有明确
+  "条件 → 结论"两段时，**改用 behavior**。
+- **behavior**：填 `content`（一句话功能行为）。**必须是某条 CLI 命令的行为说明**。架构概念 / 设计术语 /
+  项目代号不是命令也不是命令行为，**不要提取**——知识树只收 CLI 命令及其相关事实，不收名词解释。
+- **known_issue**：填 `issue_id`（BUG 编号）+ `issue_title`（**照抄 BUG title 原文，一字不改、不概括、不留空**）。
+  可选 `affected_versions`。
 
-      "cli_syntax": "http rewrite body {on|off}",
-      "parameters": [],
-      "condition": "不配置 http rewrite body limit",
-      "decision": "默认可改写 HTTP 内容长度上限为 5120KB",
-      "content": "HTTP 内容改写功能基于规则改写后台响应",
-      "issue_id": "BUG-70233",
-      "issue_title": "[Http rewrite body] Fail to rewrite a 1024KB file",
-      "affected_versions": ["10.4.2","10.4.3"],
+## evidence（cli_command / decision_rule / behavior 必填；known_issue 不需要）
 
-      "evidence_file": "knowledge/data/markdown/product/cli_10.5_Chapter2.md",
-      "evidence_quote": "http rewrite body {on|off}"
-    }
-  ]
-}
-```
+- `evidence_file`：这条事实在哪个文档能查到。真实路径，从所读文件的 path 获取，不要凭空构造。
+- `evidence_quote`：**evidence_file 里的原文片段**，未经改写 / 合并 / 概括。merger 会用 grep 验证，
+  grep 不到整条 fact 丢弃。取**最能直接证明该事实的那段原文**：cli_command 引命令定义/语法呈现那行
+  （哪怕残缺）；decision_rule/behavior 引陈述该规则/行为的那句。不要用章节标题、
+  泛泛导语、无关旁支句充数。
+  - `cli_syntax` 是你综合还原的完整签名，`evidence_quote` 是文档原始呈现，两者不必逐字相同。
+- known_issue 的 BUG 数据来自 API 而非磁盘文件，无需 evidence。
+- condition / decision / content 可以是你的概括，但 `evidence_quote` 必须引用原文。
+  cli/rule/behavior 找不到字面证据时，**宁可不提取**，不要用自己的话改写凑结构。
 
-## 字段填写规则（按 fact_kind 二选一，其他字段留空字符串/空数组）
+## feature_path（命令主体 token 序列）
 
-- **cli_command**: 必填 `cli_syntax` = 这条命令的**完整调用签名**——命令主体 + 全部参数，按正确顺序，用记法表示参数（必填 `<param>`、可选 `[param]`、枚举 `{a|b}`）。只写命令本身，禁止描述句、引号、中文标点、"用于"/"语法为"。
-  - 签名应**完整且规范**。文档对同一命令的呈现常不完整：标题行可能只列命令主体加个别参数，真正的参数集要结合紧随的参数表/说明才完整；同一命令也常并存规范定义（`ha synconfig bootup {on|off}`）和使用示例（`ha synconfig bootup on`）。综合这些信息还原出完整规范签名，而不是照抄某一行残片或把示例里选定的具体值当命令的一部分。
-  - 参数值不是命令路径。`on`/`off`/mode 名/具体 IP 等是参数取值，只出现在记法里（`{on|off}`），绝不作为独立命令 token。
-  - 命令若带命名参数且原文有参数表/参数说明，填 `parameters` 数组（每参数一对象，`name` 必填作去重键；其余字段按原文如实给，常见 `type`/`required`/`default`/`value_range`/`desc`，不限于此）。纯枚举开关（`{on|off}`）直接写进 cli_syntax 即可、`parameters` 留空。原文没有参数信息就留空 `[]`，不要编造或猜测取值范围。
-  - **同一命令的 no/show/clear/配置 是不同的 cli_command 各自提取**：`slb real http <rs>`、`no slb real http`、`show slb real http` 是三条命令，cli_syntax 各填完整签名，它们会自动归到同一节点
-- **decision_rule**: `condition`（触发条件）+ `decision`（结论/默认值/限制）**两边都必填**。如果原文没有明确"条件 → 结论"两段，**改用 behavior**。
-- **behavior**: 必填 `content`（一句话功能行为）。**注意：behavior 必须是某条 CLI 命令的行为说明**。如果内容是架构概念/设计术语/项目代号（如"Ustack 是 XX 堆栈的代号"），它**不是 CLI 命令也不是命令行为，不要提取为 fact**——产品知识树只收 CLI 命令及其相关事实，不收架构名词解释
-- **known_issue**: 必填 `issue_id`（BUG-XXXXX 格式）+ **必填 `issue_title`**。`issue_title` 直接照抄 `kb_bug_search` 返回的 `title` 字段原文，**一字不改、不要概括、不要留空**。可选 `affected_versions`
-
-## evidence 字段（cli_command / decision_rule / behavior 必填，known_issue 不需要）
-
-- `evidence_file`: cli/rule/behavior 必填。这条事实在哪个产品文档中能查到。必须是真实路径（如 `knowledge/data/markdown/product/cli_10.5_Chapter2.md`），从 tool 调用的 path 参数中获取，不要凭空构造
-- `evidence_quote`: cli/rule/behavior 必填。**必须是 evidence_file 里的原文片段**，未经任何改写、合并、概括。merger 会用 grep 验证：如果 evidence_quote 在 evidence_file 里 grep 不到，整条 fact 会被丢弃
-  - 取**最能直接证明这条事实的那段原文**，而不是任意能 grep 到的文字。对 cli_command，引命令定义/语法呈现的那一行（哪怕它在文档里是残缺形态）；对 decision_rule/behavior，引陈述该规则或行为的那句。不要用章节标题、泛泛的导语或不相关的旁支句来充数。
-  - cli_syntax 与 evidence_quote 角色不同：cli_syntax 是你综合还原的完整签名，evidence_quote 是文档里支撑它的原始呈现，两者不必逐字相同。
-- **known_issue 类型不需要 evidence_file / evidence_quote**：有 issue_id 就够了。BUG 数据来自 kb_bug_search API 而非磁盘文件，无需提供文件路径
-- 对于 cli/rule/behavior：如果原文找不到对应字面证据，宁可不提取这条 fact，也不要为了凑结构化用自己的话改写
-
-注意：condition / decision / content 这三个字段可以是你的概括，但 evidence_quote 必须是引用原文。
-
-## feature_path 填写规则
-
-- 写命令的完整路径 token，剥离 `no` / `show` / `clear` 操作前缀
-- 例：`show http rewrite body limit` → `["http","rewrite","body","limit"]`
-- **只放命令主体 token，不放参数值**：`ha synconfig bootup {on|off}` → `["ha","synconfig","bootup"]`，`on`/`off` 是参数值不进 path
-- cli_command 的 path 由代码从 cli_syntax 自动派生兜底，但你仍应给出正确的 path
-- known_issue 没有明确命令时，从 BUG title / description 里识别**真正的功能模块或命令**来定 path。
-  注意：title 开头的方括号未必是模块名——`【中标麒麟】`/`【飞腾】`是 OS/硬件环境标签，`[佛山农商行]`是客户名，
-  这些**不是 feature_path**。要从问题描述本身找功能锚点：如"HA 同步无法同步 accessgroup 配置"→ 锚点是 `accessgroup`（真实命令）或 `ha`（功能模块），不是 `中标麒麟`
-- 不要给 facts 凭空捏造路径——找不到就丢弃这条 fact
-- **不用关心层级（leaf/trunk/branch）**：节点在树里的层级由代码按子节点关系自动重算，你只需给对 feature_path
+- 剥 `no` / `show` / `clear` 操作前缀；**只放命令主体 token，不放参数值**
+  （如 `show <a> <b> <c>` → `["a","b","c"]`；枚举/取值参数不进 path）。
+- cli_command 的 path 代码会从 cli_syntax 兜底派生，但你仍应给对。
+- known_issue 无明确命令时，从 BUG title/描述里找**真正的功能模块或命令**作锚点。注意 title 开头的
+  方括号未必是模块名——可能是 OS/硬件环境标签、客户名等，这些**不是 feature_path**；要从问题描述本身
+  找功能锚点（真实命令或功能模块名）。
+- 找不到锚点就丢弃这条 fact，不要凭空造路径。
+- 不用关心层级（leaf/trunk/branch）——代码按子节点关系自动重算，你只需给对 feature_path。
 
 ## feature_path 归一化（避免同一特性分裂成多个节点）
 
-同一个产品特性必须落到**唯一一条** feature_path，不要因为措辞不同而拆散：
+- **以真实 CLI 命令路径为锚**：某事实属于某条命令，就用那条命令的 token 序列，不要另造同义分组
+  （不要造没有对应真实命令的路径）。
+- known_issue 优先挂到命令节点；完全无法对应命令时才退化为模块名（长度=1）。
+- **复用 `<existing_facts>` 里已存在的 feature_id**：上下文清单里已有语义相同的特性节点就直接用它，
+  优先收敛到已有节点而非新增近义节点。
+- 同义标准：描述的是**同一条命令 / 同一配置项 / 同一特性**，即使措辞不同也算同一特性。
 
-- **以真实 CLI 命令路径为锚**。某事实如果属于某条命令，feature_path 就用那条命令的 token 序列，不要另造同义分组。
-  例：cookie 会话保持加密由 `slb mode ircookie` 命令配置 → 所有相关 fact（含 BUG）都归到 `["slb","mode","ircookie"]`，
-  不要新造 `["cookie","encryption"]` / `["slb","cookie"]` / `["slb","ircookie"]` 这些没有对应真实命令的路径
-- **known_issue 优先挂到命令节点**。BUG 若涉及某条已知命令，用该命令的 feature_path；
-  只有当 BUG 完全无法对应任何命令时，才退化为 trunk（长度=1）的模块名
-- **复用 `<existing_facts>` 里已存在的 feature_id**。如果上下文清单里已有语义相同的特性节点，
-  直接用它的 feature_path，不要新建近义节点。优先收敛到已有节点而非新增
-- 同义判断标准：两条 fact 描述的是**同一条命令 / 同一个配置项 / 同一个特性**，
-  即使用词不同（"cookie加密" vs "ircookie enc 模式" vs "会话保持加密"）也算同一特性
+## fact_key（决定 dedup，snake_case 描述该 fact 主题）
 
-## fact_key 填写规则（决定 dedup）
+- cli_command 用命令核心 token；decision_rule 用规则主题；behavior 用行为主题；known_issue 直接用 issue_id。
+- **复用已有 fact_key**：若 `<existing_facts>` 里某 fact 与你要提取的**语义等同**，必须复用同一 fact_key
+  （哪怕措辞不同）；同一规则的不同复述映射到同一 key，否则产生重复。
 
-- snake_case，描述这条 fact 的"主题"
-- cli_command: 用命令的核心 token，例 `syntax`、`limit_syntax`
-- decision_rule: 用规则主题，例 `default_limit_5120kb`、`group_name_default_global`
-- behavior: 用行为主题，例 `rewrite_response_body`、`encryption_aes_cbc_256`
-- known_issue: 直接用 issue_id
+## 绝对不要提取
 
-## 复用已有 fact_key（重要）
+- agent 工作计划（"接下来"/"需要找到"/"继续读取"）、评审建议（"应补充"/"建议修改"）、文件导航日志
+  （"找到 N 个文件"）、等价映射（"等价于某友商型号"）、无原文证据的推测。
 
-如果 user prompt 顶部出现 `<existing_facts>` 块，里面列出了某个 feature_path 已经存在的 fact_keys 和它们对应的内容样例。
-
-- 当你提取的事实**语义上等同于**清单中某条已有事实时，**必须复用同一个 fact_key**（哪怕措辞不同）
-- 例：清单已有 `feature_path=["slb","mode","ircookie"]` 的 `rules.group_name_default_global`，
-  你又看到原文说"未指定 group_name 时使用 global"，应该用 fact_key=`group_name_default_global`，不要起 `default_group_global` / `group_name_default` 这类同义新 key
-- 同一规则的不同复述必须映射到同一个 key，否则会产生重复
-
-## 负面约束（绝对不要提取）
-
-- agent 工作计划（"接下来"、"需要找到"、"继续读取"）
-- 评审建议（"应补充"、"缺少"、"建议修改"）
-- 文件导航日志（"找到 N 个文件"）
-- 等价映射（"等价于 F5/A10"）
-- 没有原文证据的推测
-
-## 输出
-
-只输出 JSON。无可提取事实时输出 `{"facts": []}`。
+无可提取事实时，仍调用 emit_facts，传入空 facts 数组。
 """
+
+
+# emit_facts 工具：facts[] 的完整 JSON Schema —— **结构的唯一真相源**。
+# 经 function calling 作硬约束传给模型（schema 强制字段/类型/枚举），比 json_object + prompt
+# 描述更可靠。各字段的"哪个 kind 必填"语义写在 description 里，prompt 只讲语义判断。
+EXTRACTION_TOOL: dict = {
+    "type": "function",
+    "function": {
+        "name": "emit_facts",
+        "description": "提交从给定文本中提取的、有原文证据支撑的结构化产品事实列表。无可提取时传空数组。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "facts": {
+                    "type": "array",
+                    "description": "提取到的产品事实数组；无可提取事实时为空数组 []。",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "fact_kind": {
+                                "type": "string",
+                                "enum": ["cli_command", "decision_rule", "behavior",
+                                         "known_issue"],
+                                "description": "事实类型，决定哪些字段必填。",
+                            },
+                            "feature_path": {
+                                "type": "array", "items": {"type": "string"},
+                                "description": "命令主体 token 序列（剥 no/show/clear 前缀，不含参数值）。",
+                            },
+                            "fact_key": {
+                                "type": "string",
+                                "description": "同一 feature_path 下该 fact 的唯一短标识，snake_case；"
+                                               "语义等同则复用已有 key。",
+                            },
+                            "cli_syntax": {
+                                "type": "string",
+                                "description": "fact_kind=cli_command 时填：完整命令调用签名（含全部参数记法）。",
+                            },
+                            "parameters": {
+                                "type": "array", "items": {"type": "object"},
+                                "description": "cli_command 的命名参数表，每项至少含 name；纯枚举开关留空。",
+                            },
+                            "condition": {
+                                "type": "string",
+                                "description": "fact_kind=decision_rule 时填：触发条件。",
+                            },
+                            "decision": {
+                                "type": "string",
+                                "description": "fact_kind=decision_rule 时填：结论/默认值/限制。",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "fact_kind=behavior 时填：一句话功能行为。",
+                            },
+                            "issue_id": {
+                                "type": "string",
+                                "description": "fact_kind=known_issue 时填：BUG 编号。",
+                            },
+                            "issue_title": {
+                                "type": "string",
+                                "description": "fact_kind=known_issue 时填：照抄 BUG title 原文，一字不改。",
+                            },
+                            "affected_versions": {
+                                "type": "array", "items": {"type": "string"},
+                                "description": "known_issue 可选：受影响版本号列表。",
+                            },
+                            "evidence_file": {
+                                "type": "string",
+                                "description": "cli/rule/behavior 必填：证据所在文档路径。",
+                            },
+                            "evidence_quote": {
+                                "type": "string",
+                                "description": "cli/rule/behavior 必填：evidence_file 中的原文片段，未经改写。",
+                            },
+                        },
+                        "required": ["fact_kind", "feature_path", "fact_key"],
+                    },
+                }
+            },
+            "required": ["facts"],
+        },
+    },
+}
 
 
 def _parse_thread_id(content: str) -> str:
@@ -135,6 +182,8 @@ def _parse_thread_id(content: str) -> str:
 _OP_PREFIXES = ("no", "show", "clear")
 
 _NOTATION_PARAM_RE = re.compile(r"^[<\[{].*[>\]}]$")
+# 整个记法参数组(从某个开括号到下一个闭括号,含内部空格/竖线):用于剥离前先整体清掉
+_NOTATION_GROUP_RE = re.compile(r"[<\[{][^>\]}]*[>\]}]")
 
 _MD_ESCAPE_RE = re.compile(r"\\([_*~])")
 
@@ -158,7 +207,11 @@ def _feature_path_from_syntax(cli_syntax: str) -> list[str]:
     """
     if not cli_syntax:
         return []
-    toks = cli_syntax.split()
+    # 先整体剥掉记法参数组(含内部空格/竖线):`<...>` `[...]` `{...}`——否则带空格的记法
+    # 如 `[ipv4_netmask | ipv4_prefix]` split 后碎成 `[ipv4_netmask`/`|`/`ipv4_prefix]`,
+    # 单 token 判定漏掉前两段、混进 feature_path。
+    stripped = _NOTATION_GROUP_RE.sub(" ", cli_syntax)
+    toks = stripped.split()
     while toks and toks[0].lower() in _OP_PREFIXES:
         toks = toks[1:]
     out: list[str] = []
@@ -166,7 +219,7 @@ def _feature_path_from_syntax(cli_syntax: str) -> list[str]:
         tok = _clean_token(raw).strip()
         if not tok:
             continue
-        if _NOTATION_PARAM_RE.match(tok) or "|" in tok:
+        if _NOTATION_PARAM_RE.match(tok) or "|" in tok:  # 兜底
             continue
         out.append(tok.lower())
     return out
@@ -325,11 +378,12 @@ def extract_facts(
     llm_chat: Callable | None = None,
     existing_facts: dict | None = None,
 ) -> list[RawFact]:
-    """从 working memory 文本中提取 RawFact 列表。
+    """从给定文本中提取 RawFact 列表。
 
     Args:
-        content: working memory 文件完整文本
-        llm_chat: LLM 调用函数 (system_prompt, user_prompt) -> str|dict
+        content: 源文本（产品文档 / working memory 文件全文）
+        llm_chat: LLM 调用函数 ``(system_prompt, user_prompt, tool) -> dict``——经
+            function calling 把 ``EXTRACTION_TOOL`` 作硬约束传入,返回解析后的 ``{"facts":[...]}``。
         existing_facts: 现有 footprint 节点的 fact_key 清单（用于 LLM 复用）
     """
     if llm_chat is None:
@@ -340,7 +394,7 @@ def extract_facts(
     user_prompt = _format_existing_facts(existing_facts) + content
 
     try:
-        result = llm_chat(_SYSTEM_PROMPT, user_prompt)
+        result = llm_chat(_SYSTEM_PROMPT, user_prompt, EXTRACTION_TOOL)
     except Exception as exc:
         logger.warning("footprint LLM 调用失败: %s", exc)
         return []

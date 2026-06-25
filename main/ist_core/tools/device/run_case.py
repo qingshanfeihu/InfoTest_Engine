@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -178,6 +179,26 @@ def dev_run_case(
     )
 
 
+# 共享 probe 缓存:并发 draft 反复探**同一条 show 命令**是"真慢"主因——各 draft 是
+# 孤立 fork、互不知道别人探过了,于是 N 个 draft 把同样的 show 各探一遍 + 都砸向设备锁。
+# compile 期设备**只读**,**静态配置回显**在一次 run 内稳定 → 进程级缓存安全(免重复 SSH +
+# 免设备锁竞争)。但**动态查询**(statistics / session / 命中计数等运行时值)每次可能不同 →
+# 必须绕过缓存始终现探,否则返回 stale 值会让 draft 误读设备真实行为(只缓静态见 _probe_cacheable)。
+_PROBE_CACHE: dict[str, str] = {}
+_PROBE_CACHE_LOCK = threading.Lock()
+
+# 动态查询关键字:命令含这些运行时计数/状态/会话词 → 不缓存(每次现探)。绕过是**安全侧**:
+# 误判静态为动态只少缓一条(重探、无害);漏判动态会返回 stale(错),故宁可多绕。
+_PROBE_DYNAMIC_MARKERS = (
+    "statistic", "session", "connection", "counter", "traffic", "health",
+)
+
+
+def _probe_cacheable(cmd_lower: str) -> bool:
+    """该 show/get 回显在一次 compile run 内是否稳定可缓存(静态配置=可,动态计数/状态=否)。"""
+    return not any(m in cmd_lower for m in _PROBE_DYNAMIC_MARKERS)
+
+
 @tool(parse_docstring=True)
 def dev_probe(command: str) -> str:
     """经跳转机在被测 APV 设备上跑**单条只读 show/get 命令**,取真实设备回显。
@@ -217,6 +238,16 @@ def dev_probe(command: str) -> str:
     if first not in ("show", "get"):
         return f"error: probe 只允许 show/get 开头的只读命令,收到 {first!r}。改配置请用 dev_run_case 整 case 上机。"
 
+    # 共享缓存:仅**静态配置**回显可缓存(动态计数/状态走 _probe_cacheable 绕过、始终现探)。
+    # 命中即返回:并发 draft 别人/本 draft 已探过这条静态 show → 免 SSH + 免锁竞争。
+    key = " ".join(cmd.lower().split())
+    cacheable = _probe_cacheable(key)
+    if cacheable:
+        with _PROBE_CACHE_LOCK:
+            cached = _PROBE_CACHE.get(key)
+        if cached is not None:
+            return cached
+
     try:
         from main.case_compiler.device_mcp_client import FrameworkMCPClient
     except Exception as exc:  # noqa: BLE001
@@ -239,9 +270,21 @@ def dev_probe(command: str) -> str:
     if isinstance(res, dict) and res.get("error"):
         return f"=== dev_probe ===\ncommand: {cmd}\nstatus: error\n{res.get('error')}"
     output = res.get("output") if isinstance(res, dict) else res
-    return (
+    # 设备回显回灌 agent 前脱敏:show running-config 等可能含口令/community(守红线「日志不打凭据」)
+    try:
+        from main.case_compiler.device_mcp_client import _redact
+        output = _redact(str(output)) if output else output
+    except Exception:  # noqa: BLE001
+        pass
+    result = (
         f"=== dev_probe ===\n"
         f"command: {cmd}\n"
         f"--- 设备回显(经跳转机)---\n"
         f"{output if output else '(无输出)'}"
     )
+    # 只缓存**静态**成功回显;动态查询(cacheable=False)/锁竞争/空输出不缓存,留待现探或重试
+    out_s = str(output or "")
+    if cacheable and out_s and "another run in progress" not in out_s and "lock held" not in out_s:
+        with _PROBE_CACHE_LOCK:
+            _PROBE_CACHE[key] = result
+    return result

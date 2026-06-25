@@ -163,7 +163,7 @@ class IstInkApp:
         self._thinking_text = create_text("")
         self._thinking_line.append_child(self._thinking_text)
 
-        
+
         self._footer = FooterPane(render_callback=self._app.render, thinking_text_cb=self._update_thinking_line)
 
         
@@ -218,8 +218,11 @@ class IstInkApp:
         
         
         self._ai_stream_idx: int = -1
+        # 流式结束后,暂存流式 ⏺ 消息的行号,供提交版(snapshot.messages 的最终 BLOCK_TEXT)
+        # 原地替换,避免"流式 append + 提交 append"把同一段文本渲染成两条(重复 bug)。
+        self._stream_commit_idx: int = -1
 
-        
+
         from main.ist_core.tui.input_history import InputHistory
         self._input_history = InputHistory()
         self._history_idx = -1
@@ -255,6 +258,7 @@ class IstInkApp:
 
         try:
             self._app.start()
+            self._start_evidence_tailer()
             self._show_welcome()
             if self._initial_query:
                 self._submit(self._initial_query)
@@ -293,6 +297,64 @@ class IstInkApp:
         import time
         while self._app._running:
             time.sleep(0.1)
+
+    def _start_evidence_tailer(self) -> None:
+        """fastlog 消费端:每 ~300ms 把新增 fork 步骤**追加到主 transcript**(像日志往下流,
+        和 agent 消息/里程碑同一条流,不是独立面板 → 不分屏),并把 fork token 并入 footer ↑↓。
+
+        - **只在 sticky-scroll(视图在底部、用户在跟看)时渲染**;用户往上滚(sticky 关)则
+          只追加不渲染 → 不与用户滚动时的重排互抢、页面不冲花。
+        - 批量(300ms 读一次,非每条事件 emit)→ 不刷卡。完整明细同时在 evidence 日志文件。
+        """
+        import threading
+        import time as _time
+        import os as _os
+        from main.ist_core.skills.loader import (
+            _evidence_log_path, reset_evidence_log, reset_fork_tokens, get_fork_tokens,
+        )
+
+        reset_evidence_log()    # 每会话日志从干净开始
+        reset_fork_tokens()
+        path = _evidence_log_path()
+        D, X = self._DIM, self._RESET
+
+        def _poll() -> None:
+            offset = 0
+            last_ft = (-1, -1)
+            while self._app._running:
+                _time.sleep(0.3)
+                new_lines = []
+                try:
+                    if _os.path.exists(path):
+                        size = _os.path.getsize(path)
+                        if size < offset:        # 截断/新 run → 从头
+                            offset = 0
+                        if size > offset:
+                            with open(path, "r", encoding="utf-8") as f:
+                                f.seek(offset)
+                                chunk = f.read()
+                                offset = f.tell()
+                            new_lines = [ln.strip() for ln in chunk.split("\n") if ln.strip()]
+                except Exception:
+                    pass
+                try:
+                    ft = get_fork_tokens()
+                    if not new_lines and ft == last_ft:
+                        continue
+                    last_ft = ft
+                    with self._app.lock:
+                        self._footer.update(fork_input=ft[0], fork_output=ft[1])
+                        if new_lines:
+                            self._transcript.append_messages(
+                                [f"   {D}· {ln}{X}" for ln in new_lines]
+                            )
+                        # 只在用户跟看(底部 sticky)时渲染;往上滚则不渲染,放行用户滚动
+                        if new_lines and self._transcript.node.sticky_scroll:
+                            self._app.render()
+                except Exception:
+                    pass
+
+        threading.Thread(target=_poll, daemon=True).start()
 
     def _show_welcome(self) -> None:
         from main.ist_core.agents._llm import ist_core_default_model
@@ -658,7 +720,10 @@ class IstInkApp:
         if delta == 0:
             return
         self._transcript.scroll_by(delta)
-        self._app.render()
+        # 滚动会把超宽/软换行内容移进视口，普通 diff 清不掉宽字符跨列残留(溢到最左成"线")。
+        # 走 _repaint_full:render_full 逐格重写(含空格)自愈残影,且无 erase 空白相 → 不闪。
+        # 不要用 _force_full_render(那条带 erase,会每次滚动闪一下)。
+        self._app._repaint_full()
 
     
 
@@ -870,7 +935,7 @@ class IstInkApp:
     def _on_snapshot(self, snapshot: Any) -> None:
         """Handle MessageSnapshot from TuiSink (called from bridge thread).
 
-        适配层：把 MessageSnapshot 翻译成旧 _on_ui_event_locked 的渲染调用。
+        把不可变 MessageSnapshot diff 成 transcript 增量渲染(append/原地更新)。
         bridge worker 是后台线程；DOM 修改必须和 ink-input 线程串行化。
         """
         with self._app.lock:
@@ -890,6 +955,7 @@ class IstInkApp:
             self._flush_pending_tools()
             rendered = self._render_markdown(snapshot.streaming_text)
             if self._ai_stream_idx < 0:
+                self._stream_commit_idx = -1  # 新流开始,放弃上一段未匹配的提交占位
                 self._ai_stream_idx = self._transcript.message_count()
                 self._transcript.append_message(f" ⏺ {rendered}")
             else:
@@ -905,6 +971,9 @@ class IstInkApp:
 
         
         if prev and prev.streaming_text is not None and snapshot.streaming_text is None:
+            # 流式刚结束:记住这条流式 ⏺ 消息的行号,供下面 Path 2 渲染最终 BLOCK_TEXT 时
+            # 原地替换(而非再 append 一条同文本 → 重复)。
+            self._stream_commit_idx = self._ai_stream_idx
             self._ai_stream_idx = -1
 
         
@@ -936,6 +1005,7 @@ class IstInkApp:
             self._flush_pending_tools()
             self._is_loading = False
             self._ai_stream_idx = -1
+            self._stream_commit_idx = -1  # 回合收尾,清掉未匹配的流式占位,防跨回合误更新
 
             if self._plan_panel.is_visible:
                 self._plan_panel.mark_all_done()
@@ -949,6 +1019,7 @@ class IstInkApp:
             self._flush_pending_tools()
             self._is_loading = False
             self._ai_stream_idx = -1
+            self._stream_commit_idx = -1  # 同上,错误收尾也清掉流式占位
             
             if snapshot.messages:
                 last = snapshot.messages[-1]
@@ -983,7 +1054,10 @@ class IstInkApp:
         msgs = self._transcript._messages
         while insert_at < len(msgs):
             stripped = msgs[insert_at].lstrip()
-            if stripped.startswith("⎿") or "⎿" in msgs[insert_at] or stripped.startswith("…"):
+            # 跳过本 tool 已插入的结果行：⎿ 首行、… 折叠行，以及新的 5 空格对齐续行
+            # （续行不再带 ⎿，故按「缩进且非 ⏺ 工具行」识别）。遇到下一个 ⏺ 即停。
+            is_cont = msgs[insert_at].startswith("     ") and not stripped.startswith("⏺")
+            if stripped.startswith("⎿") or "⎿" in msgs[insert_at] or stripped.startswith("…") or is_cont:
                 insert_at += 1
             else:
                 break
@@ -1003,6 +1077,8 @@ class IstInkApp:
         # 统一偏移所有受影响的行索引状态
         if getattr(self, "_ai_stream_idx", -1) >= at_idx:
             self._ai_stream_idx += n
+        if getattr(self, "_stream_commit_idx", -1) >= at_idx:
+            self._stream_commit_idx += n
         if getattr(self, "_last_thinking_idx", -1) >= at_idx:
             self._last_thinking_idx += n
         if hasattr(self, "_tool_use_row"):
@@ -1043,7 +1119,15 @@ class IstInkApp:
             self._flush_pending_tools()
             rendered = self._render_markdown(block.text, final=True)
             self._ai_stream_idx = -1
-            self._transcript.append_message(f" ⏺ {rendered}")
+            if getattr(self, "_stream_commit_idx", -1) >= 0:
+                # 这段文本刚通过流式渲染过(占位在 _stream_commit_idx 行)。提交版只需把那行
+                # 原地替换为 final 渲染,绝不能再 append 一条 → 否则同一段 ⏺ 文本重复两遍。
+                self._transcript.update_message_at(
+                    self._stream_commit_idx, f" ⏺ {rendered}"
+                )
+                self._stream_commit_idx = -1
+            else:
+                self._transcript.append_message(f" ⏺ {rendered}")
 
         elif block.type == BLOCK_THINKING and block.thinking:
 
@@ -1132,12 +1216,16 @@ class IstInkApp:
                 expanded = getattr(self, '_tool_outputs_expanded', False)
 
                 summary = _tool_result_summary(raw_name, block.output)
+                # ⎿ 只标结果首行，后续行用 5 空格对齐到内容列（与 Claude Code 一致），
+                # 不再每行都堆 ⎿（那样一列角标连成断续竖线）。5 空格 = "   ⎿ " 的视觉宽度。
+                def _gut(lns: list[str]) -> list[str]:
+                    return [(f"   {D}⎿{X} {t}" if i == 0 else f"     {t}") for i, t in enumerate(lns)]
                 if summary is not None and not expanded:
-                    result_lines = [f"   {D}⎿{X} {line}" for line in summary]
+                    result_lines = _gut(list(summary))
                 elif expanded or len(full_lines) <= 3:
-                    result_lines = [f"   {D}⎿{X} {line[:100]}" for line in full_lines]
+                    result_lines = _gut([line[:100] for line in full_lines])
                 else:
-                    result_lines = [f"   {D}⎿{X} {line[:100]}" for line in full_lines[:3]]
+                    result_lines = _gut([line[:100] for line in full_lines[:3]])
                     result_lines.append(
                         f"   {D}… +{len(full_lines) - 3} lines (ctrl+o to expand){X}"
                     )
@@ -1159,7 +1247,15 @@ class IstInkApp:
 
         elif block.type == BLOCK_EVIDENCE:
             text = block.payload.get("text", "") if block.payload else ""
-            self._transcript.append_message(f"   {D}· evidence: {text[:120]}{X}")
+            # text 可能是 loader 合并后的**多行** fork 步骤(降刷屏)→ 逐行格式化,
+            # 用 append_messages 整批**只滚动一次**(避免每行 O(N) 高度重算)。
+            # 单行 evidence(流水线进度行,无 \n)split 后即单元素,行为不变。
+            # 放宽到 180:fork 结果行(footprint 节点+命令、dev_probe 回显)信息量大,
+            # 120 会把命令语法截没;过长部分靠 transcript soft-wrap 折行对齐。
+            ev_lines = [f"   {D}· evidence: {ln[:180]}{X}"
+                        for ln in text.split("\n") if ln.strip()]
+            if ev_lines:
+                self._transcript.append_messages(ev_lines)
 
         elif block.type == BLOCK_FINDING:
             text = block.payload.get("text", "") if block.payload else ""
@@ -1258,376 +1354,16 @@ class IstInkApp:
         
         self._subagent_inner_summaries[parent_id] = count + 1
 
-    def _on_ui_event_locked(self, event: Any) -> None:
-        kind = event.kind
-
-        if kind == "update_ai_token":
-            self._flush_pending_tools()
-            chunk = (event.extra or {}).get("chunk", "")
-            self._streaming_buf.append(chunk)
-            import time as _t
-            now = _t.monotonic()
-            if self._ai_stream_idx >= 0 and (now - self._last_md_render_ts) < 0.05:
-                return
-            self._last_md_render_ts = now
-            partial = "".join(self._streaming_buf)
-            rendered = self._render_markdown(partial)
-            
-            
-            
-            if self._ai_stream_idx < 0:
-                self._ai_stream_idx = self._transcript.message_count()
-                self._transcript.append_message(f" ⏺ {rendered}")
-            else:
-                self._transcript.update_message_at(
-                    self._ai_stream_idx, f" ⏺ {rendered}"
-                )
-            self._app.render()
-
-        elif kind == "finalize_ai":
-            self._flush_pending_tools()
-            final = "".join(self._streaming_buf)
-            if final:
-                rendered = self._render_markdown(final, final=True)
-                if self._ai_stream_idx >= 0:
-                    self._transcript.update_message_at(
-                        self._ai_stream_idx, f" ⏺ {rendered}"
-                    )
-                else:
-                    self._transcript.append_message(f" ⏺ {rendered}")
-            self._streaming_buf.clear()
-            self._ai_stream_idx = -1
-            
-            usage = (event.extra or {}).get("usage") or {}
-            tokens = usage.get("total_tokens", 0) or usage.get("prompt_tokens", 0)
-            if tokens:
-                self._tokens_used += tokens
-                self._footer.update(tokens_used=self._tokens_used)
-            self._app.render()
-
-        elif kind == "run_done":
-            self._flush_pending_tools()
-            self._ai_stream_idx = -1
-            self._is_loading = False
-            
-            import time as _time
-            elapsed = _time.time() - self._run_start_time if self._run_start_time else 0
-            if elapsed > 0:
-                from main.ist_core.ink.components.footer import _format_elapsed
-                elapsed_str = _format_elapsed(elapsed)
-                self._transcript.append_message(
-                    f" \x1b[2m⏱ {elapsed_str} · {self._tokens_used:,} tokens\x1b[0m"
-                )
-            self._footer.update(status="ready", tokens_used=self._tokens_used)
-            self._tool_output_blocks.clear()
-            self._notify_new_outputs()
-            self._app.render()
-
-        elif kind == "run_error":
-            self._ai_stream_idx = -1
-            self._is_loading = False
-            err = (event.extra or {}).get("error", "unknown error")
-            self._transcript.append_message(f"[error] {err}")
-            self._footer.update(status="error")
-            self._app.render()
-
-        elif kind == "append":
-            if event.message:
-                self._ai_stream_idx = -1
-                self._format_and_append(event.message)
-                self._app.render()
-
-        elif kind == "tool_start":
-            self._ai_stream_idx = -1
-            tool_name = (event.extra or {}).get("tool_name", "tool")
-            
-            idx = self._transcript.message_count()
-            self._transcript.append_message(f" \x1b[5;33m⏺\x1b[0m \x1b[1m{tool_name}\x1b[0m...")
-            
-            if not hasattr(self, '_tool_start_stack'):
-                self._tool_start_stack = []
-            self._tool_start_stack.append((idx, tool_name))
-            self._app.render()
-
-        elif kind == "tool_done":
-            self._ai_stream_idx = -1
-            extra = event.extra or {}
-            tool_name = extra.get("tool_name", "")
-            result = extra.get("result", "")
-            
-            if hasattr(self, '_tool_start_stack') and self._tool_start_stack:
-                idx, name = self._tool_start_stack.pop(0)
-                self._transcript.update_message_at(
-                    idx, f" \x1b[32m⏺\x1b[0m \x1b[1m{name}\x1b[0m"
-                )
-            
-            
-            if result:
-                full_lines = str(result).split("\n")
-                start_idx = self._transcript.message_count()
-                expanded = getattr(self, '_tool_outputs_expanded', False)
-                if expanded or len(full_lines) <= 5:
-                    for line in full_lines:
-                        self._transcript.append_message(f"   \x1b[2m⎿\x1b[0m {line[:75]}")
-                    display_count = len(full_lines)
-                else:
-                    for line in full_lines[:5]:
-                        self._transcript.append_message(f"   \x1b[2m⎿\x1b[0m {line[:75]}")
-                    self._transcript.append_message(f"   \x1b[2m… +{len(full_lines) - 5} lines (ctrl+o to expand)\x1b[0m")
-                    display_count = 6
-                if not hasattr(self, '_tool_output_blocks'):
-                    self._tool_output_blocks = []
-                self._tool_output_blocks.append({
-                    "start_idx": start_idx,
-                    "full_lines": full_lines,
-                    "display_count": display_count,
-                })
-            self._app.render()
-
-    
+    # 渲染用 ANSI 常量 + subagent 内部行折叠上限。原先与已删除的旧事件处理器
+    # (_on_ui_event_locked / _format_and_append)相邻,清理死代码时被一并移走;
+    # 这里恢复——它们仍被活跃渲染路径(self._BOLD / self._SUBAGENT_INNER_MAX_LINES 等)使用。
     _GREEN = "\x1b[32m"
     _RED = "\x1b[31m"
     _CYAN = "\x1b[36m"
     _BOLD = "\x1b[1m"
     _DIM = "\x1b[2m"
     _RESET = "\x1b[0m"
-
     _SUBAGENT_INNER_MAX_LINES = 3
-
-    def _render_subagent_inner_message(
-        self,
-        msg: Any,
-        parent_id: str,
-        cls_name: str,
-        D: str,
-        X: str,
-        C: str,
-    ) -> None:
-        """fork subagent 内部消息折叠为简短摘要行。
-
-        策略：
-        - ToolCallMessage / FileReadMessage / GrepHitsMessage / LsTreeMessage：
-          展示 "⎿ <ToolShortName>(<arg>)" 单行
-        - AIThinkingMessage / ThinkingMessage：折叠为 "⎿ ∴ Thinking" 单行
-        - AIFinalMessage（最后那条 5000+ 字研究报告）：折叠为 "⎿ +N lines (ctrl+o to expand)"
-        - 重复同类消息合并（连续 grep 不刷屏）
-        """
-        
-        if not hasattr(self, "_subagent_inner_summaries"):
-            self._subagent_inner_summaries: dict[str, int] = {}
-        count = self._subagent_inner_summaries.get(parent_id, 0)
-        expanded = getattr(self, "_tool_outputs_expanded", False)
-
-        line: str = ""
-        if cls_name == "ToolCallMessage":
-            tool_name = getattr(msg, "tool_name", "") or "tool"
-            display = _tool_short_name(tool_name)
-            args = {}
-            try:
-                content = getattr(msg, "content", None)
-                if content and hasattr(content, "input"):
-                    args = dict(content.input or {})
-            except Exception:  # noqa: BLE001
-                pass
-            arg = _tool_display_arg(tool_name, args)
-            line = f"   {D}⎿{X} {display}" + (f"({C}{arg}{X})" if arg else "")
-        elif cls_name == "FileReadMessage":
-            path = getattr(msg, "path", "")
-            n = getattr(msg, "line_count", 0) or 0
-            short = path.split("/")[-1] if path else ""
-            line = f"   {D}⎿{X} Read {short} ({n} lines)"
-        elif cls_name == "GrepHitsMessage":
-            pat = getattr(msg, "pattern", "") or ""
-            n = getattr(msg, "match_count", 0) or 0
-            line = f"   {D}⎿{X} Grep {C}{pat[:40]}{X} → {n} matches"
-        elif cls_name == "LsTreeMessage":
-            path = getattr(msg, "path", "")
-            line = f"   {D}⎿{X} Ls {C}{path}{X}"
-        elif cls_name in ("AIThinkingMessage", "ThinkingMessage"):
-            line = f"   {D}⎿ ∴ Thinking{X}"
-        elif cls_name == "AIFinalMessage":
-            text = getattr(msg, "text", "") or ""
-            n = len(text.splitlines())
-            line = f"   {D}⎿ +{n} lines (verifier report; ctrl+o to expand){X}"
-        else:
-            return
-
-        if expanded or count < self._SUBAGENT_INNER_MAX_LINES:
-            self._transcript.append_message(line)
-        elif count == self._SUBAGENT_INNER_MAX_LINES:
-            self._transcript.append_message(
-                f"   {D}… (more subagent activity; ctrl+o to expand){X}"
-            )
-        
-
-        self._subagent_inner_summaries[parent_id] = count + 1
-
-    def _format_and_append(self, msg: Any) -> None:
-        """Format a message object for display, matching old TUI style."""
-        cls_name = type(msg).__name__
-        G = self._GREEN
-        R = self._RED
-        C = self._CYAN
-        B = self._BOLD
-        D = self._DIM
-        X = self._RESET
-
-        
-        self._flush_pending_tools()
-
-        
-        
-        
-        
-        parent_id = getattr(msg, "parent_tool_use_id", "") or ""
-        if parent_id:
-            self._render_subagent_inner_message(msg, parent_id, cls_name, D, X, C)
-            return
-
-        if cls_name == "AIThinkingMessage":
-            pass
-
-        elif cls_name == "ThinkingMessage":
-            thinking = getattr(msg, "thinking", "") or ""
-            if thinking.strip() and self._thinking_expanded:
-                self._ai_stream_idx = -1
-                self._transcript.append_message(
-                    f" \x1b[2m✶ {thinking.strip()}\x1b[0m"
-                )
-
-        elif cls_name == "AIFinalMessage":
-            content = getattr(msg, "content", "") or ""
-            if content:
-                rendered = self._render_markdown(content, final=True)
-                self._transcript.append_message(f" ⏺ {rendered}")
-
-        elif cls_name == "ToolCallMessage":
-            tool_name = getattr(msg, "tool_name", "tool")
-            args = getattr(msg, "args", {})
-            first_val = next(iter(args.values()), "") if args else ""
-            if isinstance(first_val, str) and len(first_val) > 60:
-                first_val = first_val[:60] + "..."
-            arg_str = f"({C}{first_val}{X})" if first_val else ""
-            
-            idx = self._transcript.message_count()
-            self._transcript.append_message(f" \x1b[5;33m⏺\x1b[0m {B}{tool_name}{X}{arg_str}")
-            if not hasattr(self, '_tool_start_stack'):
-                self._tool_start_stack = []
-            self._tool_start_stack.append((idx, tool_name))
-
-        elif cls_name == "SubAgentTaskMessage":
-            subagent_type = getattr(msg, "subagent_type", "") or getattr(msg, "display_title", "task")
-            desc = getattr(msg, "description", "")
-            if desc and len(desc) > 60:
-                desc = desc[:60] + "..."
-            arg_str = f"({C}{desc}{X})" if desc else ""
-            idx = self._transcript.message_count()
-            self._transcript.append_message(f" \x1b[5;33m⏺\x1b[0m {B}{subagent_type}{X}{arg_str}")
-            if not hasattr(self, '_tool_start_stack'):
-                self._tool_start_stack = []
-            self._tool_start_stack.append((idx, subagent_type))
-
-        elif cls_name == "TodoListMessage":
-            
-            todos = getattr(msg, "todos", []) or []
-            self._plan_panel.update(todos)
-
-        elif cls_name == "FileReadMessage":
-            path = getattr(msg, "path", "")
-            content = getattr(msg, "content", "")
-            lines = getattr(msg, "lines", 0)
-            
-            idx = self._transcript.message_count()
-            if content:
-                dot = f"{G}⏺{X}"
-            else:
-                dot = f"\x1b[5;33m⏺\x1b[0m"
-                if not hasattr(self, '_tool_start_stack'):
-                    self._tool_start_stack = []
-                self._tool_start_stack.append((idx, f"ReadFile({path})"))
-            self._transcript.append_message(f" {dot} ReadFile({C}{path}{X})")
-            if content:
-                preview = content.split("\n")[:5]
-                for line in preview:
-                    self._transcript.append_message(f"   {D}⎿{X} {line[:75]}")
-                if lines > 5:
-                    self._transcript.append_message(f"   {D}… +{lines - 5} lines{X}")
-
-        elif cls_name == "GrepHitsMessage":
-            pattern = getattr(msg, "pattern", "")
-            hits = getattr(msg, "hits", [])
-            idx = self._transcript.message_count()
-            if hits:
-                dot = f"{G}⏺{X}"
-            else:
-                dot = f"\x1b[5;33m⏺\x1b[0m"
-                if not hasattr(self, '_tool_start_stack'):
-                    self._tool_start_stack = []
-                self._tool_start_stack.append((idx, f"Grep({pattern})"))
-            self._transcript.append_message(f" {dot} Grep({C}{pattern}{X})")
-            for hit in hits[:5]:
-                p = hit.get("path", "")
-                ln = hit.get("line", "")
-                pv = hit.get("preview", "")[:60]
-                self._transcript.append_message(f"   {D}⎿{X} {C}{p}{X}:{ln} {pv}")
-            if len(hits) > 5:
-                self._transcript.append_message(f"   {D}… +{len(hits) - 5} hits{X}")
-
-        elif cls_name == "LsTreeMessage":
-            path = getattr(msg, "path", "")
-            entries = getattr(msg, "entries", [])
-            idx = self._transcript.message_count()
-            if entries:
-                dot = f"{G}⏺{X}"
-            else:
-                dot = f"\x1b[5;33m⏺\x1b[0m"
-                if not hasattr(self, '_tool_start_stack'):
-                    self._tool_start_stack = []
-                self._tool_start_stack.append((idx, f"Ls({path})"))
-            self._transcript.append_message(f" {dot} Ls({C}{path}{X})")
-            for entry in entries[:8]:
-                name = entry.get("name", "") or entry.get("file", "")
-                self._transcript.append_message(f"   {D}⎿{X} {name}")
-            if len(entries) > 8:
-                self._transcript.append_message(f"   {D}… +{len(entries) - 8} entries{X}")
-
-        elif cls_name == "BashExecMessage":
-            command = getattr(msg, "command", "")[:60]
-            stdout = getattr(msg, "stdout", "")
-            rc = getattr(msg, "returncode", 0)
-            dot = f"{G}⏺{X}" if rc == 0 else f"{R}⏺{X}"
-            self._transcript.append_message(f" {dot} Bash({C}{command}{X})")
-            if stdout:
-                for line in stdout.split("\n")[:5]:
-                    self._transcript.append_message(f"   {D}⎿{X} {line[:75]}")
-
-        elif cls_name == "PythonExecMessage":
-            code = getattr(msg, "code", "")[:60]
-            stdout = getattr(msg, "stdout", "")
-            rc = getattr(msg, "returncode", 0)
-            dot = f"{G}⏺{X}" if rc == 0 else f"{R}⏺{X}"
-            self._transcript.append_message(f" {dot} Python({C}{code}{X})")
-            if stdout:
-                for line in stdout.split("\n")[:5]:
-                    self._transcript.append_message(f"   {D}⎿{X} {line[:75]}")
-
-        elif cls_name == "PhaseMarkerMessage":
-            phase = getattr(msg, "phase", "")
-            if phase:
-                self._transcript.append_message(f" {D}[{phase}]{X}")
-
-        elif cls_name == "ErrorMessage":
-            text = getattr(msg, "text", "") or ""
-            self._transcript.append_message(f" {R}[error]{X} {text}")
-
-        elif cls_name == "HumanInputMessage":
-            text = getattr(msg, "text", "") or ""
-            self._transcript.append_message(f"  {text}")
-
-        else:
-            text = getattr(msg, "content", None) or getattr(msg, "text", None)
-            if text:
-                self._transcript.append_message(f" {text}")
 
     def _flush_pending_tools(self) -> None:
         """Mark all pending tool dots as green (completed)."""
@@ -1645,10 +1381,23 @@ class IstInkApp:
 
 
     def _update_thinking_line(self, text: str | None) -> None:
-        """Show/hide the thinking status line above the input divider."""
+        """Show/hide the thinking status line above the input divider。
+
+        宽度感知截断到**一行**:footer 把最新 fork 步骤接在状态行尾,若超宽换行,
+        height=1 的 box 会溢出留残影。这里按可视宽度(CJK 双宽)截断,保证恰好一行。
+        """
         if text:
+            from ..string_width import string_width
+            maxw = max(20, (getattr(self._app, "width", 0) or 120) - 2)
+            w, acc = 0, []
+            for ch in text:
+                cw = string_width(ch)
+                if w + cw > maxw:
+                    break
+                acc.append(ch)
+                w += cw
             self._thinking_line.style.height = 1
-            self._thinking_text.set_value(f" {text}")
+            self._thinking_text.set_value(" " + "".join(acc))
         else:
             self._thinking_line.style.height = 0
             self._thinking_text.set_value("")
@@ -1671,7 +1420,7 @@ class IstInkApp:
         """Handle slash commands."""
         from main.ist_core.tui.slash_commands import (
             dispatch_slash_command, ParsedSlashCommand,
-            ErrorResult, InfoResult, TextResult, ClearResult, ExitResult,
+            ErrorResult, InfoResult, TextResult, ClearResult, ExitResult, InjectResult,
         )
 
         parts = text[1:].split(None, 1)
@@ -1702,6 +1451,11 @@ class IstInkApp:
                 self._transcript.append_message(f" \x1b[31m✗\x1b[0m {result.text}")
             elif isinstance(result, (InfoResult, TextResult)):
                 self._transcript.append_message(f" {result.text}")
+            elif isinstance(result, InjectResult):
+                # /<skill> 强制触发:把渲染好的合成 prompt 直接当用户输入提交跑 agent
+                # (verbatim,不污染输入历史)。_submit_expanded 内部已渲染 + 起 run。
+                self._submit_expanded(result.prompt)
+                return
         except Exception as e:
             self._transcript.append_message(f" \x1b[31m✗\x1b[0m /{cmd_name}: {e}")
         self._app.render()

@@ -395,13 +395,110 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {cmd.name: cmd for cmd in BUILTIN_CO
 
 
 
+# ── user-invocable skill 作为 slash 命令 ───────────────────────────────────
+# /<skill> <自然语言> 强制触发某 user-invocable skill(绕过主 agent"自己先探"的不确定性):
+# 渲染成 InjectResult(立即 invoke_skill + 任务),由 ist_app 直接 _submit。通用——任何
+# frontmatter `user-invocable: true` 的 skill(ist_compile / ist_verify / device-verify…)
+# 都能 /<name> 触发;fork 子流程(user-invocable: false)不暴露。
+
+
+def _truthy(v: object) -> bool:
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("true", "yes", "1", "on")
+
+
+def _skill_frontmatter(skill_md) -> dict:
+    """读 SKILL.md 的 `---` frontmatter dict;失败返回 {}。"""
+    try:
+        import yaml
+        raw = skill_md.read_text(encoding="utf-8")
+    except Exception:
+        return {}
+    if not raw.startswith("---"):
+        return {}
+    parts = raw.split("---", 2)
+    if len(parts) < 3:
+        return {}
+    try:
+        fm = yaml.safe_load(parts[1]) or {}
+    except Exception:
+        return {}
+    return fm if isinstance(fm, dict) else {}
+
+
+def _skills_dir():
+    from pathlib import Path
+    return Path(__file__).resolve().parents[1] / "skills"
+
+
+def _resolve_user_invocable_skill(name: str) -> "str | None":
+    """命令名(连字符/下划线互通)匹配某 user-invocable skill → 规范 name,否则 None。"""
+    skills_dir = _skills_dir()
+    seen: set[str] = set()
+    for cand in (name, name.replace("-", "_"), name.replace("_", "-")):
+        if cand in seen:
+            continue
+        seen.add(cand)
+        skill_md = skills_dir / cand / "SKILL.md"
+        if not skill_md.exists():
+            continue
+        fm = _skill_frontmatter(skill_md)
+        if _truthy(fm.get("user-invocable")):
+            return str(fm.get("name") or cand)
+        return None  # 存在但非 user-invocable(fork 子流程)→ 不暴露
+    return None
+
+
+def _render_skill_prompt(skill_name: str, args: str) -> str:
+    """把 /<skill> <args> 渲染成**强制触发**该 skill 的合成 prompt。"""
+    task = (args or "").strip()
+    base = (
+        f"立即调用 invoke_skill(\"{skill_name}\") 加载并严格执行 **{skill_name}** 技能。"
+        f"在加载技能之前,不要自己读取或解析任何文件、也不要自行拆解流程——一切按技能指令走。"
+    )
+    return f"{base}\n\n【任务】\n{task}" if task else base
+
+
+_USER_SKILL_NAMES_CACHE: "list[str] | None" = None
+
+
+def _user_invocable_skill_names() -> list[str]:
+    """所有 user-invocable skill 的 name(供 slash 补全);懒扫描 + 缓存。"""
+    global _USER_SKILL_NAMES_CACHE
+    if _USER_SKILL_NAMES_CACHE is not None:
+        return _USER_SKILL_NAMES_CACHE
+    out: list[str] = []
+    skills_dir = _skills_dir()
+    if skills_dir.is_dir():
+        for child in sorted(skills_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            md = child / "SKILL.md"
+            if not md.exists():
+                continue
+            fm = _skill_frontmatter(md)
+            if _truthy(fm.get("user-invocable")) and fm.get("name"):
+                out.append(str(fm["name"]))
+    _USER_SKILL_NAMES_CACHE = out
+    return out
+
+
+def _noop_handler(args: str, app: "IstApp") -> SlashCommandResult:  # 补全占位,实际走 dispatch fallback
+    return InfoResult(text="")
+
+
 def dispatch_slash_command(parsed: ParsedSlashCommand, app: "IstApp") -> SlashCommandResult:
     """Look up the command in the registry and run its handler.
 
-    Unknown command -> ErrorResult.
+    内置命令未命中时,再看是不是 user-invocable skill —— 是则强制触发该 skill。
+    都不是 -> ErrorResult。
     """
     cmd = COMMAND_REGISTRY.get(parsed.command_name)
     if cmd is None:
+        skill = _resolve_user_invocable_skill(parsed.command_name)
+        if skill is not None:
+            return InjectResult(prompt=_render_skill_prompt(skill, parsed.args))
         return ErrorResult(text=(
             f"Unknown command: /{parsed.command_name}. "
             f"Type /help for the list of commands."
@@ -422,4 +519,9 @@ def filter_completions(prefix: str, *, limit: int = 8) -> list[SlashCommand]:
         prefix = prefix[1:]
     prefix = prefix.lower()
     matches = [cmd for cmd in BUILTIN_COMMANDS if cmd.name.lower().startswith(prefix)]
+    # user-invocable skill 也作为可补全的 slash 命令(/<skill> 强制触发该 skill)
+    have = {c.name.lower() for c in matches}
+    for sname in _user_invocable_skill_names():
+        if sname.lower().startswith(prefix) and sname.lower() not in have:
+            matches.append(SlashCommand(sname, f"强制运行 {sname} 技能", _noop_handler))
     return matches[:limit]

@@ -660,7 +660,22 @@ def probe_show(command, build=""):
         out = _read_until("#", timeout=10)
         ssh.close()
         # 去掉回显的命令行与结尾 prompt
-        lines = [ln for ln in out.splitlines() if ln.strip() not in (cmd, "")]
+        raw = out.splitlines()
+        lines = [ln for ln in raw if ln.strip() not in (cmd, "")]
+        # APV 语法错误:设备对无法识别的命令/参数,在出错 token 下方标 `^`(本固件不输出
+        # `% Invalid input` 文字)。去噪后剥末尾提示符/空行,实质仅为 caret → 命令语法/参数无效。
+        # 包装成清晰文字 + 找回命令回显行让 `^` 对齐有意义,免上层(LLM)把孤立 `^` 误读为有效输出。
+        _tail = list(lines)
+        while _tail and (not _tail[-1].strip() or re.match(r"^\S*[#>]$", _tail[-1].strip())):
+            _tail.pop()
+        _core = "\n".join(_tail).strip()
+        if _core and re.match(r"^\^+$", _core):
+            _echo = next((l for l in raw if l.strip() == cmd), cmd)
+            _caret = next((l for l in _tail if l.strip().startswith("^")), "^")
+            _out = ("%% Invalid input: command %r is invalid on this device "
+                    "(syntax/parameter error; '^' marks the offending token)\n"
+                    "%s\n%s") % (cmd, _echo.rstrip(), _caret.rstrip())
+            return {"command": cmd, "output": _out, "device_ip": ip, "syntax_error": True}
         return {"command": cmd, "output": "\n".join(lines), "device_ip": ip}
     except Exception as e:
         return {"error": "probe failed: %s" % e}

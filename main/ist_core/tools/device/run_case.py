@@ -220,9 +220,13 @@ def dev_probe(command: str) -> str:
     降成"xlsx 能表达的文本查找"。
 
     典型用法:
-    - 确认配置生效:``command="show sdns host all"``
+    - 确认配置生效:``command="show sdns host status"``
     - 看计数器分布:``command="show statistics sdns pool"``
     - 核对命令语法返回:``command="show sdns listener"``
+
+    **设备语法错误**:被测 APV 对无法识别的命令/参数,在出错 token 下方回 `^` 标记。
+    框架 server 已把这种回显包装成清晰的 ``% Invalid input ...`` 文字说明(含命令回显行
+    与对齐)——遇到即说明该命令语法/参数无效,**换命令或修正语法,不要据此写断言**。
 
     Args:
         command: 单条只读命令,首词必须 show 或 get(在被测 APV 上执行)。

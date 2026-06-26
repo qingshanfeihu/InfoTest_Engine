@@ -404,7 +404,7 @@ def test_init_device_dispatch_clientside_when_flag(monkeypatch):
     assert res["initialized"] == 1
     # argv: APV_SRC TASK_DIR LOCK_FILE device_count device_index
     assert captured["args"] == [mc._JH_APV_SRC, mc._JH_TASK_DIR, mc._JH_LOCK_FILE, "0", "0"]
-    assert captured["timeout"] == 180          # 串口 clear 慢，给足
+    assert captured["timeout"] == 300          # 串口 clear 慢(多台序列~174s)，给足余量
     assert "clear config all" in captured["script"]
 
 

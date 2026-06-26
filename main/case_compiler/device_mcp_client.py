@@ -589,12 +589,14 @@ class FrameworkMCPClient:
         """Option Y：经 SSH 在跳板机(PY38+paramiko)跑串口 init 脚本（clear config all + 配 IP），
 
         不经老 stdio server。串口/锁逻辑必须在跳板机执行，但脚本是客户端常量（逻辑客户端 owns）。
-        串口 ``clear config all`` 较慢（每台最长 ~60s），故 timeout 给到 180s。
+        串口 ``clear config all`` 较慢（单台 ~30s；**多台序列化时第二台起串口读易撞满超时，实测
+        两台 ~174s**），故 timeout 给到 300s 留足余量——超时会让远端脚本续跑持锁、拖垮后续 verify。
+        编译入口只 init device_index=0（单台 ~30s）避开序列慢路径，见 compile_pipeline。
         """
         return self._ssh_python_json(
             _INIT_SCRIPT,
             [_JH_APV_SRC, _JH_TASK_DIR, _JH_LOCK_FILE, str(device_count), str(device_index)],
-            timeout=180)
+            timeout=300)
 
     def deliver(self, module: str, autoid: str, xlsx_path: str) -> dict:
         if _VERIFY_CLIENTSIDE:

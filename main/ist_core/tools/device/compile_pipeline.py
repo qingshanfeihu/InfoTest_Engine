@@ -624,7 +624,12 @@ def _init_device_for_compile(result: dict) -> None:
         return
     try:
         with FrameworkMCPClient() as client:
-            res = client.init_device()
+            # 只清编译 dev_probe 实际探的那台（device_index=0 = conf ssh_ips[0] = build 设备）。
+            # 不要 init_device()(=全部 ssh_ips)：跳板机有多台时(如 103 的 70/71)序列化串口 init
+            # 第二台会撞满串口读超时(~146s)、总耗 ~174s≈180s 客户端超时贴边→超时→远端脚本续跑
+            # 持锁→后续 verify 撞 busy。单台 ~30s，绕开序列慢路径。verify 的多设备清由框架
+            # test_xlsx.py 的 .clear() 负责，不靠这里。
+            res = client.init_device(device_index=0)
     except Exception as exc:  # noqa: BLE001
         _emit_progress(f"⚠ init_device 异常：{exc}（编译继续，draft 探针可能见残留态）")
         result["phases"].append(f"init_device: 异常({exc})")

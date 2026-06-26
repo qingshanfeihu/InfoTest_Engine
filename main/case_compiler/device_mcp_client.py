@@ -136,6 +136,14 @@ def _redact(text: str | None) -> str:
 FASTMCP_PORT = int(os.environ.get("IST_FASTMCP_PORT", "8000") or 8000)
 _DEVICE_IP_CACHE: dict[tuple, str] = {}
 
+# ── Option Y（废弃老 stdio server）：verify 编排上移客户端，经 SSH/sftp 直驱跳板机 ──
+# 跳板机路径镜像老 device_mcp_server/tools.py 默认值（单一事实源同步）。IST_VERIFY_CLIENTSIDE=1
+# 时 deliver/run/status 走客户端 SSH 实现、不经老 server；默认 0（走老 self.call，未 E2E 前不切）。
+_JH_APV_SRC = os.environ.get("IST_APV_SRC", "/home/test/apv_src")
+_JH_STAGING_MODULE = os.environ.get("IST_STAGING_MODULE", "sdns")
+_JH_STAGING_PARENT = os.environ.get("IST_STAGING_PARENT", _JH_APV_SRC + "/smoke_test/" + _JH_STAGING_MODULE)
+_VERIFY_CLIENTSIDE = os.environ.get("IST_VERIFY_CLIENTSIDE", "0") == "1"
+
 
 def _shquote(s: str) -> str:
     import shlex
@@ -338,8 +346,50 @@ class FrameworkMCPClient:
                 .get("init_device") or {})
 
     def deliver(self, module: str, autoid: str, xlsx_path: str) -> dict:
+        if _VERIFY_CLIENTSIDE:
+            return self._deliver_clientside(module, autoid, xlsx_path)
         b64 = base64.b64encode(Path(xlsx_path).read_bytes()).decode()
         return self.call([("write_case", {"module": module, "autoid": autoid, "xlsx_b64": b64})]).get("write_case", {})
+
+    def _deliver_clientside(self, module: str, autoid: str, xlsx_path: str) -> dict:
+        """Option Y：经 SSH/sftp 把 xlsx 落到 staging，不经老 stdio server 的 write_case。
+
+        镜像老 write_case 语义：staging=``ist_staging_<module>/<autoid>/``，原子写
+        ``case.xlsx``（sftp 写 .tmp → mv）+ 软链 ``test_xlsx.py`` → ../../../../lib/test_xlsx.py。
+        返回 ``{staging_dir, xlsx, bytes}`` 或 ``{error}``（永不抛）。
+        """
+        import posixpath
+        import shlex as _sh
+        try:
+            data = Path(xlsx_path).read_bytes()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": "read xlsx failed: %s" % exc}
+        stg = posixpath.join(_JH_STAGING_PARENT, "ist_staging_%s" % module, str(autoid))
+        final = posixpath.join(stg, "case.xlsx")
+        tmp = final + ".tmp"
+        link = posixpath.join(stg, "test_xlsx.py")
+        try:
+            _i, _o, e = self._c.exec_command("mkdir -p %s" % _sh.quote(stg), timeout=30)
+            err = e.read().decode("utf-8", "replace")
+            if err.strip():
+                return {"error": "mkdir failed: %s" % err.strip()[:200]}
+            sftp = self._c.open_sftp()
+            try:
+                with sftp.open(tmp, "wb") as f:
+                    f.write(data)
+            finally:
+                sftp.close()
+            # 原子 rename + 强制软链（-n 防把已存在的目录软链当目录进去）
+            cmd = ("mv -f %s %s && ln -sfn ../../../../lib/test_xlsx.py %s && echo OK"
+                   % (_sh.quote(tmp), _sh.quote(final), _sh.quote(link)))
+            _i, o, e = self._c.exec_command(cmd, timeout=30)
+            out = o.read().decode("utf-8", "replace")
+            if "OK" not in out:
+                return {"error": "finalize failed: %s"
+                        % (e.read().decode("utf-8", "replace").strip()[:200] or out.strip()[:200])}
+            return {"staging_dir": stg, "xlsx": final, "bytes": len(data)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": "deliver(clientside) failed: %s" % exc}
 
     def run(self, module: str, autoid: str, build: str) -> dict:
         """提交上机。返回 server 原始结果：成功含 task_id，撞锁含 busy 结构。"""

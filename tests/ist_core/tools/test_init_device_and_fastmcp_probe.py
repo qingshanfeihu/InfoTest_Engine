@@ -265,6 +265,71 @@ def test_probe_uncacheable_lock_and_empty_and_valid():
     assert run_case._probe_uncacheable(valid) is False
 
 
+# ── Option Y：客户端 deliver（_deliver_clientside）────────────────────
+def test_deliver_clientside_staging_and_symlink(tmp_path, monkeypatch):
+    """客户端 deliver：sftp 写 .tmp → mv case.xlsx + 软链 test_xlsx.py，返回 staging 结构。"""
+    from main.case_compiler import device_mcp_client as mc
+
+    xlsx = tmp_path / "case.xlsx"
+    xlsx.write_bytes(b"PK\x03\x04fake-xlsx-bytes")
+
+    cmds = []
+    written = {}
+
+    class _SFTPFile:
+        def __init__(self, store, path):
+            self._store, self._path = store, path
+        def write(self, data):
+            self._store[self._path] = data
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    class _SFTP:
+        def open(self, path, mode="r"):
+            return _SFTPFile(written, path)
+        def close(self):
+            pass
+
+    class _O:
+        def __init__(self, s=b""):
+            self._s = s
+        def read(self):
+            return self._s
+
+    class _FakeC:
+        def exec_command(self, cmd, timeout=30):
+            cmds.append(cmd)
+            out = b"OK\n" if "echo OK" in cmd else b""
+            return (None, _O(out), _O(b""))
+        def open_sftp(self):
+            return _SFTP()
+
+    client = mc.FrameworkMCPClient.__new__(mc.FrameworkMCPClient)
+    client._c = _FakeC()
+
+    res = client._deliver_clientside("sdns", "12345", str(xlsx))
+    assert res.get("error") is None
+    assert res["staging_dir"].endswith("ist_staging_sdns/12345")
+    assert res["bytes"] == len(b"PK\x03\x04fake-xlsx-bytes")
+    # sftp 写到 .tmp
+    assert any(p.endswith("case.xlsx.tmp") for p in written)
+    # 命令含 mkdir / mv 原子重命名 / ln 软链
+    joined = "\n".join(cmds)
+    assert "mkdir -p" in joined
+    assert "mv -f" in joined and "case.xlsx" in joined
+    assert "ln -sfn ../../../../lib/test_xlsx.py" in joined
+
+
+def test_deliver_clientside_read_error():
+    from main.case_compiler import device_mcp_client as mc
+    client = mc.FrameworkMCPClient.__new__(mc.FrameworkMCPClient)
+    client._c = None
+    res = client._deliver_clientside("sdns", "1", "/nonexistent/case.xlsx")
+    assert "read xlsx failed" in res.get("error", "")
+
+
 # ── framework_ready device-aware 健康检查 ─────────────────────────────
 class _FakeSSH:
     """假 SSH 通道：按命令内容返回设备 IP / :22 OPEN|CLOSED。"""

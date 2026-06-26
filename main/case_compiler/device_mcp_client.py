@@ -50,10 +50,16 @@ def _connect(env: Any = None):
 
 
 def framework_ready(env: Any, timeout: int = 8) -> bool:
-    """只读探活：env 跳板机 SSH 可达 **且** 框架 stdio ``server.py`` 存在。
+    """只读探活：env 跳板机 SSH 可达 **且** 框架 stdio ``server.py`` 存在 **且** 被测设备可达。
 
     环境池 health-check 用——Path A 克隆部署到新机前，新机没有这个 server.py，探活返回
     False、池自动跳过它；ops 部署后自动加入可用池。任何异常一律 False（保守）。
+
+    **device-aware（治"跳板机活但设备 down 被误判 ready"）**：跳板机 + server.py 通过后，再经
+    跳板机查被测设备 SSH 口(:22)可达——设备 down（如 79 床 ping 不通）则 False、池剔除它，避免
+    verify 被路由到死设备上全 fail。``IST_HEALTH_CHECK_DEVICE=0`` 关掉设备探活（退回只验跳板机+
+    server.py 的旧行为）。设备段解析不出 IP / 设备探活本身异常 → 保守**放行**（不因探活逻辑波动
+    误杀环境，维持"宁可多放不可错杀"——错杀会让池整体回退单环境）。
     """
     import paramiko
     c = paramiko.SSHClient()
@@ -66,7 +72,11 @@ def framework_ready(env: Any, timeout: int = 8) -> bool:
         return False
     try:
         _i, o, _e = c.exec_command(f"test -f {env.server_path} && echo OK", timeout=timeout)
-        return o.read().decode("utf-8", "replace").strip() == "OK"
+        if o.read().decode("utf-8", "replace").strip() != "OK":
+            return False
+        if os.environ.get("IST_HEALTH_CHECK_DEVICE", "1") == "0":
+            return True
+        return _device_reachable_via(c, env, timeout=timeout)
     except Exception:  # noqa: BLE001
         return False
     finally:
@@ -74,6 +84,33 @@ def framework_ready(env: Any, timeout: int = 8) -> bool:
             c.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+def _device_reachable_via(c: Any, env: Any, timeout: int = 8) -> bool:
+    """经已连的跳板机 SSH 通道，查被测设备 SSH 口(:22)是否可达。
+
+    用部署 server 的 ``tools._parse_device_conn`` 解析设备 IP（单一事实源），再从跳板机侧
+    ``/dev/tcp`` 探设备 :22。**保守放行**：解析不出 IP / 探活异常 → True（不误杀环境）；仅当
+    明确探到设备不可达才 False。
+    """
+    try:
+        srv_dir = os.path.dirname(env.server_path) or "~/mcp_server"
+        script = ("import tools,sys; c=tools._parse_device_conn(sys.argv[1] if len(sys.argv)>1 else '');"
+                  " print(c[0] if c else '')")
+        ip_cmd = "cd %s && python3 -c %s %s" % (_shquote(srv_dir), _shquote(script), _shquote(""))
+        _i, o, _e = c.exec_command(ip_cmd, timeout=timeout)
+        ip = ""
+        for line in o.read().decode("utf-8", "replace").splitlines():
+            line = line.strip()
+            if re.match(r"^\d+\.\d+\.\d+\.\d+$", line):
+                ip = line
+        if not ip:
+            return True   # 解析不出设备段 → 保守放行
+        chk = "timeout 3 bash -c 'echo > /dev/tcp/%s/22' >/dev/null 2>&1 && echo OPEN || echo CLOSED" % ip
+        _i2, o2, _e2 = c.exec_command(chk, timeout=timeout)
+        return "OPEN" in o2.read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return True   # 探活逻辑异常 → 保守放行，不误杀
 
 
 # 设备/task 日志原样回灌 agent 上下文前过一道**凭据脱敏**：mask 掉口令/密钥/token 的值，
@@ -91,6 +128,107 @@ def _redact(text: str | None) -> str:
     if not text:
         return text or ""
     return _SECRET_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}****", text)
+
+
+# ── 新版 FastMCP HTTP 探针（apv_ssh_execute）：自带 status + 完整回显 + 对齐 ^ ──
+# 老 stdio probe_show 剥命令回显行 → 无效命令只剩孤立 ^，LLM 无从识别哪个 token 错（churn 根因）。
+# 新版 FastMCP 的 apv_ssh_execute 不剥回显、回 status:error/success + 对齐 ^，故探针切到它。
+FASTMCP_PORT = int(os.environ.get("IST_FASTMCP_PORT", "8000") or 8000)
+_DEVICE_IP_CACHE: dict[tuple, str] = {}
+
+
+def _shquote(s: str) -> str:
+    import shlex
+    return shlex.quote(s)
+
+
+def resolve_device_ip(build: str = "", env: Any = None) -> str | None:
+    """SSH 跳转机读 conf 解析被测设备 IP（build 段 ssh_ips 首个）。结果按 (host,build) 缓存。
+
+    复用部署 server 的 ``tools._parse_device_conn``（单一事实源），不在 client 端重造 conf 解析。
+    解析失败返回 None（上层据此回退老 probe_show）。
+    """
+    host = (env.jumphost if env is not None else JUMPHOST)
+    key = (host, build)
+    if key in _DEVICE_IP_CACHE:
+        return _DEVICE_IP_CACHE[key]
+    c = None
+    try:
+        c = _connect(env)
+        script = ("import tools,sys; c=tools._parse_device_conn(sys.argv[1] if len(sys.argv)>1 else '');"
+                  " print(c[0] if c else '')")
+        cmd = "cd ~/mcp_server && python3 -c %s %s" % (_shquote(script), _shquote(build))
+        _, so, _ = c.exec_command(cmd, timeout=30)
+        out = so.read().decode("utf-8", "replace")
+        ip = ""
+        for line in out.splitlines():
+            line = line.strip()
+            if re.match(r"^\d+\.\d+\.\d+\.\d+$", line):
+                ip = line
+        if ip:
+            _DEVICE_IP_CACHE[key] = ip
+            return ip
+        return None
+    except Exception:
+        return None
+    finally:
+        if c is not None:
+            try:
+                c.close()
+            except Exception:
+                pass
+
+
+def probe_via_fastmcp(command: str, build: str = "", env: Any = None,
+                      timeout: int = 30) -> dict | None:
+    """经跳转机新版 FastMCP(:8000) 的 ``apv_ssh_execute`` 在被测设备上跑只读 show，取回显。
+
+    返回 ``{"text": <服务端格式化文本，含 status + 回显 + 对齐 ^>, "device_ip": ip}``；
+    设备 IP 解析不出 / FastMCP 不可达 / 响应异常 → 返回 None（上层回退老 stdio probe_show）。
+    """
+    host = (env.jumphost if env is not None else JUMPHOST)
+    device_ip = resolve_device_ip(build, env)
+    if not device_ip:
+        return None
+    url = "http://%s:%d/mcp" % (host, FASTMCP_PORT)
+    payload = {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "apv_ssh_execute",
+                   "arguments": {"host": device_ip, "command": command}},
+    }
+    import urllib.request
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json",
+                 "Accept": "application/json, text/event-stream"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    # FastMCP streamable-http 回 SSE：逐行找 data: 的 JSON-RPC result/error
+    obj = None
+    for line in raw.splitlines():
+        line = line.strip()
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(o, dict) and ("result" in o or "error" in o):
+            obj = o
+            break
+    if obj is None:
+        return None
+    try:
+        text = obj["result"]["content"][0]["text"]
+    except Exception:
+        return None
+    return {"text": text, "device_ip": device_ip}
 
 
 class FrameworkMCPClient:
@@ -176,6 +314,18 @@ class FrameworkMCPClient:
         build 决定 conf 设备段(infosec_hgk 等),空则 server 端遍历设备段兜底。
         """
         return self.call([("probe_show", {"command": command, "build": build})]).get("probe_show", {})
+
+    def init_device(self, device_count: int = 0, device_index: int = -1) -> dict:
+        """编译前固化设备初始化：经部署 server 串口 ``clear config all`` + 配接口 IP。
+
+        让 draft 的 dev_probe 探到**干净已知态**，不再撞别人残留配置。整机级清，编译入口
+        调一次即可（非 per-case）。返回 ``{"initialized","failed","total","details"}`` 或 ``{"error"}``。
+        device_count=0 自动从 conf ssh_ips 推断；device_index 指定单台（优先于 count）。
+        server 侧加单跑锁后，与正在 verify 的 run_cases 互斥（撞锁返回 ``error: another run in progress``）。
+        """
+        return (self.call([("init_device",
+                            {"device_count": device_count, "device_index": device_index})])
+                .get("init_device") or {})
 
     def deliver(self, module: str, autoid: str, xlsx_path: str) -> dict:
         b64 = base64.b64encode(Path(xlsx_path).read_bytes()).decode()

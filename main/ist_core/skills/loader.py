@@ -187,12 +187,14 @@ def _get_tool_registry() -> dict[str, Any]:
             fs_grep,
             fs_ls,
             fs_read,
+            fs_write,
         )
         _TOOL_REGISTRY.update({
             "fs_read": fs_read,
             "fs_grep": fs_grep,
             "fs_ls": fs_ls,
             "fs_glob": fs_glob,
+            "fs_write": fs_write,
         })
         try:
             from main.ist_core.tools.deepagent import run_shell, run_python

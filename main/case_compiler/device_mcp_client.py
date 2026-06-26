@@ -138,7 +138,9 @@ _DEVICE_IP_CACHE: dict[tuple, str] = {}
 
 # ── Option Y（废弃老 stdio server）：verify 编排上移客户端，经 SSH/sftp 直驱跳板机 ──
 # 跳板机路径镜像老 device_mcp_server/tools.py 默认值（单一事实源同步）。IST_VERIFY_CLIENTSIDE=1
-# 时 deliver/run/status 走客户端 SSH 实现、不经老 server；默认 0（走老 self.call，未 E2E 前不切）。
+# 时 deliver/run/status/init_device 走客户端 SSH 实现、不经老 stdio server。
+# **默认已翻 1**（Option Y：deliver/run/status/init_device 四函数单 case+batch 真机 E2E 全过）；
+# IST_VERIFY_CLIENTSIDE=0 可临时回退老 self.call 路径（老 server 删除前的安全网）。
 _JH_APV_SRC = os.environ.get("IST_APV_SRC", "/home/test/apv_src")
 _JH_STAGING_MODULE = os.environ.get("IST_STAGING_MODULE", "sdns")
 _JH_STAGING_PARENT = os.environ.get("IST_STAGING_PARENT", _JH_APV_SRC + "/smoke_test/" + _JH_STAGING_MODULE)
@@ -146,7 +148,7 @@ _JH_PY38 = os.environ.get("IST_JUMPHOST_PY38", _JH_APV_SRC + "/.python3.8/bin/py
 _JH_TASK_DIR = os.environ.get("IST_MCP_TASK_DIR", "/home/test/mcp_server/tasks")
 _JH_LOCK_FILE = os.environ.get("IST_MCP_LOCK_FILE", "/home/test/mcp_server/run.lock")
 _JH_RESULT_DB_DIR = os.environ.get("IST_RESULT_DB_DIR", "/home/test/mcp_server")  # result_db.py(MySQL 读)所在
-_VERIFY_CLIENTSIDE = os.environ.get("IST_VERIFY_CLIENTSIDE", "0") == "1"
+_VERIFY_CLIENTSIDE = os.environ.get("IST_VERIFY_CLIENTSIDE", "1") == "1"
 
 # Option Y：run 提交脚本（经 python3 - 走 stdin 在跳板机跑；锁/setsid 脱离必须在跳板机执行）。
 # 忠实 port 老 tools.py _submit_pytest：O_EXCL 锁 → 写 runner.sh(setsid pytest+写 done 状态+rm 锁)

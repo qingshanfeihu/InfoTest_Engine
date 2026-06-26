@@ -111,6 +111,7 @@ def test_probe_via_fastmcp_none_on_http_error(monkeypatch):
 # ── FrameworkMCPClient.init_device ────────────────────────────────────
 def test_client_init_device_dispatches(monkeypatch):
     from main.case_compiler import device_mcp_client as mc
+    monkeypatch.setattr(mc, "_VERIFY_CLIENTSIDE", False)  # 本测试验老 self.call 路径
 
     captured = {}
 

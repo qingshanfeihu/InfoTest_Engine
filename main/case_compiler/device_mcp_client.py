@@ -558,9 +558,8 @@ class FrameworkMCPClient:
         return res
 
     # 便捷封装 ───────────────────────────────────────────────
-
-    def list_capabilities(self) -> dict:
-        return self.call([("list_capabilities", {})]).get("list_capabilities", {})
+    # 注：list_capabilities/promote_case/read_case_xlsx 老 server 工具 IST-Core 从不调用，
+    # 客户端不再封装（Option Y 废弃老版顺手收口，不留死接口）。
 
     def probe_show(self, command: str, build: str = "") -> dict:
         """只读设备探针:经跳转机在被测 APV 上跑单条 show/get 命令,取真实回显。

@@ -50,6 +50,47 @@ def test_probe_via_fastmcp_parses_sse(monkeypatch):
     assert "^" in r["text"]            # 对齐 ^ 保留（不剥回显）
 
 
+def test_fastmcp_call_generic_parses_result(monkeypatch):
+    """通用 fastmcp_call：迁移基座——任意工具走它，解析 SSE result 文本。"""
+    from main.case_compiler import device_mcp_client as mc
+
+    class _Resp:
+        def __init__(self, data):
+            self._d = data
+        def read(self):
+            return self._d
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    body = {"jsonrpc": "2.0", "id": 1,
+            "result": {"content": [{"type": "text", "text": "OK-TEXT"}]}}
+    sse = ("event: message\ndata: " + json.dumps(body) + "\n\n").encode()
+    import urllib.request
+    captured = {}
+
+    def _fake_urlopen(req, timeout=30):
+        captured["body"] = json.loads(req.data.decode())
+        return _Resp(sse)
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    out = mc.fastmcp_call("init_device", {"device_count": 2})
+    assert out == "OK-TEXT"
+    assert captured["body"]["params"]["name"] == "init_device"
+    assert captured["body"]["params"]["arguments"]["device_count"] == 2
+
+
+def test_fastmcp_call_none_on_error(monkeypatch):
+    from main.case_compiler import device_mcp_client as mc
+    import urllib.request
+
+    def _boom(req, timeout=30):
+        raise OSError("refused")
+    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+    assert mc.fastmcp_call("apv_ssh_execute", {"host": "1.2.3.4", "command": "show version"}) is None
+
+
 def test_probe_via_fastmcp_none_when_no_device_ip(monkeypatch):
     from main.case_compiler import device_mcp_client as mc
     monkeypatch.setattr(mc, "resolve_device_ip", lambda build="", env=None: None)

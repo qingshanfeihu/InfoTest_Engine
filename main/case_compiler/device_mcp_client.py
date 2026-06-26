@@ -179,23 +179,18 @@ def resolve_device_ip(build: str = "", env: Any = None) -> str | None:
                 pass
 
 
-def probe_via_fastmcp(command: str, build: str = "", env: Any = None,
-                      timeout: int = 30) -> dict | None:
-    """经跳转机新版 FastMCP(:8000) 的 ``apv_ssh_execute`` 在被测设备上跑只读 show，取回显。
+def fastmcp_call(tool: str, arguments: dict, env: Any = None,
+                 timeout: int = 30) -> str | None:
+    """通用：经跳转机新版 FastMCP(:8000) 调一个工具，返回其结果文本(content[0].text)。
 
-    返回 ``{"text": <服务端格式化文本，含 status + 回显 + 对齐 ^>, "device_ip": ip}``；
-    设备 IP 解析不出 / FastMCP 不可达 / 响应异常 → 返回 None（上层回退老 stdio probe_show）。
+    streamable-http JSON-RPC over HTTP，解析 SSE ``data:`` 行取 result/error。FastMCP 不可达 /
+    响应异常 / 无 result → 返回 None。**迁移基座**：dev_probe 走它(apv_ssh_execute)，后续把
+    init_device/deliver/run 等编排工具迁到 FastMCP 也复用它(不再各写一遍 HTTP+SSE)。
     """
     host = (env.jumphost if env is not None else JUMPHOST)
-    device_ip = resolve_device_ip(build, env)
-    if not device_ip:
-        return None
     url = "http://%s:%d/mcp" % (host, FASTMCP_PORT)
-    payload = {
-        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": "apv_ssh_execute",
-                   "arguments": {"host": device_ip, "command": command}},
-    }
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": tool, "arguments": arguments}}
     import urllib.request
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
@@ -207,7 +202,6 @@ def probe_via_fastmcp(command: str, build: str = "", env: Any = None,
             raw = resp.read().decode("utf-8", "replace")
     except Exception:
         return None
-    # FastMCP streamable-http 回 SSE：逐行找 data: 的 JSON-RPC result/error
     obj = None
     for line in raw.splitlines():
         line = line.strip()
@@ -225,8 +219,24 @@ def probe_via_fastmcp(command: str, build: str = "", env: Any = None,
     if obj is None:
         return None
     try:
-        text = obj["result"]["content"][0]["text"]
+        return obj["result"]["content"][0]["text"]
     except Exception:
+        return None
+
+
+def probe_via_fastmcp(command: str, build: str = "", env: Any = None,
+                      timeout: int = 30) -> dict | None:
+    """经跳转机新版 FastMCP(:8000) 的 ``apv_ssh_execute`` 在被测设备上跑只读 show，取回显。
+
+    返回 ``{"text": <服务端格式化文本，含 status + 回显 + 对齐 ^>, "device_ip": ip}``；
+    设备 IP 解析不出 / FastMCP 不可达 / 响应异常 → 返回 None（上层回退老 stdio probe_show）。
+    """
+    device_ip = resolve_device_ip(build, env)
+    if not device_ip:
+        return None
+    text = fastmcp_call("apv_ssh_execute", {"host": device_ip, "command": command},
+                        env=env, timeout=timeout)
+    if text is None:
         return None
     return {"text": text, "device_ip": device_ip}
 

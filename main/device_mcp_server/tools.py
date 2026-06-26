@@ -669,3 +669,282 @@ def probe_show(command, build=""):
             os.unlink(LOCK_FILE)
         except Exception:
             pass
+
+
+# ── init_device ─────────────────────────────────────────────────────
+
+def init_device(device_count=0, device_index=-1):
+    """设备初始化：通过串口清除配置 + 配置接口 IP（跳板机侧执行）。
+
+    流程：读 conf 拿 ssh_ips / hostname / 账号 → 逐设备串口连接（cu -s 9600 -l ttyS{n}）
+    → clear config all → 配置 port1/port2/port3 IPv4+IPv6 → 返回结果。
+
+    device_count: 要初始化的设备数（1/2/3）。0=自动从 conf ssh_ips 推断。
+    device_index: 指定初始化哪台（0/1/2）。优先级高于 device_count。
+    """
+    import configparser as _cp
+    import time as _t
+
+    # ── 读 conf ──
+    try:
+        text = _read_conf_text()
+    except Exception as e:
+        return {"error": "cannot read conf: %s" % e}
+
+    cp = _cp.ConfigParser(strict=False)
+    cp.read_string(text)
+
+    # ssh_ips（设备管理口 IP 列表）
+    ssh_ips = []
+    if cp.has_option("comm", "ssh_ips"):
+        ssh_ips = [ip.strip() for ip in cp.get("comm", "ssh_ips").split(",") if ip.strip()]
+    if not ssh_ips:
+        return {"error": "conf [comm] ssh_ips is empty or missing"}
+
+    # hostname / 账号（取第一个设备段）
+    hostname = "APV"
+    user = "admin"
+    passwd = "admin"
+    for sec in cp.sections():
+        if sec == "comm":
+            continue
+        if cp.has_option(sec, "hostname"):
+            hostname = cp.get(sec, "hostname")
+        if cp.has_option(sec, "user"):
+            user = cp.get(sec, "user")
+        if cp.has_option(sec, "passwd"):
+            passwd = cp.get(sec, "passwd")
+        elif cp.has_option(sec, "password"):
+            passwd = cp.get(sec, "password")
+        break
+
+    # ports（默认 port1,port2,port3,port4）
+    port1, port2, port3 = "port1", "port2", "port3"
+    if cp.has_option("comm", "ports"):
+        ports = [p.strip() for p in cp.get("comm", "ports").split(",")]
+        if len(ports) >= 3:
+            port1, port2, port3 = ports[0], ports[1], ports[2]
+
+    # device_index 优先：指定单台
+    if 0 <= device_index <= 2:
+        if device_index >= len(ssh_ips):
+            return {"error": "device_index=%d but conf only has %d ssh_ips" % (device_index, len(ssh_ips))}
+        indices = [device_index]
+    else:
+        n = device_count if device_count > 0 else len(ssh_ips)
+        if n > len(ssh_ips):
+            return {"error": "device_count=%d but conf only has %d ssh_ips" % (n, len(ssh_ips))}
+        if n > 3:
+            return {"error": "device_count=%d exceeds max 3" % n}
+        indices = list(range(n))
+
+    results = []
+    for idx in indices:
+        ssh_ip = ssh_ips[idx]
+        r = _init_one_device(idx, ssh_ip, hostname, user, passwd, port1, port2, port3)
+        results.append(r)
+
+    ok = [r for r in results if r.get("status") == "ok"]
+    fail = [r for r in results if r.get("status") != "ok"]
+    return {
+        "initialized": len(ok),
+        "failed": len(fail),
+        "total": len(results),
+        "details": results,
+    }
+
+
+def _init_one_device(idx, ssh_ip, hostname, user, passwd, port1, port2, port3):
+    """初始化单台设备（串口连接 → 清配置 → 配 IP）。"""
+    import time as _t
+
+    tty_name = "ttyS%d" % idx
+    log_lines = []
+
+    def _log(msg):
+        log_lines.append(msg)
+
+    try:
+        import paramiko
+    except ImportError:
+        return {"device": idx, "ssh_ip": ssh_ip, "status": "error",
+                "error": "paramiko not available on jump host"}
+
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        ssh.connect(hostname="127.0.0.1", port=22, username="test", password="click1", timeout=10)
+    except Exception as e:
+        return {"device": idx, "ssh_ip": ssh_ip, "status": "error",
+                "error": "cannot SSH to localhost: %s" % e}
+
+    try:
+        chan = ssh.invoke_shell()
+        chan.settimeout(5)
+        _t.sleep(1)
+        try:
+            chan.recv(2048)
+        except Exception:
+            pass
+
+        # ── 串口连接 ──
+        _log("cu -s 9600 -l %s" % tty_name)
+        chan.send("cu -s 9600 -l %s\n" % tty_name)
+        output = _ser_read_until(chan, r"(Connected.)|(\$ )", timeout=10)
+
+        if "Line in use" in output:
+            _log("Line in use, killing competing process")
+            chan.send("ps aux|%s|%s\n" % (tty_name, "grep -v grep"))
+            output = _ser_read_until(chan, r"\$ ", timeout=5)
+            import re as _re
+            pids = _re.findall(r"test\s+(\d+)", output)
+            for pid in pids:
+                chan.send("kill %s\n" % pid)
+                _ser_read_until(chan, r"\$ ", timeout=3)
+            _t.sleep(2)
+            chan.send("cu -s 9600 -l %s\n" % tty_name)
+            _log("retry cu -s 9600 -l %s" % tty_name)
+            _ser_read_until(chan, "Connected.", timeout=10)
+
+        # ── 登录 ──
+        _ser_console_login(chan, hostname, user, passwd)
+        _log("login done")
+
+        # ── 进入 config 模式 ──
+        chan.send("config ter\n")
+        _ser_read_until(chan, "#", timeout=5)
+
+        # ── clear config all ──
+        _log("clear config all")
+        chan.send("no page\n")
+        _ser_read_until(chan, r"\(config\)#", timeout=5)
+        chan.send("clear config all\n")
+        _ser_read_until(chan, r"\(config\)#", timeout=60)
+        chan.send("support 0.0.0.0 0\n")
+        _ser_read_until(chan, r"\(config\)#", timeout=5)
+        _log("clear done")
+
+        # ── 配置 IP ──
+        _log("configuring IPs")
+        chan.send("ip add %s 172.16.35.7%d 24\n" % (port1, idx))
+        _ser_read_until(chan, r"\(config\)#", timeout=5)
+        chan.send("ip add %s 172.16.34.7%d 24\n" % (port2, idx))
+        _ser_read_until(chan, r"\(config\)#", timeout=5)
+        chan.send("ip add %s 172.16.32.7%d 24\n" % (port3, idx))
+        _ser_read_until(chan, r"\(config\)#", timeout=5)
+
+        # IPv6
+        chan.send("ip add %s 3ffd::7%d 64\n" % (port1, idx))
+        _ser_read_until(chan, r"\(config\)#", timeout=5)
+        chan.send("ip add %s 3ffc::7%d 64\n" % (port2, idx))
+        _ser_read_until(chan, r"\(config\)#", timeout=5)
+        chan.send("ip add %s 3ffb::7%d 64\n" % (port3, idx))
+        _ser_read_until(chan, r"\(config\)#", timeout=5)
+
+        chan.send("support 0.0.0.0 0\n")
+        _ser_read_until(chan, r"\(config\)#", timeout=5)
+        _log("IP config done")
+
+        return {"device": idx, "ssh_ip": ssh_ip, "tty": tty_name,
+                "status": "ok", "log": log_lines}
+
+    except Exception as e:
+        _log("error: %s" % e)
+        return {"device": idx, "ssh_ip": ssh_ip, "tty": tty_name,
+                "status": "error", "error": str(e), "log": log_lines}
+    finally:
+        try:
+            ssh.close()
+        except Exception:
+            pass
+
+
+def _ser_read_until(chan, expected, timeout=5):
+    """读 channel 输出直到匹配正则或超时。"""
+    import re as _re
+    import time as _time
+    output = ""
+    regexp = _re.compile(expected)
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        try:
+            tmp = chan.recv(1024).decode("utf-8", errors="ignore")
+        except Exception:
+            tmp = ""
+        output += tmp
+        if regexp.search(output):
+            return output
+    return output
+
+
+def _ser_console_login(chan, hostname, user, passwd):
+    """处理设备控制台登录（复刻 apv.py console_login 逻辑）。"""
+    import re as _re
+    import time as _t
+
+    chan.send("\n")
+    output = _ser_read_until(chan,
+        r"(ogin)|(ew assword:)|(%s#)|Mode\]#|Init\]#|"
+        r"Standby\]#|Active\]#|\]>|(\]#)|(TMA#)|(TMB#)|"
+        r"(\]\$)|(assword:)|(config\)#)|(test#)|(\$ )|(\# )|(%s>)" % (hostname, hostname),
+        timeout=10)
+
+    if _re.search(r"%s>" % hostname, output) or _re.search(r"\]>", output):
+        chan.send("quit\n")
+        output = _ser_read_until(chan, r"(ogin)|(\]#)|(\]\$)|(# )", timeout=10)
+        if _re.search("ogin", output):
+            chan.send("%s\n" % user)
+            output = _ser_read_until(chan, "sword:", timeout=5)
+            chan.send("%s\n" % passwd)
+            output = _ser_read_until(chan, r"(>)|(ew password:)", timeout=5)
+        if _re.search("%s>" % hostname, output):
+            chan.send("enable\n")
+            output = _ser_read_until(chan, r"(#)|(sword:)", timeout=5)
+            if "sword:" in output:
+                chan.send("%s\n" % passwd)
+                _ser_read_until(chan, "#", timeout=5)
+        chan.send("terminal length 0\n")
+        _ser_read_until(chan, "#", timeout=5)
+    elif _re.search("ogin", output):
+        chan.send("%s\n" % user)
+        output = _ser_read_until(chan, "sword:", timeout=5)
+        chan.send("%s\n" % passwd)
+        output = _ser_read_until(chan, r"(#)|(>)", timeout=5)
+        if ">" in output:
+            chan.send("enable\n")
+            output = _ser_read_until(chan, r"(#)|(sword:)", timeout=5)
+            if "sword:" in output:
+                chan.send("%s\n" % passwd)
+                _ser_read_until(chan, "#", timeout=5)
+        chan.send("terminal length 0\n")
+        _ser_read_until(chan, "#", timeout=5)
+    elif _re.search("assword:", output):
+        chan.send("%s\n" % passwd)
+        output = _ser_read_until(chan, r"(#)|(>)", timeout=5)
+        if ">" in output:
+            chan.send("enable\n")
+            output = _ser_read_until(chan, r"(#)|(sword:)", timeout=5)
+            if "sword:" in output:
+                chan.send("%s\n" % passwd)
+                _ser_read_until(chan, "#", timeout=5)
+        chan.send("terminal length 0\n")
+        _ser_read_until(chan, "#", timeout=5)
+    elif _re.search(r"\$ |\# ", output):
+        chan.send("su\n")
+        output = _ser_read_until(chan, "sword:", timeout=5)
+        chan.send("%s\n" % passwd)
+        _ser_read_until(chan, "#", timeout=5)
+        chan.send("terminal length 0\n")
+        _ser_read_until(chan, "#", timeout=5)
+    else:
+        _t.sleep(0.3)
+        chan.send("\n")
+        _ser_read_until(chan, "#", timeout=10)
+        chan.send("conf ter\n")
+        _ser_read_until(chan, "#", timeout=5)
+
+    chan.send("conf ter\n")
+    output = _ser_read_until(chan, "#", timeout=5)
+    if "Someone else is in config mode" in output:
+        chan.send("conf ter force\n")
+        _ser_read_until(chan, "#", timeout=5)

@@ -15,6 +15,7 @@ from main.ist_core.tools.deepagent import (
 )
 from main.ist_core.tools.deepagent.exec_tools import run_shell, run_python
 from main.ist_core.tools.device import dev_rest, dev_ssh
+from main.ist_core.tools.skills.file_server import qa_file_server
 
 __all__ = [
     "fs_edit",
@@ -27,4 +28,5 @@ __all__ = [
     "run_python",
     "dev_ssh",
     "dev_rest",
+    "qa_file_server",
 ]

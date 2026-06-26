@@ -85,6 +85,14 @@ TOOL_DEFS = [
             "command": {"type": "string"},
         }, "required": ["command"]},
     },
+    {
+        "name": "init_device",
+        "description": "设备初始化：通过串口连接设备，清除全部配置（clear config all），重新配置接口 IP（port1 管理口 + port2/port3 固定地址）。支持指定单台或批量。读 conf 文件自动获取设备 IP/账号/端口。",
+        "inputSchema": {"type": "object", "properties": {
+            "device_count": {"type": "integer", "description": "初始化设备数（1/2/3），0=自动从 conf 推断", "default": 0},
+            "device_index": {"type": "integer", "description": "指定初始化哪台（0/1/2），优先级高于 device_count", "default": -1},
+        }},
+    },
 ]
 
 DISPATCH = {
@@ -99,6 +107,7 @@ DISPATCH = {
         source=a.get("source"), overwrite=a.get("overwrite", False),
         list_name=a.get("list_name")),
     "probe_show": lambda a: tools.probe_show(a["command"], a.get("build", "")),
+    "init_device": lambda a: tools.init_device(a.get("device_count", 0), a.get("device_index", -1)),
 }
 
 

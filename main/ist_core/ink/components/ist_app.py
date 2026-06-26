@@ -111,6 +111,11 @@ def _tool_display_arg(name: str, args: dict) -> str:
     return str(first_val) if first_val else ""
 
 
+def _is_transient_tool_error(output: str) -> bool:
+    from main.ist_core.resilience import is_transient_error
+    return is_transient_error(output)
+
+
 def _tool_result_summary(name: str, output: str) -> list[str] | None:
     """工具特定结果摘要。返回 None = 通用截断；返回 list = 摘要替代。"""
     if name == "fs_read":
@@ -1020,7 +1025,7 @@ class IstInkApp:
             self._is_loading = False
             self._ai_stream_idx = -1
             self._stream_commit_idx = -1  # 同上,错误收尾也清掉流式占位
-            
+
             if snapshot.messages:
                 last = snapshot.messages[-1]
                 for b in last.content:
@@ -1195,8 +1200,15 @@ class IstInkApp:
 
         elif block.type == BLOCK_TOOL_RESULT:
             self._ai_stream_idx = -1
-            # ask_user 结果由 ask_user 面板的完成提示负责，跳过标准结果行
-            if (block.name or "") == "ask_user":
+            # qa_ask_user 结果由 ask_user 面板的完成提示负责，跳过标准结果行
+            if (block.name or "") == "qa_ask_user":
+                return
+            # 瞬态连接错误折叠为单行，不展示完整异常文本（agent 侧仍可看到原始错误）
+            if block.output and _is_transient_tool_error(block.output):
+                tuid = getattr(block, "tool_use_id", "") or ""
+                self._place_result_lines(
+                    tuid, [f"   {D}⎿{X} {D}瞬态连接错误，已自动重试{X}"]
+                )
                 return
             if block.output:
                 raw_name = block.name or ""

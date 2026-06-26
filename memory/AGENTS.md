@@ -32,3 +32,4 @@ deepagents MemoryMiddleware 在每次 agent 启动时把本文件内容注入 sy
 - SDNS 测试用例初始化必须包含 `sdns listener <ip>` 和 `sdns host method <host_name> rr` 命令，且 init_commands 参数必须用换行分隔各命令，不能空格拼接。
 - SDNS 测试中，dig 查询域名必须使用框架初始化配置中已有的域名（如 autotest.com），外部域名（如 www.example.com）可能因 SDNS 未配置转发而返回 NXDOMAIN。
 - SDNS 测试中，框架模块 sdns 的初始化配置会自动执行以下命令：sdns on、sdns host name autotest.com、sdns service ip ip1 172.16.35.231、sdns pool name pool1、sdns pool service pool1 ip1、sdns host pool autotest.com pool1。因此，测试用例可以直接使用 autotest.com 作为已配置的域名进行查询，无需额外配置。
+- 已确认的失败案例：agent 频繁使用单数目录名（workspace/input/、workspace/output/）导致路径错误，应始终使用复数形式（workspace/inputs/、workspace/outputs/、workspace/defects/）

@@ -18,7 +18,7 @@ from main.ist_core.tools.deepagent import (
     fs_write,
 )
 from main.ist_core.tools.deepagent.exec_tools import run_shell, run_python
-from main.ist_core.tools.device import dev_rest, dev_ssh, dev_run_case, dev_probe
+from main.ist_core.tools.device import dev_rest, dev_ssh, dev_run_case, dev_probe, dev_init_device
 from main.ist_core.tools.device import (
     dev_run_batch,
     compile_attribute,
@@ -29,6 +29,7 @@ from main.ist_core.tools.device import (
 from main.ist_core.tools.knowledge.kb_bug_search import kb_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
 from main.ist_core.tools.skills import invoke_skill
+from main.ist_core.tools.skills.file_server import qa_file_server
 from main.ist_core.tools.ask_user import ask_user
 from main.ist_core.tools.memory_tool import remember
 
@@ -51,6 +52,7 @@ def _default_generic_tools() -> list[Any]:
         dev_rest,
         dev_run_case,
         dev_probe,
+        dev_init_device,
 
         # 编译/上机：主 agent 只编排不手搓——编译机器（compile_prep/fanout/emit/
         # emit_merged/precedent/score）下放到 compile_pipeline 内部 + draft/grade fork，
@@ -67,6 +69,8 @@ def _default_generic_tools() -> list[Any]:
 
 
         invoke_skill,
+
+        qa_file_server,
 
         ask_user,
         remember,

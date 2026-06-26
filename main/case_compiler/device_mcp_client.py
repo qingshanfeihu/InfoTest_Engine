@@ -177,6 +177,15 @@ class FrameworkMCPClient:
         """
         return self.call([("probe_show", {"command": command, "build": build})]).get("probe_show", {})
 
+    def init_device(self, device_count: int = 0, device_index: int = -1) -> dict:
+        """设备初始化:通过串口清除配置+配置接口 IP。
+
+        device_count: 初始化设备数(1/2/3),0=从 conf ssh_ips 自动推断。
+        device_index: 指定初始化哪台(0/1/2),优先级高于 device_count。
+        返回 {initialized, failed, total, details}。
+        """
+        return self.call([("init_device", {"device_count": device_count, "device_index": device_index})]).get("init_device", {})
+
     def deliver(self, module: str, autoid: str, xlsx_path: str) -> dict:
         b64 = base64.b64encode(Path(xlsx_path).read_bytes()).decode()
         return self.call([("write_case", {"module": module, "autoid": autoid, "xlsx_b64": b64})]).get("write_case", {})

@@ -178,6 +178,11 @@ LINUX_SSH_PASSWORD=
 # 详见 CLAUDE.md「自动化环境池」+ scripts/maintenance/deploy_framework_to_envs.py。
 # =============================================================================
 IST_JUMPHOST_PASS=                                # 跳板机 SSH 口令（必填；勿留弱口令）
+
+# ── 文件服务器 ─────────────────────────────────────────────────────────
+# IST_FILE_SERVER_URL=http://<host>:8080            # HTTP 文件管理器地址（qa_file_server 工具用）
+# IST_FILE_SERVER_USER=admin                        # Basic Auth 用户名（缺省 admin）
+# IST_FILE_SERVER_PASS=admin                        # Basic Auth 密码（缺省 admin）
 # IST_JUMPHOST_HOST=10.4.127.103                  # 现役单跳板机（池关时用；缺省见 config.py）
 # IST_ENV_POOL_ENABLED=1                          # 开启 4 机并行池（默认关）
 # IST_ENV_POOL_HOSTS=10.4.127.103,10.4.127.93,10.4.127.79,10.4.127.105   # 池主机列表（缺省=内置 4 机）

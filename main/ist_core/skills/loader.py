@@ -23,6 +23,8 @@ from typing import Any
 
 import yaml
 
+from main.ist_core.resilience import is_transient_error
+
 logger = logging.getLogger(__name__)
 
 _SKILLS_DIR = Path(__file__).parent
@@ -223,10 +225,12 @@ def _get_tool_registry() -> dict[str, Any]:
                 compile_emit,
                 dev_probe,
                 dev_run_case,
+                dev_init_device,
             )
             _TOOL_REGISTRY["compile_emit"] = compile_emit
             _TOOL_REGISTRY["dev_run_case"] = dev_run_case
             _TOOL_REGISTRY["dev_probe"] = dev_probe
+            _TOOL_REGISTRY["dev_init_device"] = dev_init_device
         except ImportError:
             pass
         # 批量编译 tools（ist_compile 编译链用）：解析清单 + 合并打包 + fan-out + 串行上机
@@ -723,6 +727,10 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "") -> st
         _trace_fork(skill_name, brief, _elapsed, {}, error=str(exc)[:120])
         _record_fork_status(skill_name, agent_name, _elapsed, {}, ok=False,
                             error=str(exc)[:300])
+        if is_transient_error(exc):
+            logger.debug("Fork skill %s 瞬态错误(已抑制): %s", skill_name, exc)
+        else:
+            logger.exception("Fork skill %s execution failed", skill_name)
         return f"ERROR: fork skill {skill_name!r} execution failed: {exc}"
 
     messages = result.get("messages", [])

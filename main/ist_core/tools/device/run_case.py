@@ -288,3 +288,58 @@ def dev_probe(command: str) -> str:
         with _PROBE_CACHE_LOCK:
             _PROBE_CACHE[key] = result
     return result
+
+
+@tool(parse_docstring=True)
+def dev_init_device(jumphost: str, device_count: int = 0, device_index: int = -1) -> str:
+    """通过串口初始化被测设备：清除全部配置 + 重新配置接口 IP。
+
+    在跳板机上执行，经串口（cu -s 9600 -l ttyS{n}）连接设备，执行 clear config all
+    后配置 port1（172.16.35.7{n}）、port2（172.16.34.7{n}）、port3（172.16.32.7{n}）
+    的 IPv4/IPv6 地址。
+
+    **何时用**：设备配置混乱需要恢复出厂、新设备首次上架、或上机前需要干净基线。
+    **何时不用**：只想改某条配置 → 用 dev_run_case 跑 case 或 dev_probe 查状态。
+
+    Args:
+        jumphost: 跳板机 IP（如 10.4.127.103），必填。
+        device_count: 初始化设备数（1/2/3），0=从 conf 自动推断（默认全部）。
+        device_index: 指定初始化哪台（0=APV0, 1=APV1, 2=APV2），优先级高于 device_count。
+
+    Returns:
+        每台设备的初始化结果（成功/失败 + 日志）。
+    """
+    try:
+        from main.case_compiler.device_mcp_client import FrameworkMCPClient
+        from main.case_compiler.config import Environment
+    except Exception as exc:
+        return f"error: 加载模块失败: {exc}"
+
+    env = Environment(id="adhoc", jumphost=jumphost)
+
+    try:
+        with FrameworkMCPClient(env=env) as client:
+            res = client.init_device(device_count=device_count, device_index=device_index)
+    except RuntimeError as exc:
+        return f"error: {exc}"
+    except Exception as exc:
+        return f"error: 设备初始化异常: {exc}"
+
+    if isinstance(res, dict) and res.get("error"):
+        return f"=== dev_init_device ===\nstatus: error\n{res.get('error')}"
+
+    lines = ["=== dev_init_device ==="]
+    for d in (res.get("details") or []):
+        status = d.get("status", "?")
+        idx = d.get("device", "?")
+        ip = d.get("ssh_ip", "?")
+        tty = d.get("tty", "?")
+        if status == "ok":
+            lines.append(f"APV{idx} ({tty}, {ip}): 初始化成功")
+        else:
+            lines.append(f"APV{idx} ({tty}, {ip}): 失败 — {d.get('error', '?')}")
+        for log_line in (d.get("log") or []):
+            lines.append(f"  {log_line}")
+
+    lines.append(f"\n总计: {res.get('initialized', 0)} 成功 / {res.get('failed', 0)} 失败 / {res.get('total', 0)} 总数")
+    return "\n".join(lines)

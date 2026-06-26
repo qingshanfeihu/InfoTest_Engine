@@ -211,6 +211,142 @@ os.write(fd, ("%s:%d" % (task_id, proc.pid)).encode()); os.close(fd)
 print(json.dumps({"task_id": task_id}))
 '''
 
+# Option Y：init_device 脚本。忠实 port 老 tools.py init_device + _init_one_device 串口逻辑：
+# 读 conf → O_EXCL 锁 → 逐设备 ssh localhost → cu -s 9600 ttyS{n} → 登录 → clear config all →
+# 配 port IPv4/IPv6。argv: APV_SRC TASK_DIR LOCK_FILE device_count device_index。stdout 打 JSON。
+# 在跳板机 PY38(含 paramiko)跑，故串口逻辑/锁都在跳板机执行、逻辑由客户端 owns(免改 FastMCP daemon)。
+_INIT_SCRIPT = r'''
+import os, sys, json, time, re, subprocess, configparser
+APV_SRC, TASK_DIR, LOCK_FILE = sys.argv[1:4]
+device_count = int(sys.argv[4]) if len(sys.argv) > 4 else 0
+device_index = int(sys.argv[5]) if len(sys.argv) > 5 else -1
+def conf_name():
+    out = subprocess.run(["ip", "add"], capture_output=True, text=True).stdout
+    m = re.search(r"10\.4\.\d+\.(\d+)/\d+", out)
+    return (m.group(1) + ".conf") if m else "103.conf"
+try:
+    text = open(os.path.join(APV_SRC, "conf", conf_name()), "r", errors="replace").read()
+except Exception as e:
+    print(json.dumps({"error": "cannot read conf: %s" % e})); sys.exit(0)
+cp = configparser.ConfigParser(strict=False); cp.read_string(text)
+ssh_ips = [ip.strip() for ip in cp.get("comm", "ssh_ips").split(",")
+           if ip.strip()] if cp.has_option("comm", "ssh_ips") else []
+if not ssh_ips:
+    print(json.dumps({"error": "conf [comm] ssh_ips empty"})); sys.exit(0)
+hostname, user, passwd = "APV", "admin", "admin"
+for sec in cp.sections():
+    if sec == "comm": continue
+    if cp.has_option(sec, "hostname"): hostname = cp.get(sec, "hostname")
+    if cp.has_option(sec, "user"): user = cp.get(sec, "user")
+    if cp.has_option(sec, "passwd"): passwd = cp.get(sec, "passwd")
+    elif cp.has_option(sec, "password"): passwd = cp.get(sec, "password")
+    break
+port1, port2, port3 = "port1", "port2", "port3"
+if cp.has_option("comm", "ports"):
+    ports = [p.strip() for p in cp.get("comm", "ports").split(",")]
+    if len(ports) >= 3: port1, port2, port3 = ports[0], ports[1], ports[2]
+if 0 <= device_index <= 2:
+    if device_index >= len(ssh_ips):
+        print(json.dumps({"error": "device_index OOB"})); sys.exit(0)
+    indices = [device_index]
+else:
+    n = device_count if device_count > 0 else len(ssh_ips)
+    if n > len(ssh_ips) or n > 3:
+        print(json.dumps({"error": "device_count invalid"})); sys.exit(0)
+    indices = list(range(n))
+os.makedirs(TASK_DIR, exist_ok=True)
+def read_lock():
+    try:
+        s = open(LOCK_FILE).read().strip()
+        if not s: return None
+        p = s.split(":"); return (":".join(p[:-1]), int(p[-1]))
+    except Exception: return None
+def pid_alive(pid):
+    try: os.kill(pid, 0); return True
+    except Exception: return False
+def acquire():
+    for _ in (0, 1):
+        try: return os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            h = read_lock()
+            if h and pid_alive(h[1]): return None
+            try: os.unlink(LOCK_FILE)
+            except FileNotFoundError: pass
+    return None
+fd = acquire()
+if fd is None:
+    h = read_lock()
+    print(json.dumps({"error": "another run in progress (lock held by %s)" % (h[0] if h else "?")})); sys.exit(0)
+try: os.write(fd, ("init_%d:%d" % (int(time.time()), os.getpid())).encode())
+finally: os.close(fd)
+import paramiko
+def ru(chan, expected, timeout=5):
+    output = ""; rx = re.compile(expected); deadline = time.time() + timeout
+    while time.time() < deadline:
+        try: tmp = chan.recv(1024).decode("utf-8", "ignore")
+        except Exception: tmp = ""
+        output += tmp
+        if rx.search(output): return output
+    return output
+def login(chan):
+    chan.send("\n")
+    o = ru(chan, r"(ogin)|(ew assword:)|(%s#)|Mode\]#|Init\]#|Standby\]#|Active\]#|\]>|(\]#)|(TMA#)|(TMB#)|(\]\$)|(assword:)|(config\)#)|(test#)|(\$ )|(\# )|(%s>)" % (hostname, hostname), 10)
+    if re.search(r"%s>" % hostname, o) or re.search(r"\]>", o):
+        chan.send("quit\n"); o = ru(chan, r"(ogin)|(\]#)|(\]\$)|(# )", 10)
+        if re.search("ogin", o):
+            chan.send("%s\n" % user); ru(chan, "sword:", 5); chan.send("%s\n" % passwd); o = ru(chan, r"(>)|(ew password:)", 5)
+        if re.search("%s>" % hostname, o):
+            chan.send("enable\n"); o = ru(chan, r"(#)|(sword:)", 5)
+            if "sword:" in o: chan.send("%s\n" % passwd); ru(chan, "#", 5)
+        chan.send("terminal length 0\n"); ru(chan, "#", 5)
+    elif re.search("ogin", o):
+        chan.send("%s\n" % user); ru(chan, "sword:", 5); chan.send("%s\n" % passwd); o = ru(chan, r"(#)|(>)", 5)
+        if ">" in o:
+            chan.send("enable\n"); o = ru(chan, r"(#)|(sword:)", 5)
+            if "sword:" in o: chan.send("%s\n" % passwd); ru(chan, "#", 5)
+        chan.send("terminal length 0\n"); ru(chan, "#", 5)
+def init_one(idx, ssh_ip):
+    tty = "ttyS%d" % idx; logs = []
+    ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try: ssh.connect(hostname="127.0.0.1", port=22, username="test", password="click1", timeout=10)
+    except Exception as e:
+        return {"device": idx, "ssh_ip": ssh_ip, "status": "error", "error": "cannot SSH localhost: %s" % e}
+    try:
+        chan = ssh.invoke_shell(); chan.settimeout(5); time.sleep(1)
+        try: chan.recv(2048)
+        except Exception: pass
+        chan.send("cu -s 9600 -l %s\n" % tty); out = ru(chan, r"(Connected.)|(\$ )", 10)
+        if "Line in use" in out:
+            chan.send("ps aux|%s|%s\n" % (tty, "grep -v grep")); out = ru(chan, r"\$ ", 5)
+            for pid in re.findall(r"test\s+(\d+)", out):
+                chan.send("kill %s\n" % pid); ru(chan, r"\$ ", 3)
+            time.sleep(2); chan.send("cu -s 9600 -l %s\n" % tty); ru(chan, "Connected.", 10)
+        login(chan); logs.append("login done")
+        chan.send("config ter\n"); ru(chan, "#", 5)
+        chan.send("no page\n"); ru(chan, r"\(config\)#", 5)
+        chan.send("clear config all\n"); ru(chan, r"\(config\)#", 60)
+        chan.send("support 0.0.0.0 0\n"); ru(chan, r"\(config\)#", 5); logs.append("clear done")
+        for p, sub in ((port1, "35"), (port2, "34"), (port3, "32")):
+            chan.send("ip add %s 172.16.%s.7%d 24\n" % (p, sub, idx)); ru(chan, r"\(config\)#", 5)
+        for p, sub in ((port1, "3ffd"), (port2, "3ffc"), (port3, "3ffb")):
+            chan.send("ip add %s %s::7%d 64\n" % (p, sub, idx)); ru(chan, r"\(config\)#", 5)
+        chan.send("support 0.0.0.0 0\n"); ru(chan, r"\(config\)#", 5); logs.append("ip done")
+        return {"device": idx, "ssh_ip": ssh_ip, "tty": tty, "status": "ok", "log": logs}
+    except Exception as e:
+        return {"device": idx, "ssh_ip": ssh_ip, "tty": tty, "status": "error", "error": str(e), "log": logs}
+    finally:
+        try: ssh.close()
+        except Exception: pass
+try:
+    results = [init_one(idx, ssh_ips[idx]) for idx in indices]
+    ok = [r for r in results if r.get("status") == "ok"]
+    print(json.dumps({"initialized": len(ok), "failed": len(results) - len(ok),
+                      "total": len(results), "details": results}))
+finally:
+    try: os.unlink(LOCK_FILE)
+    except Exception: pass
+'''
+
 # Option Y：status 脚本。读 status.json + result_db(MySQL 主源,跳板机 lib) + tail log。
 # argv: TASK_DIR RESULT_DB_DIR APV_SRC task_id build case_ids_json。stdout 打 JSON。
 _STATUS_SCRIPT = r'''
@@ -438,12 +574,26 @@ class FrameworkMCPClient:
 
         让 draft 的 dev_probe 探到**干净已知态**，不再撞别人残留配置。整机级清，编译入口
         调一次即可（非 per-case）。返回 ``{"initialized","failed","total","details"}`` 或 ``{"error"}``。
-        device_count=0 自动从 conf ssh_ips 推断；device_index 指定单台（优先于 count）。
-        server 侧加单跑锁后，与正在 verify 的 run_cases 互斥（撞锁返回 ``error: another run in progress``）。
+        device_count=0 自动从 conf ssh_ips 推断；device_index 指定单台（优先于 count）。单跑锁与
+        verify 的 run_cases 互斥（撞锁返回 ``error: another run in progress``）。
+        ``IST_VERIFY_CLIENTSIDE=1`` 走客户端 SSH 实现（不经老 stdio server）。
         """
+        if _VERIFY_CLIENTSIDE:
+            return self._init_device_clientside(device_count, device_index)
         return (self.call([("init_device",
                             {"device_count": device_count, "device_index": device_index})])
                 .get("init_device") or {})
+
+    def _init_device_clientside(self, device_count: int = 0, device_index: int = -1) -> dict:
+        """Option Y：经 SSH 在跳板机(PY38+paramiko)跑串口 init 脚本（clear config all + 配 IP），
+
+        不经老 stdio server。串口/锁逻辑必须在跳板机执行，但脚本是客户端常量（逻辑客户端 owns）。
+        串口 ``clear config all`` 较慢（每台最长 ~60s），故 timeout 给到 180s。
+        """
+        return self._ssh_python_json(
+            _INIT_SCRIPT,
+            [_JH_APV_SRC, _JH_TASK_DIR, _JH_LOCK_FILE, str(device_count), str(device_index)],
+            timeout=180)
 
     def deliver(self, module: str, autoid: str, xlsx_path: str) -> dict:
         if _VERIFY_CLIENTSIDE:

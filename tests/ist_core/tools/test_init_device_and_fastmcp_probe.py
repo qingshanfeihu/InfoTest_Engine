@@ -385,6 +385,28 @@ def test_run_status_dispatch_clientside_when_flag(monkeypatch):
     assert calls["status"] == ("tid", "BUILD", ["123"])
 
 
+def test_init_device_dispatch_clientside_when_flag(monkeypatch):
+    from main.case_compiler import device_mcp_client as mc
+    monkeypatch.setattr(mc, "_VERIFY_CLIENTSIDE", True)
+    captured = {}
+
+    client = mc.FrameworkMCPClient.__new__(mc.FrameworkMCPClient)
+
+    def _fake(script, args, timeout=60):
+        captured["script"] = script
+        captured["args"] = args
+        captured["timeout"] = timeout
+        return {"initialized": 1, "failed": 0, "total": 1, "details": []}
+
+    client._ssh_python_json = _fake
+    res = client.init_device(device_index=0)
+    assert res["initialized"] == 1
+    # argv: APV_SRC TASK_DIR LOCK_FILE device_count device_index
+    assert captured["args"] == [mc._JH_APV_SRC, mc._JH_TASK_DIR, mc._JH_LOCK_FILE, "0", "0"]
+    assert captured["timeout"] == 180          # 串口 clear 慢，给足
+    assert "clear config all" in captured["script"]
+
+
 def test_run_clientside_passes_jumphost_paths(monkeypatch):
     from main.case_compiler import device_mcp_client as mc
     captured = {}

@@ -330,6 +330,74 @@ def test_deliver_clientside_read_error():
     assert "read xlsx failed" in res.get("error", "")
 
 
+# ── Option Y：客户端 run / status（_ssh_python_json 派发）──────────────
+def test_ssh_python_json_parses_last_json_line():
+    from main.case_compiler import device_mcp_client as mc
+
+    class _O:
+        def __init__(self, s=b""):
+            self._s = s
+        def read(self):
+            return self._s
+
+    class _SI:
+        def write(self, *a):
+            pass
+        def flush(self):
+            pass
+        class channel:
+            @staticmethod
+            def shutdown_write():
+                pass
+
+    class _FakeC:
+        def exec_command(self, cmd, timeout=60):
+            out = b"some pytest noise\n{\"task_id\": \"ist_sdns_1_2\"}\n"
+            return (_SI(), _O(out), _O(b""))
+
+    client = mc.FrameworkMCPClient.__new__(mc.FrameworkMCPClient)
+    client._c = _FakeC()
+    res = client._ssh_python_json("print('x')", ["a", "b"])
+    assert res == {"task_id": "ist_sdns_1_2"}
+
+
+def test_run_status_dispatch_clientside_when_flag(monkeypatch):
+    from main.case_compiler import device_mcp_client as mc
+    monkeypatch.setattr(mc, "_VERIFY_CLIENTSIDE", True)
+    calls = {}
+
+    client = mc.FrameworkMCPClient.__new__(mc.FrameworkMCPClient)
+
+    def _fake_run(m, a, b):
+        calls["run"] = (m, a, b)
+        return {"task_id": "t"}
+
+    def _fake_status(t, b, c):
+        calls["status"] = (t, b, c)
+        return {"status": {"state": "done"}}
+
+    client._run_clientside = _fake_run
+    client._status_clientside = _fake_status
+
+    assert client.run("sdns", "123", "BUILD")["task_id"] == "t"
+    assert client.status("tid", "BUILD", ["123"])["status"]["state"] == "done"
+    assert calls["run"] == ("sdns", "123", "BUILD")
+    assert calls["status"] == ("tid", "BUILD", ["123"])
+
+
+def test_run_clientside_passes_jumphost_paths(monkeypatch):
+    from main.case_compiler import device_mcp_client as mc
+    captured = {}
+
+    client = mc.FrameworkMCPClient.__new__(mc.FrameworkMCPClient)
+    client._ssh_python_json = lambda script, args, timeout=60: captured.setdefault("args", args) or {"task_id": "t"}
+    client._run_clientside("sdns", "123", "BUILD")
+    args = captured["args"]
+    # argv: APV_SRC PY38 TASK_DIR LOCK_FILE STAGING_PARENT module autoid build
+    assert args[5:] == ["sdns", "123", "BUILD"]
+    assert args[0] == mc._JH_APV_SRC and args[3] == mc._JH_LOCK_FILE
+
+
 # ── framework_ready device-aware 健康检查 ─────────────────────────────
 class _FakeSSH:
     """假 SSH 通道：按命令内容返回设备 IP / :22 OPEN|CLOSED。"""

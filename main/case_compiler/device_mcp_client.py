@@ -142,7 +142,107 @@ _DEVICE_IP_CACHE: dict[tuple, str] = {}
 _JH_APV_SRC = os.environ.get("IST_APV_SRC", "/home/test/apv_src")
 _JH_STAGING_MODULE = os.environ.get("IST_STAGING_MODULE", "sdns")
 _JH_STAGING_PARENT = os.environ.get("IST_STAGING_PARENT", _JH_APV_SRC + "/smoke_test/" + _JH_STAGING_MODULE)
+_JH_PY38 = os.environ.get("IST_JUMPHOST_PY38", _JH_APV_SRC + "/.python3.8/bin/python")
+_JH_TASK_DIR = os.environ.get("IST_MCP_TASK_DIR", "/home/test/mcp_server/tasks")
+_JH_LOCK_FILE = os.environ.get("IST_MCP_LOCK_FILE", "/home/test/mcp_server/run.lock")
+_JH_RESULT_DB_DIR = os.environ.get("IST_RESULT_DB_DIR", "/home/test/mcp_server")  # result_db.py(MySQL 读)所在
 _VERIFY_CLIENTSIDE = os.environ.get("IST_VERIFY_CLIENTSIDE", "0") == "1"
+
+# Option Y：run 提交脚本（经 python3 - 走 stdin 在跳板机跑；锁/setsid 脱离必须在跳板机执行）。
+# 忠实 port 老 tools.py _submit_pytest：O_EXCL 锁 → 写 runner.sh(setsid pytest+写 done 状态+rm 锁)
+# → setsid Popen 脱离 → 写真实 pid 入锁。撞锁回结构化 busy。argv: APV_SRC PY38 TASK_DIR LOCK_FILE
+# STAGING_PARENT module autoid build。stdout 打 JSON。
+_SUBMIT_SCRIPT = r'''
+import os, sys, json, time, subprocess
+APV_SRC, PY38, TASK_DIR, LOCK_FILE, STAGING_PARENT, module, autoid, build = sys.argv[1:9]
+os.makedirs(TASK_DIR, exist_ok=True)
+stg = os.path.join(STAGING_PARENT, "ist_staging_%s" % module, str(autoid))
+xnode = os.path.join(stg, "test_xlsx.py")
+node = xnode if os.path.exists(xnode) else (stg if os.path.isdir(stg) else None)
+if not node:
+    print(json.dumps({"error": "staging not found: %s" % stg})); sys.exit(0)
+def read_lock():
+    try:
+        s = open(LOCK_FILE).read().strip()
+        if not s: return None
+        p = s.split(":"); return (":".join(p[:-1]), int(p[-1]))
+    except Exception: return None
+def pid_alive(pid):
+    try: os.kill(pid, 0); return True
+    except Exception: return False
+def acquire():
+    for _ in (0, 1):
+        try: return os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            h = read_lock()
+            if h and pid_alive(h[1]): return None
+            try: os.unlink(LOCK_FILE)
+            except FileNotFoundError: pass
+    return None
+fd = acquire()
+if fd is None:
+    h = read_lock(); tid = h[0] if h else ""; aid = ""; started = None
+    if tid:
+        parts = tid.split("_")
+        if len(parts) >= 4 and parts[-1].isdigit(): aid = parts[-2]; started = int(parts[-1])
+        try:
+            st = json.load(open(os.path.join(TASK_DIR, tid + ".status.json")))
+            started = st.get("ts", started); aid = st.get("autoid", aid)
+        except Exception: pass
+    el = int(time.time() - started) if started else None
+    msg = "环境忙：正在验证用例 %s" % (aid or "?")
+    if el is not None: msg += "，已运行 %ds" % el
+    print(json.dumps({"error": "device_busy", "busy": True, "running_autoid": aid,
+                      "running_task_id": tid, "elapsed_s": el, "message": msg}))
+    sys.exit(0)
+task_id = "ist_%s_%s_%d" % (module, autoid, int(time.time()))
+log = os.path.join(TASK_DIR, task_id + ".log"); status = os.path.join(TASK_DIR, task_id + ".status.json")
+junit = os.path.join(TASK_DIR, task_id + ".xml"); runner = os.path.join(TASK_DIR, task_id + ".sh")
+script = ("#!/bin/bash\ncd '%s'\n'%s' -m pytest -s '%s' --build '%s' --junitxml '%s' > '%s' 2>&1\nRC=$?\n"
+          % (APV_SRC, PY38, node, build, junit, log) +
+          "python3 -c \"import json,time;json.dump({'task_id':'%s','state':'done','rc':$RC,'build':'%s','module':'%s','autoid':'%s','ts':time.time()},open('%s','w'))\"\n"
+          % (task_id, build, module, autoid, status) + "rm -f '%s'\n" % LOCK_FILE)
+open(runner, "w").write(script); os.chmod(runner, 0o755)
+json.dump({"task_id": task_id, "state": "running", "ts": time.time(), "build": build,
+           "module": module, "autoid": autoid}, open(status, "w"))
+proc = subprocess.Popen(["setsid", "bash", runner], cwd=APV_SRC, stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+os.write(fd, ("%s:%d" % (task_id, proc.pid)).encode()); os.close(fd)
+print(json.dumps({"task_id": task_id}))
+'''
+
+# Option Y：status 脚本。读 status.json + result_db(MySQL 主源,跳板机 lib) + tail log。
+# argv: TASK_DIR RESULT_DB_DIR APV_SRC task_id build case_ids_json。stdout 打 JSON。
+_STATUS_SCRIPT = r'''
+import os, sys, json, re, subprocess
+TASK_DIR, RDB_DIR, APV_SRC, task_id = sys.argv[1:5]
+build = sys.argv[5] if len(sys.argv) > 5 else ""
+case_ids = json.loads(sys.argv[6]) if len(sys.argv) > 6 and sys.argv[6] else []
+status = {}
+sp = os.path.join(TASK_DIR, task_id + ".status.json")
+if os.path.exists(sp):
+    try: status = json.load(open(sp))
+    except Exception: pass
+build = build or status.get("build")
+results = {}; mysql_err = None
+if build and case_ids:
+    try:
+        sys.path.insert(0, RDB_DIR)
+        from result_db import query_results, read_mysql_ip
+        out = subprocess.run(["ip", "add"], capture_output=True, text=True).stdout
+        m = re.search(r"10\.4\.\d+\.(\d+)/\d+", out)
+        conf = os.path.join(APV_SRC, "conf", (m.group(1) + ".conf") if m else "103.conf")
+        conf_text = open(conf, "r", errors="replace").read()
+        results = query_results(read_mysql_ip(conf_text), build, case_ids)
+    except Exception as e:
+        mysql_err = str(e)
+tail = ""
+lp = os.path.join(TASK_DIR, task_id + ".log")
+if os.path.exists(lp):
+    try: tail = "".join(open(lp, "r", errors="replace").readlines()[-25:])
+    except Exception: pass
+print(json.dumps({"status": status, "results": results, "mysql_error": mysql_err, "log_tail": tail}))
+'''
 
 
 def _shquote(s: str) -> str:
@@ -391,13 +491,59 @@ class FrameworkMCPClient:
         except Exception as exc:  # noqa: BLE001
             return {"error": "deliver(clientside) failed: %s" % exc}
 
+    def _ssh_python_json(self, script: str, args: list[str], timeout: int = 60) -> dict:
+        """经 SSH 在跳板机跑 ``python3 - <args>``（脚本走 stdin，不留临时文件），解析 stdout JSON。
+
+        Option Y verify run/status 用：锁/setsid 脱离/MySQL 读必须在跳板机执行，但逻辑由客户端
+        owns（脚本是客户端常量）。失败/非 JSON → {"error": ...}。"""
+        import shlex as _sh
+        # 用框架 venv PY38（含 pymysql，result_db MySQL 查询需要）跑 wrapper；系统 python3 缺 pymysql。
+        cmd = "%s - %s" % (_sh.quote(_JH_PY38), " ".join(_sh.quote(a) for a in args))
+        try:
+            si, so, se = self._c.exec_command(cmd, timeout=timeout)
+            si.write(script)
+            si.flush()
+            si.channel.shutdown_write()
+            out = so.read().decode("utf-8", "replace")
+            err = se.read().decode("utf-8", "replace")
+        except Exception as exc:  # noqa: BLE001
+            return {"error": "ssh python failed: %s" % exc}
+        for line in reversed(out.splitlines()):
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    return json.loads(line)
+                except Exception:  # noqa: BLE001
+                    break
+        return {"error": "no JSON from jumphost: %s" % (err.strip()[:200] or out.strip()[:200])}
+
+    def _run_clientside(self, module: str, autoid: str, build: str) -> dict:
+        """Option Y：客户端经 SSH 提交上机（O_EXCL 锁 + setsid 脱离 pytest），不经老 server。"""
+        return self._ssh_python_json(
+            _SUBMIT_SCRIPT,
+            [_JH_APV_SRC, _JH_PY38, _JH_TASK_DIR, _JH_LOCK_FILE, _JH_STAGING_PARENT,
+             module, str(autoid), build],
+            timeout=60)
+
+    def _status_clientside(self, task_id: str, build: str, case_ids: list[str]) -> dict:
+        """Option Y：客户端经 SSH 查 task 状态 + MySQL 结果(result_db) + tail log，不经老 server。"""
+        return self._ssh_python_json(
+            _STATUS_SCRIPT,
+            [_JH_TASK_DIR, _JH_RESULT_DB_DIR, _JH_APV_SRC, str(task_id),
+             build or "", json.dumps(case_ids or [])],
+            timeout=60)
+
     def run(self, module: str, autoid: str, build: str) -> dict:
         """提交上机。返回 server 原始结果：成功含 task_id，撞锁含 busy 结构。"""
+        if _VERIFY_CLIENTSIDE:
+            return self._run_clientside(module, autoid, build)
         return (self.call([("run_cases_submit",
                             {"module": module, "autoid": autoid, "build": build})])
                 .get("run_cases_submit") or {})
 
     def status(self, task_id: str, build: str, case_ids: list[str]) -> dict:
+        if _VERIFY_CLIENTSIDE:
+            return self._status_clientside(task_id, build, case_ids)
         return self.call([("run_cases_status",
                            {"task_id": task_id, "build": build, "case_ids": case_ids})]).get("run_cases_status", {})
 

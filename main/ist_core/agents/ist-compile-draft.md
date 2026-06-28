@@ -2,7 +2,7 @@
 name: ist-compile-draft
 description: Compilation draft subagent. Turns one manual test case into a structured case.xlsx via G→E→V three-layer generation, and records per-step provenance (which layer, which source) as a byproduct. Does not run on-device, does not self-assess — orchestrator dispatches grade/verify separately.
 tools: kb_footprint, compile_precedent, compile_emit, dev_probe
-model: haiku
+model: opus
 inherit-parent-prompt: true
 ---
 
@@ -13,8 +13,8 @@ inherit-parent-prompt: true
 ## Principles
 
 - 分清两件事：**命令怎么写**（G-文法：参数、语法）和**测什么**（骨架/断言：选哪条命令、断言什么行为）。前者有权威源，后者是你的语义判断。
-- **你没有手册全文 grep 工具——这是有意的。** 命令文法的权威源是 **footprint**（手册已提取的结构化索引）+ brief 末尾的**预检索先例**（同类已验证 case 的真实命令原文）。这两个就够了：先例里已用到的命令直接照搬，先例没有的才 `kb_footprint`。**别试图逐字翻手册**——那是上一版 draft 慢的根因（grep 大手册 20+ 次还找不到、空转超时）。
-- **优先照预检索先例改写**：brief 已内联同类先例的完整配置基线 + 触发→断言链，照它改成本 case 的需求即可，别重新发明。先例缺的命令才 footprint 补。
+- **你没有手册全文 grep 工具——这是有意的。** 命令文法的权威源是 **footprint**（手册已提取的结构化索引）+ brief 末尾的**预检索先例 + 预检索 footprint**（均已为你查好、直接读）。先例/footprint 块里已给的命令直接用，**两者都没有的命令才 `kb_footprint` 现查**。**别试图逐字翻手册、也别重复查 brief 已内联的命令**——那是上一版 draft 慢的根因（grep 大手册 20+ 次还找不到、空转超时）。
+- **优先照预检索先例改写**：brief 已内联同类先例的完整配置基线 + 触发→断言链，照它改成本 case 的需求即可，别重新发明。先例缺的命令才 footprint 补。先例里的命令是真机跑通的确切文法；脑图给你的是中文/抽象概念（不是命令名），先例已覆盖该概念时，它就是命令名最可靠的来源。
 - **骨架/断言才是 H_G≠0 的语义决策**：测什么、断言什么期望——由你归纳。自由留在这里，不留在"逐字找命令语法"。
 - 命令实在拿不准（footprint + 先例都没有），用 `dev_probe` 在设备上看一眼真实回显确认，或按已知最接近的语法推断 + 标 source。**绝不空转找全文**。
 - provenance 是**如实记录**你每步的来源，不是额外推理任务——标不准就标 unknown。
@@ -23,13 +23,14 @@ inherit-parent-prompt: true
 
 ### 1. 用预检索先例 + footprint 定命令文法（G 段）
 
-brief 末尾已内联**预检索先例**（同类已验证 case 的完整配置基线 + 触发→断言链）。**先例里出现的命令直接照搬**（它们是真机跑通过的真实文法）。先例没覆盖到的命令，才 `kb_footprint(命令名)` 取签名/参数（命中即用）。
+brief 末尾已内联**预检索先例** + **预检索 footprint**（确定性预检索，已为你查好）。**先例里出现的命令直接照搬**（真机跑通过的真实文法）；**「预检索 footprint」块已给的命令文法/行为直接采信**。两者都没覆盖的命令，才 `kb_footprint(命令名)` 现查（命中即用）。
 
-**Success criteria**: 本 case 要配的每条命令，要么来自先例原文、要么来自 footprint 签名
+**Success criteria**: 本 case 要配的每条命令，要么来自先例原文、要么来自（预检索或现查的）footprint 签名
 **Artifacts**: 命令来源（precedent / footprint feature_id）
 **Rules**:
 - **没有手册全文 grep**——别找了，footprint + 先例就是你的全部命令源（footprint 已是手册提取物）
-- footprint 命中即采信（含模糊匹配返回的相关节点），不重复查同一命令
+- footprint 命中即采信（含模糊匹配返回的相关节点）；**brief「预检索 footprint」块已给的命令别再 `kb_footprint` 重复查**，只查 brief 没有的
+- **查命令族的父命令即一次拿全子命令文法**：查 `sdns pool`（族父命令）会**一次返回其全部子命令文法**（name/service/method/member…）——**别再逐个 `sdns pool name`/`sdns pool service` 单查**（那是自顶向下逐层走树、白白多发 LLM 往返）。仅当返回里出现「其余子命令未展开：…」提示时，才追加查那几个具体的
 - footprint 也没有、先例也没有：`dev_probe` 探设备真实回显确认，或按最接近语法推断 + 标 source；绝不空转
 
 **⚠ 单设备红线（必守）**：所有配置（APV_*）默认**只用 APV_0 一台**；**绝不用 APV_1**，除非需求**明确**要两台设备（双机/主备/HA/跨设备/对端同步）。原因：①需求没要第二台就用 APV_1 是无谓复杂化；②本测试床 **APV_1 网络未就绪**，merged 文件里只要有**一个** APV_1 步，框架就会去 init APV_1（经串口）并失败 → **整份文件 init 崩、所有 case（含本可在 APV_0 跑通的）全不执行**。listener/host/pool/service 等单机功能一律配在 APV_0。

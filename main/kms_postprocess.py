@@ -33,7 +33,9 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 # 纳入自动语法修复的命令手册（stem）。app 手册不在此列（结构不支持安全自动修）。
 # 新增 CLI 手册时在此登记，且需确认 orgin/ 下有对应 PDF 源。
-_SYNTAX_MANUALS = ("cli_74", "10.5_cli")
+# 10.5 手册已切到 manual_10.5/（按章节切 cli_10.5_Chapter*），不走本 partN 语法修复链；
+# cli_74（旧版）已清理。当前无按 partN 切分的 CLI 手册需走本修复链。
+_SYNTAX_MANUALS = ()
 
 
 def _fix_command_syntax(apply: bool) -> dict:

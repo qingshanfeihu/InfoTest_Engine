@@ -147,18 +147,23 @@ def _check_command_allowlist(steps: list, init: str, result: StructuralResult) -
 
 
 def _is_observation_step(step: dict) -> bool:
-    """该步骤是否产出可被 check_point 文本匹配的回显（观测算子）。
+    """该步骤是否让框架 `result` 持有非 None 回显（可被 check_point `re.search`，不抛 TypeError）。
 
-    test_env 触发（dig/clientc/routera 等）天然产出回显；APV 的 show/统计类命令产出回显；
-    APV 的纯配置（cmd_config 写配置）不产回显，不算观测算子。
+    判据是**框架的结构化契约（F 列方法名）**，不是 grep G 列命令关键字——后者会把"失败的单条配置
+    命令"误判成无回显（994957：`sdns host pool … p11` 不含 show/dig，却真回显错误文字 `A maximum
+    of 10…`，逼 draft 多插一步 show 把 result 冲掉、断言读错缓冲）。框架事实：
+      - test_env 触发（dig/clientc/routera 等）→ 回显。
+      - APV `cmd_config`（**单条**，apv_ssh.py:151 `return output`）→ 回显；失败命令回显错误文字、
+        成功命令回显 prompt，均非 None、可被断言。
+      - APV `cmds_config`（**多条**，apv_ssh.py:166-169 遍历调 cmd_config 但**不收集返回值**）→ None。
+    （test_xlsx.py:309 `result = func()`，func 即该 F 列方法：cmd_config 返回 output、cmds_config 返回 None。）
     """
     e = str(step.get("E", "")).strip()
     f = str(step.get("F", "")).strip()
-    g = str(step.get("G", "") or "")
     if e == "test_env":
         return True  # dig/clientc/routera 等触发都回显
     if e.startswith("APV"):
-        return bool(_OBSERVE_RE.search(f) or _OBSERVE_RE.search(g))
+        return f == "cmd_config"   # 单条 cmd_config 产 result 回显；cmds_config（多条）返回 None
     return False
 
 
@@ -204,6 +209,48 @@ def _check_dangling_assertions(steps: list, result: StructuralResult) -> None:
             # 带 H → 仅存寄存器、不更新 result → result_is_observe 不变
 
 
+def _check_dead_capture(steps: list, result: StructuralResult) -> None:
+    """寄存器写而不读（死捕获）：观测/动作步用 H(save_as) 把回显捕获进寄存器 v，但**没有任何
+    check_point 引用 v**——写了一个永不读的寄存器，是废动作/残缺断言。
+
+    典型（GA 断错缓冲）：dig 带 H 捕获命中 IP 进 v1/v3，但 check_point 去读框架 result（紧前常是
+    `show host pool` 配置回显，里面没有该 IP）→ 既没验到 dig 行为(寄存器没人读)、断言又读错缓冲。
+    这正是 grade 的 `is_genuine_v_assertion` 修 H 后仍不主动报警的那类（无 mutating、IP token 空），
+    需本确定性门兜底。
+
+    与意图无关、纯数据流（写入集 − 读取集），机械可判。**天然区分合法三步式**：dig(H=v1)→dig(无H)→
+    check_point(H=v1)，v1 被 check_point 的 H 读了 → 不死；残缺混合体里 v1 无人读 → 死。
+    读取集保守地收 check_point 的 H(作 expect 寄存器) + **所有步**的 I(作被查文本/输入引用)——
+    宁可漏报、绝不误杀（对齐本门「静态约束宁漏报不误杀」原则，见 check_structural_constraints 注）。
+    """
+    captured: dict[str, int] = {}   # 寄存器名 → 捕获它的步 idx（非 check_point 步带 H）
+    referenced: set[str] = set()    # 被引用（消费）的寄存器名
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        e = str(s.get("E", "")).strip()
+        h = str(s.get("H", "") or "").strip()
+        i_col = str(s.get("I", "") or "").strip()
+        if i_col:
+            referenced.add(i_col)            # 任何步的 I = 从寄存器取被查文本/输入
+        if e == "check_point":
+            if h:
+                referenced.add(h)            # check_point 带 H = expect 从寄存器取（abs_found 比较）
+        elif h:
+            captured[h] = i                  # 观测/动作步带 H = 把回显捕获进寄存器
+    for reg, idx in captured.items():
+        if reg not in referenced:
+            result.add(
+                "dead_capture",
+                f"寄存器 '{reg}' 被 save_as 捕获但**无任何 check_point 引用**（既不作 expect 的 H、"
+                f"也不作被查文本的 I）= 写了永不读的寄存器、废动作/残缺断言。典型：dig 带 H 捕获进 "
+                f"'{reg}' 却用 found 读 result(紧前常是 show 配置回显→断错缓冲)，没 abs_found(H='{reg}') "
+                f"消费它 → 既没验到该 dig 行为、断言又读错缓冲。修法：用 check_point abs_found 引用 "
+                f"'{reg}'（三步式 dig(H={reg})→dig(无H)→check_point(H={reg})），或删掉这个没用的捕获。",
+                idx,
+            )
+
+
 def check_structural_constraints(autoid: str, steps: list, init: str = "") -> StructuralResult:
     """v2 结构约束门入口：命令 allowlist + 断言非悬空（IP 可达由 emit 既有门做）。
 
@@ -220,6 +267,7 @@ def check_structural_constraints(autoid: str, steps: list, init: str = "") -> St
     _check_command_allowlist(steps, init, result)
     _check_dangling_assertions(steps, result)
     _check_no_found_times(steps, result)
+    _check_dead_capture(steps, result)
     return result
 
 

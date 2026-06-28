@@ -11,6 +11,28 @@ from typing import Dict, List, Optional
 
 import paramiko
 
+# CLI 错误识别收口到共享模块（main/ist_core/tools/device/device_errors.py）。
+# 本脚本常被 device-verify skill 以 importlib spec 按路径独立加载（目录带连字符无法
+# 作为包名），此时无法 import 项目包——故 try 绝对 import，失败则回退本地等价实现
+# （marker 表须与 device_errors.DEVICE_CLI_ERROR_MARKERS 完全一致）。
+try:
+    from main.ist_core.tools.device.device_errors import (
+        DEVICE_CLI_ERROR_MARKERS as _CLI_ERROR_MARKERS,
+        has_cli_error as _has_cli_error_shared,
+    )
+except Exception:  # pragma: no cover - 独立 spec 加载场景
+    _has_cli_error_shared = None
+    _CLI_ERROR_MARKERS = (
+        "% invalid",
+        "% error",
+        "% unknown",
+        "% unrecognized",
+        "syntax error",
+        "invalid input",
+        "command not found",
+        "failed to execute",
+    )
+
 
 class APVSSHClient:
     """APV/InfosecOS 负载均衡器 SSH 交互客户端"""
@@ -206,12 +228,12 @@ class APVSSHClient:
 
     @staticmethod
     def _has_cli_error(output: str) -> bool:
-        """检测 CLI 输出中的错误关键字"""
+        """检测 CLI 输出中的错误关键字（收口到共享 device_errors，独立加载时本地回退）。"""
+        if _has_cli_error_shared is not None:
+            return _has_cli_error_shared(output)
+        # 本地回退：与 device_errors.DEVICE_CLI_ERROR_MARKERS + has_caret_error 同义。
         text = output.strip().lower()
-        if any(kw in text for kw in (
-            "% invalid", "% error", "% unknown", "% unrecognized",
-            "syntax error", "invalid input", "command not found",
-        )):
+        if any(kw in text for kw in _CLI_ERROR_MARKERS):
             return True
         for line in output.strip().splitlines():
             s = line.strip()

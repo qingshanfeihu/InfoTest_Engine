@@ -33,10 +33,13 @@ _E_MARKERS = (
     "0 servers", "no such host", "address not found",
 )
 # G 错信号：命令骨架/配置层面（命令没被接受、配置未生效）。
+# 命令/参数层新措辞与共享 device_errors 同义（勿加裸 "not found"，会与
+# _E_MARKERS 的 "address not found" 抢且过宽）。
 _G_MARKERS = (
     "invalid command", "syntax error", "unknown command", "incomplete command",
     "command not found", "configuration failed", "not configured", "未生效",
     "% error", "ambiguous",
+    "failed to execute", "not support", "% invalid input", "query type not found",
 )
 
 

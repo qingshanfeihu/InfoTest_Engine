@@ -104,6 +104,14 @@ main/ist_core/tools/
 
 user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 
+### skill/agent prompt 编写红线
+
+写 skill/agent 的 `.md` prompt 时：
+
+- **只陈述事实与现象，让 LLM 据此自己判断、行动；不写指令/否定**。禁用「必须 / 务必 / 不要 / 不自己推断 / 原样转达 / 不可只甩」这类指令性、否定式措辞。例：写「某 case 的 CUT 原因 = `rounds` 末轮的 `feedback_full`」，而非「必须复述、不许自己编归因」。
+- **零写死领域命令**：prompt 里不出现具体设备命令（如 `show statistics sdns pool` / `Hit:N` / 具体 sdns 语法）；该探/该断言哪条命令，靠 LLM 查手册/先例/footprint 得出。
+- **不写死答案与具体例子**：不给「应改成 X」式的具体命令例子——LLM 会把它当通用规则一刀切套用、误伤异类。实证：grade 重做意见写死「算法类 case 补 `show statistics`」→ GA 算法本该用 `dig` 验证命中、却被迫套 `show statistics` 写出 `Hit:\d+` 恒真断言 → 3 个 GA case 连续 CUT escalate（回归）。
+
 ## main 子包结构
 
 | 子包 | 职责 | 模块 |

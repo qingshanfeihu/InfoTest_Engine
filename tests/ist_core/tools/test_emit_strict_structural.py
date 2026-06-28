@@ -7,7 +7,9 @@ import json
 from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
 
 _DANGLING = [
-    {"E": "APV_0", "F": "cmd_config", "G": "sdns listener 172.16.34.200"},
+    # cmds_config(多条)框架遍历不收返回 → result=None → found(None) 抛 TypeError 崩整份文件 = 真
+    # dangling。(单条 cmd_config 返回 output 非 None、不崩——见 test_structural_gate 正向用例)
+    {"E": "APV_0", "F": "cmds_config", "G": "sdns listener 172.16.34.200"},
     {"E": "check_point", "F": "found", "G": "172.16.34.200"},
 ]
 

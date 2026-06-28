@@ -575,7 +575,8 @@ class DreamTask:
                     user_prompt,
                     model=model,
                     base_url=base_url,
-                    max_tokens=8192,
+                    # 16384：strict schema 填全字段输出更冗长，放大保底避免 max_tokens 截断（与 backfill 一致）。
+                    max_tokens=16384,
                     temperature=0.1,
                     top_p=0.1,
                     tool=tool,

@@ -391,7 +391,11 @@ def get_subagent_runnable(name: str) -> Any | None:
 
         model_name = spec["model"]
         model_tier = _MODEL_MAP.get(model_name, model_name)
-        model = build_agent_chat_model(model=ist_core_tier_model(model_tier))
+        # fork LLM 强制非流式：fork 子流程不进 TUI 流式渲染,而流式遇不稳定网关会周期发空 chunk
+        # → httpx 每 chunk 重置读超时 → 整体响应永不完成(0% CPU 死挂、draft 卡满墙钟)。非流式是
+        # 单次请求 + 干净 request_timeout,遇 stall 按时超时重试,不无限挂。主 TUI 流式不受影响。
+        model = build_agent_chat_model(
+            model=ist_core_tier_model(model_tier), streaming=False, stream_usage=False)
 
         tools = _resolve_tools(spec["tools_spec"])
 
@@ -549,6 +553,37 @@ def _short_fork_args(args: Any, limit: int = 48) -> str:
     return ""
 
 
+# compile_score 等工具返回 indent=2 的 pretty JSON(首行只有 `{`)——_short_fork_result 旧逻辑取
+# 首行只会显示 `{`,评分详情(overall/decision)全丢。下面把 JSON 压成单行关键字段预览,跳过
+# tool/note/how_to_use 等噪声键(非领域命令),让 TUI 看到 `overall=0.0 decision=CUT… checkpoints[5]`。
+_JSON_NOISE_KEYS = {"tool", "note", "hint", "how_to_use", "arm"}
+
+
+def _json_one_line_preview(s: str, limit: int) -> str:
+    """JSON 工具返回压成单行关键字段预览;非合法 JSON(如 run_python 的 py repr)回退纯压平兜底。"""
+    import json
+    try:
+        obj = json.loads(s)
+    except Exception:  # noqa: BLE001 — 非合法 JSON → 压平兜底(顺带优雅处理 py repr)
+        flat = " ".join(s.split())
+        return flat[:limit] + ("…" if len(flat) > limit else "")
+    if isinstance(obj, dict):
+        parts = []
+        for k, v in obj.items():
+            if k in _JSON_NOISE_KEYS:
+                continue
+            if isinstance(v, (bool, int, float, str)):
+                parts.append(f"{k}={v}")
+            elif isinstance(v, list):
+                parts.append(f"{k}[{len(v)}]")
+            elif isinstance(v, dict):
+                parts.append(f"{k}{{…}}")
+        out = " ".join(parts) if parts else " ".join(s.split())
+    else:   # 顶层数组
+        out = f"[{len(obj)}项] " + " ".join(s.split())
+    return out[:limit] + ("…" if len(out) > limit else "")
+
+
 def _short_fork_result(content: Any, limit: int = 140) -> str:
     """把工具结果压成单行简洁预览,带上**实质内容**而不只是节点标识。
 
@@ -568,6 +603,8 @@ def _short_fork_result(content: Any, limit: int = 140) -> str:
     s = str(content or "").strip()
     if not s:
         return ""
+    if s[:1] in ("{", "["):          # JSON 工具返回(compile_score 等 pretty JSON)→ 关键字段单行预览
+        return _json_one_line_preview(s, limit)
     # 跳过工具自带的头部横幅/分隔线 + 元数据标签行,抓第一行**真内容**(如 dev_probe 的设备回显)。
     # dev_probe 格式:`=== dev_probe ===` / `command: {cmd}` / `--- 设备回显 ---` / `{真实输出}`
     # —— 不跳 `command:` 就只会显示命令回显而非设备响应(用户要看的是"查到什么")。
@@ -666,7 +703,8 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str) -> dict
     return final_state
 
 
-def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "") -> str:
+def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
+                       summary_sink: dict | None = None) -> str:
     """执行 fork skill 的定义逻辑。
 
     流程：
@@ -678,6 +716,11 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "") -> st
     5. 返回 subagent 最终 AIMessage text
 
     关键：subagent 的 system_prompt 来自 agents/<agent>.md，SKILL.md body 是任务。
+
+    summary_sink（可选）：传入一个 dict，fork 成功完成后原地写入 _summarize_fork_messages
+    的结果（{ai_rounds, tool_results, tool_calls, search_queries}），供调用方聚合可观测
+    指标——compile_pipeline 用它统计每 case draft 的 dev_probe/kb_footprint 调用次数与
+    LLM 往返轮数（验证预检索是否真减少 LLM 调用/查找）。fork 异常/早退时清空，不污染调用方。
     """
     skill_file = _SKILLS_DIR / skill_name / "SKILL.md"
     if not skill_file.exists():
@@ -713,22 +756,31 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "") -> st
     try:
         result = _invoke_fork_streamed(runnable, rendered_body, _label)
     except Exception as exc:
-        # 递归上限是「已处理」的预期情况(compile_pipeline 会捕获 → CUT 重做),
-        # 只记简讯不打 traceback;其它异常才打完整栈。日志已统一进文件(TUI 不糊屏)。
+        # 递归上限是「已处理」的预期情况——compile_pipeline 会捕获后**立即 escalate**(不再做
+        # 3 轮等价重做:同 brief 必然同样递归 spin)。回带确定性标记 `[recursion-limit]` 让上层
+        # 据此分流;只记简讯不打 traceback,其它异常才打完整栈。日志已统一进文件(TUI 不糊屏)。
         if exc.__class__.__name__ == "GraphRecursionError":
-            logger.warning("Fork skill %s 触发递归上限(已处理:将 CUT 重做)", skill_name)
+            logger.warning("Fork skill %s 触发递归上限(立即 escalate,不做等价重做)", skill_name)
+            _err = f"[recursion-limit] {str(exc)[:120]}"
         else:
             logger.exception("Fork skill %s execution failed", skill_name)
+            _err = str(exc)[:120]
         _elapsed = time.monotonic() - _t0
-        _trace_fork(skill_name, brief, _elapsed, {}, error=str(exc)[:120])
+        _trace_fork(skill_name, brief, _elapsed, {}, error=_err)
         _record_fork_status(skill_name, agent_name, _elapsed, {}, ok=False,
-                            error=str(exc)[:300])
-        return f"ERROR: fork skill {skill_name!r} execution failed: {exc}"
+                            error=_err[:300])
+        if summary_sink is not None:
+            summary_sink.clear()   # 异常 fork 无可观测 tool_calls，清空防污染调用方
+        return f"ERROR: fork skill {skill_name!r} execution failed: {_err}"
 
     messages = result.get("messages", [])
     _elapsed = time.monotonic() - _t0
     _summary = _summarize_fork_messages(messages)
-    # 可观测性：落 fork 内部工具调用分布/轮数/耗时到 fork_trace.log
+    # 可观测性①：把 summary 回传给调用方（pipeline 聚合 per-case LLM 往返/工具调用次数）
+    if summary_sink is not None:
+        summary_sink.clear()
+        summary_sink.update(_summary)
+    # 可观测性②：落 fork 内部工具调用分布/轮数/耗时到 fork_trace.log
     _trace_fork(skill_name, brief, _elapsed, _summary)
     _dump_full_trace(skill_name, messages)  # IST_FORK_TRACE_FULL=1 时落完整思考
 

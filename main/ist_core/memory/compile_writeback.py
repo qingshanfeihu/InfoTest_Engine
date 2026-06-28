@@ -63,7 +63,7 @@ def _g_step_to_rawfact(step, autoid: str, manual_glob: str) -> RawFact | None:
         return None
     ref = step.source.ref or ""
     # evidence：footprint/skeleton 类用命令原文作 quote（merge 会在手册里找）；
-    # manual 类 ref 形如 "10.5_cli:1234"，evidence_file 取文件名部分。
+    # manual 类 ref 形如 "cli_10.5_Chapter11:1234"，evidence_file 取文件名部分。
     evidence_file = ""
     if step.source.kind == "manual" and ":" in ref:
         evidence_file = ref.split(":", 1)[0]

@@ -271,6 +271,7 @@ class APVSSHClient:
         if any(kw in text for kw in (
             "% invalid", "% error", "% unknown", "% unrecognized",
             "syntax error", "invalid input", "command not found",
+            "failed to execute",  # 设备统一失败裁决（不穷举业务措辞；"% Invalid input" 已被 "% invalid" 覆盖）
         )):
             return True
         for line in output.strip().splitlines():

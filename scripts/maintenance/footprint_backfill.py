@@ -28,7 +28,11 @@ from pathlib import Path
 
 logger = logging.getLogger("footprint_backfill")
 
-MAX_SLICE_CHARS = 6000           # 单批喂 LLM 的字符上限（含章节上下文）
+# 单批喂 LLM 的字符上限（含章节上下文）。批越密、命令越多 → LLM 输出越易逼近 max_tokens
+# 截断（实测 6000→单批最多 43 命令、completion ~7.9K 逼近 8192）。2500 ≈ 单批 ~15 命令、
+# completion ~3K，留足余量。（单遍漏命令的真根因是端点把 facts 数组 stringify，已靠
+# extractor.EXTRACTION_TOOL 的 strict:true 治本，此处只防 max_tokens 截断。）
+MAX_SLICE_CHARS = 2500
 MAX_WORKERS = 6                  # 并发 LLM 调用数（function_llm 自带 cache + retry）
 
 _CJK_RE = re.compile(r"[一-鿿]")
@@ -61,10 +65,14 @@ def _is_signature(line: str, *, bold_only: bool = False) -> bool:
     s = s.replace("**", "").replace("__", "").strip()
     if not s or _CJK_RE.search(s):
         return False
-    # bold_only（新手册按表1-1 用粗体标命令主体）：非粗体行是示例/输出/引用，不是命令定义，
-    # 不作签名锚（否则 "config file"/"write file" 等示例会被误切成命令）。
-    if bold_only and not had_bold:
-        return False
+    # 新手册（bold_doc，表1-1 用粗体标命令主体）：**粗体本身就是"这是命令"的确定性标记**——
+    # 凡「粗体 + 命令头 token」的非中文行即命令签名，不再额外要求记法或查询动词。否则一整类
+    # 命令在切片层就漏掉、LLM 永远看不到（strict 等下游修复够不着）：
+    #   ① 无参命令 disable/exit/quit/help/?/ha ssi on/off（首词非 show/clear/no/write/config）；
+    #   ② 记法前有空格或非字母开头的参数 `< host_name>`/`<1-4094>`（_NOTATION_RE 紧跟字母会挂）。
+    if bold_only:
+        return had_bold and bool(_CMD_HEAD_RE.match(s))
+    # 旧 MinerU（无粗体约定）：用记法/查询动词启发式，避免把示例/输出误切成命令。
     if not _CMD_HEAD_RE.match(s):
         return False
     if _NOTATION_RE.search(s):
@@ -93,7 +101,9 @@ def slice_manual(md_path: Path, rel_path: str) -> list[Chunk]:
     lines = md_path.read_text(encoding="utf-8").split("\n")
     # 自动检测：文档是否用 markdown 粗体约定标命令主体（新手册格式，表1-1）。
     # 是则只认粗体行为命令定义（剔除示例/输出等非粗体噪声行）；否则用纯文本启发式（MinerU 兼容）。
-    bold_doc = sum(1 for ln in lines if ln.lstrip().startswith("**")) >= 10
+    # 阈值取 3：小章节（Chapter7/16 各 ~6 命令）也要识别为 bold_doc，否则走旧启发式漏掉无参命令；
+    # 引言/附录（0-2 粗体、本无命令）仍判 False，不受影响。
+    bold_doc = sum(1 for ln in lines if ln.lstrip().startswith("**")) >= 3
     chunks: list[Chunk] = []
     section = ""
     cur: list[str] | None = None
@@ -122,16 +132,19 @@ def slice_manual(md_path: Path, rel_path: str) -> list[Chunk]:
 
 
 def pack_batches(chunks: list[Chunk]) -> list[list[Chunk]]:
-    """把同 source_file 的相邻片打包到 ≤MAX_SLICE_CHARS 的批次。
+    """把**同 source_file** 的相邻片打包到 ≤MAX_SLICE_CHARS 的批次。
 
-    同批共享章节上下文拼接；单片超限自成一批（不切碎命令）。
+    同批共享章节上下文拼接；单片超限自成一批（不切碎命令）。**强制单源**：source_file
+    变化即断批——render_batch 用 batch[0].source_file 作头/evidence_file 锚，混源批会让 LLM
+    把 A 章命令的 evidence_file 填成 B 章 → 证据门查错文件误丢。run_backfill 本就 per-chapter
+    调用此函数，这里再硬保证一次，杜绝调用方传混源 chunks 时静默错配。
     """
     batches: list[list[Chunk]] = []
     cur: list[Chunk] = []
     cur_len = 0
     for ch in chunks:
         clen = ch.char_len()
-        if cur and cur_len + clen > MAX_SLICE_CHARS:
+        if cur and (cur_len + clen > MAX_SLICE_CHARS or cur[-1].source_file != ch.source_file):
             batches.append(cur)
             cur, cur_len = [], 0
         cur.append(ch)
@@ -212,8 +225,10 @@ def build_backfill_llm():
             return chat_completion(
                 session, api_key,
                 system_prompt + _MANUAL_ADAPT_SUFFIX, user_prompt,
+                # 16384：mimo 1M 上下文，输出上限远不止 8192。strict schema 要求填全字段(含 null)
+                # 输出更冗长(实测密集批 completion 逼近 7K)，放大保底避免 max_tokens 截断丢整批。
                 model=model, base_url=base_url,
-                max_tokens=8192, temperature=0.1, top_p=0.1,
+                max_tokens=16384, temperature=0.1, top_p=0.1,
                 tool=tool,
             )
         except TruncationError:
@@ -245,8 +260,10 @@ def run_backfill(*, dry_run: bool = False, limit: int = 0,
 
     root = Path(__file__).resolve().parents[2]
     if manuals is None:
+        # 新固定手册：adoc→md 产出的章节制 CLI 手册（粗体命令约定，表1-1）。
+        # 旧 MinerU 切分 `10.5_cli__part*.md` 已归档至 .md_backup/，不再用。
         manuals = sorted(
-            (root / "knowledge/data/markdown/product").glob("10.5_cli__part*.md")
+            (root / "knowledge/data/markdown/product/manual_10.5").glob("cli_10.5_*.md")
         )
 
     # 切片 + 打包
@@ -320,16 +337,50 @@ def run_backfill(*, dry_run: bool = False, limit: int = 0,
     return stats
 
 
+def _backup_and_clear_nodes() -> Path | None:
+    """rebuild 前：把现有 nodes/*.json 备份到 .intermediate 带时间戳目录后清空。
+
+    返回备份目录（无节点可备份时返回 None）。清空保证全量重建从干净状态起，
+    existing_facts 为空 → fact_key 全新生成，不与旧数据交叉污染。
+    """
+    import shutil
+    from datetime import datetime
+    from main import knowledge_paths as kp
+
+    nodes = kp.KNOWLEDGE_FOOTPRINTS_NODES
+    files = sorted(nodes.glob("*.json")) if nodes.exists() else []
+    if not files:
+        return None
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    bak = kp.KNOWLEDGE_INTERMEDIATE / "footprint_nodes_backup" / ts
+    bak.mkdir(parents=True, exist_ok=True)
+    for f in files:
+        shutil.copy2(f, bak / f.name)
+        f.unlink()
+    logger.info("rebuild: 已备份 %d 节点 → %s 并清空 nodes/", len(files), bak)
+    return bak
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="footprint 文法补全（手册 → footprint 树）")
     parser.add_argument("--dry-run", action="store_true", help="只切片统计，不调 LLM")
     parser.add_argument("--limit", type=int, default=0, help="只跑前 N 批（调试）")
+    parser.add_argument(
+        "--rebuild", action="store_true",
+        help="全量重建：先备份现有 nodes 到 .intermediate/footprint_nodes_backup/<ts> 再清空，"
+             "然后从空树重抽（默认是增量补全，复用 existing 仅追加新事实）",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    if args.rebuild and not args.dry_run:
+        bak = _backup_and_clear_nodes()
+        print(f"[rebuild] 已备份旧节点到 {bak} 并清空 nodes/" if bak
+              else "[rebuild] nodes/ 已空，直接全量生成")
 
     stats = run_backfill(dry_run=args.dry_run, limit=args.limit)
     print("\n=== footprint backfill 统计 ===")

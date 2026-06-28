@@ -71,12 +71,31 @@ def _resolve_evidence_path(evidence_file: str) -> Path | None:
     return None
 
 
+_BR_RE = re.compile(r"<br\s*/?>")
+
+# CJK 字符相邻的空白是排版/硬换行产生的，**不是词边界**（中文词间无空格）。手册把一句话
+# 硬换行成多行（如 "类型的DNS" 换行后接 "解析请求"），" ".join(s.split()) 把换行归一成空格
+# → "DNS 解析"，而 LLM 引的是连续句 "DNS解析" → 失配；长 quote 跨换行点被切成两段、均 <60%
+# 覆盖率 → rule/behavior 被证据门假阴性丢弃。比对前删掉 CJK 相邻空白即可对齐（英文词间空格如
+# "Canonical Name" / "show version" 因两侧非 CJK 而保留，不受影响）。
+# 范围：CJK 标点 U+3000-303F、扩展A U+3400-4DBF、统一表意 U+4E00-9FFF、全角符号 U+FF00-FFEF。
+_CJK_RANGE = "\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef"
+_CJK_SPACE_RE = re.compile(rf"(?<=[{_CJK_RANGE}])\s+|\s+(?=[{_CJK_RANGE}])")
+
+
 def _normalize(s: str) -> str:
-    """归一化引号、行号、空白，便于子串匹配。"""
+    r"""归一化行号、省略号、`<br>`/硬换行、markdown 强调、空白，便于子串匹配。
+
+    手册参数表/注意段用 `<br>` 软换行、正文用硬换行 `\n` 把一句话拆成多段，LLM 引用的是
+    清洗后的连续句 → 原文最长连续逐字命中 <60% → rule/behavior 被证据门假丢弃。比对前把
+    `<br>`/`**` 规整掉、并删除 CJK 相邻空白(中文换行非词边界)，碎句才能与连续 quote 对齐。
+    """
     s = _LINE_PREFIX_RE.sub("", s)
     s = _ELLIPSIS_RE.sub("", s)
-    s = s.replace("　", " ")
-    return " ".join(s.split())
+    s = _BR_RE.sub("", s)          # <br> 软换行直接接上(中文无词间空格,LLM 引的是连续句)
+    s = s.replace("**", "").replace("　", " ")
+    s = " ".join(s.split())        # 多空白(含硬换行 \n)→单空格
+    return _CJK_SPACE_RE.sub("", s)  # 删 CJK 相邻空白(硬换行非词边界;英文词间空格保留)
 
 
 import math
@@ -127,18 +146,22 @@ def _evidence_supports(fact) -> bool:
     except OSError:
         return False
 
-    quote = _normalize(fact.evidence_quote)
-    if not quote:
-        return False
-
     haystack_norm = _normalize(haystack)
 
-    
-    if quote in haystack_norm:
+    quote = _normalize(fact.evidence_quote)
+    if quote and (quote in haystack_norm or _covers_quote(quote, haystack_norm)):
         return True
 
-    
-    return _covers_quote(quote, haystack_norm)
+    # cli_command 兜底：LLM 的 quote 偶尔整体改写不达标,但命令本身是 ground truth——
+    # 命令主体的粗体签名 `**cmd**` 逐字在手册原文里 → 命令真实存在(非编造),放行。
+    # 修掉「命令明明在手册、却因 LLM quote 改写被整条毙掉」的门误拒(单遍漏命令的一个原因)。
+    if getattr(fact, "fact_kind", "") == "cli_command":
+        cmd = (getattr(fact, "cli_syntax", "") or "").strip()
+        body = re.split(r"[<\[{]", cmd)[0].strip()
+        if body and _normalize(f"**{body}**") in haystack_norm:
+            return True
+
+    return False
 
 
 def _now_iso() -> str:

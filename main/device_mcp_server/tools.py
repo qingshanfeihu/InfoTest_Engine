@@ -652,7 +652,14 @@ def probe_show(command, build=""):
 
         _read_until("#", timeout=5)
         chan.send("enable\n")
-        _read_until("#", timeout=5)
+        # enable 后设备提示输 Enable 密码（手册：**缺省为空**）。必须补发（空）密码才能从用户级
+        # `APV>` 进特权级 `APV#`；否则停在 `APV>`，show sdns 等特权命令全报 `^` 语法错误、被下方
+        # 包装成 "Invalid input" 误判为"设备无此命令"（实测根因：show version 用户级可用故 probe
+        # 伪装成功，show sdns 用户级无效）。对齐框架 ssh_apv.py enter_enable_mode 的密码处理。
+        _eo = _read_until("#", timeout=5)
+        if "assword" in _eo.lower() or not re.search(r"#\s*$", _eo.rstrip()):
+            chan.send("\n")   # 空 Enable 密码
+            _read_until("#", timeout=5)
         # 关闭分页避免 --More-- 卡死（show 命令前置）
         chan.send("terminal length 0\n")
         _read_until("#", timeout=3)

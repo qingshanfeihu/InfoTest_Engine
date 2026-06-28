@@ -21,14 +21,27 @@ def test_command_head_tokens_strips_prefix_and_values():
 
 
 def test_dangling_assertion_detected_when_no_observation():
-    # check_point 紧跟在写配置后 → 无观测回显 → 悬空
+    # check_point 紧跟在 cmds_config(多条配置,框架遍历不收返回 → result=None)后 → found(None)
+    # 抛 TypeError 崩整份文件 = 真 dangling。(单条 cmd_config 返回 output 非 None、不崩,见下方正向用例)
     steps = [
-        {"E": "APV_0", "F": "cmd_config", "G": "sdns listener 172.16.34.70"},
+        {"E": "APV_0", "F": "cmds_config", "G": "sdns listener 172.16.34.70"},
         {"E": "check_point", "F": "found", "G": "172.16.34.70"},
     ]
     res = check_structural_constraints("c1", steps)
     assert not res.ok
     assert any(v.code == "dangling_assertion" for v in res.violations)
+
+
+def test_single_cmd_config_failure_echo_not_dangling():
+    # 单条 cmd_config(apv_ssh.py:151 `return output`)即使失败也回显错误文字(非 None)——框架 result
+    # 可被 found re.search、不抛 TypeError、不崩。994957「10 pool 上限」断言 found "A maximum of 10"
+    # 正挂在失败 cmd_config 回显上,合法、非 dangling(锁住 problem12 修复不被回退)。
+    steps = [
+        {"E": "APV_0", "F": "cmd_config", "G": "sdns host pool autotest.com p11"},
+        {"E": "check_point", "F": "found", "G": "A maximum of 10"},
+    ]
+    res = check_structural_constraints("c1", steps)
+    assert not any(v.code == "dangling_assertion" for v in res.violations)
 
 
 def test_assertion_ok_when_preceded_by_observation():

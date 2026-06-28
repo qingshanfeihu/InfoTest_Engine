@@ -1,6 +1,6 @@
 ---
 name: ist_compile
-description: "把人工测试用例（脑图 / txt）编译成自动化 case.xlsx 的编排链。一次调用确定性流水线 compile_pipeline 跑完 prep→draft 并发→grade 并发→合并，draft 旁挂三层 Provenance IR、grade 验来源不重 grep。编译新用例时用。"
+description: "把人工测试用例（脑图 / txt）编译成自动化 case.xlsx 的编排主入口：一次调用确定性流水线 compile_pipeline 跑完解析→草稿→审批→合并打包。当用户要「编译用例」「把脑图/txt 转成 case.xlsx / excel」「用例编译」「编译这批脑图」，或拿到人工脑图用例想生成可上机的自动化 excel 时用。涉及脑图转 excel、txt 转用例、批量编译用例之类的需求都走这里。"
 context: inline
 user-invocable: true
 source: hand
@@ -21,7 +21,7 @@ when_to_use: |
 
 编译序列（prep→draft 并发→grade 并发→合并）是**固定的，已锁进 `compile_pipeline` 工具**——你不自己拆步调 `compile_prep` / `compile_fanout` / `compile_emit_merged`。流水线内部派两个**严格有序**的 fork 子流程，各有自己的流程纪律：
 
-- **`ist_compile_draft`**（生成草稿）：先探明设备真实行为 → 再设计 G→E→V 断言。详见 `ist_compile_draft/SKILL.md`。
+- **`ist_compile_draft`**（生成草稿）：先读 brief 内联的预检索先例/footprint → 缺口才 probe/查 → 再设计 G→E→V 断言。详见 `ist_compile_draft/SKILL.md`。
 - **`ist_compile_grade`**（语义审批）：先验 draft 记的来源 → 再判断言覆盖度。详见 `ist_compile_grade/SKILL.md`。
 
 **本 skill 只产 excel，不上机。** 上机复验（采框架真实裁决 + 四层归因 + 回填 `<RUNTIME>`）走独立的 `ist_verify`。
@@ -60,7 +60,9 @@ compile_pipeline(mindmap_path="<脑图.txt>", product_version="<版本，如 10.
 
 每脑图一行：excel 路径 + case 数（done / escalated）。非交互（`infotest -p`）直接报完成；交互模式可问用户是否要 `ist_verify` 上机复验。
 
-**Success criteria**: 每脑图一行（excel 路径 + done/escalated 数）。
+**escalated 每条带 `rounds`**（grade 各轮的裁定 + 完整理由 `feedback_full`）。某 autoid 的 CUT 原因即其 `rounds` 末轮的 `feedback_full`；`suspect_spec_conflict=True` 表示 grade 某轮判了 `根因：用例预期冲突`。汇报逐条给出 autoid 及其 CUT 原因。
+
+**Success criteria**: 每脑图一行（excel 路径 + done/escalated 数）；每条 escalated 带原因摘要，疑似预期冲突的带人工核对提示。
 
 ## Quick Reference
 
@@ -83,4 +85,4 @@ compile_pipeline(mindmap_path="<脑图.txt>", product_version="<版本，如 10.
 
 - **上机解耦**：本 skill 只产 excel，不调 `dev_run_batch` / run。上机走 `ist_verify`。
 - **不做意图族摊销 / 族骨架**（实测负收益，论文证明骨架层无稳健收益、收益在 grounding）。
-- **escalated 如实上报**（≤3 轮仍 CUT），不拿弱产物充数。
+- **escalated 如实上报**（≤3 轮仍 CUT），不拿弱产物充数——逐条带 autoid + grade 给的 CUT 原因（汇报细节见 Steps 2 汇报）。

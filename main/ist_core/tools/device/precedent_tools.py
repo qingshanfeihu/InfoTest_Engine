@@ -57,22 +57,45 @@ def _load_mirror_corpus() -> list[dict]:
                 ws = openpyxl.load_workbook(fp, data_only=True).active
             except Exception:  # noqa: BLE001
                 continue
-            rows = []
+            # 读全表：autoid 在 col1（18 位数字），case 标题在 col4，E/F/G 在 col5/6/7。
+            raw = []
             for r in range(29, ws.max_row + 1):
+                c1 = str(ws.cell(r, 1).value or "").strip()
                 E = str(ws.cell(r, 5).value or "").strip()
                 F = str(ws.cell(r, 6).value or "").strip()
                 G = str(ws.cell(r, 7).value or "").strip()
-                if E or F:
-                    rows.append({"E": E, "F": F, "G": G})
-            if not rows:
+                title = str(ws.cell(r, 4).value or "").strip()
+                aid = c1 if _re.fullmatch(r"\d{15,20}", c1) else ""
+                if aid or E or F:
+                    raw.append({"aid": aid, "E": E, "F": F, "G": G, "title": title})
+            if not raw:
                 continue
-            cfg = " ".join(r["G"] for r in rows if r["E"].startswith("APV") and r["G"])
-            # 返回**完整**链：APV 配置基线(含 sdns on / 启用 / 池法 等)+ show + 触发 + 断言。
-            # 旧版只留 show/method，把配置基线滤掉 → draft 看不到完整可用配置 → 拼出残缺配置
-            # (缺 sdns on 致服务不起、dig 零解析、断言全 fail)。基线必须原样可见,draft 才能照抄。
-            seq = [(r["E"], r["F"], r["G"]) for r in rows
-                   if r["E"] in ("test_env", "check_point", "time") or r["E"].startswith("APV")]
-            corpus.append({"fn": Path(fp).name, "cfg_tokens": _cmd_tokens(cfg), "seq": seq[:40]})
+            # **按 case 拆**：一个 xlsx 常塞多个 case（sdns_method 含 rr/wrr/ga 9 个）。整文件当一个
+            # entry + seq[:40] 截断，会把靠后的 case（wrr 在第 64 步、ga 更后）切掉，draft 检索对应
+            # 算法时看到的是错位的别的 case 形态（dongkl 算法类全 fail 的真根）。按 autoid 拆 → 每
+            # case 一个 entry，检索命中自己那条、内联自己的完整链（含该算法的统计断言）。
+            first_aid = next((i for i, x in enumerate(raw) if x["aid"]), len(raw))
+            preamble = [x for x in raw[:first_aid] if x["E"] or x["F"]]   # autoid 前的通用前置（初始化基线）
+            cases, cur = [], None
+            for x in raw[first_aid:]:
+                if x["aid"]:
+                    if cur:
+                        cases.append(cur)
+                    cur = {"aid": x["aid"], "title": x["title"], "rows": []}
+                if cur and (x["E"] or x["F"]):
+                    cur["rows"].append(x)
+            if cur:
+                cases.append(cur)
+            if not cases:   # 无 autoid 标记的老先例 → 整文件当一个 case，向后兼容
+                cases = [{"aid": "", "title": "", "rows": [x for x in raw if x["E"] or x["F"]]}]
+            for c in cases:
+                full = preamble + c["rows"]   # 每 case = 通用前置 + 该 case 步骤（配置基线完整、可照抄）
+                cfg = " ".join(x["G"] for x in full if x["E"].startswith("APV") and x["G"])
+                # 完整链：APV 配置基线(sdns on/启用/池法)+ show + 触发 + 断言，基线必须可见才能照抄。
+                seq = [(x["E"], x["F"], x["G"]) for x in full
+                       if x["E"] in ("test_env", "check_point", "time") or x["E"].startswith("APV")]
+                corpus.append({"fn": Path(fp).name, "autoid": c["aid"], "intent_self": c["title"],
+                               "cfg_tokens": _cmd_tokens(cfg), "seq": seq[:40]})
         _MIRROR_CORPUS_CACHE = corpus
         logger.info("mirror 先例语料已缓存: %d 个先例", len(corpus))
         return _MIRROR_CORPUS_CACHE
@@ -114,7 +137,13 @@ def _intent_tokens(text: str) -> set:
 
 
 def _intent_similarity(intent: str, intent_paths: list[str]) -> float:
-    """intent 与某 xlsx 的 intent_path 列表的最大词重叠相似度（Jaccard）。"""
+    """intent 与某先例意图的最大相似度——用**覆盖率（包含度）`|a∩q|/|a|`**，不是 Jaccard。
+
+    数学依据：先例意图 a（case 标题，~8 词）vs 脑图 intent q（~46 词）是**非对称**匹配——要量的是
+    "脑图覆盖了多少先例意图"，不是两边互相覆盖。Jaccard `|a∩q|/|a∪q|` 把分母放成并集、被 q 的长度
+    稀释（算法类金标准 title 100% 被脑图覆盖、Jaccard 却只 0.15~0.20、卡阈值不内联，是降阈值/回归的根）。
+    覆盖率 `|a∩q|/|a|` 直接量先例意图被脑图覆盖的比例（0.875~1.0），稳过阈值、无需脆弱调参。
+    """
     q = _intent_tokens(intent)
     if not q:
         return 0.0
@@ -123,7 +152,9 @@ def _intent_similarity(intent: str, intent_paths: list[str]) -> float:
         a = _intent_tokens(path)
         if not a:
             continue
-        sim = len(a & q) / len(a | q)
+        # 覆盖率：先例意图被脑图覆盖的比例（非对称包含度）。a 过短（<3 词）退回 Jaccard，防"删除"
+        # 这类一两个词的短标题碰巧落在脑图里就误判成 1.0。
+        sim = (len(a & q) / len(a)) if len(a) >= 3 else (len(a & q) / len(a | q))
         if sim > best:
             best = sim
     return best
@@ -187,6 +218,99 @@ def _resolve_xlsx(xlsx_path: str):
     return p if (p and Path(p).is_file()) else None
 
 
+def _retrieve_precedent_hits(my_config: str, intent: str, limit: int) -> tuple[list, set, str]:
+    """检索（与渲染解耦）：返回 (hits, my_toks, intent_clean)。
+
+    hits = [(score, cfg_sim, intent_sim, fn, seq)…] 按 score 降序。score = 融合排序分
+    （两轴都启用取等权和；只有一轴退化为该轴）——**结构化数值**，供阈值判定，免去从显示文本
+    正则抠分（旧 _precedent_best_score 只覆盖「意图X」「配置X+意图Y」，「相似度X」config-only 轴误判 0）。
+    两轴皆空 → ([], set(), '')。
+    """
+    my_toks = _cmd_tokens(my_config)
+    intent = (intent or "").strip()
+    if not my_toks and not intent:
+        return [], my_toks, intent
+    intent_index = _load_intent_index() if intent else {}
+    cands = []
+    # 用缓存语料（静态解析一次），每个先例按本次 query 实时算相似度。
+    for entry in _load_mirror_corpus():
+        a = entry["cfg_tokens"]
+        cfg_sim = (len(a & my_toks) / len(a | my_toks)) if (a and my_toks) else 0.0
+        # 意图轴:**case 级意图优先**（entry.intent_self = 该 case 的标题/描述）+ 整文件 intent_index 兜底。
+        # 治"整 xlsx 意图被同文件无关 case 稀释"——sdns_method 的 wrr 意图本被 rr/ga 拉低成 0.09，
+        # 按 case 拆 + case 级 intent 后，wrr query 对上 wrr case 的标题，intent_sim 不再被稀释。
+        intent_sim = 0.0
+        if intent:
+            paths = ([entry["intent_self"]] if entry.get("intent_self") else []) + intent_index.get(entry["fn"], [])
+            if paths:
+                intent_sim = _intent_similarity(intent, paths)
+        # 融合排序分:两轴都启用时取等权和;只有一轴时退化为该轴。
+        if my_toks and intent:
+            score = cfg_sim + intent_sim
+        elif intent:
+            score = intent_sim
+        else:
+            score = cfg_sim
+        if score <= 0:
+            continue
+        # 返回完整"触发→断言"步骤链(test_env 的 dig/触发 + check_point),不只摘断言——
+        # 否则 agent 看不到先例怎么触发的(如 A/AAAA 分查、多次触发),学不全做法。
+        cands.append((score, cfg_sim, intent_sim, entry["fn"], entry["seq"], entry.get("autoid", "")))
+    cands.sort(key=lambda x: -x[0])
+    return [c for c in cands[:limit] if c[0] > 0], my_toks, intent
+
+
+def _format_precedent_hits(hits: list, my_toks: set, intent: str) -> str:
+    """把 hits 渲染成 draft 可读的先例文本（触发→断言链 + 警示 + env_facts）。"""
+    axis = "config+intent 融合" if (my_toks and intent) else ("intent 意图轴" if intent else "config 结构轴")
+    out = [f"=== compile_precedent(按{axis}相似度排序;含完整触发→断言链)==="]
+    for score, cfg_sim, intent_sim, fn, seq, autoid in hits:
+        if my_toks and intent:
+            tag = f"配置{cfg_sim:.2f}+意图{intent_sim:.2f}"
+        elif intent:
+            tag = f"意图{intent_sim:.2f}"
+        else:
+            tag = f"相似度{cfg_sim:.2f}"
+        fn_show = f"{fn}[{autoid}]" if autoid else fn
+        out.append(f"\n先例 {fn_show}({tag})的触发→断言链:")
+        for e, f, g in seq:
+            # 多行 cmds_config 用**真换行**展示(缩进续行),draft 照抄即得真 \n——
+            # 切勿用 ⏎ 等替身字符:draft 会把字面替身抄进配置,框架按 \n 拆命令时整串变一条废命令。
+            g_show = g[:300].replace("\n", "\n        ")
+            out.append(f"  {e} {f}: {g_show}")
+    out.append("\n⚠ 照先例的**完整配置基线**写,别截断:先例里的启用/激活步(如 sdns on)、"
+               "数据中心/池法/监听器等基线步**一个都不能漏**——漏了设备服务起不来、dig 零解析、断言全 fail。"
+               "先例'怎么配(完整基线)+怎么触发(dig 类型/次数)+怎么断言'是配套的,照它整条链写。"
+               "期望值溯源到先例+手册;离线不可知的运行时值(dig 解析出的具体 IP 等)留 <RUNTIME>,别编。")
+    out.append("⚠ **命令格式逐字照抄最像的先例,只改值(IP/域名/名称),别改格式**:先例命令的"
+               "**引号、参数个数与顺序**是上机跑通的——它给某个参数加了双引号(如 `\"24\"`)你就照样加,"
+               "它没加你也别加;**绝不自己'规范化'引号、绝不发明先例没有的参数组合**(如先例只到掩码、"
+               "你别凭空加 query_type)。先例没覆盖的形态查 footprint/手册定格式,拿不准就留给上机 verify "
+               "用设备 `^` 报错/`show` 回显兜底校验——别自己猜一个会被设备拒的写法。")
+    # 契约:先例 G 列可能混有不可达示例 IP(1.1.1.1 等历史脏数据)。在同一返回里附上本测试床
+    # 真实可达集合,让你写 IP 时取真值,别照抄先例的示例 IP——emit 出口会按此校验,不可达必打回。
+    try:
+        from main.ist_core.tools._shared.env_facts import get_env_facts
+        facts = get_env_facts()
+        if facts.devices:
+            out.append("\n" + facts.summary_for_agent())
+    except Exception:  # noqa: BLE001
+        pass
+    return "\n".join(out)
+
+
+def precedent_best_and_text(my_config: str = "", intent: str = "", limit: int = 2) -> tuple[float, str]:
+    """供确定性预检索：返回 (最像先例的结构化排序分 = hits[0][0], 渲染文本)。无召回 → (0.0, "")。
+
+    替代从 compile_precedent 显示文本正则抠分——直接读结构化分，消掉 parser/formatter 跨文件
+    只对齐 2/3 格式 + 阈值在不同轴语义不一的脆弱点。
+    """
+    hits, my_toks, intent_clean = _retrieve_precedent_hits(my_config, intent, limit)
+    if not hits:
+        return 0.0, ""
+    return hits[0][0], _format_precedent_hits(hits, my_toks, intent_clean)
+
+
 @tool(parse_docstring=True)
 def compile_precedent(my_config: str, limit: int = 3, intent: str = "") -> str:
     """【先例检索】给你这个用例的配置/意图,返回最像的已验证先例当参考。
@@ -218,76 +342,16 @@ def compile_precedent(my_config: str, limit: int = 3, intent: str = "") -> str:
         return ("=== compile_precedent(基线臂:不提供先例) ===\n"
                 "本臂不检索已验证先例(对照实验 Arm-E)。请直接依据需求与通用知识生成,"
                 "不依赖同类先例的触发→断言形态。")
-    my_toks = _cmd_tokens(my_config)
-    intent = (intent or "").strip()
+    hits, my_toks, intent_clean = _retrieve_precedent_hits(my_config, intent, limit)
     # 向后兼容:config 与 intent 都空才报错;只要有一轴可用就检索（intent 轴治分布外）。
-    if not my_toks and not intent:
+    if not my_toks and not intent_clean:
         return ("error: my_config 与 intent 均为空——请传入你这个用例的关键配置命令"
                 "(配置对象/动作那几行),或传 intent(原始需求描述)走意图轴检索。")
-    intent_index = _load_intent_index() if intent else {}
-    cands = []
-    # 用缓存语料（静态解析一次），每个先例按本次 query 实时算相似度。
-    for entry in _load_mirror_corpus():
-        a = entry["cfg_tokens"]
-        cfg_sim = (len(a & my_toks) / len(a | my_toks)) if (a and my_toks) else 0.0
-        # 意图轴:该 xlsx 的脑图意图链与 intent 的文本重叠度
-        intent_sim = 0.0
-        if intent:
-            paths = intent_index.get(entry["fn"], [])
-            if paths:
-                intent_sim = _intent_similarity(intent, paths)
-        # 融合排序分:两轴都启用时取等权和;只有一轴时退化为该轴。
-        if my_toks and intent:
-            score = cfg_sim + intent_sim
-        elif intent:
-            score = intent_sim
-        else:
-            score = cfg_sim
-        if score <= 0:
-            continue
-        # 返回完整"触发→断言"步骤链(test_env 的 dig/触发 + check_point),不只摘断言——
-        # 否则 agent 看不到先例怎么触发的(如 A/AAAA 分查、多次触发),学不全做法。
-        cands.append((score, cfg_sim, intent_sim, entry["fn"], entry["seq"]))
-    cands.sort(key=lambda x: -x[0])
-    hits = [c for c in cands[:limit] if c[0] > 0]
     if not hits:
         return ("=== compile_precedent ===\n你的配置/意图在先例库里没有结构相近的先例(分布外/新类型)。\n"
                 "→ 没有现成范式可抄,你得自己查手册推断该测什么 + 上机验证;f() 会因无锚点给低置信,"
                 "做不出就诚实上报(escalate-when-stuck)。")
-    axis = "config+intent 融合" if (my_toks and intent) else ("intent 意图轴" if intent else "config 结构轴")
-    out = [f"=== compile_precedent(按{axis}相似度排序;含完整触发→断言链)==="]
-    for score, cfg_sim, intent_sim, fn, seq in hits:
-        if my_toks and intent:
-            tag = f"配置{cfg_sim:.2f}+意图{intent_sim:.2f}"
-        elif intent:
-            tag = f"意图{intent_sim:.2f}"
-        else:
-            tag = f"相似度{cfg_sim:.2f}"
-        out.append(f"\n先例 {fn}({tag})的触发→断言链:")
-        for e, f, g in seq:
-            # 多行 cmds_config 用**真换行**展示(缩进续行),draft 照抄即得真 \n——
-            # 切勿用 ⏎ 等替身字符:draft 会把字面替身抄进配置,框架按 \n 拆命令时整串变一条废命令。
-            g_show = g[:300].replace("\n", "\n        ")
-            out.append(f"  {e} {f}: {g_show}")
-    out.append("\n⚠ 照先例的**完整配置基线**写,别截断:先例里的启用/激活步(如 sdns on)、"
-               "数据中心/池法/监听器等基线步**一个都不能漏**——漏了设备服务起不来、dig 零解析、断言全 fail。"
-               "先例'怎么配(完整基线)+怎么触发(dig 类型/次数)+怎么断言'是配套的,照它整条链写。"
-               "期望值溯源到先例+手册;离线不可知的运行时值(dig 解析出的具体 IP 等)留 <RUNTIME>,别编。")
-    out.append("⚠ **命令格式逐字照抄最像的先例,只改值(IP/域名/名称),别改格式**:先例命令的"
-               "**引号、参数个数与顺序**是上机跑通的——它给某个参数加了双引号(如 `\"24\"`)你就照样加,"
-               "它没加你也别加;**绝不自己'规范化'引号、绝不发明先例没有的参数组合**(如先例只到掩码、"
-               "你别凭空加 query_type)。先例没覆盖的形态查 footprint/手册定格式,拿不准就留给上机 verify "
-               "用设备 `^` 报错/`show` 回显兜底校验——别自己猜一个会被设备拒的写法。")
-    # 契约:先例 G 列可能混有不可达示例 IP(1.1.1.1 等历史脏数据)。在同一返回里附上本测试床
-    # 真实可达集合,让你写 IP 时取真值,别照抄先例的示例 IP——emit 出口会按此校验,不可达必打回。
-    try:
-        from main.ist_core.tools._shared.env_facts import get_env_facts
-        facts = get_env_facts()
-        if facts.devices:
-            out.append("\n" + facts.summary_for_agent())
-    except Exception:  # noqa: BLE001
-        pass
-    return "\n".join(out)
+    return _format_precedent_hits(hits, my_toks, intent_clean)
 
 
 @tool(parse_docstring=True)

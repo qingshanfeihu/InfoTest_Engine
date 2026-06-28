@@ -35,6 +35,7 @@ def _detect_cli_error(contents: str) -> bool:
     if any(kw in lower for kw in (
         "% invalid", "% error", "% unknown", "% unrecognized",
         "syntax error", "invalid input", "command not found",
+        "failed to execute",  # 设备统一失败裁决（不穷举业务措辞；"% Invalid input" 已被 "% invalid" 覆盖）
     )):
         return True
 

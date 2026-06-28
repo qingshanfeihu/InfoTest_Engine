@@ -21,6 +21,7 @@ import re
 import requests
 from langchain_core.tools import tool
 
+from main.ist_core.tools.device.device_errors import has_cli_error
 from main.ist_core.tools.device.ssh import (
     _DENIED_METACHARS,
     _HIGH_RISK_COMMANDS,
@@ -192,21 +193,8 @@ def dev_rest(
 
     contents = data.get("contents", "")
 
-    # Detect CLI errors in response
-    has_error = False
-    if contents.strip():
-        lower = contents.lower()
-        if any(kw in lower for kw in (
-            "% invalid", "% error", "% unknown", "% unrecognized",
-            "syntax error", "invalid input", "command not found",
-        )):
-            has_error = True
-        # Check for caret on its own line
-        for line in contents.splitlines():
-            s = line.strip()
-            if s == "^" or (len(s) <= 3 and "^" in s):
-                has_error = True
-                break
+    # Detect CLI errors in response（收口到共享 device_errors）
+    has_error = has_cli_error(contents)
 
     status = "error" if has_error else "success"
 

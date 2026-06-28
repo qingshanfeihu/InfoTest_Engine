@@ -43,13 +43,13 @@ _TRANSIENT_BASE_SLEEP = 3.0
 # Fix A：单 fork 硬墙钟。实测端点 stall 时单个 draft fork 跑出 810/1004/1056s（流式下
 # request_timeout 不触发、ai_rounds=0 死挂），而 _CASE_DEADLINE_S 拦不住在飞 fork。看门狗
 # 把 fork 跑在独立线程、用 future.result(timeout) 放弃等待（挂死线程泄漏但数量受并发上限约束）。
-_FORK_WALLCLOCK_S = float(os.environ.get("IST_FORK_WALLCLOCK_S") or 300)
+_FORK_WALLCLOCK_S = float(os.environ.get("IST_FORK_WALLCLOCK_S") or 600)
 _FORK_WATCHDOG = _cf_mod.ThreadPoolExecutor(
     max_workers=int(os.environ.get("IST_FORK_WATCHDOG_WORKERS") or 64),
     thread_name_prefix="fork-wd")
 # Fix B：一个 fork（含其所有 transient 重试）的总墙钟上限。防 "Request timed out" 被判 transient
 # 后整 fork 重试 4 次 = 4×810s 放大。封顶重试之**和**，与 _FORK_WALLCLOCK_S（封顶单次）互补。
-_FORK_TRANSIENT_WALLCLOCK_S = float(os.environ.get("IST_FORK_TRANSIENT_WALLCLOCK_S") or 600)
+_FORK_TRANSIENT_WALLCLOCK_S = float(os.environ.get("IST_FORK_TRANSIENT_WALLCLOCK_S") or 1200)
 
 
 def _emit_progress(text: str) -> None:
@@ -97,7 +97,9 @@ def _grade_extract_facts(xp: Path, prov: Path) -> dict:
 
 # 低置信先例不内联(提速 + 去误导):召回最佳相似度 < 此阈值 → 视作"无好先例",不塞 7.5K 大块,
 # draft 回落到 footprint 自查(footprint 是手册事实,比烂先例更可靠)。算法类(ga/wrr)先例普遍只
-# 0.16(匹配差且常带错算法),listener/forward 类 0.4+(好匹配)——0.20 正好分界。env 可调。
+# 阈值 0.20：_intent_similarity 改用覆盖率（包含度 |a∩q|/|a|）后，有相关先例的 case score 都
+# 0.6~1.0（金标准意图被脑图覆盖），无相关先例的才 <0.2——0.20 现在干净地分「有/无相关先例」，不再像
+# Jaccard 时代把真金标准（被脑图长度稀释成 0.16~0.20）误挡在外。无需再为算法类降阈值（那是治标）。env 可调。
 import os as _os
 _PRECEDENT_MIN_SCORE = float(_os.environ.get("IST_PRECEDENT_MIN_SCORE", "0.20"))
 # 分数走 precedent_best_and_text 的**结构化排序分**(hits[0][0])，不再正则抠显示文本——
@@ -121,6 +123,12 @@ def _preretrieve_precedent(case: dict) -> str:
     if not intent:
         return ""
     try:
+        # my_config="" → 纯 intent_sim 召回（draft 此刻还没配命令）。算法类 intent_sim 偏低
+        # （0.16~0.20）但 top 召回的本就是含 `show statistics + Hit:N` 的算法金标准——只是卡在
+        # 0.20 阈值之下、被挡在内联之外（dongkl 算法类拿不到金标准、退而用 dig 点断言、statistics=0
+        # 的真根）。注意：用 intent 充 my_config 会让 cfg_sim 被脑图里"算法/域名/method"等词误匹配到
+        # 无 statistics 的 show/删除类 case、挤掉真金标准。所以保持 my_config=""，靠 _PRECEDENT_MIN_SCORE
+        # 放到 0.15 让算法类先例进得来。
         best, text = precedent_best_and_text(my_config="", intent=intent, limit=2)
     except Exception:  # noqa: BLE001
         return ""
@@ -500,18 +508,12 @@ def _parse_rootcause(out: str) -> str | None:
 def _build_escalate_reason(summary: str, rounds: list[dict]) -> dict:
     """缺陷②：把 escalate reason 升级为结构化 dict——如实回带各轮裁定 + 根因 + 完整反馈。
 
-    suspect_spec_conflict 判定：任一轮 rootcause=="用例预期冲突"，或连续 ≥2 轮同一根因
-    （重做仍同因，说明非 draft 质量问题）→ 疑似脑图预期与手册/实机冲突，需人工核对。
+    suspect_spec_conflict 仅当某轮 grade 明确判 rootcause=="用例预期冲突" 时为 True；其余
+    （含连续同因）一律 False——连续同因更可能是 draft 反复改不对，不据此推断脑图冲突，
+    让 main 直接复述 grade 各轮的 CUT 原因即可。
     """
     rcs = [r.get("rootcause") for r in rounds]
     suspect = ("用例预期冲突" in rcs)
-    if not suspect:
-        # 连续同因（去 None 后相邻相等）→ 也判疑似冲突
-        non_none = [c for c in rcs if c]
-        for i in range(1, len(non_none)):
-            if non_none[i] == non_none[i - 1]:
-                suspect = True
-                break
     return {"summary": summary, "rounds": rounds, "suspect_spec_conflict": suspect}
 
 
@@ -622,6 +624,8 @@ def _init_device_for_compile(result: dict) -> None:
         _emit_progress(f"⚠ init_device 跳过（FrameworkMCPClient 不可用：{exc}）")
         result["phases"].append("init_device: 跳过(client 不可用)")
         return
+    # 开始状态：串口 clear config all 同步阻塞 ~30s,先告知 TUI「在清设备」,免得看起来卡死。
+    _emit_progress("🧹 init_device：正在初始化设备（串口 clear config all + 配接口 IP，约 30s，请稍候）…")
     try:
         with FrameworkMCPClient() as client:
             # 只清编译 dev_probe 实际探的那台（device_index=0 = conf ssh_ips[0] = build 设备）。
@@ -640,7 +644,11 @@ def _init_device_for_compile(result: dict) -> None:
         return
     n = res.get("initialized", 0) if isinstance(res, dict) else 0
     tot = res.get("total", 0) if isinstance(res, dict) else 0
-    _emit_progress(f"🧹 init_device：清干净 {n}/{tot} 台设备（clear config all + 配 IP）→ draft 探针见干净态")
+    # 执行动作摘要：从 init_one 的 log（login done → clear done → ip done）回传,让 TUI 看到清了什么。
+    details = res.get("details", []) if isinstance(res, dict) else []
+    _log0 = (details[0].get("log") or []) if details and isinstance(details[0], dict) else []
+    _action = " → ".join(_log0) if _log0 else "clear config all + 配 IP"
+    _emit_progress(f"🧹 init_device：清干净 {n}/{tot} 台（{_action}）→ draft 探针见干净态")
     result["phases"].append(f"init_device: {n}/{tot} 台清干净")
 
 
@@ -928,6 +936,7 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
             _emit_progress(f"⛓ merge：{len(merged_cases)} 个 case 合并打包 → {out_name}/case.xlsx")
             merge_out = compile_emit_merged.invoke(
                 {"cases_json": json.dumps(merged_cases, ensure_ascii=False), "out_name": out_name})
+            _emit_progress(f"✓ merge 完成：{len(merged_cases)} 个 case 已合并 → {out_name}/case.xlsx")
             result["phases"].append(f"merge: {len(merged_cases)} cases → {out_name}/case.xlsx")
             result["merge_output"] = merge_out[:300]
     return result

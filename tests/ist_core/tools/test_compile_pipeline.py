@@ -73,7 +73,7 @@ def test_pipeline_per_case_no_barrier(monkeypatch):
 
     # execute_fork_skill(skill, brief)：draft brief 含"需求："→落 xlsx 返回路径；
     # grade brief 含"xlsx_path="→返回 PASS。
-    def fake_fork(skill, brief, tag=""):
+    def fake_fork(skill, brief, tag="", summary_sink=None):
         if skill == "ist_compile_draft":
             # 从 brief 提 autoid
             aid = brief.split("autoid=")[1].split("，")[0].strip()
@@ -104,6 +104,64 @@ def test_pipeline_per_case_no_barrier(monkeypatch):
     assert not res["escalated"]
 
 
+def test_pipeline_observability_aggregates_llm_and_tool_calls(monkeypatch):
+    """Phase 0：pipeline 聚合每 case draft/grade fork 的 LLM 往返 + 工具调用次数。
+
+    mock 的 execute_fork_skill 经 summary_sink 回传可观测指标（模拟真 fork 的统计），
+    验证 result['observability'] 汇总正确——这是「预检索是否真减少 LLM 调用/查找」的度量。
+    """
+    root = CP._project_root()
+    outdir = root / "workspace" / "outputs" / "t_obs"
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "manifest.json").write_text(json.dumps({
+        "cases": [_case(), {**_case(), "autoid": "222", "title": "case2"}],
+        "groups": {},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    class _Fake:
+        def __init__(self, fn): self._fn = fn
+        def invoke(self, d): return self._fn(d)
+
+    def fake_fork(skill, brief, tag="", summary_sink=None):
+        if skill == "ist_compile_draft":
+            aid = brief.split("autoid=")[1].split("，")[0].strip()
+            cdir = root / "workspace" / "outputs" / aid
+            cdir.mkdir(parents=True, exist_ok=True)
+            _write_min_xlsx(cdir / "case.xlsx", aid)
+            if summary_sink is not None:   # draft fork：5 轮 LLM + probe/footprint 各几次
+                summary_sink.update({"ai_rounds": 5,
+                                     "tool_calls": {"dev_probe": 2, "kb_footprint": 3}})
+            return f"xlsx: {aid}"
+        if summary_sink is not None:       # grade fork：2 轮 LLM + 1 次 compile_score
+            summary_sink.update({"ai_rounds": 2, "tool_calls": {"compile_score": 1}})
+        return "判定：PASS"
+
+    prep_mod = importlib.import_module("main.ist_core.tools.device.compile_prep")
+    import main.ist_core.tools.device.emit_xlsx_tool as em
+    import main.ist_core.skills.loader as loader_mod
+    monkeypatch.setattr(prep_mod, "compile_prep", _Fake(lambda d: "ok"))
+    monkeypatch.setattr(em, "compile_emit_merged", _Fake(lambda d: "merged"))
+    monkeypatch.setattr(loader_mod, "execute_fork_skill", fake_fork)
+
+    res = CP._run_pipeline("x.txt", "10.5", "t_obs",
+                           draft_skill="ist_compile_draft", grade_skill="ist_compile_grade")
+    obs = res["observability"]["total"]
+    # 2 case，各 draft(ai=5)+grade(ai=2) → draft_llm=10 grade_llm=4 合计=14
+    assert obs["draft_llm_rounds"] == 10
+    assert obs["grade_llm_rounds"] == 4
+    assert obs["total_llm_rounds"] == 14
+    # 工具：dev_probe 2×2=4, kb_footprint 3×2=6, compile_score 1×2=2
+    assert obs["tool_calls"]["dev_probe"] == 4
+    assert obs["tool_calls"]["kb_footprint"] == 6
+    assert obs["tool_calls"]["compile_score"] == 2
+    assert set(res["observability"]["per_case"].keys()) == {"111", "222"}
+    # 渲染行：要削减的成本键(dev_probe/kb_footprint)排在普通工具前 + 进 phases
+    line = CP._format_observability(obs)
+    assert "dev_probe=4" in line and "kb_footprint=6" in line
+    assert line.index("dev_probe") < line.index("compile_score")
+    assert any("观测(LLM/查找成本" in p for p in res["phases"])
+
+
 def test_pipeline_escalates_after_max_rounds(monkeypatch):
     """grade 持续 CUT → ≤N 轮后 escalate，不进 merge。"""
     root = CP._project_root()
@@ -117,7 +175,7 @@ def test_pipeline_escalates_after_max_rounds(monkeypatch):
         def __init__(self, fn): self._fn = fn
         def invoke(self, d): return self._fn(d)
 
-    def fake_fork(skill, brief, tag=""):
+    def fake_fork(skill, brief, tag="", summary_sink=None):
         if skill == "ist_compile_draft":
             n_draft["n"] += 1
             aid = brief.split("autoid=")[1].split("，")[0].strip()
@@ -139,6 +197,110 @@ def test_pipeline_escalates_after_max_rounds(monkeypatch):
     assert res["done"] == []
     assert "111" in res["escalated"]
     assert n_draft["n"] == CP._MAX_REWORK_ROUNDS  # 重做到上限
+
+
+def _setup_single_case(monkeypatch, out_name, fake_fork):
+    """公共脚手架：单 case manifest + mock prep/merge/fork，返回 _run_pipeline 结果。"""
+    root = CP._project_root()
+    outdir = root / "workspace" / "outputs" / out_name
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "manifest.json").write_text(json.dumps({"cases": [_case()], "groups": {}},
+                                                     ensure_ascii=False), encoding="utf-8")
+
+    class _Fake:
+        def __init__(self, fn): self._fn = fn
+        def invoke(self, d): return self._fn(d)
+
+    prep_mod = importlib.import_module("main.ist_core.tools.device.compile_prep")
+    import main.ist_core.tools.device.emit_xlsx_tool as em
+    import main.ist_core.skills.loader as loader_mod
+    monkeypatch.setattr(prep_mod, "compile_prep", _Fake(lambda d: "ok"))
+    monkeypatch.setattr(em, "compile_emit_merged", _Fake(lambda d: "merged"))
+    monkeypatch.setattr(loader_mod, "execute_fork_skill", fake_fork)
+    return CP._run_pipeline("x.txt", "10.5", out_name,
+                            draft_skill="ist_compile_draft", grade_skill="ist_compile_grade")
+
+
+def test_draft_recursion_escalates_immediately_no_rework(monkeypatch):
+    """Fix E：draft 返回 [recursion-limit] → 恰好 1 次 draft 尝试即 escalate，不做 3 轮等价重做。"""
+    n_draft = {"n": 0}
+
+    def fake_fork(skill, brief, tag="", summary_sink=None):
+        if skill == "ist_compile_draft":
+            n_draft["n"] += 1
+            return ("ERROR: fork skill 'ist_compile_draft' execution failed: "
+                    "[recursion-limit] Recursion limit of 200 reached")
+        return "判定：PASS"
+
+    res = _setup_single_case(monkeypatch, "t_recursion", fake_fork)
+    assert res["done"] == []
+    assert "111" in res["escalated"]
+    assert n_draft["n"] == 1                      # 不再 _MAX_REWORK_ROUNDS 轮等价重做
+    reason = res["escalated"]["111"]
+    assert reason["rounds"][0]["verdict"] == "DRAFT_RECURSION"
+    assert "递归" in reason["summary"]
+
+
+def test_fork_wallclock_timeout_escalates_and_not_transient(monkeypatch):
+    """Fix A：单 fork 超 _FORK_WALLCLOCK_S → 返回 [fork-wallclock]、escalate；该标记非 transient。"""
+    import time as _t
+    monkeypatch.setattr(CP, "_FORK_WALLCLOCK_S", 0.2)
+    n_draft = {"n": 0}
+
+    def fake_fork(skill, brief, tag="", summary_sink=None):
+        if skill == "ist_compile_draft":
+            n_draft["n"] += 1
+            _t.sleep(1.0)                          # 超 0.2s 墙钟 → 看门狗放弃等待
+            return "xlsx: never"
+        return "判定：PASS"
+
+    res = _setup_single_case(monkeypatch, "t_wallclock", fake_fork)
+    assert res["done"] == []
+    assert "111" in res["escalated"]
+    assert n_draft["n"] == 1                      # wallclock 也立即 escalate，不重做
+    # [fork-wallclock] 标记不应被判 transient（否则会被 4× 重试放大）
+    from main.ist_core.resilience import is_transient_error
+    assert not is_transient_error(f"ERROR: [fork-wallclock] 超 {int(CP._FORK_WALLCLOCK_S)}s")
+
+
+def test_fork_run_token_propagates_into_watchdog_thread(monkeypatch):
+    """Fix A 回归红线：copy_context 把 _current_run_token 带进看门狗线程，dev_probe single-flight 不破。"""
+    from main.ist_core.tools.device import run_case
+    seen = {}
+
+    def fake_fork(skill, brief, tag="", summary_sink=None):
+        seen[skill] = run_case._current_run_token.get()   # 看门狗线程内读 contextvar
+        if skill == "ist_compile_draft":
+            aid = brief.split("autoid=")[1].split("，")[0].strip()
+            cdir = CP._project_root() / "workspace" / "outputs" / aid
+            cdir.mkdir(parents=True, exist_ok=True)
+            _write_min_xlsx(cdir / "case.xlsx", aid)
+            return f"xlsx: {aid}"
+        return "判定：PASS"
+
+    res = _setup_single_case(monkeypatch, "t_token", fake_fork)
+    assert res["done"] == ["111"]
+    assert seen.get("ist_compile_draft", "").startswith("run-")   # 非 None、是本 run token
+
+
+def test_transient_retry_capped_by_total_wallclock(monkeypatch):
+    """Fix B：transient ERROR 在总墙钟超时即停退，不跑满 _TRANSIENT_RETRIES+1 次。"""
+    monkeypatch.setattr(CP, "_FORK_TRANSIENT_WALLCLOCK_S", 0.0)   # 总墙钟立即到点
+    monkeypatch.setattr(CP, "_TRANSIENT_BASE_SLEEP", 0.0)
+    n_draft = {"n": 0}
+
+    def fake_fork(skill, brief, tag="", summary_sink=None):
+        if skill == "ist_compile_draft":
+            n_draft["n"] += 1
+            return "ERROR: fork skill 'ist_compile_draft' execution failed: Request timed out"
+        return "判定：PASS"
+
+    res = _setup_single_case(monkeypatch, "t_transcap", fake_fork)
+    # 每轮 _fork_call 因总墙钟=0 只做 1 次尝试（不再 transient 重试 4 次）；DRAFT_FAIL 走满 N 轮重做。
+    # 有 Fix B：N 轮 × 1 = N 次；无 Fix B：N 轮 × (4 重试+1) = N×5 次。断言落在前者。
+    assert n_draft["n"] == CP._MAX_REWORK_ROUNDS
+    assert n_draft["n"] < CP._MAX_REWORK_ROUNDS * (CP._TRANSIENT_RETRIES + 1)
+    assert "111" in res["escalated"]
 
 
 def _write_min_xlsx(path, autoid):

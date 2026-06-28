@@ -59,3 +59,68 @@ def test_trace_fork_never_raises(tmp_path, monkeypatch):
     importlib.reload(L)
     # 不抛异常即通过
     L._trace_fork("ist_compile_grade", "brief", 1.0, {"ai_rounds": 1, "tool_results": 0, "tool_calls": {}})
+
+
+def test_execute_fork_skill_populates_summary_sink(monkeypatch):
+    """execute_fork_skill 经 summary_sink 把 fork 的工具调用/轮数回传给调用方
+    （compile_pipeline 据此聚合 LLM/查找成本，验证预检索是否真减少调用）。
+    mock 掉真实 subagent 构建 + LLM 流式调用，不需 LLM/设备。"""
+    import main.ist_core.skills.loader as L
+
+    monkeypatch.setattr(L, "get_subagent_runnable", lambda name: object())
+    canned = {"messages": [
+        HumanMessage(content="task"),
+        AIMessage(content="", tool_calls=[
+            {"name": "dev_probe", "args": {"command": "show x"}, "id": "1"},
+            {"name": "kb_footprint", "args": {"command": "sdns"}, "id": "2"},
+        ]),
+        ToolMessage(content="r1", tool_call_id="1"),
+        ToolMessage(content="r2", tool_call_id="2"),
+        AIMessage(content="最终草稿路径 workspace/outputs/x/case.xlsx"),
+    ]}
+    monkeypatch.setattr(L, "_invoke_fork_streamed", lambda *a, **k: canned)
+
+    sink: dict = {}
+    out = L.execute_fork_skill("ist_compile_draft", "some brief", summary_sink=sink)
+    assert "case.xlsx" in out
+    assert sink.get("ai_rounds") == 2                      # 2 个 AIMessage
+    assert sink.get("tool_calls") == {"dev_probe": 1, "kb_footprint": 1}
+
+
+def test_execute_fork_skill_summary_sink_cleared_on_error(monkeypatch):
+    """fork 异常 → summary_sink 被清空，不把上一次的统计串味给调用方。"""
+    import main.ist_core.skills.loader as L
+
+    monkeypatch.setattr(L, "get_subagent_runnable", lambda name: object())
+
+    def _boom(*a, **k):
+        raise RuntimeError("fork blew up")
+
+    monkeypatch.setattr(L, "_invoke_fork_streamed", _boom)
+    sink: dict = {"stale": "data"}
+    out = L.execute_fork_skill("ist_compile_draft", "brief", summary_sink=sink)
+    assert out.startswith("ERROR:")
+    assert sink == {}                                      # 清空防污染
+
+
+def test_execute_fork_skill_marks_recursion_limit(monkeypatch):
+    """Fix E：GraphRecursionError → 返回串带确定性 [recursion-limit] 标记，
+    让 compile_pipeline 据此立即 escalate（不做 3 轮等价重做）。"""
+    import main.ist_core.skills.loader as L
+
+    monkeypatch.setattr(L, "get_subagent_runnable", lambda name: object())
+
+    class GraphRecursionError(Exception):   # 按类名匹配（loader 用 __class__.__name__）
+        pass
+
+    def _recurse(*a, **k):
+        raise GraphRecursionError("Recursion limit of 200 reached")
+
+    monkeypatch.setattr(L, "_invoke_fork_streamed", _recurse)
+    traced: dict = {}
+    monkeypatch.setattr(L, "_trace_fork",
+                        lambda skill, brief, el, summ, error="": traced.update({"error": error}))
+    out = L.execute_fork_skill("ist_compile_draft", "brief")
+    assert out.startswith("ERROR:")
+    assert "[recursion-limit]" in out                      # 上层据此分流
+    assert "[recursion-limit]" in traced.get("error", "")   # trace 也带标记

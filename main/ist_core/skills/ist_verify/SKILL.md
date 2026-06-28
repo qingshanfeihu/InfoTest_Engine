@@ -1,6 +1,6 @@
 ---
 name: ist_verify
-description: "把成品 case.xlsx 串行上机验证的编排链。先上机回填 draft 留空的 <RUNTIME> 断言（用设备真实输出锁死，不反复改），再采集框架真实裁决，用 compile_attribute 把每个 fail 做四层归因（G错 / E错 / V错 / 瞬态，论文 §5.4）按层定向回流——G/E/V 错带层级反馈回 ist_compile 重编对应层，瞬态不回流。上机真 PASS 的 case 把 G 段文法写回 footprint。只验已有 excel + 回填 <RUNTIME>，不重新生成 case。对已编译好的 excel 做上机验证 / 上机回填 / 四层归因 / 闭环写回时用。"
+description: "把已编译好的成品 case.xlsx 上机跑一遍：采集设备真实裁决、回填留空的 RUNTIME 断言、对失败做四层归因（G/E/V/瞬态）并按层交回 ist_compile 重编，真 PASS 的写回 footprint。只验已有 excel、不生成新用例。当用户说上机验证 / 上机复验 / verify 这个 case.xlsx / 上机跑一遍看结果 / 验证用例 / 跑通看看 / 按 G·E·V·瞬态归因 / 上机 PASS 写回 footprint，或想让已编译好的成品 excel 在设备上实跑确认时用本 skill。"
 context: inline
 user-invocable: true
 source: hand
@@ -14,6 +14,37 @@ when_to_use: |
 ---
 
 # 上机验证：串行上机 + 四层归因 + 回流交接
+
+## Quick Start
+
+对一份编译好的 `case.xlsx` 上机跑一遍最小调用：
+
+```python
+# 1. 首跑：整份 xlsx 单跑一次，拿逐 case 真实裁决 + device_context
+dev_run_batch(
+    xlsx_path="workspace/outputs/<脑图名>/case.xlsx",
+    autoids_json='["121100001","121100002"]',
+    module="<module>", build="<build>",
+)
+# 2. 若有 <RUNTIME> 待填：看槽位 → 从首跑设备真实输出抽值回填 → 复验
+compile_runtime_slots("workspace/outputs/<脑图名>/case.xlsx")
+compile_runtime_fill(xlsx_path=..., fills_json=..., run_meta=...)
+dev_run_batch(xlsx_path=..., autoids_json='[...]', module=..., build=...)  # 复验
+# 3. 仍 fail 的 → 四层归因；真 PASS 的 → 写回 footprint
+```
+
+整份 xlsx 单跑一次（deliver+run 合并），超时 `clamp(max(floor, N×45s), 600, 2400)`。**只验一遍即返回**，不自套"验到全过"循环。
+
+## Quick Reference
+
+| 阶段 | 工具 / 动作 | 关键约束 |
+|---|---|---|
+| 定位 | 确定 xlsx 路径 + autoids + build/module + provenance 路径 | provenance 缺失 → 归因退化、不写回 |
+| 首跑 | `dev_run_batch(xlsx_path, autoids_json, module, build)` | 含 `<RUNTIME>` 的 case 必 fail，属预期待填，先别归因 |
+| 回填 RUNTIME | `compile_runtime_slots` → `compile_runtime_fill` → 复验 `dev_run_batch` | 值只来自设备真实输出；填完即锁、不反复改；抽不出留空 |
+| 四层归因 | `compile_attribute(verdict_detail, failing_assertion_layer)` | 必基于 `device_context`/`framework_traceback`；瞬态单列不回流 |
+| 回流交接 | `invoke_skill(skill="ist_compile", brief=...)` 一次 | 修 case 唯一正路；绝不手调 `compile_*` 内部步、绝不 `fs_edit` xlsx |
+| 写回 footprint | provenance 取真 PASS 的 G 段文法回写（`on_device_passed=True`） | 只写 G 段命令文法；V/E/运行时值不写 |
 
 把**已编译好的** excel 串行上机一遍，采集框架真实裁决，回填 `<RUNTIME>`，对每个 fail 四层归因、按层 reflow 交给 `ist_compile` 重编。**只验一遍 + 交接修复**——不自己改 case（改归 `ist_compile`），也不自己套"验到全过"的迭代循环（迭代由上层：用户 / goal 循环驱动；本 skill 跑一遍即返回）。
 

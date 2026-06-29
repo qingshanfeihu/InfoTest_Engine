@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import time as _time
 import uuid
 from typing import Any, Callable, Iterable
 
@@ -25,14 +26,29 @@ from main.ist_core.events import EventBus, IstCoreEvent, reset_default_bus
 
 logger = logging.getLogger(__name__)
 
+# ---- idle timeout: 并发 monitor task，不复用 asyncio.wait_for 取消 __anext__() ----
+
+# 节点深度：on_chain_start +1, on_chain_end -1。>0 表示正"在 graph node 内部"同步执行。
+# agent.invoke() 同步跑时 astream_events 在图层面零事件——monitor 据此跳过 stall 判定。
+_NODE_DEPTH: int = 0
+
+# EventBus 心跳：_MainAgentProgressHandler 在任何线程 emit 事件时更新此时间戳。
+# monitor 同时检查 node_depth 和 bus 心跳，双重确认才判定 stall。
+_BUS_HEARTBEAT_TS: float = 0.0
+
+
+def _on_bus_heartbeat(_event: IstCoreEvent) -> None:
+    """EventBus 订阅回调：任何事件到达时更新心跳时间戳。"""
+    global _BUS_HEARTBEAT_TS
+    _BUS_HEARTBEAT_TS = _time.monotonic()
+
 
 _KIND_MAP: dict[str, str] = {
     "on_chain_start": "node_start",
     "on_chain_end": "node_end",
-    
-    
-    
-    
+
+
+
     "on_chat_model_start": "llm_start",
     "on_chat_model_stream": "llm_token",
     "on_chat_model_end": "llm_end",
@@ -56,13 +72,11 @@ def _to_event_payload(lc_event: dict[str, Any]) -> dict[str, Any]:
     if "input" in data:
         payload["input"] = _safe_str(data["input"])[:500]
     if "output" in data:
-        
-        
-        
-        
-        
-        
-        
+
+
+
+
+
         payload["output"] = _safe_str(data["output"])
     return payload
 
@@ -74,6 +88,39 @@ def _safe_str(obj: Any) -> str:
         return str(obj)
     except Exception:  # noqa: BLE001
         return "<unrepr>"
+
+
+async def _stall_monitor(
+    agen: Any,
+    idle_timeout: float,
+    poll_interval: float,
+    bus: EventBus,
+) -> None:
+    """并发 stall 监控：独立于主事件循环运行，定期检查是否真正 stall。
+
+    与 asyncio.wait_for 方案的关键区别：monitor 是旁路观察者，不取消 __anext__()
+    协程（取消会关闭 async generator）。只在确认 stall 时调用 agen.aclose() 通知
+    主循环退出——这是 generator 协议的合法关闭方式。
+    """
+    _ticks: int = 0
+    _max_ticks = max(1, int(idle_timeout / poll_interval))
+    while True:
+        await asyncio.sleep(poll_interval)
+
+        if _NODE_DEPTH > 0:
+            _ticks = 0
+            continue
+        if _time.monotonic() - _BUS_HEARTBEAT_TS < poll_interval + 10.0:
+            _ticks = 0
+            continue
+
+        _ticks += 1
+        if _ticks >= _max_ticks:
+            logger.error("stall_monitor: 触发 — 关闭 generator")
+            bus.emit("error", payload={"text": "运行超时：graph 事件总线与 LLM 端点均无任何事件，已中断"})
+            with contextlib.suppress(Exception):
+                await agen.aclose()
+            return
 
 
 async def astream_to_bus(
@@ -88,23 +135,28 @@ async def astream_to_bus(
     bus.emit("run_start", payload={"config": {"thread_id": (config or {}).get("configurable", {}).get("thread_id")}})
 
     final_state: dict[str, Any] = {}
+    global _NODE_DEPTH, _BUS_HEARTBEAT_TS
+    # 订阅 EventBus 心跳：EventBus 上任何事件都更新 _BUS_HEARTBEAT_TS。
+    bus.subscribe(_on_bus_heartbeat)
+    _BUS_HEARTBEAT_TS = _time.monotonic()
+    _NODE_DEPTH = 0
+    _monitor_task: asyncio.Task | None = None
     try:
         _agen = graph.astream_events(initial_state, config=config, version="v2")
         _idle = float(os.environ.get("IST_LLM_IDLE_TIMEOUT") or "300")
-        while True:
-            try:
-                ev = await asyncio.wait_for(_agen.__anext__(), timeout=_idle)
-            except StopAsyncIteration:
-                break
-            except asyncio.TimeoutError:
-                # idle 秒内 graph 零事件 = 端点 stall(thinking 流式空 chunk / 网关挂)→ 主动 abort。
-                # 等价 cc 的 AbortSignal.timeout:独立计时、到点强制中断,不被流式 chunk 反复重置
-                # (httpx read timeout 被空 chunk 重置 → 永不超时 → asyncio loop 死挂、Ctrl-C 不响应)。
-                with contextlib.suppress(Exception):
-                    await _agen.aclose()  # 传播 cancel → 底层 httpx 请求 abort
-                bus.emit("error", payload={"text": f"LLM 端点 {_idle:.0f}s 无任何事件,已中断(疑 thinking 流式空 chunk 死挂)"})
-                raise TimeoutError(f"LLM idle timeout {_idle:.0f}s — 端点 stall")
+        _POLL_INTERVAL = 60.0
+        # 启动并发 stall monitor：旁路检查，不参与事件消费，不取消 __anext__()
+        _monitor_task = asyncio.ensure_future(
+            _stall_monitor(_agen, _idle, _POLL_INTERVAL, bus)
+        )
+        # 主循环：async for 是最安全的消费方式，不会取消 __anext__()
+        async for ev in _agen:
             lc_kind = ev.get("event") or ""
+            # 追踪节点深度：on_chain_start 进入 node，on_chain_end 离开 node
+            if lc_kind == "on_chain_start":
+                _NODE_DEPTH += 1
+            elif lc_kind == "on_chain_end":
+                _NODE_DEPTH = max(0, _NODE_DEPTH - 1)
             mapped = _KIND_MAP.get(lc_kind, "info")
             tags = {"lc_event": lc_kind, "name": ev.get("name") or ""}
             metadata = ev.get("metadata") or {}
@@ -116,7 +168,7 @@ async def astream_to_bus(
                 um = getattr(data["output"], "usage_metadata", None)
                 if isinstance(um, dict):
                     usage = dict(um)
-                
+
                 rmeta = getattr(data["output"], "response_metadata", None) or {}
                 raw = rmeta.get("token_usage") or rmeta.get("usage") or {}
                 if isinstance(raw, dict):
@@ -135,11 +187,10 @@ async def astream_to_bus(
                     event_name = payload.get("event")
                     if isinstance(event_name, str):
                         tags["progress_event"] = event_name
-                        
+
                         if event_name in {"phase_marker", "evidence_added", "finding_emitted"}:
                             mapped = event_name
-                        
-                        
+
                         elif event_name == "tool_start":
                             mapped = "tool_call"
                             tool_name = payload.get("tool_name") or ""
@@ -153,7 +204,7 @@ async def astream_to_bus(
                             output_preview = payload.get("output_preview") or payload.get("output") or ""
                             payload = {"name": tool_name, "output": output_preview}
                         elif event_name == "thought":
-                            
+
                             mapped = "llm_end"
                             payload = {"name": "thought", "content": payload.get("content", "")}
                         elif event_name == "run_start":
@@ -167,7 +218,6 @@ async def astream_to_bus(
                             payload = {"error": payload.get("message", "")}
             bus.emit(mapped, payload=payload, tags=tags, usage=usage)
 
-            
             if lc_kind == "on_chain_end" and (ev.get("name") in ("LangGraph", "agent")):
                 out = data.get("output")
                 if isinstance(out, dict):
@@ -176,9 +226,12 @@ async def astream_to_bus(
         bus.emit("error", payload={"error": str(exc)})
         raise
     finally:
+        if _monitor_task is not None and not _monitor_task.done():
+            _monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await _monitor_task
         bus.emit("run_end", payload={})
 
-    
     if not final_state:
         try:
             final_state = graph.invoke(initial_state, config)
@@ -202,6 +255,6 @@ def stream_and_collect(
     try:
         return asyncio.run(astream_to_bus(graph, initial_state, config=config, bus=bus))
     except RuntimeError:
-        
+
         logger.warning("已有事件循环，退回到同步 invoke")
         return graph.invoke(initial_state, config)

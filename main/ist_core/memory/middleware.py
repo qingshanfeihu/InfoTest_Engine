@@ -337,6 +337,11 @@ class MemoryWriteMiddleware(AgentMiddleware):
                 return str(tid)
         except Exception:
             pass
+        import os as _os
+        user = _os.environ.get("IST_SSH_USER", "").strip()
+        session = _os.environ.get("IST_SESSION_ID", "").strip()
+        if user and session:
+            return f"{user}_{session}"
         return "default"
 
 

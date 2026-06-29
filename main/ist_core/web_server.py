@@ -2,7 +2,7 @@
 
 xterm.js 前端 + WebSocket PTY 后端：
 - / GET：xterm.js 终端页面（含登录 + 文件上传/下载按钮）
-- /api/login POST：验证用户
+- /api/login POST：验证用户（PG-backed SessionManager）
 - /api/upload POST：文件上传到沙箱
 - /api/files GET：列出 workspace/outputs/ 下可下载文件
 - /api/download GET：下载 workspace/outputs/ 中的文件
@@ -14,13 +14,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import fcntl
-import hashlib
-import hmac
 import json
 import logging
 import os
 import pty
-import secrets
 import signal
 import struct
 import sys
@@ -31,10 +28,11 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from main.ist_core.events import get_default_bus
+
 logger = logging.getLogger("ist_web")
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_USERS_FILE = _PROJECT_ROOT / "ssh_users.json"
 _SANDBOX = _PROJECT_ROOT / "workspace" / "inputs"
 _WEB_DIR = Path(__file__).resolve().parent / "web"
 _ALLOWED = {
@@ -45,9 +43,24 @@ _ALLOWED = {
 
 app = FastAPI(title="IST-Core Web Terminal")
 
-# token -> {"username", "role", "expires_at"}
-_sessions: dict[str, dict] = {}
-_SESSION_TTL_SEC = int(os.environ.get("IST_WEB_SESSION_TTL_SEC", str(8 * 3600)))
+# SessionManager 单例（延迟初始化）
+_session_mgr = None
+
+
+def _get_session_mgr():
+    global _session_mgr
+    if _session_mgr is None:
+        from main.ist_core.auth.session_manager import SessionManager
+        _session_mgr = SessionManager()
+    return _session_mgr
+
+
+def _validate_request(session_id: str, jwt_token: str) -> dict | None:
+    """校验请求：返回 {"username", "role", "session_id"} 或 None。"""
+    if not session_id or not jwt_token:
+        return None
+    return _get_session_mgr().validate_session(session_id, jwt_token)
+
 
 # 登录失败限流（按客户端 IP，滑动窗口）
 _login_attempts: dict[str, list[float]] = {}
@@ -58,57 +71,7 @@ _LOGIN_WINDOW_SEC = int(os.environ.get("IST_WEB_LOGIN_WINDOW_SEC", "300"))
 _MAX_UPLOAD_BYTES = int(os.environ.get("IST_WEB_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 
 # RBAC：仅这些角色可写（上传）。reviewer 只读。
-_WRITE_ROLES = {r.strip() for r in os.environ.get("IST_WEB_WRITE_ROLES", "admin").split(",") if r.strip()}
-
-_PBKDF2_ITERATIONS = 200_000
-
-
-def _load_users() -> dict[str, dict]:
-    if not _USERS_FILE.exists():
-        return {}
-    try:
-        data = json.loads(_USERS_FILE.read_text(encoding="utf-8"))
-        return {u["username"]: u for u in data.get("users", []) if u.get("enabled", True)}
-    except Exception:
-        return {}
-
-
-def _verify_password(user: dict, password: str) -> bool:
-    """恒定时间校验密码。
-
-    支持两种存储：
-    - ``password_hash``: ``pbkdf2_sha256$<iter>$<salt_hex>$<hash_hex>``（推荐）
-    - ``password``: 明文（向后兼容，登录时打 warning 提示尽快迁移）
-    """
-    stored_hash = user.get("password_hash")
-    if stored_hash:
-        try:
-            algo, iters, salt_hex, want_hex = stored_hash.split("$", 3)
-            if algo != "pbkdf2_sha256":
-                return False
-            dk = hashlib.pbkdf2_hmac(
-                "sha256", password.encode("utf-8"),
-                bytes.fromhex(salt_hex), int(iters),
-            )
-            return hmac.compare_digest(dk.hex(), want_hex)
-        except Exception:
-            return False
-    # 明文兜底（恒定时间比较，避免时序侧信道）
-    plain = user.get("password")
-    if plain is None:
-        return False
-    logger.warning(
-        "user %r authenticated via plaintext password; migrate to password_hash",
-        user.get("username", "?"),
-    )
-    return hmac.compare_digest(str(plain), password)
-
-
-def hash_password(password: str) -> str:
-    """生成 password_hash 字符串。供运维脚本 / 文档调用。"""
-    salt = secrets.token_bytes(16)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS)
-    return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${salt.hex()}${dk.hex()}"
+_WRITE_ROLES = {r.strip() for r in os.environ.get("IST_WEB_WRITE_ROLES", "admin,superadmin").split(",") if r.strip()}
 
 
 def _client_ip(request: Request | None) -> str:
@@ -129,25 +92,15 @@ def _record_failure(ip: str) -> None:
     _login_attempts.setdefault(ip, []).append(time.monotonic())
 
 
-def _new_session(username: str, role: str) -> str:
-    token = secrets.token_urlsafe(32)
-    _sessions[token] = {
-        "username": username,
-        "role": role,
-        "expires_at": time.time() + _SESSION_TTL_SEC,
-    }
-    return token
-
-
-def _resolve_session(token: str) -> dict | None:
-    """校验 token：不存在 / 过期 → None（过期顺手清理）。"""
-    sess = _sessions.get(token)
-    if not sess:
-        return None
-    if time.time() >= sess.get("expires_at", 0):
-        _sessions.pop(token, None)
-        return None
-    return sess
+def _ensure_env() -> None:
+    """加载项目根目录 environment 文件。"""
+    try:
+        from dotenv import load_dotenv
+        env_path = _PROJECT_ROOT / "environment"
+        if env_path.exists():
+            load_dotenv(env_path, override=False)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @app.post("/api/login")
@@ -158,28 +111,91 @@ async def login(body: dict, request: Request):
         raise HTTPException(status_code=429, detail="登录尝试过多，请稍后再试")
     username = body.get("username", "")
     password = body.get("password", "")
-    users = _load_users()
-    user = users.get(username)
-    if not user or not _verify_password(user, password):
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+
+    # 从 PG 查找用户
+    from main.ist_core.auth.db import pg_cursor
+    from main.ist_core.auth.password import verify_password
+    try:
+        with pg_cursor() as cur:
+            cur.execute(
+                "SELECT id, username, password_hash, role, account_status "
+                "FROM ist_audit.users WHERE username = %s",
+                (username,),
+            )
+            user = cur.fetchone()
+    except Exception as exc:
+        logger.error("login DB 查询失败: %s", exc)
+        raise HTTPException(status_code=500, detail="服务暂时不可用")
+
+    if not user:
         _record_failure(ip)
-        logger.info("login failed user=%r ip=%s", username, ip)
+        logger.info("login failed user=%r (not found) ip=%s", username, ip)
+        get_default_bus().emit(
+            "auth_login_failed",
+            payload={"username": username, "reason": "user_not_found"},
+            tags={"source_ip": ip},
+        )
+        raise HTTPException(status_code=401, detail="用户名不存在")
+
+    if user.get("account_status") != "normal":
+        _record_failure(ip)
+        logger.info("login failed user=%r (account locked/disabled) ip=%s", username, ip)
+        get_default_bus().emit(
+            "auth_login_failed",
+            payload={"username": username, "reason": "account_locked", "account_status": user.get("account_status")},
+            tags={"source_ip": ip},
+        )
+        raise HTTPException(status_code=403, detail="账号已被锁定或禁用")
+
+    if not verify_password(user["password_hash"], password):
+        _record_failure(ip)
+        logger.info("login failed user=%r (wrong password) ip=%s", username, ip)
+        get_default_bus().emit(
+            "auth_login_failed",
+            payload={"username": username, "reason": "wrong_password"},
+            tags={"source_ip": ip},
+        )
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    # 创建会话（PG + Redis）
     role = user.get("role", "reviewer")
-    token = _new_session(username, role)
-    logger.info("login ok user=%r role=%s ip=%s", username, role, ip)
-    return {"token": token, "username": username, "role": role}
+    try:
+        session_id, jwt_token = _get_session_mgr().create_session(username, role, channel="web")
+    except Exception as exc:
+        logger.error("login create_session 失败: %s", exc)
+        raise HTTPException(status_code=500, detail="会话创建失败")
+
+    logger.info("login ok user=%r role=%s session=%s ip=%s", username, role, session_id, ip)
+    get_default_bus().emit(
+        "auth_login",
+        payload={"username": username, "role": role},
+        tags={"session_id": session_id, "source_ip": ip, "session_user": username},
+    )
+    return {"token": jwt_token, "session_id": session_id, "username": username, "role": role}
 
 
 @app.post("/api/logout")
 async def logout(body: dict):
-    token = body.get("token", "")
-    _sessions.pop(token, None)
+    session_id = body.get("session_id", "")
+    username = body.get("username", "")
+    if session_id:
+        try:
+            _get_session_mgr().invalidate_session(session_id)
+            get_default_bus().emit(
+                "auth_logout",
+                payload={"username": username},
+                tags={"session_id": session_id, "session_user": username},
+            )
+        except Exception as exc:
+            logger.debug("logout invalidate 失败: %s", exc)
     return {"ok": True}
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...), token: str = ""):
-    sess = _resolve_session(token)
+async def upload(file: UploadFile = File(...), session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
     if not sess:
         raise HTTPException(status_code=401, detail="未登录")
     if sess.get("role") not in _WRITE_ROLES:
@@ -222,8 +238,8 @@ _OUTPUTS = _PROJECT_ROOT / "workspace" / "outputs"
 
 
 @app.get("/api/files")
-async def list_files(token: str = ""):
-    if not _resolve_session(token):
+async def list_files(session_id: str = "", token: str = ""):
+    if not _validate_request(session_id, token):
         raise HTTPException(401, "未登录")
     if not _OUTPUTS.is_dir():
         return {"files": []}
@@ -236,8 +252,8 @@ async def list_files(token: str = ""):
 
 
 @app.get("/api/download")
-async def download_file(token: str = "", name: str = ""):
-    if not _resolve_session(token):
+async def download_file(session_id: str = "", token: str = "", name: str = ""):
+    if not _validate_request(session_id, token):
         raise HTTPException(401, "未登录")
     if not name or "/" in name or "\\" in name or ".." in name:
         raise HTTPException(400, "非法文件名")
@@ -260,7 +276,8 @@ async def ws_terminal(websocket: WebSocket):
 
     auth = await websocket.receive_json()
     token = auth.get("token", "")
-    sess = _resolve_session(token)
+    session_id = auth.get("session_id", "")
+    sess = _validate_request(session_id, token)
     if not sess:
         await websocket.send_json({"type": "error", "msg": "未登录或会话已过期"})
         await websocket.close()
@@ -285,6 +302,7 @@ async def ws_terminal(websocket: WebSocket):
     env["LANG"] = env.get("LANG", "en_US.UTF-8")
     env["PYTHONIOENCODING"] = "utf-8"
     env["IST_SSH_USER"] = username
+    env["IST_SESSION_ID"] = session_id
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-u", "-m", "main.ist_core.tui.cli",
@@ -377,6 +395,24 @@ async def index():
 
 def serve(host: str = "127.0.0.1", port: int = 8080):
     import uvicorn
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        force=True,
+    )
+    _ensure_env()
+    try:
+        from main.ist_core.auth.db import ensure_schema
+        ensure_schema()
+    except Exception as exc:
+        logger.warning("auth schema init failed: %s", exc)
+    # 订阅 PgAuditSink 到默认 bus（捕获登录/登出等非 agent-run 事件）
+    try:
+        from main.ist_core.events import get_default_bus
+        from main.ist_core.sinks.pg_sink import PgAuditSink
+        get_default_bus().subscribe(PgAuditSink())
+    except Exception as exc:
+        logger.debug("PgAuditSink 注册到默认 bus 失败: %s", exc)
     logger.info("IST-Core Web Terminal on %s:%d", host, port)
     uvicorn.run(app, host=host, port=port, log_level="info")
 
@@ -388,4 +424,5 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
+    _ensure_env()
     serve(args.host, args.port)

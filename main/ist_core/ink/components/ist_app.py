@@ -941,7 +941,8 @@ class IstInkApp:
         from main.ist_core.tui.message_model import MessageSnapshot
 
         if self._bridge is None:
-            thread_id = self._thread_id or uuid.uuid4().hex[:12]
+            from main.ist_core.runner import _resolve_thread_id
+            thread_id = self._thread_id or _resolve_thread_id()
             from main.ist_core.sinks.jsonl_sink import JsonlFileSink
             from pathlib import Path
             
@@ -949,11 +950,17 @@ class IstInkApp:
             _project_root = Path(__file__).resolve().parents[4]
             jsonl_sink = JsonlFileSink(log_dir=_project_root / "runtime" / "logs")
             self._jsonl_sink = jsonl_sink
+            extra = [jsonl_sink]
+            try:
+                from main.ist_core.sinks.pg_sink import PgAuditSink
+                extra.append(PgAuditSink())
+            except Exception:
+                pass
             self._bridge = GraphBridge(
                 graph_factory=self._build_graph,
                 post=self._on_snapshot,
                 thread_id=thread_id,
-                extra_sinks=[jsonl_sink],
+                extra_sinks=extra,
             )
 
         if self._bridge.is_running:

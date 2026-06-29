@@ -33,7 +33,7 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 <body>
 <div id="loginPage">
   <div class="login-box">
-    <h2>InfoTest Engine v1.0.4</h2>
+    <h2>InfoTest Engine v1.0.5</h2>
     <input type="text" id="username" placeholder="用户名" autocomplete="off">
     <input type="password" id="password" placeholder="密码">
     <button onclick="doLogin()">登录</button>
@@ -54,6 +54,7 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script>
 let token = '';
+let sessionId = '';
 let ws = null;
 let term = null;
 let fitAddon = null;
@@ -63,9 +64,14 @@ async function doLogin() {
   const p = document.getElementById('password').value;
   try {
     const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:u,password:p})});
-    if (!r.ok) { document.getElementById('loginError').textContent = '用户名或密码错误'; return; }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      document.getElementById('loginError').textContent = err.detail || '用户名或密码错误';
+      return;
+    }
     const d = await r.json();
     token = d.token;
+    sessionId = d.session_id || '';
     document.getElementById('loginPage').style.display = 'none';
     document.getElementById('termPage').style.display = 'flex';
     initTerminal();
@@ -99,7 +105,7 @@ function initTerminal() {
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({token, cols: term.cols, rows: term.rows}));
+    ws.send(JSON.stringify({token, session_id: sessionId, cols: term.cols, rows: term.rows}));
   };
   ws.onmessage = (e) => {
     if (e.data instanceof ArrayBuffer) {
@@ -131,7 +137,7 @@ document.getElementById('fileInput')?.addEventListener('change', async (e) => {
   fd.append('file', file);
   document.getElementById('uploadStatus').textContent = '上传中...';
   try {
-    const r = await fetch('/api/upload?token=' + encodeURIComponent(token), {method:'POST', body:fd});
+    const r = await fetch('/api/upload?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token), {method:'POST', body:fd});
     if (!r.ok) { document.getElementById('uploadStatus').textContent = '上传失败 (' + r.status + ')'; e.target.value = ''; return; }
     const d = await r.json();
     if (d.path) {
@@ -160,7 +166,7 @@ document.getElementById('termPage')?.addEventListener('drop', async (e) => {
   fd.append('file', file);
   document.getElementById('uploadStatus').textContent = '上传中...';
   try {
-    const r = await fetch('/api/upload?token=' + encodeURIComponent(token), {method:'POST', body:fd});
+    const r = await fetch('/api/upload?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token), {method:'POST', body:fd});
     if (!r.ok) { document.getElementById('uploadStatus').textContent = '上传失败 (' + r.status + ')'; return; }
     const d = await r.json();
     if (d.path) {
@@ -205,7 +211,7 @@ async function refreshDownloads() {
   const panel = document.getElementById('downloadPanel');
   panel.innerHTML = '<div class="dl-empty">加载中...</div>';
   try {
-    const r = await fetch('/api/files?token=' + encodeURIComponent(token));
+    const r = await fetch('/api/files?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token));
     const d = await r.json();
     if (!d.files || d.files.length === 0) {
       panel.innerHTML = '<div class="dl-empty">暂无输出文件</div>';
@@ -229,7 +235,7 @@ async function refreshDownloads() {
 }
 
 function doDownload(name) {
-  window.open('/api/download?token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(name), '_blank');
+  window.open('/api/download?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(name), '_blank');
   document.getElementById('downloadPanel').style.display = 'none';
 }
 

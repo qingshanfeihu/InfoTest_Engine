@@ -142,6 +142,15 @@ class GraphBridge:
             bus = reset_default_bus(run_id=_uuid.uuid4().hex[:12])
             for sink in sinks:
                 bus.subscribe(sink)
+            # 注入会话上下文到 bus default_tags（审计 sink 用）
+            import os as _os
+            _session_user = _os.environ.get("IST_SSH_USER", "").strip()
+            _session_id = _os.environ.get("IST_SESSION_ID", "").strip()
+            if _session_user or _session_id:
+                bus.set_default_tags({
+                    "session_user": _session_user,
+                    "session_id": _session_id,
+                })
 
             coro = astream_to_bus(graph, payload, config=config, bus=bus)
             self._task = loop.create_task(coro)

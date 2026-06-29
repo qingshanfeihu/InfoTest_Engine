@@ -104,10 +104,16 @@ def _user_namespace(rt: Any) -> tuple[str, ...]:
         pass
     try:
         ctx = getattr(rt, "context", None) or {}
-        user_id = ctx.get("user_id") or ctx.get("identity") or "default"
-        return (str(user_id), "memories")
+        user_id = ctx.get("user_id") or ctx.get("identity")
+        if user_id:
+            return (str(user_id), "memories")
     except Exception:
-        return ("default", "memories")
+        pass
+    import os as _os
+    ssh_user = _os.environ.get("IST_SSH_USER", "").strip()
+    if ssh_user:
+        return (ssh_user, "memories")
+    return ("default", "memories")
 
 
 def get_default_store():

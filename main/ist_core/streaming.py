@@ -220,6 +220,21 @@ def stream_and_collect(
     bus = reset_default_bus(run_id=uuid.uuid4().hex[:12])
     for sink in sinks:
         bus.subscribe(sink)
+    # 注入会话上下文到 bus default_tags（审计 sink 用）
+    import os as _os
+    _session_user = _os.environ.get("IST_SSH_USER", "").strip()
+    _session_id = _os.environ.get("IST_SESSION_ID", "").strip()
+    if _session_user or _session_id:
+        bus.set_default_tags({
+            "session_user": _session_user,
+            "session_id": _session_id,
+        })
+    # 自动注册 PgAuditSink（第四个 Sink：CLI / JSONL / LangSmith / Audit）
+    try:
+        from main.ist_core.sinks.pg_sink import PgAuditSink
+        bus.subscribe(PgAuditSink())
+    except Exception as exc:
+        logger.debug("PgAuditSink 注册失败（审计日志禁用）: %s", exc)
 
     try:
         return asyncio.run(astream_to_bus(graph, initial_state, config=config, bus=bus))

@@ -19,6 +19,7 @@ import threading
 from typing import Any, Callable
 
 from main.ist_core.events import EventBus
+from main.ist_core.resilience import is_transient_error
 from main.ist_core.streaming import astream_to_bus
 from main.ist_core.tui.message_model import MessageSnapshot
 from main.ist_core.tui.sink import TuiSink
@@ -156,8 +157,14 @@ class GraphBridge:
             self._sink.reducer.set_run_status("done")
         except Exception as exc:  # noqa: BLE001
             if self._cancelled:
-                
+
                 self._last_final_state = {}
+                self._sink.reducer.set_run_status("done")
+            elif is_transient_error(exc):
+                # 瞬态连接抖动（RemoteProtocolError / 429 / 限流等）：记日志但不往前台发
+                # run_error，避免干扰用户阅读。模型层 max_retries + resilience 外层重试
+                # 已经处理过，走到这里是重试耗尽，但系统仍可继续下一轮。
+                logger.debug("GraphBridge 瞬态错误(不显示前台): %s", exc)
                 self._sink.reducer.set_run_status("done")
             else:
                 logger.exception("GraphBridge worker crashed")

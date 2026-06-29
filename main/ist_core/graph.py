@@ -23,6 +23,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
+from main.ist_core.resilience import is_transient_error
 from main.ist_core.state import IstCoreState
 
 logger = logging.getLogger(__name__)
@@ -406,6 +407,8 @@ def qa_node(state: IstCoreState, config: RunnableConfig | None = None) -> dict[s
     try:
         result = agent.invoke(agent_input, config=merged_config)
     except Exception as exc:  # noqa: BLE001
+        if is_transient_error(exc):
+            raise  # 传播到 bridge 层统一处理，不吞掉让 agent 有机会重试
         logger.exception("qa_node 调用 MainAgent 失败: %s", exc)
         return {"final_answer": f"[error] {exc}", "messages": [AIMessage(content=f"错误: {exc}")]}
 

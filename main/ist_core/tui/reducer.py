@@ -29,6 +29,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from main.ist_core.events import IstCoreEvent
+from main.ist_core.resilience import is_transient_error
 from main.ist_core.tui.message_model import (
     BLOCK_ASK_USER,
     BLOCK_EVIDENCE,
@@ -567,6 +568,11 @@ class MessageReducer:
             text = str(payload.get("error") or payload)
         else:
             text = str(payload)
+        # 瞬态连接抖动（RemoteProtocolError / 429 / 限流等）不往前台显示，
+        # 避免干扰用户阅读。模型层重试已处理，记日志即可。
+        if is_transient_error(text):
+            logger.debug("reducer 瞬态错误(不显示前台): %s", text[:120])
+            return
         block = make_payload_block("error", {"text": text})
         msg = make_system_message(
             uuid=make_uuid(run_id, seq),

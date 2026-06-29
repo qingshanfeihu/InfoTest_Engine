@@ -693,6 +693,8 @@ def probe_show(command, build=""):
             pass
 
 
+# ── init_device ─────────────────────────────────────────────────────
+
 def init_device(device_count=0, device_index=-1):
     """设备初始化：通过串口清除配置 + 配置接口 IP（跳板机侧执行）。
 
@@ -921,6 +923,7 @@ def _ser_read_until(chan, expected, timeout=5):
 def _ser_console_login(chan, hostname, user, passwd):
     """处理设备控制台登录（复刻 apv.py console_login 逻辑）。"""
     import re as _re
+    import time as _t
 
     chan.send("\n")
     output = _ser_read_until(chan,
@@ -957,4 +960,34 @@ def _ser_console_login(chan, hostname, user, passwd):
                 chan.send("%s\n" % passwd)
                 _ser_read_until(chan, "#", timeout=5)
         chan.send("terminal length 0\n")
+        _ser_read_until(chan, "#", timeout=5)
+    elif _re.search("assword:", output):
+        chan.send("%s\n" % passwd)
+        output = _ser_read_until(chan, r"(#)|(>)", timeout=5)
+        if ">" in output:
+            chan.send("enable\n")
+            output = _ser_read_until(chan, r"(#)|(sword:)", timeout=5)
+            if "sword:" in output:
+                chan.send("%s\n" % passwd)
+                _ser_read_until(chan, "#", timeout=5)
+        chan.send("terminal length 0\n")
+        _ser_read_until(chan, "#", timeout=5)
+    elif _re.search(r"\$ |\# ", output):
+        chan.send("su\n")
+        output = _ser_read_until(chan, "sword:", timeout=5)
+        chan.send("%s\n" % passwd)
+        _ser_read_until(chan, "#", timeout=5)
+        chan.send("terminal length 0\n")
+        _ser_read_until(chan, "#", timeout=5)
+    else:
+        _t.sleep(0.3)
+        chan.send("\n")
+        _ser_read_until(chan, "#", timeout=10)
+        chan.send("conf ter\n")
+        _ser_read_until(chan, "#", timeout=5)
+
+    chan.send("conf ter\n")
+    output = _ser_read_until(chan, "#", timeout=5)
+    if "Someone else is in config mode" in output:
+        chan.send("conf ter force\n")
         _ser_read_until(chan, "#", timeout=5)

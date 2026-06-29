@@ -23,6 +23,8 @@ from typing import Any
 
 import yaml
 
+from main.ist_core.resilience import is_transient_error
+
 logger = logging.getLogger(__name__)
 
 _SKILLS_DIR = Path(__file__).parent
@@ -185,12 +187,14 @@ def _get_tool_registry() -> dict[str, Any]:
             fs_grep,
             fs_ls,
             fs_read,
+            fs_write,
         )
         _TOOL_REGISTRY.update({
             "fs_read": fs_read,
             "fs_grep": fs_grep,
             "fs_ls": fs_ls,
             "fs_glob": fs_glob,
+            "fs_write": fs_write,
         })
         try:
             from main.ist_core.tools.deepagent import run_shell, run_python
@@ -223,10 +227,12 @@ def _get_tool_registry() -> dict[str, Any]:
                 compile_emit,
                 dev_probe,
                 dev_run_case,
+                dev_init_device,
             )
             _TOOL_REGISTRY["compile_emit"] = compile_emit
             _TOOL_REGISTRY["dev_run_case"] = dev_run_case
             _TOOL_REGISTRY["dev_probe"] = dev_probe
+            _TOOL_REGISTRY["dev_init_device"] = dev_init_device
         except ImportError:
             pass
         # 批量编译 tools（ist_compile 编译链用）：解析清单 + 合并打包 + fan-out + 串行上机
@@ -762,6 +768,9 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
         if exc.__class__.__name__ == "GraphRecursionError":
             logger.warning("Fork skill %s 触发递归上限(立即 escalate,不做等价重做)", skill_name)
             _err = f"[recursion-limit] {str(exc)[:120]}"
+        elif is_transient_error(exc):
+            logger.debug("Fork skill %s 瞬态错误(已抑制): %s", skill_name, exc)
+            _err = str(exc)[:120]
         else:
             logger.exception("Fork skill %s execution failed", skill_name)
             _err = str(exc)[:120]

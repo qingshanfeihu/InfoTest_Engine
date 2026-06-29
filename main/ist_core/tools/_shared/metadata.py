@@ -197,6 +197,12 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": None,
         "intent": "exec",
     },
+    "qa_file_server": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "exec",
+    },
     # 上机回填 runtime 槽位（ist_verify 用）
     "compile_runtime_slots": {
         "read_only": True,

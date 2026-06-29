@@ -22,7 +22,9 @@ DEFAULT_HAIKU_MODEL = "mimo-v2.5"
 
 # 默认请求超时 / 重试。streaming 模式下端点中途 stall 时，没有 timeout
 # 会无限挂（TUI 永远转圈、无报错）。可用 env 覆盖。
-DEFAULT_REQUEST_TIMEOUT = 120.0
+# 300s：开思考（IST_THINKING=on）单次响应常 >120s——重推理 case（如 rr 轮转）第一次思考
+# 就可能过 120s，被 request_timeout 砍、ai_rounds=0 不出 xlsx。给长思考留足时间。
+DEFAULT_REQUEST_TIMEOUT = 300.0
 DEFAULT_MAX_RETRIES = 2
 
 
@@ -99,6 +101,12 @@ def _build_chat_model(model_name: str, **kwargs: Any):
     _stream = _resolve_streaming()
     kwargs.setdefault("streaming", _stream)
     kwargs.setdefault("stream_usage", _stream)
+    # 关流式时强制 disable_streaming=True：仅 streaming=False 挡不住 TUI 的 astream_events(version="v2")——
+    # 后者会让 model 走流式 HTTP 拉 token 事件、覆盖 streaming=False。disable_streaming=True 才真把 astream
+    # 退化成非流式 invoke。否则开思考(IST_THINKING=on)时 mimo 长响应 + 流式 HTTP 撞网关周期性空 chunk →
+    # httpx 每 chunk 重置读超时 → 0% CPU 死挂(永不完成也永不超时)。这是 TUI 模式开思考的死挂根因。
+    if not _stream:
+        kwargs.setdefault("disable_streaming", True)
     timeout, retries = _resolve_timeout_retries()
     kwargs.setdefault("request_timeout", timeout)
     kwargs.setdefault("max_retries", retries)
@@ -135,6 +143,12 @@ def build_explore_model(**kwargs: Any):
     _stream = _resolve_streaming()
     kwargs.setdefault("streaming", _stream)
     kwargs.setdefault("stream_usage", _stream)
+    # 关流式时强制 disable_streaming=True：仅 streaming=False 挡不住 TUI 的 astream_events(version="v2")——
+    # 后者会让 model 走流式 HTTP 拉 token 事件、覆盖 streaming=False。disable_streaming=True 才真把 astream
+    # 退化成非流式 invoke。否则开思考(IST_THINKING=on)时 mimo 长响应 + 流式 HTTP 撞网关周期性空 chunk →
+    # httpx 每 chunk 重置读超时 → 0% CPU 死挂(永不完成也永不超时)。这是 TUI 模式开思考的死挂根因。
+    if not _stream:
+        kwargs.setdefault("disable_streaming", True)
     timeout, retries = _resolve_timeout_retries()
     kwargs.setdefault("request_timeout", timeout)
     kwargs.setdefault("max_retries", retries)

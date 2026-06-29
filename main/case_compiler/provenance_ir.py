@@ -135,6 +135,19 @@ def steps_match(provenance: CaseProvenance, steps: list[dict]) -> bool:
     return True
 
 
+def backfill_efg(provenance: CaseProvenance, steps: list[dict]) -> bool:
+    """按位置把 emit steps 的 E/F/G 回填进 provenance——draft 只标 layer/source、不必手抄 E/F/G。
+    （手抄一长串 E/F/G 极易错位，一错位 steps_match 就失败、旁挂跳过、draft 就重 emit 空转。）
+    步骤数一致即逐位回填并返回 True；数目对不上才返回 False（旁挂跳过）。"""
+    if len(provenance.steps) != len(steps):
+        return False
+    for ps, st in zip(provenance.steps, steps):
+        ps.E = str(st.get("E", ""))
+        ps.F = str(st.get("F", ""))
+        ps.G = str(st.get("G", ""))
+    return True
+
+
 def check_runtime_consistency(provenance: CaseProvenance) -> list[str]:
     """不瞎写硬契约：device_runtime 来源 ⟺ G 值是 <RUNTIME> 占位，双向自洽。
 

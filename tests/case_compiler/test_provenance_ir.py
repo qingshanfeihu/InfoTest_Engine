@@ -86,14 +86,27 @@ def test_emit_with_provenance_writes_sidecar():
     assert len(loaded.steps) == 3
 
 
-def test_emit_with_mismatched_provenance_skips_sidecar():
+def test_emit_with_step_count_mismatch_skips_sidecar():
+    # 只有「步骤数」不一致才跳过旁挂（E/F/G 不一致已不触发——emit 按位置回填）
     p = _prov()
     steps = [{"E": s.E, "F": s.F, "G": s.G} for s in p.steps]
-    steps[0]["G"] = "sdns listener 172.16.34.201"  # 与 provenance 不一致
+    steps.append({"E": "APV_0", "F": "cmd_config", "G": "show sdns pool"})  # steps 比 provenance 多一步
     r = compile_emit.invoke({"autoid": "t1", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_prov_mismatch",
                              "provenance_json": p.to_json()})
     assert "不一致" in r
+
+
+def test_emit_backfills_efg_when_draft_omits_them():
+    # draft 的 provenance 不抄 E/F/G（留空），emit 按位置回填、步骤数一致即旁挂成功（不空转）
+    p = _prov()
+    steps = [{"E": s.E, "F": s.F, "G": s.G} for s in p.steps]
+    for s in p.steps:
+        s.E = s.F = s.G = ""
+    r = compile_emit.invoke({"autoid": "t1", "steps_json": json.dumps(steps),
+                             "init_commands": "sdns on", "out_name": "t_prov_backfill",
+                             "provenance_json": p.to_json()})
+    assert "已旁挂" in r
 
 
 # --- 不瞎写硬契约：device_runtime ⟺ <RUNTIME> 占位双向自洽 ---

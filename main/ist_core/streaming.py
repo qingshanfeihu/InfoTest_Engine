@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
 import uuid
 from typing import Any, Callable, Iterable
 
@@ -87,7 +89,21 @@ async def astream_to_bus(
 
     final_state: dict[str, Any] = {}
     try:
-        async for ev in graph.astream_events(initial_state, config=config, version="v2"):
+        _agen = graph.astream_events(initial_state, config=config, version="v2")
+        _idle = float(os.environ.get("IST_LLM_IDLE_TIMEOUT") or "300")
+        while True:
+            try:
+                ev = await asyncio.wait_for(_agen.__anext__(), timeout=_idle)
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                # idle 秒内 graph 零事件 = 端点 stall(thinking 流式空 chunk / 网关挂)→ 主动 abort。
+                # 等价 cc 的 AbortSignal.timeout:独立计时、到点强制中断,不被流式 chunk 反复重置
+                # (httpx read timeout 被空 chunk 重置 → 永不超时 → asyncio loop 死挂、Ctrl-C 不响应)。
+                with contextlib.suppress(Exception):
+                    await _agen.aclose()  # 传播 cancel → 底层 httpx 请求 abort
+                bus.emit("error", payload={"text": f"LLM 端点 {_idle:.0f}s 无任何事件,已中断(疑 thinking 流式空 chunk 死挂)"})
+                raise TimeoutError(f"LLM idle timeout {_idle:.0f}s — 端点 stall")
             lc_kind = ev.get("event") or ""
             mapped = _KIND_MAP.get(lc_kind, "info")
             tags = {"lc_event": lc_kind, "name": ev.get("name") or ""}

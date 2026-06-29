@@ -428,11 +428,9 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
     - ``G`` 数据(**数据类型=字面文本/正则字符串,不是变量、不是 Python 表达式、不是数值**):
       配置步骤=CLI命令原文;check_point=要在上一步输出里**文本查找**的期望文本/正则。
       框架拿 G **原样**匹配——写一个变量名(如 init_ip)它就去找字面 "init_ip" 这几个字符,永远找不到。
-    - ``H`` save_as(可选)/``I`` input_var(可选): **捕获+比较**(框架原生,会话保持/亲和性/同-异成员的正确形态)。
-      触发步加 H="v1" 把该步**整段输出捕获**进寄存器 v1;后续 check_point 加 H="v1" 把 v1 当 expect——
-      ``found``=本次结果与首次捕获**相同**(同池/亲和保持)、``not_found``=**不同**(换池/超时),此时 G 留空。
-      "第一次 dig 命中谁、后续跟它比同/不同"这类**跨观测关系比对完全可表达**(dig 用 +short 让捕获值干净,
-      命中啥存啥、不用预测)。真限制只有一条:H 存的是整段输出文本,不能抽其中单字段做**数值算术**比对。
+    - ``H`` save_as(可选)/``I`` input_var(可选): 捕获+比较——存一次观测输出、之后比同/不同
+      (会话保持/亲和性/轮转的正确形态)。完整用法(必需的三步式结构、为什么带 H 的步不更新 result)
+      在 knowledge/data/compile_ref/EXCEL_FUNCTIONS.md 的「H 格」那节。
     - ``desc``(可选): 步骤描述
 
     check_point 自动校验**上一个非 check_point 步骤的输出**,所以断言前要先有产出输出的步骤
@@ -523,12 +521,12 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
     # v3：旁挂三层 Provenance IR（默认空＝不写，V2 行为不变）。
     prov_note = ""
     if provenance_json and provenance_json.strip():
-        from main.case_compiler.provenance_ir import parse_provenance, steps_match
+        from main.case_compiler.provenance_ir import parse_provenance, backfill_efg
         prov = parse_provenance(provenance_json)
         if prov is None:
             prov_note = "\n⚠ provenance_json 解析失败，已跳过旁挂（xlsx 正常产出）。"
-        elif not steps_match(prov, steps):
-            prov_note = "\n⚠ provenance 步骤与 emit steps 的 E/F/G 不一致，已跳过旁挂（防标注脱节）。"
+        elif not backfill_efg(prov, steps):
+            prov_note = "\n⚠ provenance 步骤数与 emit steps 不一致，已跳过旁挂（draft 只标 layer/source，E/F/G 由 emit 按位置回填）。"
         else:
             # 不瞎写硬契约（仅 strict_structural 链强制）：device_runtime ⟺ <RUNTIME> 占位双向自洽。
             # 抓"标弃权却编数"和"占位却谎称有源"，把诚实弃权从建议变成可拒绝的结构约束。

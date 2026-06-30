@@ -10,11 +10,14 @@ CWD 硬约束：所有 pytest/import 框架库都在 cwd=APV_SRC 下跑。
 """
 
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import time
+
+logger = logging.getLogger(__name__)
 
 APV_SRC = os.environ.get("IST_APV_SRC", "/home/test/apv_src")
 PY38 = os.environ.get("IST_JUMPHOST_PY38", APV_SRC + "/.python3.8/bin/python")
@@ -35,8 +38,8 @@ def _ensure_dirs():
     for d in (TASK_DIR, os.path.dirname(LOCK_FILE)):
         try:
             os.makedirs(d, exist_ok=True)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            logger.debug("创建目录失败: %s", d, exc_info=True)
 
 
 def _conf_name():
@@ -147,7 +150,7 @@ def _read_lock():
         parts = old.split(":")
         pid = int(parts[-1])      # pid 是最后一段（task_id 内含下划线但无冒号）
         return (":".join(parts[:-1]), pid)
-    except Exception:
+    except (FileNotFoundError, ValueError, OSError):
         return None
 
 
@@ -260,7 +263,7 @@ def _pid_alive(pid):
     try:
         os.kill(pid, 0)
         return True
-    except Exception:
+    except (ProcessLookupError, PermissionError, OSError):
         return False
 
 
@@ -270,8 +273,8 @@ def _write_status(path, task_id, state, **kw):
     try:
         with open(path, "w") as f:
             json.dump(payload, f)
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001
+        logger.warning("写入 task 状态失败: path=%s task_id=%s", path, task_id, exc_info=True)
 
 
 def run_cases_status(task_id, build=None, case_ids=None):
@@ -282,8 +285,8 @@ def run_cases_status(task_id, build=None, case_ids=None):
         try:
             with open(status_path) as f:
                 status = json.load(f)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            logger.debug("读取 task 状态文件失败: %s", status_path, exc_info=True)
     build = build or status.get("build")
     results = {}
     mysql_err = None
@@ -301,8 +304,8 @@ def run_cases_status(task_id, build=None, case_ids=None):
         try:
             with open(log_path, "r", errors="replace") as f:
                 tail = "".join(f.readlines()[-25:])
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            logger.debug("读取 task 日志尾失败: %s", log_path, exc_info=True)
     return {"status": status, "results": results, "mysql_error": mysql_err, "log_tail": tail}
 
 

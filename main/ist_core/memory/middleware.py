@@ -357,7 +357,8 @@ def read_session_counter() -> int:
         return 0
     try:
         return int(path.read_text(encoding="utf-8").strip() or "0")
-    except Exception:
+    except (ValueError, OSError) as exc:
+        logger.debug("session counter 读取失败: %s", exc)
         return 0
 
 
@@ -366,8 +367,8 @@ def reset_session_counter() -> None:
     path = _session_counter_path()
     try:
         path.write_text("0", encoding="utf-8")
-    except Exception:
-        pass
+    except OSError as exc:
+        logger.debug("reset session counter 失败: %s", exc)
 
 
 def _session_counter_path():

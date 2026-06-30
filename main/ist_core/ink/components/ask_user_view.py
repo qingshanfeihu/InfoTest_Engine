@@ -1,5 +1,7 @@
 """ask_user 的 TUI 交互式问答会话。
 
+.. note:: 引入 logging 供异常记录。
+
 把"渲染选项 + 键盘导航 + 提交答案"从 ist_app（已 2000 行）里拆出来，
 ist_app 只在 _handle_key 顶部拦截、把按键委托给本模块。
 
@@ -270,5 +272,8 @@ class AskUserSession:
             from main.ist_core.tools.ask_user import submit_answers
             submit_answers(self._question_id, answers)
         except Exception:  # noqa: BLE001
-            pass
+            import logging
+            logging.getLogger(__name__).warning(
+                "ask_user 提交答案失败: question_id=%s", self._question_id, exc_info=True,
+            )
         self._on_finish()

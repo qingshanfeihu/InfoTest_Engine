@@ -5,12 +5,15 @@ Ties together: DOM tree, layout, render, screen buffer, diff, terminal IO.
 
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import sys
 import threading
 import time
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from .cursor import CursorManager
 from .dom import DOMElement, NodeType, Rect, create_element
@@ -149,8 +152,8 @@ class InkApp:
         for cb in list(self._selection_listeners):
             try:
                 cb()
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                logger.debug("selection listener 回调异常", exc_info=True)
 
     def has_text_selection(self) -> bool:
         return has_selection(self.selection)
@@ -209,7 +212,7 @@ class InkApp:
             try:
                 self._terminal.write(data)
             except Exception:  # noqa: BLE001
-                pass
+                logger.debug("终端 passthrough 写入失败", exc_info=True)
 
     def render(self) -> None:
         """Perform a full render cycle: layout → render → diff → output.

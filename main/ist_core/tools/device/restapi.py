@@ -153,8 +153,10 @@ def dev_rest(
     port = max(1, min(int(port or _DEFAULT_RESTAPI_PORT), 65535))
 
     # 5. Resolve credentials
-    resolved_user = username or os.environ.get("APV_RESTAPI_USERNAME", "admin")
-    resolved_pass = password or os.environ.get("APV_RESTAPI_PASSWORD", "admin")
+    resolved_user = username or os.environ.get("APV_RESTAPI_USERNAME", "")
+    resolved_pass = password or os.environ.get("APV_RESTAPI_PASSWORD", "")
+    if not resolved_user or not resolved_pass:
+        return "error: REST API credentials not configured (set APV_RESTAPI_USERNAME and APV_RESTAPI_PASSWORD)"
 
     # 6. Build URL and body
     url = f"https://{host}:{port}/rest/{device_type}/cli_extend"

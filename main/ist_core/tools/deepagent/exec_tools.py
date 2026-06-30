@@ -109,14 +109,8 @@ def _safe_env() -> dict[str, str]:
 
     keep_keys = {
         "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE",
-        "OPENAI_API_KEY", "OPENAI_BASE_URL", "MINERU_TOKEN",
         "NO_PROGRESS",
         "TERM",
-        # 设备连接 / 烟雾测试
-        "APV_USERNAME", "APV_PASSWORD", "APV_ENABLE_PASSWORD",
-        "APV_RESTAPI_USERNAME", "APV_RESTAPI_PASSWORD",
-        "LINUX_TEST_HOST", "LINUX_SSH_USERNAME", "LINUX_SSH_PASSWORD",
-        "SMOKE_BUILD",
     }
     env = {k: v for k, v in os.environ.items() if k in keep_keys}
     env["IST_AGENT_ROOT"] = str(_ft._AGENT_ROOT)

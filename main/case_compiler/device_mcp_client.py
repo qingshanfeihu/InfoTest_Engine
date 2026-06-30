@@ -228,6 +228,9 @@ import os, sys, json, time, re, subprocess, configparser
 APV_SRC, TASK_DIR, LOCK_FILE = sys.argv[1:4]
 device_count = int(sys.argv[4]) if len(sys.argv) > 4 else 0
 device_index = int(sys.argv[5]) if len(sys.argv) > 5 else -1
+_LOCALHOST_SSH_PASS = sys.argv[6] if len(sys.argv) > 6 else os.environ.get("IST_LOCALHOST_SSH_PASS", "")
+if not _LOCALHOST_SSH_PASS:
+    print(json.dumps({"error": "localhost SSH password not provided (set IST_LOCALHOST_SSH_PASS or pass as arg)"})); sys.exit(0)
 def conf_name():
     out = subprocess.run(["ip", "add"], capture_output=True, text=True).stdout
     m = re.search(r"10\.4\.\d+\.(\d+)/\d+", out)
@@ -316,7 +319,7 @@ def login(chan):
 def init_one(idx, ssh_ip):
     tty = "ttyS%d" % idx; logs = []
     ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try: ssh.connect(hostname="127.0.0.1", port=22, username="test", password="click1", timeout=10)
+    try: ssh.connect(hostname="127.0.0.1", port=22, username="test", password=_LOCALHOST_SSH_PASS, timeout=10)
     except Exception as e:
         return {"device": idx, "ssh_ip": ssh_ip, "status": "error", "error": "cannot SSH localhost: %s" % e}
     try:
@@ -604,7 +607,8 @@ class FrameworkMCPClient:
         """
         return self._ssh_python_json(
             _INIT_SCRIPT,
-            [_JH_APV_SRC, _JH_TASK_DIR, _JH_LOCK_FILE, str(device_count), str(device_index)],
+            [_JH_APV_SRC, _JH_TASK_DIR, _JH_LOCK_FILE, str(device_count), str(device_index),
+             os.environ.get("IST_LOCALHOST_SSH_PASS", "")],
             timeout=300)
 
     def deliver(self, module: str, autoid: str, xlsx_path: str) -> dict:

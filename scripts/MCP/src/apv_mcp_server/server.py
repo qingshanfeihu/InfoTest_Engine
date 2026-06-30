@@ -955,7 +955,11 @@ def _init_one_device(idx: int, ssh_ip: str, hostname: str, user: str, passwd: st
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        ssh.connect(hostname="127.0.0.1", port=22, username="test", password="click1", timeout=10)
+        _localhost_pass = os.environ.get("IST_LOCALHOST_SSH_PASS", "")
+        if not _localhost_pass:
+            return {"device": idx, "ssh_ip": ssh_ip, "status": "error",
+                    "error": "IST_LOCALHOST_SSH_PASS not set"}
+        ssh.connect(hostname="127.0.0.1", port=22, username="test", password=_localhost_pass, timeout=10)
     except Exception as e:
         return {"device": idx, "ssh_ip": ssh_ip, "status": "error",
                 "error": "cannot SSH to localhost: %s" % e}
@@ -1081,7 +1085,7 @@ async def init_device(
 
         hostname = "APV"
         user = "admin"
-        passwd = "admin"
+        passwd = os.environ.get("IST_DEVICE_DEFAULT_PASS", "")
         for sec in cp.sections():
             if sec == "comm":
                 continue

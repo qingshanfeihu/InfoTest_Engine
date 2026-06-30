@@ -382,14 +382,6 @@ def _session_counter_path():
     return dream_dir / "session_count"
 
 
-def reset_session_counter() -> None:
-    path = _session_counter_path()
-    try:
-        path.write_text("0", encoding="utf-8")
-    except Exception as exc:
-        logger.debug("reset session counter 失败: %s", exc)
-
-
 __all__ = [
     "MemoryInjectionMiddleware",
     "MemoryWriteMiddleware",

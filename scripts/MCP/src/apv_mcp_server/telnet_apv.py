@@ -16,6 +16,14 @@ import socket
 import time
 from typing import Optional
 
+# CLI error detection reuses the canonical module when available.
+try:
+    from main.ist_core.tools.device.device_errors import (
+        has_cli_error as _has_cli_error_shared,
+    )
+except Exception:  # pragma: no cover - standalone deployment
+    _has_cli_error_shared = None
+
 # Telnet protocol constants
 IAC  = 255  # Interpret As Command
 DONT = 254
@@ -454,12 +462,15 @@ class APVTelnetClient:
 
     @staticmethod
     def _has_cli_error(output: str) -> bool:
-        """Detect CLI error keywords in output."""
+        """Detect CLI error keywords in output (delegates to shared device_errors)."""
+        if _has_cli_error_shared is not None:
+            return _has_cli_error_shared(output)
+        # Local fallback for standalone deployment
         text = output.strip().lower()
         if any(kw in text for kw in (
             "% invalid", "% error", "% unknown", "% unrecognized",
             "syntax error", "invalid input", "command not found",
-            "failed to execute",  # 设备统一失败裁决（不穷举业务措辞；"% Invalid input" 已被 "% invalid" 覆盖）
+            "failed to execute",
         )):
             return True
         for line in output.strip().splitlines():

@@ -21,6 +21,7 @@ except ImportError:
     from main.terminal_progress import emit_llm_event
 
 from main.common.llm_cache import LLMCache
+from main.common.llm_helpers import supports_thinking_toggle
 from main.knowledge_paths import KNOWLEDGE_ROOT
 
 _LLM_CACHE: LLMCache | None = None
@@ -70,14 +71,8 @@ def resolve_chat_completions_url(base_url: str | None) -> str:
     return f"{root}{_CHAT_COMPLETIONS_SUFFIX}"
 
 
-def _supports_thinking_toggle(url: str) -> bool:
-    """端点是否认 `thinking` 开关（MiMo / 小米 / DeepSeek 系）。
-
-    实测：思考模式下 tool_call 会以私有文本格式返回、且占满 token 致截断 → 拿不到
-    结构化 tool_calls。对工具调用（结构化抽取）须关思考。与 agents/_llm 一致。
-    """
-    u = (url or "").lower()
-    return any(k in u for k in ("mimo", "xiaomi", "deepseek"))
+# 向后兼容（如有外部调用方直接引用此名称）
+_supports_thinking_toggle = supports_thinking_toggle
 
 
 def chat_completion(
@@ -147,7 +142,7 @@ def chat_completion(
             "type": "function",
             "function": {"name": tool["function"]["name"]},
         }
-        if _supports_thinking_toggle(use_url):
+        if supports_thinking_toggle(use_url):
             body["thinking"] = {"type": "disabled"}
     else:
         body["response_format"] = {"type": "json_object"}

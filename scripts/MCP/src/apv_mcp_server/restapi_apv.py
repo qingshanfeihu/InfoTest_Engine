@@ -18,34 +18,33 @@ from typing import Optional
 
 import httpx
 
+# CLI error detection reuses the canonical module when available.
+try:
+    from main.ist_core.tools.device.device_errors import has_cli_error as _detect_cli_error
+except Exception:  # pragma: no cover - standalone deployment
+    def _detect_cli_error(contents: str) -> bool:  # type: ignore[misc]
+        """Local fallback: check if CLI response contains an error indicator."""
+        if not contents.strip():
+            return False
+        lower = contents.lower()
+        if any(kw in lower for kw in (
+            "% invalid", "% error", "% unknown", "% unrecognized",
+            "syntax error", "invalid input", "command not found",
+            "failed to execute",
+        )):
+            return True
+        for line in contents.splitlines():
+            s = line.strip()
+            if s == "^" or (len(s) <= 3 and "^" in s):
+                return True
+        return False
+
 logger = logging.getLogger(__name__)
 
 # Default REST API port for APV devices
 DEFAULT_RESTAPI_PORT = 9997
 DEFAULT_TIMEOUT = 30
 MAX_TIMEOUT = 120
-
-
-def _detect_cli_error(contents: str) -> bool:
-    """Check if CLI response contains an error indicator."""
-    if not contents.strip():
-        return False
-
-    lower = contents.lower()
-    if any(kw in lower for kw in (
-        "% invalid", "% error", "% unknown", "% unrecognized",
-        "syntax error", "invalid input", "command not found",
-        "failed to execute",  # 设备统一失败裁决（不穷举业务措辞；"% Invalid input" 已被 "% invalid" 覆盖）
-    )):
-        return True
-
-    # Caret on its own line indicates CLI syntax error
-    for line in contents.splitlines():
-        s = line.strip()
-        if s == "^" or (len(s) <= 3 and "^" in s):
-            return True
-
-    return False
 
 
 def execute_restapi(

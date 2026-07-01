@@ -197,7 +197,7 @@ def _get_tool_registry() -> dict[str, Any]:
             "fs_write": fs_write,
         })
         try:
-            from main.ist_core.tools.deepagent import run_shell, run_python
+            from main.ist_core.tools.deepagent.exec_tools import run_shell, run_python
             _TOOL_REGISTRY["run_shell"] = run_shell
             _TOOL_REGISTRY["run_python"] = run_python
         except ImportError:
@@ -225,11 +225,15 @@ def _get_tool_registry() -> dict[str, Any]:
         try:
             from main.ist_core.tools.device import (
                 compile_emit,
+                compile_check_verifiability,
+                compile_grade_extract,
                 dev_probe,
                 dev_run_case,
                 dev_init_device,
             )
             _TOOL_REGISTRY["compile_emit"] = compile_emit
+            _TOOL_REGISTRY["compile_check_verifiability"] = compile_check_verifiability
+            _TOOL_REGISTRY["compile_grade_extract"] = compile_grade_extract
             _TOOL_REGISTRY["dev_run_case"] = dev_run_case
             _TOOL_REGISTRY["dev_probe"] = dev_probe
             _TOOL_REGISTRY["dev_init_device"] = dev_init_device
@@ -458,7 +462,8 @@ def _evidence_log_path() -> str:
     p = os.environ.get("IST_EVIDENCE_LOG")
     if p:
         return p
-    return str(Path(__file__).resolve().parents[3] / "runtime" / "logs" / "compile_evidence.live.log")
+    # 默认按 pid 分文件:多个 infotest 实例并存时各写各的、互不串台/互不清空(显式给 IST_EVIDENCE_LOG 则共用该路径)。
+    return str(Path(__file__).resolve().parents[3] / "runtime" / "logs" / f"compile_evidence.{os.getpid()}.live.log")
 
 
 def reset_evidence_log() -> None:
@@ -475,6 +480,12 @@ def reset_evidence_log() -> None:
             path = Path(_evidence_log_path())
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("", encoding="utf-8")
+            # 清理同目录早已过时的旧 pid evidence 文件(>6h 未写=对应 infotest 进程多半已退)，避免按 pid 分文件后累积。
+            import time as _t
+            _cut = _t.time() - 6 * 3600
+            for _old in path.parent.glob("compile_evidence.*.live.log"):
+                if _old != path and _old.stat().st_mtime < _cut:
+                    _old.unlink()
     except Exception:
         pass
 

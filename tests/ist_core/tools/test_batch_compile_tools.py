@@ -57,6 +57,48 @@ def test_merged_emit_rejects_empty():
     assert "error" in compile_emit_merged.invoke({"cases_json": "not json"})
 
 
+def test_parse_autoids_arg_not_given_falls_through():
+    from main.ist_core.tools.device.emit_xlsx_tool import _parse_autoids_arg
+
+    assert _parse_autoids_arg(None) == (None, None)
+    assert _parse_autoids_arg("") == (None, None)
+    assert _parse_autoids_arg("   ") == (None, None)
+    assert _parse_autoids_arg([]) == (None, None)
+
+
+def test_parse_autoids_arg_given_but_empty_errors():
+    from main.ist_core.tools.device.emit_xlsx_tool import _parse_autoids_arg
+
+    aids, err = _parse_autoids_arg("[]")
+    assert aids == [] and err and "解析为空" in err
+
+    aids, err = _parse_autoids_arg(["", "  "])
+    assert aids == [] and err and "无有效 id" in err
+
+    aids, err = _parse_autoids_arg("  ,  , ")
+    assert aids == [] and err and "解析为空" in err
+
+
+def test_parse_autoids_arg_valid_inputs():
+    from main.ist_core.tools.device.emit_xlsx_tool import _parse_autoids_arg
+
+    assert _parse_autoids_arg(["B100", "B101"]) == (["B100", "B101"], None)
+    assert _parse_autoids_arg('["B100","B101"]') == (["B100", "B101"], None)
+    assert _parse_autoids_arg("B100,B101") == (["B100", "B101"], None)
+
+
+def test_merged_emit_autoids_empty_json_errors_not_cases_json():
+    """显式传 autoids='[]' 应走 autoids 分支报错，不应误落到 cases_json。"""
+    out = compile_emit_merged.invoke({"autoids": "[]", "cases_json": "[]"})
+    assert "error" in out and "autoids" in out and "解析为空" in out
+
+
+def test_merged_emit_blank_autoids_falls_through_to_cases_json():
+    """空串 autoids 应走 cases_json（与未传 autoids 等价）。"""
+    out = compile_emit_merged.invoke({"autoids": "", "cases_json": "[]"})
+    assert "error" in out and "需传 autoids" in out or "cases_json" in out
+
+
 def test_run_batch_rejects_bad_autoids():
     out = dev_run_batch.invoke({"xlsx_path": "x.xlsx", "autoids_json": "[]"})
     assert "error" in out

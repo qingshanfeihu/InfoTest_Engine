@@ -3,7 +3,7 @@ name: ist_compile_grade
 description: "Grade subflow — judge ONLY whether a case.xlsx's V-segment assertions cover the requirement's target behavior, by verifying the draft's Provenance IR instead of re-grepping the manual. The judgment rules live in the subagent system prompt; this task message only frames the case and enforces verify-sources-before-judging ordering. Read-only. Emits a machine-readable verdict line. Invoked by ist_compile with a structured brief as $ARGUMENTS."
 context: fork
 agent: ist-compile-grade
-allowed-tools: run_python
+allowed-tools: compile_grade_extract, compile_score, compile_precedent, fs_grep, fs_read, run_python
 user-invocable: false
 ---
 
@@ -25,7 +25,7 @@ user-invocable: false
 - **正路**（论文 §四 三层分解：覆盖只由 V 段断言判定）：
   1. 只有 **V 段断言**（dig/统计/session 等**行为观测**验业务行为）贡献覆盖；G 段配置存在性检查（show 配置→found 配置）是健全性前置、**不算覆盖**。
   2. 期望值必须**溯源手册/先例**（核 source_ref 真支撑），不许 observe-then-assert 瞎写。
-  3. 主动识别"配 X→show X→found X 的配置存在性检查被标 V"= 伪覆盖——先跑 `scripts/grade_extract.py` 看 `layer_mismatch` / `is_genuine_v_assertion` / case 级 `weak_v_coverage_suspect` 信号。
+  3. 主动识别"配 X→show X→found X 的配置存在性检查被标 V"= 伪覆盖——先调 `compile_grade_extract` 工具看 `layer_mismatch` / `is_genuine_v_assertion` / case 级 `weak_v_coverage_suspect` / `distribution_coverage_gap_suspect` 信号。
 
 **流程见 [WORKFLOW.md](WORKFLOW.md)**（先跑 extract 探明 → 数据契约 → 互斥分支 A/B/C/D/E（含 E 预期冲突审查）→ Validation → 机读标记）。
 

@@ -277,12 +277,13 @@ def test_run_python_pythonpath_stripped_blocks_main_import():
     assert not result.startswith("error:")
 
 
-def test_run_python_cwd_is_agent_root():
-    """run_python 子进程 cwd 必须是 ``knowledge/data/``。"""
+def test_run_python_cwd_is_project_root():
+    """run_python 子进程 cwd 是项目根——agent 写 workspace/ 与 fs_write 一致锚项目根、不落进 knowledge/data/workspace/。"""
+    from main.ist_core.tools.deepagent.file_tools import _PROJECT_ROOT
     code = "import os; print(os.getcwd())"
     result = run_python.invoke({"code": code, "timeout": 10})
     assert "returncode=0" in result
-    assert "knowledge/data" in result
+    assert str(_PROJECT_ROOT) in result
 
 
 
@@ -372,9 +373,9 @@ def test_run_python_xlsx_parse_smoke(tmp_path, monkeypatch):
     ws.append(["3", "Negative", "Low"])
     wb.save(xlsx_path)
 
-    code = textwrap.dedent("""
+    code = textwrap.dedent(f"""
         import openpyxl, collections
-        wb = openpyxl.load_workbook('smoke.xlsx')
+        wb = openpyxl.load_workbook(r'{xlsx_path}')
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         types = collections.Counter(r[1] for r in rows[1:])

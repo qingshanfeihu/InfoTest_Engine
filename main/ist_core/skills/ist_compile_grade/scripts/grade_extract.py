@@ -82,6 +82,120 @@ def _expect_is_rejection(expect: str) -> bool:
     return any(h in low for h in _REJECTION_HINTS)
 
 
+# ── 分布区间断言（算法类 rr/wrr）确定性识别 ─────────────────────────────────────────
+# 分布类负载均衡：发 N 次→各后端累计命中∈统计区间（守恒 Σ==N），是合法 V 覆盖；与「ga 优先级 /
+# 一致性哈希 / 会话保持」（确定性映射，走 captured_relation 关系断言）区分。
+# rr/wrr/grr/gwrr = 均摊/加权轮询（分布类）；ga/hi/topology/rtt 等非分布（命中由优先级/探测/哈希定）。
+_DISTRIBUTION_METHODS = ("rr", "wrr", "grr", "gwrr")
+_METHOD_LINE_RE = re.compile(r"\bmethod\b\s+\S+\s+\"?([a-z]+)\"?", re.IGNORECASE)
+# 命中/计数字段词（断言锚定的统计字段）。
+_HIT_FIELD_RE = re.compile(r"(hit|命中|计数|counter|count|statistic)", re.IGNORECASE)
+# 有界区间标志：emit 区间正则签名 (?<!\d)…(?!\d)、数字字符类 [d-d]、或数字交替 (?:d…。
+_BOUNDED_RANGE_RE = re.compile(r"\(\?<!\\d\)|\[\d-\d\]|\(\?:\d")
+# 无界数字标志：\d（任意数字，对计数断言＝恒真）。
+_UNBOUNDED_DIGIT_RE = re.compile(r"\\d")
+# 字面 IPv4 标志：expect 写死一个成员 IP（点可能转义成 \.）——dig found 它＝断言"这一发必中它"。
+# 分布算法(rr/wrr)下命中哪个由运行时轮转起点定，写死单次命中落点＝observe-then-assert（偶对偶错）。
+_LITERAL_IPV4_RE = re.compile(r"\d{1,3}(?:\\?\.\d{1,3}){3}")
+
+
+# ── 新增 pool 命中归属锚定（结构信号，pool→成员IP 映射由确定文法拼出，不猜领域语义）───────────
+_POOL_SERVICE_RE = re.compile(r'sdns\s+pool\s+service\s+"?([\w.-]+)"?\s+"?([\w.-]+)"?', re.IGNORECASE)
+_SERVICE_IP_RE = re.compile(r'sdns\s+service\s+ip\s+"?([\w.-]+)"?\s+([0-9a-fA-F:.]+)', re.IGNORECASE)
+_HOST_POOL_RE = re.compile(r'sdns\s+host\s+pool\s+"?[\w.-]+"?\s+"?([\w.-]+)"?', re.IGNORECASE)
+
+
+def _ip_literal_pattern(ip: str) -> str:
+    """构造能同时匹配 IP 原始写法与正则转义写法（`.`→`\\.`）的检测模式，用于在 check_point
+    expect 文本里查这个 IP 是否被引用过（不管是常量断言还是 member/dist 展开的转义正则）。"""
+    parts = ip.split(".")
+    if len(parts) == 4 and all(p.isdigit() for p in parts):
+        return r"\\?\.".join(re.escape(p) for p in parts)
+    return re.escape(ip)  # IPv6/其他：原样转义（冒号非正则元字符，不会被转义成 \:）
+
+
+def _unanchored_new_pools(config_so_far: list, config_line_rows: list,
+                           first_cp_row, check_points: list) -> list:
+    """找出「中途新增绑定到 host、但成员 IP 从未被任何 check_point 引用过」的 pool 名列表。
+
+    结构性判据（不解析领域语义、不猜 claim 类型）：
+    - pool→成员IP 映射由 `sdns pool service`/`sdns service ip` 两条命令的确定文法拼出——
+      这是配置的静态事实，不是猜的（对应 EXCEL_FUNCTIONS.md「命中归属锚点」①层）。
+    - 「中途新增」= 该 pool 第一次 `sdns host pool` 绑定行的行号 > 该 case 第一个
+      check_point 的行号（在这之前就已经在测某些东西了，这个 pool 才第一次接进解析链）。
+    - 「未被锚定」= 它的成员 IP 一个都没在任何 check_point 的 expect 里出现过（不管以哪种
+      转义形式）——不代表一定是缺陷（这条 case 可能压根没有顺序/归属类 claim），只是把
+      「这个结构事实」交给 grade 结合 need_intent 判要不要紧（对齐 new_member_last 的
+      成员归属锚序列：判定该在其他信号旁挂参考，不单独下终判）。
+    """
+    if first_cp_row is None:
+        return []
+    pool_services: dict[str, list[str]] = {}
+    service_ips: dict[str, str] = {}
+    first_bind_row: dict[str, int] = {}
+    for line, row_idx in zip(config_so_far, config_line_rows):
+        m = _POOL_SERVICE_RE.search(line)
+        if m:
+            pool_services.setdefault(m.group(1), []).append(m.group(2))
+            continue
+        m = _SERVICE_IP_RE.search(line)
+        if m:
+            service_ips.setdefault(m.group(1), m.group(2))
+            continue
+        m = _HOST_POOL_RE.search(line)
+        if m:
+            pool = m.group(1)
+            if pool not in first_bind_row:
+                first_bind_row[pool] = row_idx
+
+    all_expects = [c["expect"] for c in check_points if c.get("expect")]
+    unanchored: list[str] = []
+    for pool, bind_row in first_bind_row.items():
+        if bind_row <= first_cp_row:
+            continue  # 一开始就绑定的 pool，不是"中途新增"
+        member_ips = [service_ips[svc] for svc in pool_services.get(pool, []) if svc in service_ips]
+        if not member_ips:
+            continue  # 没解出成员 IP（命令变体/拼装不全），结构信息不够，不在此判
+        anchored = any(
+            re.search(_ip_literal_pattern(ip), expect)
+            for ip in member_ips for expect in all_expects
+        )
+        if not anchored:
+            unanchored.append(pool)
+    return unanchored
+
+
+def _detect_lb_methods(config_so_far: list) -> list:
+    """从被测配置链抽负载均衡算法 token（生效的 method 行算法参数，小写；跳过 no/show/clear）。"""
+    found: list[str] = []
+    for c in config_so_far:
+        if re.search(r"\bmethod\b", c, re.IGNORECASE) and _leading_verb(c) not in ("no", "show", "clear"):
+            m = _METHOD_LINE_RE.search(c)
+            if m:
+                tok = m.group(1).lower()
+                if tok and tok not in found:
+                    found.append(tok)
+    return found
+
+
+def _count_assertion_kind(expect: str, source_kind: str) -> str:
+    """计数断言性质：'range'（有界区间＝分布类正确形态）/ 'unbounded'（Hit:\\d+ 任意数字＝恒真）
+    / 'hardcoded'（Hit:固定数＝写死单计数，分布算法下偶对偶错）/ ''（非计数断言）。
+    source.kind=distribution_derived（emit 展开标的）直接认 'range'。"""
+    if source_kind == "distribution_derived":
+        return "range"
+    if not expect:
+        return ""
+    if _BOUNDED_RANGE_RE.search(expect):
+        return "range"
+    if _HIT_FIELD_RE.search(expect):
+        if _UNBOUNDED_DIGIT_RE.search(expect):
+            return "unbounded"          # Hit:\d+ 无界＝任意数字都过＝恒真
+        if re.search(r"[0-9]", expect):
+            return "hardcoded"          # Hit:固定数（如 Hit:\s+1）＝写死单次计数
+    return ""
+
+
 def _load_rows(xlsx_path: str) -> list[dict]:
     """读 case.xlsx 数据区为 [{E,F,G,H,...}...]。复用 precedent_tools._load_case_rows
     （lazy import：它顶层 import openpyxl，路径走 main 包）。"""
@@ -141,6 +255,9 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
       has_mutating_under_test(case 含 clear/no… 瞬时态命令，意图通常要测其运行时行为),
       mutating_commands, genuine_v_count(名副其实的 V 段断言数),
       weak_v_coverage_suspect(被测瞬时态行为却无任何真 V 段断言覆盖 → 弱 V 覆盖 / 恒真嫌疑),
+      unanchored_new_pools(中途新增绑定到 host、成员 IP 从未被任何 check_point 引用过的 pool 名),
+      new_member_unanchored_suspect(unanchored_new_pools 非空 → 疑似漏用命中归属锚定该新增 pool，
+        是否要紧交给 grade 结合 need_intent 判——不是所有 case 都有顺序/归属类 claim），
       suspect_count
 
     确定性判据（脏活，非终判；严格按论文三层）：
@@ -167,6 +284,7 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
     check_points: list[dict] = []
     # 截至当前的 APV 配置/动作命令链（被测命令链，含 clear/no）；与 link_assertion_to_config 同口径。
     config_so_far: list[str] = []
+    config_line_rows: list[int] = []   # 与 config_so_far 逐位对应的行号（_unanchored_new_pools 用）
     last_obs_idx = None     # 最近一个产出回显的观测步（show/dig/...）
     for i, row in enumerate(rows):
         e = (row.get("E") or "").strip()
@@ -176,6 +294,7 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
                 for line in g.split("\n"):
                     if line.strip():
                         config_so_far.append(line.strip())
+                        config_line_rows.append(i)
             # 带 H 的观测步仅存寄存器、不刷 result（对齐框架 test_xlsx:308 / structural_gate:201 /
             # confidence_f）。漏 `not h` → 带 H 的 dig 被误当后续 check_point 的观测源 → IP 断言
             # (断错缓冲)被误判 behavior/真 V、genuine_v_count 虚高 → grade 干净体检单放过（GA 假
@@ -226,7 +345,27 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
         expect_is_error_echo = _expect_is_rejection(expect)
         spec_conflict_suspect = (cp_src_kind == "intent") and expect_is_error_echo
 
-        suspect = layer_mismatch or query_object_invalid or spec_conflict_suspect
+        # 计数断言性质：有界区间(分布正确) / 无界 \d+(恒真) / 写死固定数(偶对偶错) / 非计数。
+        count_kind = _count_assertion_kind(expect, cp_src_kind)
+        is_distribution_assertion = count_kind == "range"
+        count_tautology_suspect = count_kind == "unbounded"
+        # 本断言所在 case 此刻是否已配分布算法(rr/wrr)——写死命中落点/固定计数只在分布上下文判可疑
+        # （ga 优先级/一致性哈希/会话保持是确定性映射，固定落点合法，不在此误杀）。
+        _dist_ctx = any(m in _DISTRIBUTION_METHODS for m in _detect_lb_methods(config_so_far))
+        count_hardcoded_suspect = (count_kind == "hardcoded") and _dist_ctx
+        # D：写死单次命中落点 IP——分布算法下 dig found 一个字面成员 IP＝断言"这一发必中它"，但命中哪个
+        # 由运行时轮转起点定(同 absolute_position 不可证伪)。寄存器关系(cp_h)/分布区间/命中归属锚点/
+        # <RUNTIME> 除外——membership_derived(member 声明展开)断言的是"这次输出∈某 pool 的成员集合"
+        # (归属判定，可能是多成员 alternation 也可能是单成员 pool)，不是"这一发必中这一个写死的值"，
+        # 结构上都含字面 IP 但语义不同，漏排会把合法的命中归属断言误判成偶对偶错的假断言。
+        asserts_literal_hit_ip = bool(
+            _dist_ctx and mode == "found" and observe_kind == "behavior" and not cp_h
+            and cp_src_kind not in ("captured_relation", "distribution_derived",
+                                    "membership_derived", "device_runtime")
+            and _LITERAL_IPV4_RE.search(expect))
+
+        suspect = (layer_mismatch or query_object_invalid or spec_conflict_suspect
+                   or count_hardcoded_suspect or asserts_literal_hit_ip)
         reasons = []
         if layer_mismatch:
             reasons.append(
@@ -241,6 +380,19 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
                 "grade 应核 source_ref 后判 CUT 并标根因「用例预期冲突」")
         if query_object_invalid:
             reasons.append("观测步回显语法错误/无有效回显（dangling，对齐 589432）")
+        if count_tautology_suspect:
+            reasons.append("命中计数断言用无界 \\d+（任意数字都通过=恒真、不验分布）——分布类(rr/wrr)应改成"
+                           "守恒区间断言：各后端累计命中∈[N/k±容差]，用 dist 声明确定性展开")
+        if count_hardcoded_suspect:
+            reasons.append("命中计数断言写死固定数（如 Hit:\\s+1）——分布算法(rr/wrr)下某后端命中数随运行时"
+                           "轮转/健康检查变，写死=偶对偶错(observe-then-assert)；应改分布区间(dist)或寄存器关系断言")
+        if asserts_literal_hit_ip:
+            reasons.append("分布算法(rr/wrr)下 dig 断言写死单个成员 IP——'这一发必中它'由运行时轮转起点定、"
+                           "不可证伪(同 absolute_position 偶对偶错)；正确形态是 H 捕获比较(captured_relation)"
+                           "或分布区间(dist)，不是写死命中落点")
+        if is_distribution_assertion:
+            reasons.append("分布区间断言（distribution_derived/有界计数区间）：分布类算法的合法 V 覆盖，"
+                           "期望由算法语义离线推导+守恒可验，勿因没写死单次命中数判 CUT；只在区间退化恒真时才 CUT")
 
         check_points.append({
             "idx": len(check_points),
@@ -262,6 +414,10 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
             "query_object_invalid": query_object_invalid,
             "expect_is_error_echo": expect_is_error_echo,
             "spec_conflict_suspect": spec_conflict_suspect,
+            "is_distribution_assertion": is_distribution_assertion,
+            "count_tautology_suspect": count_tautology_suspect,
+            "count_hardcoded_suspect": count_hardcoded_suspect,
+            "asserts_literal_hit_ip": asserts_literal_hit_ip,
             "suspect": suspect,
             "suspect_reason": "；".join(reasons),
         })
@@ -275,7 +431,33 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
     # case 级预期冲突：任一断言是「kind=intent 错误回显」（断言设备报错却无手册依据）→ 疑似脑图预期冲突。
     spec_conflict_suspect = any(c["spec_conflict_suspect"] for c in check_points)
 
-    suspect_count = sum(1 for c in check_points if c["suspect"]) + (1 if weak_v_coverage_suspect else 0)
+    # —— case 级：分布类算法（rr/wrr）覆盖 ——
+    lb_methods = _detect_lb_methods(config_so_far)
+    has_distribution_method = any(m in _DISTRIBUTION_METHODS for m in lb_methods)
+    distribution_assertion_count = sum(1 for c in check_points if c["is_distribution_assertion"])
+    has_distribution_assertion = distribution_assertion_count > 0
+    count_tautology_count = sum(1 for c in check_points if c["count_tautology_suspect"])
+    # 分布算法下写死单次命中落点 IP / 写死固定命中计数 = observe-then-assert（偶对偶错，778012 根因）。
+    count_hardcoded_count = sum(1 for c in check_points if c["count_hardcoded_suspect"])
+    asserts_literal_hit_ip_count = sum(1 for c in check_points if c["asserts_literal_hit_ip"])
+    hardcoded_count_suspect = has_distribution_method and count_hardcoded_count > 0
+    hardcoded_hit_ip_suspect = has_distribution_method and asserts_literal_hit_ip_count > 0
+    has_register_relation = any(c["cp_h"] for c in check_points)
+    # 配了分布算法(rr/wrr)却既无分布区间断言、也无关系断言 → 疑似漏测分布（dongkl WEAK_no_count 类）。
+    # 注：无界 Hit:\d+ 因 observe=show statistics=behavior 会被 is_genuine_v 计为真 V、骗过 weak_v；
+    # 本信号据「有界分布区间」而非「有没有 Hit 字段」判，专抓这类恒真伪覆盖。
+    distribution_coverage_gap_suspect = (
+        has_distribution_method and not has_distribution_assertion and not has_register_relation)
+
+    # —— case 级：新增 pool 命中归属锚定（结构信号，与算法类型/claim 类型无关）——
+    first_cp_row = check_points[0]["row_line"] if check_points else None
+    unanchored_new_pools = _unanchored_new_pools(config_so_far, config_line_rows, first_cp_row, check_points)
+    new_member_unanchored_suspect = bool(unanchored_new_pools)
+
+    suspect_count = (sum(1 for c in check_points if c["suspect"])
+                     + (1 if weak_v_coverage_suspect else 0)
+                     + (1 if distribution_coverage_gap_suspect else 0)
+                     + (1 if new_member_unanchored_suspect else 0))
 
     return {
         "status": "success",
@@ -287,6 +469,18 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
         "genuine_v_count": genuine_v_count,
         "weak_v_coverage_suspect": weak_v_coverage_suspect,
         "spec_conflict_suspect": spec_conflict_suspect,
+        "lb_methods": lb_methods,
+        "has_distribution_method": has_distribution_method,
+        "distribution_assertion_count": distribution_assertion_count,
+        "has_distribution_assertion": has_distribution_assertion,
+        "count_tautology_count": count_tautology_count,
+        "count_hardcoded_count": count_hardcoded_count,
+        "hardcoded_count_suspect": hardcoded_count_suspect,
+        "asserts_literal_hit_ip_count": asserts_literal_hit_ip_count,
+        "hardcoded_hit_ip_suspect": hardcoded_hit_ip_suspect,
+        "distribution_coverage_gap_suspect": distribution_coverage_gap_suspect,
+        "unanchored_new_pools": unanchored_new_pools,
+        "new_member_unanchored_suspect": new_member_unanchored_suspect,
         "suspect_count": suspect_count,
         "check_points": check_points,
     }

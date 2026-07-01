@@ -24,12 +24,13 @@ when_to_use: |
 dev_run_batch(
     xlsx_path="workspace/outputs/<脑图名>/case.xlsx",
     autoids_json='["121100001","121100002"]',
-    module="<module>", build="<build>",
+    # build/module 不传 → get_config() dataclass 默认兜底(module=sdns + 当前版本 build)；
+    # 仅当用户主动给了特定 build 串时才传 build=...，否则别填、别问。
 )
 # 2. 若有 <RUNTIME> 待填：看槽位 → 从首跑设备真实输出抽值回填 → 复验
 compile_runtime_slots("workspace/outputs/<脑图名>/case.xlsx")
 compile_runtime_fill(xlsx_path=..., fills_json=..., run_meta=...)
-dev_run_batch(xlsx_path=..., autoids_json='[...]', module=..., build=...)  # 复验
+dev_run_batch(xlsx_path=..., autoids_json='[...]')  # 复验(build/module 同走默认)
 # 3. 仍 fail 的 → 四层归因；真 PASS 的 → 写回 footprint
 ```
 
@@ -39,7 +40,7 @@ dev_run_batch(xlsx_path=..., autoids_json='[...]', module=..., build=...)  # 复
 
 | 阶段 | 工具 / 动作 | 关键约束 |
 |---|---|---|
-| 定位 | 确定 xlsx 路径 + autoids + build/module + provenance 路径 | provenance 缺失 → 归因退化、不写回 |
+| 定位 | 确定 xlsx 路径 + autoids + provenance 路径（build/module 走默认、不必确定） | provenance 缺失 → 归因退化、不写回 |
 | 首跑 | `dev_run_batch(xlsx_path, autoids_json, module, build)` | 含 `<RUNTIME>` 的 case 必 fail，属预期待填，先别归因 |
 | 回填 RUNTIME | `compile_runtime_slots` → `compile_runtime_fill` → 复验 `dev_run_batch` | 值只来自设备真实输出；填完即锁、不反复改；抽不出留空 |
 | 四层归因 | `compile_attribute(verdict_detail, failing_assertion_layer)` | 必基于 `device_context`/`framework_traceback`；瞬态单列不回流 |
@@ -50,7 +51,8 @@ dev_run_batch(xlsx_path=..., autoids_json='[...]', module=..., build=...)  # 复
 
 ## Inputs
 
-- excel 路径或脑图名（→ `workspace/outputs/<脑图名>/case.xlsx`）+ autoid 列表 + build/module（缺省取 compiler config）。
+- excel 路径或脑图名（→ `workspace/outputs/<脑图名>/case.xlsx`）+ autoid 列表。
+- **build/module 不用你确定、也别为它问用户**——`dev_run_batch` 不传时底层 `get_config()` 自带 dataclass 默认（module=`sdns`、build 为当前产品版本）兜底。只有用户**主动**给了特定 build 串时才把它传进 `dev_run_batch`；没给就直接不传，让它走默认。本地没有 `compiler_config.json` 是常态、不是缺失。
 - 各 case 的 `case.provenance.json`（draft v3 旁挂；缺失则归因退化到只看裁决明细、不写回）。
 
 ## Principles
@@ -68,16 +70,16 @@ dev_run_batch(xlsx_path=..., autoids_json='[...]', module=..., build=...)  # 复
 
 **Execution**: Direct
 
-确定 excel 路径、autoid 列表、build/module；记下各 case 的 `provenance.json` 路径（缺失则归因退化到只看裁决明细、不写回）。
+确定 excel 路径、autoid 列表；记下各 case 的 `provenance.json` 路径（缺失则归因退化到只看裁决明细、不写回）。**build/module 别去翻、别问用户**——`dev_run_batch` 不传就走 `get_config()` 默认（见 Inputs）。
 
-**Success criteria**: 路径 + autoids + build 就绪
-**Artifacts**: xlsx_path, autoids, build, provenance_paths
+**Success criteria**: 路径 + autoids 就绪（build/module 走默认，不阻塞）
+**Artifacts**: xlsx_path, autoids, provenance_paths
 
 ### 2. 首跑上机
 
 **Execution**: Direct
 
-`dev_run_batch(xlsx_path=..., autoids_json='[...]', module=..., build=...)`——整份单跑一次，回每 case verdict + causality + `device_context`（非 pass）+ `framework_traceback`（unknown）。
+`dev_run_batch(xlsx_path=..., autoids_json='[...]')`——整份单跑一次，回每 case verdict + causality + `device_context`（非 pass）+ `framework_traceback`（unknown）。build/module 不传走 `get_config()` 默认（见 Inputs）；别为它问用户。
 
 **Rules**: 含 `<RUNTIME>` 的 case 首跑必 fail（框架拿 G 找字面 "<RUNTIME>"）——这是预期"待回填"，**先别归因**。
 **Success criteria**: 拿到逐 case 真实裁决 + 失败 case 的 device_context

@@ -424,6 +424,18 @@ def qa_node(state: IstCoreState, config: RunnableConfig | None = None) -> dict[s
 
 
 
+async def _qa_node_async(state: IstCoreState, config: RunnableConfig | None = None) -> dict[str, Any]:
+    """qa_node 的 async 包装——TUI 的 astream_events(async)走这条。
+
+    把同步阻塞的 qa_node 用 to_thread 挪到工作线程、让出 event loop。否则 langgraph 1.2.6
+    把同步 node 内联占死 loop 线程(RunnableCallable.ainvoke 无 afunc 时直接同步跑),
+    AsyncSqliteSaver.put_writes 的 run_coroutine_threadsafe(...).result() 就会同步等一个
+    被自己占死的 loop -> main-orchestrated 长 turn 死锁。
+    runner.py 的 sync graph.invoke 仍走同步 qa_node(RunnableCallable 按 sync/async 自动分派)。
+    """
+    return await asyncio.to_thread(qa_node, state, config)
+
+
 def finalize(state: IstCoreState) -> dict[str, Any]:
     """Finalize 节点：写最终 final_answer.
 
@@ -566,7 +578,11 @@ def build_ist_core_graph(
 
     g = StateGraph(IstCoreState)
     g.add_node("normalize_input", normalize_input)
-    g.add_node("qa_node", qa_node)
+    from langgraph.utils.runnable import RunnableCallable
+    # RunnableCallable(同步 qa_node, 异步 _qa_node_async)：runner.py 的 sync graph.invoke
+    # 走同步版；TUI 的 astream_events(async) 走异步版(to_thread 让出 loop,避免 async
+    # AsyncSqliteSaver 死锁)。否则纯 async node 会让 sync invoke 抛 "No synchronous function"。
+    g.add_node("qa_node", RunnableCallable(qa_node, _qa_node_async))
     g.add_node("review_gate", review_gate)
     g.add_node("goal_gate", goal_gate)
     g.add_node("finalize", finalize)

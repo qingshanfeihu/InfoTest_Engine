@@ -4,16 +4,21 @@
 
 ## 硬关卡（先探明，不许抢跑判定）
 
-**第一步必须先跑 `scripts/grade_extract.py` 探明 suspect 信号，再下判定。**
-在拿到 extract 的确定性事实（layer / observe_kind / is_genuine_v_assertion / layer_mismatch / weak_v_coverage_suspect）之前，
-**不许**凭印象给 PASS/CUT。orchestrator 已把 `extract_facts=` 并入 brief（确定性预跑结果）；
-若 brief 未带或需复核，用 `run_python` 跑：
+**第一步必须先调 `compile_grade_extract` 工具探明 suspect 信号，再下判定。**
+在拿到它的确定性事实（layer / observe_kind / is_genuine_v_assertion / layer_mismatch /
+weak_v_coverage_suspect / distribution_coverage_gap_suspect / count_tautology /
+count_hardcoded / hardcoded_hit_ip）之前，**不许**凭印象给 PASS/CUT。
 
 ```
-python main/ist_core/skills/ist_compile_grade/scripts/grade_extract.py <case.xlsx> <case.provenance.json|->
+compile_grade_extract(xlsx_path="<case.xlsx>", prov_path="<case.provenance.json 或 ->")
 ```
 
-脚本只产**确定性信号**，**不下终判**——终判由你（grade LLM）据真实证据现场判。
+工具在主进程内按绝对路径加载探针、返回结构化 JSON——**别再用 `run_python` 跑
+`scripts/grade_extract.py`**：fork 里 cwd/路径不稳、会找不到脚本而 fallback 肉眼放水，
+这正是写死命中 IP / `Hit:固定数` 的算法类 case 带病 PASS 的根因。
+（脚本仍保留供人工命令行复核：`python main/ist_core/skills/ist_compile_grade/scripts/grade_extract.py <xlsx> <prov|->`。）
+
+工具只产**确定性信号**，**不下终判**——终判由你（grade LLM）据真实证据现场判。
 
 ## 数据契约（extract 每个 check_point 的字段）
 
@@ -31,6 +36,8 @@ python main/ist_core/skills/ist_compile_grade/scripts/grade_extract.py <case.xls
 | `source_kind` / `source_ref` | 本 check_point 步的来源类型/定位（核 source_ref 真支撑期望值） |
 | `query_object_invalid` | 观测步回显语法错误/孤立 ^（dangling，无有效回显） |
 | `expect_is_error_echo` / `spec_conflict_suspect` | 期望值本身是设备错误回显(Invalid input/not support…) / 且来源 kind=intent(仅凭脑图意图、无手册溯源)=疑似脑图预期与手册冲突 |
+| `is_distribution_assertion` / `count_tautology_suspect` | 分布区间断言(distribution_derived 或有界计数区间正则,分布类合法 V) / 命中计数用无界 `\d+`(任意数都过=恒真) |
+| `count_hardcoded_suspect` / `asserts_literal_hit_ip` | 分布算法下命中计数写死固定数(`Hit:\s+1`=偶对偶错) / 分布算法下 dig found 写死单个成员 IP(写死命中落点=不可证伪) |
 | `suspect` / `suspect_reason` | 本 cp 存疑(layer_mismatch / dangling / spec_conflict) / 可读说明 |
 
 case 级（顶层）字段：
@@ -41,6 +48,11 @@ case 级（顶层）字段：
 | `genuine_v_count` | 名副其实的 V 段断言数（真覆盖目标行为的断言） |
 | `weak_v_coverage_suspect` | 有被测瞬时态行为却 `genuine_v_count==0`——秩亏/弱 V 覆盖（恒真嫌疑） |
 | `spec_conflict_suspect` | 任一断言「kind=intent + 错误回显」——疑似脑图预期与手册/实机冲突（断言设备报错却无手册依据） |
+| `has_distribution_method` / `lb_methods` | 配了分布算法 rr/wrr/grr/gwrr / 检出的算法 token |
+| `has_distribution_assertion` / `distribution_assertion_count` | 有分布区间断言 / 其条数 |
+| `count_tautology_count` / `distribution_coverage_gap_suspect` | 无界 Hit 恒真断言数 / 配了分布算法却无分布区间也无关系断言（漏测分布，dongkl WEAK_no_count 类） |
+| `count_hardcoded_count` / `hardcoded_count_suspect` | 写死固定命中计数(`Hit:\s+1`)断言数 / 分布算法下存在这类写死计数（偶对偶错） |
+| `asserts_literal_hit_ip_count` / `hardcoded_hit_ip_suspect` | 写死单次命中落点 IP 的断言数 / 分布算法下存在这类写死命中 IP（observe-then-assert，778012 根因） |
 
 ## 互斥分支（逐 check_point 选一条走）
 
@@ -53,6 +65,15 @@ case 级（顶层）字段：
 
 - **C `<RUNTIME>` 占位**（source_kind=device_runtime）：判**方向相反**的事——这个点是不是**真的**离线不可知？
   弃权理由成立 → 覆盖到位（诚实标待验点）；本可离线定值却偷懒标占位 → CUT（误标弃权）。**绝不因"没填具体值"判 CUT**。
+
+- **C2 分布区间断言**（`is_distribution_assertion==true`，source_kind=distribution_derived 或有界计数区间正则）：
+  分布类算法（rr/wrr）的合法 V 覆盖——各后端累计命中∈统计区间（守恒 Σ==N，已过 emit 守恒+反恒真门）。
+  **绝不因"没写死单次命中数/是区间不是定值"判 CUT**。判**方向相反**的两件事：
+  (a) 算法类型对不对——rr/wrr 才用分布区间；ga（优先级故障切换）/一致性哈希/会话保持是确定性映射，套了分布区间反而错 → CUT，改回 B 关系断言；
+  (b) 有没有退化恒真——`count_tautology_suspect`（无界 `Hit:\d+`）或区间上界≥总次数 → CUT。
+  case 级 `distribution_coverage_gap_suspect==true`（配了 rr/wrr 却无分布区间断言也无关系断言）= 漏测分布 → **CUT**，重做意见指明应补分布区间断言（`dist` 声明：发 N 次→统计命令→各后端命中∈[N/k±容差]）。
+
+- **C2′ 分布算法下的写死落点（observe-then-assert，必 CUT）**：`hardcoded_hit_ip_suspect==true`（dig 断言写死某个成员 IP，等于断言"这一发必中它"）或 `hardcoded_count_suspect==true`（命中计数写死固定数如 `Hit:\s+1`）——分布算法(rr/wrr)下命中哪个/命中几次由运行时轮转起点决定，写死=偶对偶错的假断言（与 absolute_position 同病）。**判 CUT**，重做意见指明：单次命中改 H 捕获比较关系断言（`captured_relation`，验"两次同/异"），多次累计命中改分布区间断言（`dist`）；都不要写死单次命中的 IP / 计数。（这正是 778012 首轮带病 PASS 的形态，确定性信号现已能拦。）
 
 - **D 恒真/弱 V 覆盖审查**（`layer_mismatch==true` 或 case 级 `weak_v_coverage_suspect==true`）：
   按论文"覆盖只由 V 段断言判定"——`layer_mismatch` 的断言是"配 X→show X→found X"的配置存在性检查（名 V 实 G），

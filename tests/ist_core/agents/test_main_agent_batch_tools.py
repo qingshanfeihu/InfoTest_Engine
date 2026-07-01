@@ -1,18 +1,22 @@
-"""守护:编译/上机工具的主 agent 挂载契约(v3 pipeline 架构 + 桶 D 解耦)。
+"""守护:编译/上机工具的主 agent 挂载契约(main-orchestrated 架构)。
 
-ist_compile 是 inline skill,在主 agent 上下文执行,但它**只调一次** compile_pipeline
-——固定序列 prep→fanout→merge 锁在该工具内部(直接 import,不经主 agent 工具表)。
-故主 agent **挂 compile_pipeline,不挂** compile_prep/compile_fanout/compile_emit_merged
-(桶 D:主 agent 只编排不手搓,避免它越过 pipeline 逐步调散件而失控——本会话踩过的真 bug)。
+ist_compile 是 inline skill,主 agent 作为 orchestrator **自己编排**:compile_prep 解析脑图→
+manifest、invoke_skill 派 compile_worker 逐 case 编、compile_grade_extract 合并前确定性自查 +
+派 grade、compile_emit_merged 合并打包。故这些编排件**挂**主 agent。compile_pipeline 保留当
+fallback(也挂)。compile_fanout **不挂**——main-orchestrated 用 invoke_skill 派 worker,不走
+fanout 散件(防主 agent 越过 invoke_skill 手搓 fan-out)。
 ist_verify 上机验证链用 dev_run_batch(串行上机),故它必须挂主 agent。
 """
 
 from __future__ import annotations
 
-# 主 agent 必须挂(它直接调的编排/上机入口)
-_MAIN_AGENT_TOOLS = ["compile_pipeline", "dev_run_batch"]
-# pipeline 内部件,主 agent 不挂(compile_pipeline 内部直接 import 调用)
-_PIPELINE_INTERNAL = ["compile_prep", "compile_fanout", "compile_emit_merged"]
+# 主 agent 必须挂(orchestrator 直接调的编排/上机入口)
+_MAIN_AGENT_TOOLS = [
+    "compile_pipeline", "dev_run_batch",
+    "compile_prep", "compile_emit", "compile_emit_merged", "compile_grade_extract",
+]
+# main-orchestrated 下仍不挂主 agent:compile_fanout(主 agent 用 invoke_skill 派 worker,不用 fanout)
+_PIPELINE_INTERNAL = ["compile_fanout"]
 
 
 def test_orchestration_entries_mounted_on_main_agent():
@@ -24,12 +28,12 @@ def test_orchestration_entries_mounted_on_main_agent():
 
 
 def test_pipeline_internal_tools_not_mounted_on_main_agent():
-    """桶 D:prep/fanout/emit_merged 是 pipeline 内部件,不挂主 agent(防主 agent 手搓拆步)。"""
+    """compile_fanout 不挂主 agent(main-orchestrated 用 invoke_skill 派 worker,不手搓 fan-out)。"""
     from main.ist_core.agents.main_agent import _default_generic_tools
     names = {getattr(t, "name", "") for t in _default_generic_tools()}
     for t in _PIPELINE_INTERNAL:
         assert t not in names, (
-            f"{t} 不应挂主 agent——它是 compile_pipeline 内部件,主 agent 只调 pipeline 一次"
+            f"{t} 不应挂主 agent——main-orchestrated 用 invoke_skill 派 worker,不走 fanout 散件"
         )
 
 

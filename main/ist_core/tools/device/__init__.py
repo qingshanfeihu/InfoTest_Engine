@@ -4,6 +4,8 @@ from main.ist_core.tools.device.ssh import dev_ssh
 from main.ist_core.tools.device.restapi import dev_rest
 from main.ist_core.tools.device.run_case import dev_run_case, dev_probe, dev_init_device
 from main.ist_core.tools.device.emit_xlsx_tool import compile_emit, compile_emit_merged
+from main.ist_core.tools.device.verifiability_tool import compile_check_verifiability
+from main.ist_core.tools.device.grade_extract_tool import compile_grade_extract
 from main.ist_core.tools.device.batch_tools import compile_fanout, dev_run_batch
 from main.ist_core.tools.device.compile_prep import compile_prep
 from main.ist_core.tools.device.fail_attribution import compile_attribute
@@ -13,6 +15,8 @@ from main.ist_core.tools.device.runtime_fill_tools import compile_runtime_slots,
 # smoke_test_run 在 MCP_Server/),是远程一个残提交。此处不引入死 import;待该文件补齐再接。
 
 __all__ = ["dev_ssh", "dev_rest", "dev_run_case", "dev_probe", "dev_init_device",
-           "compile_emit", "compile_emit_merged", "compile_fanout", "dev_run_batch",
+           "compile_emit", "compile_emit_merged", "compile_check_verifiability",
+           "compile_grade_extract",
+           "compile_fanout", "dev_run_batch",
            "compile_prep", "compile_attribute", "compile_pipeline",
            "compile_runtime_slots", "compile_runtime_fill"]

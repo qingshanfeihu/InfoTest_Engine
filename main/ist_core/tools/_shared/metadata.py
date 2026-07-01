@@ -114,6 +114,13 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": None,
         "intent": "read",
     },
+    "compile_grade_extract": {
+        # grade 确定性探针:只读 case.xlsx/provenance、产 suspect 信号,无副作用,可并发。
+        "read_only": True,
+        "concurrency_safe": True,
+        "fallback_for": None,
+        "intent": "read",
+    },
     "remember": {
         "read_only": False,
         "concurrency_safe": False,

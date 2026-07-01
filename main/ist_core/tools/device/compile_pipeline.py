@@ -423,9 +423,11 @@ def _build_case_brief(case: dict, *, product_version: str, manual_glob: str,
         algo_block = f"""
 
 【本用例算法 = {algo}】先例可能用的是别的算法(如 wrr),**算法这一项以需求为准,绝不照抄先例的算法**。
-配 sdns host/pool method … {algo}(查 footprint「{algo}」拿语法+行为)。注意各算法断言形态不同:
-轮询类(rr/wrr)断言轮转命中分布;ga(全局可用性)是优先级故障切换→断言「始终命中最高优先级成员」、
-用 sdns pool member priority 设优先级,不是轮转。"""
+配 sdns host/pool method … {algo}(查 footprint「{algo}」拿语法+行为)。各算法断言形态不同、别一刀切:
+均摊/比例分布类(rr/wrr)验**分布**——发包工具(dnsperf/iperf 等)发 N 次 → 统计命令看各后端累计命中 →
+用 `dist` 声明断言各后端命中∈期望区间(rr≈N/k、wrr≈N×权重比,守恒 Σ==N;见 EXCEL_FUNCTIONS.md),
+别写恒真 `Hit:\\s+\\d+`、别写死单次命中 IP;ga(全局可用性)是优先级故障切换→断言「始终命中最高
+优先级成员」、用 sdns pool member priority 设优先级,验关系不验分布(不套分布区间)。"""
 
     # ★ 可达 IP 事实(确定性 env_facts)本被 compile_precedent 捆进先例文本;先例为空(新意图/相似度<0.20
     # 被跳过,如会话保持)时 ★ 列表会一起消失→draft 没 IP 锚点会探设备失败后瞎编(实测 533097 撞此坑)。
@@ -447,7 +449,7 @@ def _build_case_brief(case: dict, *, product_version: str, manual_glob: str,
 
 规则：期望值溯源先例/手册/作者意图/**你自己写的配置**，不许 observe-then-assert（不看设备这次输出啥就抄成期望）；每个 case 自包含（init 自建全部前置）。
 **期望值按来源三分诊（决定怎么写，条件于你正在写的这份配置——你配的东西你就知道，不是未知）**：
-  ① 配置可推导值（池成员 IP、超时秒数、删除/清除后状态、rr 按配置顺序的命中、协议固定响应）——**写常量**，IP 用 \\b…\\b 加词边界 + 转义点（防 1.1.1.1 误匹配 1.1.1.10）。绝不因"运行时才显示"就当不可知。
+  ① 配置可推导值（池成员 IP、超时秒数、删除/清除后状态、协议固定响应）——**写常量**，IP 用 \\b…\\b 加词边界 + 转义点（防 1.1.1.1 误匹配 1.1.1.10）。绝不因"运行时才显示"就当不可知。（注：rr/wrr 的**单次**命中是②运行时关系、不是①；**N 次累计命中分布**是 distribution_derived 区间断言、用 `dist` 声明，见 EXCEL_FUNCTIONS.md。）
   ② 跨观测关系（会话保持/亲和性/同-异成员/前后对比）——断言是"两次观测的**关系**"不是"某个值"，**绝不留 <RUNTIME>**（占位只能填一个值，表达不了关系）。用**捕获+比较**：触发步加 H=v1 捕获首次输出（命中啥存啥、**不用预测是哪个池**），后续 check_point 加 H=v1，found=与首次同/not_found=与首次异；dig 用 +short 去时间戳噪声。
   ③ 设备生成的不透明单值（auto-gen 名/PID/抓包间隔/哈希种子）——能 execute 提取就提取；纯不透明才留 <RUNTIME>（部分模式如 "Hits:\\s*<RUNTIME>"，或整值），标 source.kind=device_runtime（<RUNTIME>⟺device_runtime 自洽，emit 强制），由 ist_verify 上机回填锁死。
 红线：会话保持/同-异 **走②捕获、绝不走 <RUNTIME>**；配置可推导走①常量、不留 <RUNTIME>；只有真·设备不透明单值才 <RUNTIME>。绝不凭空编一个对不上来源的值。

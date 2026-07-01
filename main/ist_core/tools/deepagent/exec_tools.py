@@ -314,7 +314,7 @@ def run_python(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     try:
         completed = subprocess.run(
             [sys.executable, "-c", code],
-            cwd=str(_default_cwd()),
+            cwd=str(_PROJECT_ROOT),  # 锚项目根:agent 写 workspace/ 与 fs_write 一致、不落进 knowledge/data/workspace/
             env=_safe_env(),
             capture_output=True,
             text=True,
@@ -430,7 +430,7 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
                 
                 expanded_parts.append(token)
 
-    cwd_path = _default_cwd()
+    cwd_path = _PROJECT_ROOT  # 锚项目根:与 run_python/fs_write 一致，agent 相对路径统一锚项目根
 
     started = time.time()
     try:

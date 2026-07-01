@@ -22,6 +22,10 @@ from main.ist_core.tools.device import dev_rest, dev_ssh, dev_run_case, dev_prob
 from main.ist_core.tools.device import (
     dev_run_batch,
     compile_attribute,
+    compile_emit,  # main-orchestrated 兜底单 case；worker 主路也用
+    compile_prep,  # main-orchestrated：解析脑图→manifest（main 自己拆 case 清单）
+    compile_emit_merged,  # main-orchestrated：合并各 case 单 xlsx 打包
+    compile_grade_extract,  # main-orchestrated：合并前确定性自查 suspect（grade 之外的第二道闸）
     compile_pipeline,
     compile_runtime_slots,
     compile_runtime_fill,
@@ -59,7 +63,11 @@ def _default_generic_tools() -> list[Any]:
         # 主 agent 仅调 compile_pipeline 一次；ist_verify 上机验证链用下面这组。
         dev_run_batch,
         compile_attribute,   # 上机 fail 四层归因
-        compile_pipeline,  # 确定性编译流水线（主 agent 只调一次；prep/fanout/merge 锁在工具内）
+        compile_pipeline,  # 确定性编译流水线（保留当 fallback）
+        compile_emit,  # main-orchestrated 兜底单 case
+        compile_prep,  # main-orchestrated：解析脑图→manifest（main 自己拆 case 清单）
+        compile_emit_merged,  # main-orchestrated：合并各 case 单 xlsx 打包
+        compile_grade_extract,  # main-orchestrated：合并前确定性自查（grade 之外第二道闸，防放水）
         compile_runtime_slots,  # 列 <RUNTIME> 待回填槽位
         compile_runtime_fill,  # 上机真实值锁死回填（不反复改）
 

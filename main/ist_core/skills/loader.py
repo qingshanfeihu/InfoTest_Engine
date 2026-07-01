@@ -262,6 +262,11 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["compile_score"] = compile_score
         except ImportError:
             pass
+        try:
+            from main.ist_core.tools.knowledge.command_builder import build_command
+            _TOOL_REGISTRY["build_command"] = build_command
+        except ImportError:
+            pass
     return _TOOL_REGISTRY
 
 

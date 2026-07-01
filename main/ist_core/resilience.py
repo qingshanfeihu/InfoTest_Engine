@@ -34,7 +34,9 @@ _CONNECTION_MARKERS = (
     "apiconnectionerror", "connection error", "connection aborted",
     "connection reset", "connection refused", "remote end closed",
     "max retries exceeded", "read timed out", "timed out", "temporarily unavailable",
-    "bad gateway", "service unavailable", "502", "503", "504",
+    "bad gateway", "service unavailable", "gateway timeout",
+    # 不放裸 "502"/"503"/"504"——会误中 autoid/IP/计数等任意含该子串的文本
+    # （如 autoid 203031754291994957 里的 "4291"）；HTTP 5xx 文字描述上面已覆盖。
 )
 
 
@@ -49,7 +51,8 @@ def _is_connection_error(exc: BaseException) -> bool:
 # 而非当成 draft 质量失败。
 _TRANSIENT_EXTRA_MARKERS = (
     "remoteprotocol", "peer closed connection", "incomplete chunked",
-    "429", "rate limit", "too many requests", "overloaded", "incompleteread",
+    # 不放裸 "429"——同理误中数字子串；限流用下面的文字描述兜。
+    "rate limit", "too many requests", "overloaded", "incompleteread",
 )
 
 

@@ -14,6 +14,8 @@ import os
 from contextlib import contextmanager
 from typing import Any
 
+from main.common.llm_helpers import supports_thinking_toggle
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_OPENAI_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
@@ -88,9 +90,7 @@ def _build_chat_model(model_name: str, **kwargs: Any):
     # (用 pro 的能力 + chat 的速度)。已显式传 extra_body.thinking 的不覆盖;不支持该参数的端点不注入。
     if "thinking" not in extra_body:
         _think = (os.environ.get("IST_THINKING") or "on").strip().lower()
-        _bl = base_url.lower()
-        _supports_thinking = any(k in _bl for k in ("mimo", "xiaomi", "deepseek"))
-        if _supports_thinking:
+        if supports_thinking_toggle(base_url):
             if _think in ("on", "1", "true", "enabled"):
                 extra_body["thinking"] = {"type": "enabled"}
             elif _think in ("off", "0", "false", "disabled"):
@@ -138,49 +138,10 @@ def build_explore_model(**kwargs: Any):
     """Explore sub-agent：haiku tier 模型，快速低成本检索。
 
     走 OpenAI 兼容端点；模型取 ``IST_HAIKU_MODEL``。
+    所有 streaming / timeout / thinking 逻辑复用 ``_build_chat_model``。
     """
     model_name = (os.environ.get("IST_HAIKU_MODEL") or DEFAULT_HAIKU_MODEL).strip()
-    base_url, api_key = _resolve_endpoint()
-
-    extra_body = dict(kwargs.pop("extra_body", None) or {})
-    # 思考模式锁定(同 _build_chat_model):IST_THINKING=off 时对 MiMo/DeepSeek 关思考(快)。
-    if "thinking" not in extra_body:
-        _think = (os.environ.get("IST_THINKING") or "on").strip().lower()
-        if any(k in base_url.lower() for k in ("mimo", "xiaomi", "deepseek")):
-            if _think in ("on", "1", "true", "enabled"):
-                extra_body["thinking"] = {"type": "enabled"}
-            elif _think in ("off", "0", "false", "disabled"):
-                extra_body["thinking"] = {"type": "disabled"}
-
-    # 深度思考开启时 mimo 强制 temperature/top_p、不接受自定义值(官方文档)。仅未开时设默认。
-    if extra_body.get("thinking", {}).get("type") != "enabled":
-        kwargs.setdefault("temperature", 0.0)
-        kwargs.setdefault("top_p", 0.5)
-    _stream = _resolve_streaming()
-    kwargs.setdefault("streaming", _stream)
-    kwargs.setdefault("stream_usage", _stream)
-    # 关流式时强制 disable_streaming=True：仅 streaming=False 挡不住 TUI 的 astream_events(version="v2")——
-    # 后者会让 model 走流式 HTTP 拉 token 事件、覆盖 streaming=False。disable_streaming=True 才真把 astream
-    # 退化成非流式 invoke。否则开思考(IST_THINKING=on)时 mimo 长响应 + 流式 HTTP 撞网关周期性空 chunk →
-    # httpx 每 chunk 重置读超时 → 0% CPU 死挂(永不完成也永不超时)。这是 TUI 模式开思考的死挂根因。
-    if not _stream:
-        kwargs.setdefault("disable_streaming", True)
-    timeout, retries = _resolve_timeout_retries()
-    kwargs.setdefault("request_timeout", timeout)
-    kwargs.setdefault("max_retries", retries)
-    kwargs["extra_body"] = extra_body
-
-    cls = _get_chat_openai_with_reasoning()
-    logger.info(
-        "Explore model: model=%s base_url=%s timeout=%ss retries=%s",
-        model_name, base_url, timeout, retries,
-    )
-    return cls(
-        model=model_name,
-        base_url=base_url,
-        api_key=api_key,
-        **kwargs,
-    )
+    return _build_chat_model(model_name, **kwargs)
 
 
 def _patch_chunk_with_reasoning(chunk, raw_chunk_dict) -> None:

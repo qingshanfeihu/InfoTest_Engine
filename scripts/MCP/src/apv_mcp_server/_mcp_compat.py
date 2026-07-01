@@ -16,6 +16,7 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import re
 import sys
 import typing
@@ -347,6 +348,7 @@ class FastMCP:
 
     async def _serve_http(self, host: str, port: int) -> None:
         """JSON-RPC over HTTP POST (simplified MCP HTTP transport)."""
+        _cors_origin = os.environ.get("IST_MCP_CORS_ORIGIN", "")
 
         async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             try:
@@ -378,8 +380,9 @@ class FastMCP:
             if http_method == "OPTIONS":
                 response_body = ""
                 status_line = "HTTP/1.1 204 No Content\r\n"
+                _acao = f"Access-Control-Allow-Origin: {_cors_origin}\r\n" if _cors_origin else ""
                 headers = (
-                    "Access-Control-Allow-Origin: *\r\n"
+                    f"{_acao}"
                     "Access-Control-Allow-Methods: POST, OPTIONS\r\n"
                     "Access-Control-Allow-Headers: Content-Type\r\n"
                 )
@@ -390,14 +393,16 @@ class FastMCP:
                     resp = self._mk_err(None, code=-32700, message="Parse error")
                     response_body = json.dumps(resp, ensure_ascii=False)
                     status_line = "HTTP/1.1 400 Bad Request\r\n"
-                    headers = "Content-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                    _acao_hdr = f"Access-Control-Allow-Origin: {_cors_origin}\r\n" if _cors_origin else ""
+                    headers = f"Content-Type: application/json\r\n{_acao_hdr}"
                     self._write_http(writer, status_line, headers, response_body)
                     return
 
                 resp = await self._dispatch(json_req)
                 response_body = json.dumps(resp if resp is not None else {}, ensure_ascii=False)
                 status_line = "HTTP/1.1 200 OK\r\n"
-                headers = "Content-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                _acao_hdr = f"Access-Control-Allow-Origin: {_cors_origin}\r\n" if _cors_origin else ""
+                headers = f"Content-Type: application/json\r\n{_acao_hdr}"
             else:
                 # GET or other → simple status page
                 response_body = json.dumps({
@@ -406,7 +411,8 @@ class FastMCP:
                     "tools": len(self._tools),
                 }, ensure_ascii=False)
                 status_line = "HTTP/1.1 200 OK\r\n"
-                headers = "Content-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                _acao_hdr = f"Access-Control-Allow-Origin: {_cors_origin}\r\n" if _cors_origin else ""
+                headers = f"Content-Type: application/json\r\n{_acao_hdr}"
 
             self._write_http(writer, status_line, headers, response_body)
 

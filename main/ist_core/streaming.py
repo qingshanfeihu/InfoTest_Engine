@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
 import uuid
@@ -90,20 +89,19 @@ async def astream_to_bus(
     final_state: dict[str, Any] = {}
     try:
         _agen = graph.astream_events(initial_state, config=config, version="v2")
-        _idle = float(os.environ.get("IST_LLM_IDLE_TIMEOUT") or "300")
+        # 死挂 / 内容静默兜底交给 langchain-openai 内置的底层 stream_chunk_timeout(默认 120s,
+        # env LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S):它在 SSE parsed-chunk 层计时,SDK 内部消费
+        # keepalive 注释、不当 chunk,因此能正确区分 keepalive 与真内容静默,触发时抛
+        # StreamChunkTimeoutError(asyncio.TimeoutError 子类)由下方 except Exception 接住、不致永久挂。
+        # 不再手搓上层"事件间隔"idle 守卫:它基于 astream_events 上层事件计时,而 mimo 深度思考期端点
+        # 在底层周期性吐空 delta chunk(<120s),这些 chunk 在 _convert_chunk_to_generation_chunk 因
+        # delta 为空被丢成 None、不上抛 on_chat_model_stream 事件 → 上层"零事件"被误判 stall
+        # (实测精确 300s 误杀长思考,亦会误伤 ist_verify 上机长跑等单步长耗时)。职责收口到官方底层 timer。
         while True:
             try:
-                ev = await asyncio.wait_for(_agen.__anext__(), timeout=_idle)
+                ev = await _agen.__anext__()
             except StopAsyncIteration:
                 break
-            except asyncio.TimeoutError:
-                # idle 秒内 graph 零事件 = 端点 stall(thinking 流式空 chunk / 网关挂)→ 主动 abort。
-                # 等价 cc 的 AbortSignal.timeout:独立计时、到点强制中断,不被流式 chunk 反复重置
-                # (httpx read timeout 被空 chunk 重置 → 永不超时 → asyncio loop 死挂、Ctrl-C 不响应)。
-                with contextlib.suppress(Exception):
-                    await _agen.aclose()  # 传播 cancel → 底层 httpx 请求 abort
-                bus.emit("error", payload={"text": f"LLM 端点 {_idle:.0f}s 无任何事件,已中断(疑 thinking 流式空 chunk 死挂)"})
-                raise TimeoutError(f"LLM idle timeout {_idle:.0f}s — 端点 stall")
             lc_kind = ev.get("event") or ""
             mapped = _KIND_MAP.get(lc_kind, "info")
             tags = {"lc_event": lc_kind, "name": ev.get("name") or ""}

@@ -96,8 +96,12 @@ def _build_chat_model(model_name: str, **kwargs: Any):
             elif _think in ("off", "0", "false", "disabled"):
                 extra_body["thinking"] = {"type": "disabled"}
 
-    kwargs.setdefault("temperature", 0.0)
-    kwargs.setdefault("top_p", 0.5)
+    # 深度思考开启时 mimo 强制 temperature=1.0/top_p=0.95、不接受自定义采样参数(官方文档
+    # deep-thinking 页)。再发 0.0/0.5 是冗余,且可能触发端点告警或被静默忽略。仅未开 thinking
+    # 时设确定性默认采样。
+    if extra_body.get("thinking", {}).get("type") != "enabled":
+        kwargs.setdefault("temperature", 0.0)
+        kwargs.setdefault("top_p", 0.5)
     _stream = _resolve_streaming()
     kwargs.setdefault("streaming", _stream)
     kwargs.setdefault("stream_usage", _stream)
@@ -138,8 +142,20 @@ def build_explore_model(**kwargs: Any):
     model_name = (os.environ.get("IST_HAIKU_MODEL") or DEFAULT_HAIKU_MODEL).strip()
     base_url, api_key = _resolve_endpoint()
 
-    kwargs.setdefault("temperature", 0.0)
-    kwargs.setdefault("top_p", 0.5)
+    extra_body = dict(kwargs.pop("extra_body", None) or {})
+    # 思考模式锁定(同 _build_chat_model):IST_THINKING=off 时对 MiMo/DeepSeek 关思考(快)。
+    if "thinking" not in extra_body:
+        _think = (os.environ.get("IST_THINKING") or "on").strip().lower()
+        if any(k in base_url.lower() for k in ("mimo", "xiaomi", "deepseek")):
+            if _think in ("on", "1", "true", "enabled"):
+                extra_body["thinking"] = {"type": "enabled"}
+            elif _think in ("off", "0", "false", "disabled"):
+                extra_body["thinking"] = {"type": "disabled"}
+
+    # 深度思考开启时 mimo 强制 temperature/top_p、不接受自定义值(官方文档)。仅未开时设默认。
+    if extra_body.get("thinking", {}).get("type") != "enabled":
+        kwargs.setdefault("temperature", 0.0)
+        kwargs.setdefault("top_p", 0.5)
     _stream = _resolve_streaming()
     kwargs.setdefault("streaming", _stream)
     kwargs.setdefault("stream_usage", _stream)
@@ -152,15 +168,6 @@ def build_explore_model(**kwargs: Any):
     timeout, retries = _resolve_timeout_retries()
     kwargs.setdefault("request_timeout", timeout)
     kwargs.setdefault("max_retries", retries)
-    extra_body = dict(kwargs.pop("extra_body", None) or {})
-    # 思考模式锁定(同 _build_chat_model):IST_THINKING=off 时对 MiMo/DeepSeek 关思考(快)。
-    if "thinking" not in extra_body:
-        _think = (os.environ.get("IST_THINKING") or "on").strip().lower()
-        if any(k in base_url.lower() for k in ("mimo", "xiaomi", "deepseek")):
-            if _think in ("on", "1", "true", "enabled"):
-                extra_body["thinking"] = {"type": "enabled"}
-            elif _think in ("off", "0", "false", "disabled"):
-                extra_body["thinking"] = {"type": "disabled"}
     kwargs["extra_body"] = extra_body
 
     cls = _get_chat_openai_with_reasoning()
@@ -269,6 +276,34 @@ def _get_chat_openai_with_reasoning():
                 if os.environ.get("IST_DEBUG_PAYLOAD") == "1":
                     logger.warning("[deepseek payload patch err] %s", exc)
             return payload
+
+        def _create_chat_result(self, response, generation_info=None):
+            """非流式路径的 reasoning_content 收取。
+
+            ``_convert_chunk_to_generation_chunk`` 只在【流式 chunk】触发；当
+            ``IST_LLM_STREAMING=0`` 或用 ``.invoke()`` 非流式调用时走 ``_generate``→
+            ``_create_chat_result``,若不在这里收,``reasoning_content`` 永远进不了
+            ``additional_kwargs`` → 出方向 ``_get_request_payload`` 回传时拿不到 →
+            mimo/DeepSeek thinking 多轮 tool_call 报 400 "reasoning_content must be
+            passed back",或上下文不完整导致指令遵循下降、幻觉增多。流式/非流式两条
+            收取路径都打补丁,reasoning_content 才不会因开/关流式而丢。
+            """
+            result = super()._create_chat_result(response, generation_info)
+            try:
+                resp = response if isinstance(response, dict) else (
+                    response.model_dump() if hasattr(response, "model_dump") else {})
+                choices = resp.get("choices") or []
+                for gen, choice in zip(result.generations, choices):
+                    msg = (choice or {}).get("message") or {}
+                    rc = msg.get("reasoning_content") or msg.get("reasoning")
+                    gm = getattr(gen, "message", None)
+                    if rc and gm is not None:
+                        if getattr(gm, "additional_kwargs", None) is None:
+                            gm.additional_kwargs = {}
+                        gm.additional_kwargs["reasoning_content"] = rc
+            except Exception:  # noqa: BLE001
+                pass
+            return result
 
     _CHAT_OPENAI_REASONING_CLS = ChatOpenAIWithReasoning
     return ChatOpenAIWithReasoning

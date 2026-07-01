@@ -265,7 +265,12 @@ class MessageReducer:
         payload = event.get("payload") or {}
         name = payload.get("name") or ""
         usage = event.get("usage")
-        if isinstance(usage, dict):
+        # fork 子 agent 的 usage 不合入主 reducer 累计——fork token 由
+        # loader._accumulate_fork_tokens 单独跟踪、footer 通过
+        # fork_input/fork_output 叠加显示。合入会导致双重计数。
+        tags = event.get("tags") or {}
+        is_fork = bool(tags.get("parent_subagent"))
+        if isinstance(usage, dict) and not is_fork:
             self._merge_usage(usage)
 
         

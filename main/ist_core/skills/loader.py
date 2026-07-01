@@ -543,6 +543,23 @@ def reset_fork_tokens() -> None:
         _FORK_TOKENS[1] = 0
 
 
+def accumulate_fork_tokens_from_usage(usage: dict) -> None:
+    """从 EventBus 的 usage dict 累加 fork token（由 graph.py callback handler 调用）。
+
+    _accumulate_fork_tokens 从 AIMessage 读 usage_metadata 永远返回 0
+    （AIMessage 没有该属性），改由 callback handler 直接传 usage dict 过来。
+    """
+    try:
+        it = int(usage.get("input_tokens") or 0)
+        ot = int(usage.get("output_tokens") or 0)
+        if it or ot:
+            with _FORK_TOKENS_LOCK:
+                _FORK_TOKENS[0] += it
+                _FORK_TOKENS[1] += ot
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # 路径类参数:只展示尾部(basename/末两段)——项目绝对路径前缀对所有调用都一样、无信息量。
 _FORK_PATH_KEYS = ("path", "file_path", "xlsx_path", "provenance_path", "mindmap_path")
 # 取值优先级:语义参数(搜什么/查什么)排在路径前——如 fs_grep 显示搜索 pattern 比显示手册路径有用。

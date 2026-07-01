@@ -4,14 +4,15 @@ from __future__ import annotations
 
 
 PRICING_RMB: dict[str, dict[str, float]] = {
-    # MiMo-V2.5 系列
-    "mimo-v2.5": {"input_miss": 1.0, "input_hit": 0.02, "output": 2.0},
+    # MiMo-V2.5 系列（小米 API 按量计费，元/百万 tokens）
+    "mimo-v2.5":     {"input_miss": 1.0, "input_hit": 0.02,  "output": 2.0},
     "mimo-v2.5-pro": {"input_miss": 3.0, "input_hit": 0.025, "output": 6.0},
-    # DeepSeek
-    "deepseek-v4-flash": {"input_miss": 1.0, "input_hit": 0.02, "output": 2.0},
-    "deepseek-v4-pro": {"input_miss": 3.0, "input_hit": 0.025, "output": 6.0},
-    "deepseek-chat": {"input_miss": 1.0, "input_hit": 0.02, "output": 2.0},
-    "deepseek-reasoner": {"input_miss": 1.0, "input_hit": 0.02, "output": 2.0},
+    # DeepSeek V4 系列（2026-05-27 生效，统一费率）
+    "deepseek-v4-flash": {"input_miss": 1.0, "input_hit": 0.02,  "output": 2.0},
+    "deepseek-v4-pro":   {"input_miss": 3.0, "input_hit": 0.025, "output": 6.0},
+    # DeepSeek 旧版（向后兼容）
+    "deepseek-chat":     {"input_miss": 2.0, "input_hit": 0.5,  "output": 8.0},
+    "deepseek-reasoner": {"input_miss": 4.0, "input_hit": 1.0,  "output": 16.0},
 }
 
 

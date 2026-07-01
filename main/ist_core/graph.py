@@ -182,29 +182,57 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
                     
                     um = getattr(msg, "usage_metadata", None) or {}
                     if isinstance(um, dict):
-                        usage = um
+                        usage = dict(um)
                 if not text:
                     text = getattr(first, "text", "") or ""
-            
+
+            # usage_metadata 有 input/output/total 但缺 cache 字段；
+            # response.llm_output.token_usage 有 prompt_cache_hit/miss_tokens。
+            # 两者合并（与 streaming.py 的提取逻辑对齐）。
             if not usage:
                 llm_out = getattr(response, "llm_output", None) or {}
                 tu = llm_out.get("token_usage") or llm_out.get("usage") or {}
                 if isinstance(tu, dict):
-                    usage = tu
+                    usage = dict(tu)
+            else:
+                llm_out = getattr(response, "llm_output", None) or {}
+                raw = llm_out.get("token_usage") or llm_out.get("usage") or {}
+                if isinstance(raw, dict):
+                    # DeepSeek: 顶层 prompt_cache_hit_tokens / prompt_cache_miss_tokens
+                    for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
+                        if k in raw and k not in usage:
+                            usage[k] = raw[k]
+                    # MiMo / OpenAI 标准: prompt_tokens_details.cached_tokens
+                    if "prompt_cache_hit_tokens" not in usage:
+                        ptd = raw.get("prompt_tokens_details") or {}
+                        cached = ptd.get("cached_tokens")
+                        if isinstance(cached, int) and cached > 0:
+                            usage["prompt_cache_hit_tokens"] = cached
+                            prompt_total = usage.get("input_tokens") or raw.get("prompt_tokens") or 0
+                            usage["prompt_cache_miss_tokens"] = max(prompt_total - cached, 0)
         except Exception:  # noqa: BLE001
             text = ""
         text = (text or "").strip()
-        
+
         sub_tags = self._subagent_tags(kwargs)
 
-        
+        # fork 子 agent 的 usage 不发 EventBus（reducer 会跳过），直接写 _FORK_TOKENS。
+        # 主 agent 的 usage 正常发 EventBus（这是主 agent usage 的唯一来源——
+        # astream_events 看不到 agent.invoke() 内部的 LLM 事件）。
         if usage:
-            self._emit_to_bus(
-                "llm_end",
-                payload={"name": "usage_only"},
-                tags=sub_tags or None,
-                usage=usage,
-            )
+            if sub_tags.get("parent_subagent"):
+                try:
+                    from main.ist_core.skills.loader import accumulate_fork_tokens_from_usage
+                    accumulate_fork_tokens_from_usage(usage)
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                self._emit_to_bus(
+                    "llm_end",
+                    payload={"name": "usage_only"},
+                    tags=sub_tags or None,
+                    usage=usage,
+                )
         
         if thinking_text:
             self._emit_to_bus(

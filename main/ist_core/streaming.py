@@ -108,6 +108,12 @@ async def astream_to_bus(
             metadata = ev.get("metadata") or {}
             if "langgraph_node" in metadata:
                 tags["node"] = metadata["langgraph_node"]
+            # fork 子 agent 标识：callback handler 通过 _subagent_tags 设置，
+            # astream_events 通过 metadata.lc_agent_name 传递。reducer 据此
+            # 跳过 fork usage（避免与 _FORK_TOKENS 双重计数）。
+            lc_agent = metadata.get("lc_agent_name") or ""
+            if lc_agent and lc_agent not in ("main_agent", ""):
+                tags["parent_subagent"] = lc_agent
             usage = None
             data = ev.get("data") or {}
             if "output" in data and hasattr(data["output"], "usage_metadata"):
@@ -120,9 +126,18 @@ async def astream_to_bus(
                 if isinstance(raw, dict):
                     if usage is None:
                         usage = {}
+                    # DeepSeek: 顶层 prompt_cache_hit_tokens / prompt_cache_miss_tokens
                     for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
                         if k in raw and k not in usage:
                             usage[k] = raw[k]
+                    # MiMo / OpenAI 标准: prompt_tokens_details.cached_tokens
+                    if "prompt_cache_hit_tokens" not in usage:
+                        ptd = raw.get("prompt_tokens_details") or {}
+                        cached = ptd.get("cached_tokens")
+                        if isinstance(cached, int) and cached > 0:
+                            usage["prompt_cache_hit_tokens"] = cached
+                            prompt_total = usage.get("input_tokens") or raw.get("prompt_tokens") or 0
+                            usage["prompt_cache_miss_tokens"] = max(prompt_total - cached, 0)
                 if usage == {}:
                     usage = None
             payload = _to_event_payload(ev)

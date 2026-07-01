@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IST-Core 审计日志</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f7fa; color: #333; font-size: 14px; }
+        .login-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .login-box { background: #fff; padding: 40px; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.15); width: 360px; }
+        .login-box h2 { text-align: center; margin-bottom: 24px; color: #1a1a2e; }
+        .login-box input { width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 12px; font-size: 14px; }
+        .login-box button { width: 100%; padding: 10px; background: #4361ee; color: #fff; border: none; border-radius: 6px; font-size: 15px; cursor: pointer; }
+        .login-box button:hover { background: #3a56d4; }
+        .login-error { color: #e63946; font-size: 13px; text-align: center; margin-bottom: 8px; display: none; }
+
+        header { background: #1a1a2e; color: #fff; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; }
+        header h1 { font-size: 18px; font-weight: 600; }
+        .header-right { display: flex; align-items: center; gap: 16px; }
+        .header-right .user-info { font-size: 13px; opacity: 0.8; }
+        .header-right button { padding: 6px 14px; background: rgba(255,255,255,0.15); color: #fff; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .header-right button:hover { background: rgba(255,255,255,0.25); }
+
+        nav { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 0 24px; display: flex; gap: 0; }
+        nav button { padding: 12px 20px; background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; font-size: 14px; color: #666; }
+        nav button.active { color: #4361ee; border-bottom-color: #4361ee; font-weight: 500; }
+        nav button:hover { color: #333; }
+
+        main { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+
+        /* Dashboard */
+        .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat-card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .stat-card .label { font-size: 13px; color: #888; margin-bottom: 4px; }
+        .stat-card .value { font-size: 28px; font-weight: 700; color: #1a1a2e; }
+
+        /* Filters */
+        .filters { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+        .filter-group { display: flex; flex-direction: column; gap: 4px; }
+        .filter-group label { font-size: 12px; color: #888; }
+        .filter-group input, .filter-group select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
+        .filter-actions { display: flex; gap: 8px; align-items: flex-end; }
+        .btn { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .btn-primary { background: #4361ee; color: #fff; }
+        .btn-primary:hover { background: #3a56d4; }
+        .btn-secondary { background: #e9ecef; color: #333; }
+        .btn-secondary:hover { background: #dee2e6; }
+        .btn-export { background: #2d6a4f; color: #fff; }
+        .btn-export:hover { background: #245a3f; }
+
+        /* Table */
+        .table-container { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #f8f9fa; padding: 10px 12px; text-align: left; font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #e0e0e0; white-space: nowrap; }
+        td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+        tr:hover { background: #f8f9ff; }
+        tr { cursor: pointer; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+        .badge-error { background: #fee2e2; color: #dc2626; }
+        .badge-ok { background: #d1fae5; color: #059669; }
+        .badge-kind { background: #e0e7ff; color: #4338ca; }
+
+        /* Pagination */
+        .pagination { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }
+        .page-info { font-size: 13px; color: #888; }
+        .page-buttons { display: flex; gap: 4px; }
+        .page-buttons button { padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .page-buttons button.active { background: #4361ee; color: #fff; border-color: #4361ee; }
+        .page-buttons button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* Detail modal */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none; align-items: center; justify-content: center; z-index: 900; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: #fff; border-radius: 12px; width: 800px; max-width: 90vw; max-height: 85vh; overflow-y: auto; padding: 24px; }
+        .modal h3 { margin-bottom: 16px; }
+        .modal .close-btn { float: right; background: none; border: none; font-size: 20px; cursor: pointer; color: #888; }
+        .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .detail-item { padding: 8px 0; }
+        .detail-item .label { font-size: 12px; color: #888; }
+        .detail-item .val { font-size: 14px; word-break: break-all; }
+        .detail-full { grid-column: 1 / -1; }
+        pre.json-block { background: #f5f5f5; padding: 12px; border-radius: 6px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; }
+
+        /* Tabs content */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .loading { text-align: center; padding: 40px; color: #888; }
+    </style>
+</head>
+<body>
+
+<!-- Login -->
+<div class="login-overlay" id="loginOverlay">
+    <div class="login-box">
+        <h2>IST-Core 审计日志</h2>
+        <div class="login-error" id="loginError"></div>
+        <input type="text" id="loginUsername" placeholder="用户名" autocomplete="username">
+        <input type="password" id="loginPassword" placeholder="密码" autocomplete="current-password">
+        <button onclick="doLogin()">登录</button>
+    </div>
+</div>
+
+<!-- Header -->
+<header id="mainHeader" style="display:none">
+    <h1>IST-Core 审计日志</h1>
+    <div class="header-right">
+        <span class="user-info" id="userInfo"></span>
+        <button onclick="doLogout()">退出</button>
+    </div>
+</header>
+
+<!-- Nav -->
+<nav id="mainNav" style="display:none">
+    <button class="active" data-tab="dashboard">概览</button>
+    <button data-tab="audit">审计日志</button>
+    <button data-tab="users">用户</button>
+    <button data-tab="sessions">会话</button>
+    <button data-tab="llm">LLM 用量</button>
+    <button data-tab="tools">工具</button>
+    <button data-tab="security">安全</button>
+</nav>
+
+<!-- Main -->
+<main id="mainContent" style="display:none">
+
+    <!-- Dashboard Tab -->
+    <div class="tab-content active" id="tab-dashboard">
+        <div class="dashboard-grid" id="dashboardCards"></div>
+    </div>
+
+    <!-- Audit Tab -->
+    <div class="tab-content" id="tab-audit">
+        <div class="filters" id="auditFilters">
+            <div class="filter-group">
+                <label>事件类型</label>
+                <select id="fEventKind">
+                    <option value="">全部</option>
+                    <option value="auth_login">登录</option>
+                    <option value="auth_login_failed">登录失败</option>
+                    <option value="auth_logout">登出</option>
+                    <option value="llm_end">LLM 调用</option>
+                    <option value="tool_start">工具开始</option>
+                    <option value="tool_end">工具结束</option>
+                    <option value="file_read">文件读</option>
+                    <option value="file_write">文件写</option>
+                    <option value="file_edit">文件编辑</option>
+                    <option value="skill_invoke">Skill 调用</option>
+                    <option value="code_exec">代码执行</option>
+                    <option value="shell_exec">Shell 执行</option>
+                    <option value="access_denied">权限拒绝</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>用户名</label>
+                <input type="text" id="fUsername" placeholder="用户名">
+            </div>
+            <div class="filter-group">
+                <label>会话 ID</label>
+                <input type="text" id="fSessionId" placeholder="session_id">
+            </div>
+            <div class="filter-group">
+                <label>工具名</label>
+                <input type="text" id="fToolName" placeholder="tool_name">
+            </div>
+            <div class="filter-group">
+                <label>错误</label>
+                <select id="fIsError">
+                    <option value="">全部</option>
+                    <option value="true">仅错误</option>
+                    <option value="false">仅正常</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>开始时间</label>
+                <input type="datetime-local" id="fStartTime">
+            </div>
+            <div class="filter-group">
+                <label>结束时间</label>
+                <input type="datetime-local" id="fEndTime">
+            </div>
+            <div class="filter-actions">
+                <button class="btn btn-primary" onclick="loadAuditLogs(1)">查询</button>
+                <button class="btn btn-secondary" onclick="clearFilters()">清空</button>
+                <button class="btn btn-export" onclick="exportCSV()">导出 CSV</button>
+            </div>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>时间</th>
+                        <th>用户</th>
+                        <th>事件类型</th>
+                        <th>摘要</th>
+                        <th>工具</th>
+                        <th>状态</th>
+                    </tr>
+                </thead>
+                <tbody id="auditTableBody">
+                    <tr><td colspan="7" class="loading">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="pagination" id="auditPagination"></div>
+    </div>
+
+    <!-- Users Tab -->
+    <div class="tab-content" id="tab-users">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr><th>用户名</th><th>角色</th><th>状态</th><th>失败次数</th><th>最后登录</th><th>创建时间</th></tr>
+                </thead>
+                <tbody id="usersTableBody">
+                    <tr><td colspan="6" class="loading">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="pagination" id="usersPagination"></div>
+    </div>
+
+    <!-- Sessions Tab -->
+    <div class="tab-content" id="tab-sessions">
+        <div class="filters">
+            <div class="filter-group">
+                <label>用户名</label>
+                <input type="text" id="fSessUsername" placeholder="用户名">
+            </div>
+            <div class="filter-group">
+                <label>状态</label>
+                <select id="fSessValid">
+                    <option value="">全部</option>
+                    <option value="true">有效</option>
+                    <option value="false">已失效</option>
+                </select>
+            </div>
+            <div class="filter-actions">
+                <button class="btn btn-primary" onclick="loadSessions(1)">查询</button>
+            </div>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr><th>会话 ID</th><th>用户名</th><th>角色</th><th>状态</th><th>创建时间</th><th>过期时间</th></tr>
+                </thead>
+                <tbody id="sessionsTableBody">
+                    <tr><td colspan="6" class="loading">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="pagination" id="sessionsPagination"></div>
+    </div>
+
+    <!-- LLM Tab -->
+    <div class="tab-content" id="tab-llm">
+        <div class="filters">
+            <div class="filter-group">
+                <label>用户名</label>
+                <input type="text" id="fLlmUsername" placeholder="用户名">
+            </div>
+            <div class="filter-group">
+                <label>模型</label>
+                <input type="text" id="fLlmModel" placeholder="model_name">
+            </div>
+            <div class="filter-actions">
+                <button class="btn btn-primary" onclick="loadLlmUsage(1)">查询</button>
+            </div>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr><th>时间</th><th>用户</th><th>模型</th><th>输入 Token</th><th>输出 Token</th><th>缓存命中</th><th>缓存未命中</th></tr>
+                </thead>
+                <tbody id="llmTableBody">
+                    <tr><td colspan="7" class="loading">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="pagination" id="llmPagination"></div>
+    </div>
+
+    <!-- Tools Tab -->
+    <div class="tab-content" id="tab-tools">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr><th>工具名</th><th>调用次数</th></tr>
+                </thead>
+                <tbody id="toolsTableBody">
+                    <tr><td colspan="2" class="loading">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Security Tab -->
+    <div class="tab-content" id="tab-security">
+        <h3 style="margin-bottom:12px">登录失败记录</h3>
+        <div class="table-container" style="margin-bottom:24px">
+            <table>
+                <thead>
+                    <tr><th>时间</th><th>目标用户</th><th>原因</th><th>来源 IP</th></tr>
+                </thead>
+                <tbody id="secFailBody">
+                    <tr><td colspan="4" class="loading">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <h3 style="margin-bottom:12px">锁定/禁用账号</h3>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr><th>用户名</th><th>角色</th><th>状态</th><th>失败次数</th><th>更新时间</th></tr>
+                </thead>
+                <tbody id="secLockedBody">
+                    <tr><td colspan="5" class="loading">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+
+<!-- Detail Modal -->
+<div class="modal-overlay" id="detailModal">
+    <div class="modal">
+        <button class="close-btn" onclick="closeModal()">&times;</button>
+        <h3>日志详情 #<span id="detailId"></span></h3>
+        <div class="detail-grid" id="detailGrid"></div>
+    </div>
+</div>
+
+<script>
+// ---- State ----
+let token = '';
+let username = '';
+let auditPage = 1;
+let usersPage = 1;
+let sessionsPage = 1;
+let llmPage = 1;
+
+// ---- API ----
+function params(obj = {}) {
+    const merged = { token, ...obj };
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(merged)) {
+        if (v !== '' && v !== null && v !== undefined) p.set(k, v);
+    }
+    return p.toString();
+}
+
+function errStr(e) {
+    if (!e) return '未知错误';
+    if (typeof e === 'string') return e;
+    if (e.message) return e.message;
+    try { return JSON.stringify(e); } catch { return String(e); }
+}
+
+async function api(path, opts = {}) {
+    const sep = path.includes('?') ? '&' : '?';
+    let resp;
+    try {
+        resp = await fetch(`${path}${sep}${params(opts)}`);
+    } catch (e) {
+        throw new Error('网络错误: ' + errStr(e));
+    }
+    if (resp.status === 401) { doLogout(); throw new Error('未登录或会话已过期'); }
+    if (!resp.ok) {
+        let detail = '';
+        try { const j = await resp.json(); detail = j.detail || ''; } catch {}
+        throw new Error(detail || ('HTTP ' + resp.status + ' ' + resp.statusText));
+    }
+    return resp.json();
+}
+
+// ---- Auth ----
+async function doLogin() {
+    const u = document.getElementById('loginUsername').value.trim();
+    const p = document.getElementById('loginPassword').value;
+    const errEl = document.getElementById('loginError');
+    if (!u || !p) { errEl.textContent = '请输入用户名和密码'; errEl.style.display = 'block'; return; }
+    try {
+        const resp = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: u, password: p }),
+        });
+        let data;
+        try { data = await resp.json(); } catch { data = {}; }
+        if (!resp.ok) { errEl.textContent = data.detail || ('HTTP ' + resp.status); errEl.style.display = 'block'; return; }
+        token = data.token;
+        username = data.username;
+        localStorage.setItem('log_sess', JSON.stringify({ token, username }));
+        enterApp();
+    } catch (e) {
+        errEl.textContent = '网络错误: ' + errStr(e);
+        errEl.style.display = 'block';
+    }
+}
+
+function doLogout() {
+    fetch('/api/logout', { method: 'POST' }).catch(() => {});
+    token = ''; username = '';
+    localStorage.removeItem('log_sess');
+    document.getElementById('loginOverlay').style.display = 'flex';
+    document.getElementById('mainHeader').style.display = 'none';
+    document.getElementById('mainNav').style.display = 'none';
+    document.getElementById('mainContent').style.display = 'none';
+}
+
+function enterApp() {
+    document.getElementById('loginOverlay').style.display = 'none';
+    document.getElementById('mainHeader').style.display = 'flex';
+    document.getElementById('mainNav').style.display = 'flex';
+    document.getElementById('mainContent').style.display = 'block';
+    document.getElementById('userInfo').textContent = username + ' (superadmin)';
+    loadDashboard();
+    loadAuditLogs(1);
+}
+
+// ---- Nav ----
+document.getElementById('mainNav').addEventListener('click', e => {
+    if (e.target.tagName !== 'BUTTON') return;
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    e.target.classList.add('active');
+    const tab = e.target.dataset.tab;
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    if (tab === 'dashboard') loadDashboard();
+    if (tab === 'audit') loadAuditLogs(1);
+    if (tab === 'users') loadUsers(1);
+    if (tab === 'sessions') loadSessions(1);
+    if (tab === 'llm') loadLlmUsage(1);
+    if (tab === 'tools') loadTools();
+    if (tab === 'security') loadSecurity();
+});
+
+// ---- Dashboard ----
+async function loadDashboard() {
+    try {
+        const d = await api('/api/dashboard/overview');
+        document.getElementById('dashboardCards').innerHTML = [
+            { label: '用户总数', value: d.user_count },
+            { label: '活跃会话', value: d.active_sessions },
+            { label: '总事件数', value: d.total_events },
+            { label: '24h 事件', value: d.events_24h },
+            { label: '错误总数', value: d.error_count },
+            { label: '总 Token', value: d.total_tokens?.toLocaleString() },
+        ].map(c => `<div class="stat-card"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`).join('');
+    } catch (e) {
+        document.getElementById('dashboardCards').innerHTML =
+            `<div class="stat-card"><div class="label">加载失败</div><div class="value" style="font-size:14px;color:#e63946">${errStr(e)}</div></div>`;
+    }
+}
+
+// ---- Audit Logs ----
+function getAuditFilters() {
+    return {
+        event_kind: document.getElementById('fEventKind').value,
+        username: document.getElementById('fUsername').value,
+        session_id: document.getElementById('fSessionId').value,
+        tool_name: document.getElementById('fToolName').value,
+        is_error: document.getElementById('fIsError').value,
+        start_time: document.getElementById('fStartTime').value,
+        end_time: document.getElementById('fEndTime').value,
+    };
+}
+
+async function loadAuditLogs(page) {
+    auditPage = page;
+    const f = getAuditFilters();
+    const body = document.getElementById('auditTableBody');
+    body.innerHTML = '<tr><td colspan="7" class="loading">加载中...</td></tr>';
+    try {
+        const d = await api('/api/audit/logs', { page, page_size: 50, ...f });
+        if (!d.items.length) {
+            body.innerHTML = '<tr><td colspan="7" class="loading">暂无数据</td></tr>';
+        } else {
+            body.innerHTML = d.items.map(r => `
+                <tr onclick="showDetail(${r.id})">
+                    <td>${r.id}</td>
+                    <td>${fmtDt(r.recorded_at)}</td>
+                    <td>${esc(r.username || '')}</td>
+                    <td><span class="badge badge-kind">${esc(r.event_kind)}</span></td>
+                    <td>${esc((r.event_summary || '').slice(0, 80))}</td>
+                    <td>${esc(r.tool_name || '')}</td>
+                    <td>${r.is_error ? '<span class="badge badge-error">ERROR</span>' : '<span class="badge badge-ok">OK</span>'}</td>
+                </tr>
+            `).join('');
+        }
+        renderPagination('auditPagination', d.total, page, 50, loadAuditLogs);
+    } catch (e) {
+        body.innerHTML = `<tr><td colspan="7" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
+    }
+}
+
+function clearFilters() {
+    ['fEventKind','fUsername','fSessionId','fToolName','fIsError','fStartTime','fEndTime'].forEach(id => {
+        const el = document.getElementById(id);
+        el.value = '';
+    });
+}
+
+function exportCSV() {
+    const f = getAuditFilters();
+    const qs = params(f);
+    window.open(`/api/audit/logs/export?${qs}`, '_blank');
+}
+
+// ---- Detail Modal ----
+async function showDetail(id) {
+    try {
+        const d = await api(`/api/audit/logs/${id}`);
+        document.getElementById('detailId').textContent = id;
+        const grid = document.getElementById('detailGrid');
+        const fields = [
+            ['用户名', d.username], ['角色', d.role], ['会话 ID', d.session_id],
+            ['运行 ID', d.run_id], ['线程 ID', d.thread_id], ['时间', fmtDt(d.recorded_at)],
+            ['事件类型', d.event_kind], ['模型', d.model_name],
+            ['输入 Token', d.token_input], ['输出 Token', d.token_output],
+            ['缓存命中', d.token_cache_hit], ['缓存未命中', d.token_cache_miss],
+            ['工具名', d.tool_name], ['工具耗时(ms)', d.tool_duration_ms],
+            ['文件路径', d.file_path], ['文件操作', d.file_operation],
+            ['来源 IP', d.source_ip], ['是否错误', d.is_error ? '是' : '否'],
+            ['错误信息', d.error_message],
+        ];
+        grid.innerHTML = fields.map(([l, v]) => `
+            <div class="detail-item"><div class="label">${l}</div><div class="val">${esc(String(v ?? ''))}</div></div>
+        `).join('');
+
+        if (d.event_summary) {
+            grid.innerHTML += `<div class="detail-item detail-full"><div class="label">摘要</div><div class="val">${esc(d.event_summary)}</div></div>`;
+        }
+        if (d.event_payload) {
+            grid.innerHTML += `<div class="detail-item detail-full"><div class="label">Payload</div><pre class="json-block">${esc(JSON.stringify(d.event_payload, null, 2))}</pre></div>`;
+        }
+        if (d.tool_input) {
+            grid.innerHTML += `<div class="detail-item detail-full"><div class="label">工具输入</div><pre class="json-block">${esc(d.tool_input)}</pre></div>`;
+        }
+        if (d.tool_output) {
+            grid.innerHTML += `<div class="detail-item detail-full"><div class="label">工具输出</div><pre class="json-block">${esc(d.tool_output)}</pre></div>`;
+        }
+        if (d.tags) {
+            grid.innerHTML += `<div class="detail-item detail-full"><div class="label">Tags</div><pre class="json-block">${esc(JSON.stringify(d.tags, null, 2))}</pre></div>`;
+        }
+
+        document.getElementById('detailModal').classList.add('show');
+    } catch {}
+}
+
+function closeModal() {
+    document.getElementById('detailModal').classList.remove('show');
+}
+
+// ---- Users ----
+async function loadUsers(page) {
+    usersPage = page;
+    const body = document.getElementById('usersTableBody');
+    body.innerHTML = '<tr><td colspan="6" class="loading">加载中...</td></tr>';
+    try {
+        const d = await api('/api/users', { page, page_size: 50 });
+        if (!d.items.length) {
+            body.innerHTML = '<tr><td colspan="6" class="loading">暂无数据</td></tr>';
+        } else {
+            body.innerHTML = d.items.map(r => `
+                <tr>
+                    <td>${esc(r.username)}</td>
+                    <td>${esc(r.role)}</td>
+                    <td>${r.account_status === 'normal' ? '<span class="badge badge-ok">正常</span>' : '<span class="badge badge-error">' + esc(r.account_status) + '</span>'}</td>
+                    <td>${r.failed_login_count}</td>
+                    <td>${fmtDt(r.last_login_at)}</td>
+                    <td>${fmtDt(r.created_at)}</td>
+                </tr>
+            `).join('');
+        }
+        renderPagination('usersPagination', d.total, page, 50, loadUsers);
+    } catch (e) {
+        body.innerHTML = `<tr><td colspan="6" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
+    }
+}
+
+// ---- Sessions ----
+async function loadSessions(page) {
+    sessionsPage = page;
+    const body = document.getElementById('sessionsTableBody');
+    body.innerHTML = '<tr><td colspan="6" class="loading">加载中...</td></tr>';
+    try {
+        const d = await api('/api/sessions', {
+            page, page_size: 50,
+            username: document.getElementById('fSessUsername').value,
+            is_valid: document.getElementById('fSessValid').value,
+        });
+        if (!d.items.length) {
+            body.innerHTML = '<tr><td colspan="6" class="loading">暂无数据</td></tr>';
+        } else {
+            body.innerHTML = d.items.map(r => `
+                <tr>
+                    <td title="${esc(r.session_id)}">${esc(r.session_id.slice(0, 30))}...</td>
+                    <td>${esc(r.username)}</td>
+                    <td>${esc(r.role)}</td>
+                    <td>${r.is_valid ? '<span class="badge badge-ok">有效</span>' : '<span class="badge badge-error">已失效</span>'}</td>
+                    <td>${fmtDt(r.created_at)}</td>
+                    <td>${fmtDt(r.expires_at)}</td>
+                </tr>
+            `).join('');
+        }
+        renderPagination('sessionsPagination', d.total, page, 50, loadSessions);
+    } catch (e) {
+        body.innerHTML = `<tr><td colspan="6" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
+    }
+}
+
+// ---- LLM ----
+async function loadLlmUsage(page) {
+    llmPage = page;
+    const body = document.getElementById('llmTableBody');
+    body.innerHTML = '<tr><td colspan="7" class="loading">加载中...</td></tr>';
+    try {
+        const d = await api('/api/llm/usage', {
+            page, page_size: 50,
+            username: document.getElementById('fLlmUsername').value,
+            model_name: document.getElementById('fLlmModel').value,
+        });
+        if (!d.items.length) {
+            body.innerHTML = '<tr><td colspan="7" class="loading">暂无数据</td></tr>';
+        } else {
+            body.innerHTML = d.items.map(r => `
+                <tr>
+                    <td>${fmtDt(r.recorded_at)}</td>
+                    <td>${esc(r.username)}</td>
+                    <td>${esc(r.model_name || '')}</td>
+                    <td>${r.token_input ?? ''}</td>
+                    <td>${r.token_output ?? ''}</td>
+                    <td>${r.token_cache_hit ?? ''}</td>
+                    <td>${r.token_cache_miss ?? ''}</td>
+                </tr>
+            `).join('');
+        }
+        renderPagination('llmPagination', d.total, page, 50, loadLlmUsage);
+    } catch (e) {
+        body.innerHTML = `<tr><td colspan="7" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
+    }
+}
+
+// ---- Tools ----
+async function loadTools() {
+    const body = document.getElementById('toolsTableBody');
+    body.innerHTML = '<tr><td colspan="2" class="loading">加载中...</td></tr>';
+    try {
+        const d = await api('/api/tools');
+        if (!d.items.length) {
+            body.innerHTML = '<tr><td colspan="2" class="loading">暂无数据</td></tr>';
+        } else {
+            body.innerHTML = d.items.map(r => `
+                <tr><td>${esc(r.tool_name)}</td><td>${r.cnt}</td></tr>
+            `).join('');
+        }
+    } catch (e) {
+        body.innerHTML = `<tr><td colspan="2" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
+    }
+}
+
+// ---- Security ----
+async function loadSecurity() {
+    // Failed logins
+    const failBody = document.getElementById('secFailBody');
+    failBody.innerHTML = '<tr><td colspan="4" class="loading">加载中...</td></tr>';
+    try {
+        const d = await api('/api/security/failed-logins', { page: 1, page_size: 50 });
+        if (!d.items.length) {
+            failBody.innerHTML = '<tr><td colspan="4" class="loading">暂无数据</td></tr>';
+        } else {
+            failBody.innerHTML = d.items.map(r => `
+                <tr>
+                    <td>${fmtDt(r.recorded_at)}</td>
+                    <td>${esc(r.target_username || '')}</td>
+                    <td>${esc(r.reason || '')}</td>
+                    <td>${esc(r.source_ip || '')}</td>
+                </tr>
+            `).join('');
+        }
+    } catch (e) {
+        failBody.innerHTML = `<tr><td colspan="4" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
+    }
+
+    // Locked accounts
+    const lockedBody = document.getElementById('secLockedBody');
+    lockedBody.innerHTML = '<tr><td colspan="5" class="loading">加载中...</td></tr>';
+    try {
+        const d = await api('/api/security/locked-accounts');
+        if (!d.items.length) {
+            lockedBody.innerHTML = '<tr><td colspan="5" class="loading">暂无锁定账号</td></tr>';
+        } else {
+            lockedBody.innerHTML = d.items.map(r => `
+                <tr>
+                    <td>${esc(r.username)}</td>
+                    <td>${esc(r.role)}</td>
+                    <td><span class="badge badge-error">${esc(r.account_status)}</span></td>
+                    <td>${r.failed_login_count}</td>
+                    <td>${fmtDt(r.updated_at)}</td>
+                </tr>
+            `).join('');
+        }
+    } catch (e) {
+        lockedBody.innerHTML = `<tr><td colspan="5" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
+    }
+}
+
+// ---- Pagination ----
+function renderPagination(containerId, total, page, pageSize, loadFn) {
+    const totalPages = Math.ceil(total / pageSize);
+    const el = document.getElementById(containerId);
+    if (totalPages <= 1) { el.innerHTML = ''; return; }
+
+    let html = `<div class="page-info">共 ${total} 条，第 ${page}/${totalPages} 页</div><div class="page-buttons">`;
+    html += `<button ${page <= 1 ? 'disabled' : ''} onclick="(${loadFn.name})(${page - 1})">上一页</button>`;
+
+    const start = Math.max(1, page - 2);
+    const end = Math.min(totalPages, page + 2);
+    for (let i = start; i <= end; i++) {
+        html += `<button class="${i === page ? 'active' : ''}" onclick="(${loadFn.name})(${i})">${i}</button>`;
+    }
+
+    html += `<button ${page >= totalPages ? 'disabled' : ''} onclick="(${loadFn.name})(${page + 1})">下一页</button></div>`;
+    el.innerHTML = html;
+}
+
+// ---- Helpers ----
+function fmtDt(s) {
+    if (!s) return '';
+    try {
+        const d = new Date(s);
+        return d.toLocaleString('zh-CN', { hour12: false });
+    } catch { return s; }
+}
+
+function esc(s) {
+    const el = document.createElement('span');
+    el.textContent = s;
+    return el.innerHTML;
+}
+
+// ---- Keyboard ----
+document.getElementById('loginPassword').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+document.getElementById('loginUsername').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('loginPassword').focus(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+document.getElementById('detailModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+
+// ---- Init ----
+(function init() {
+    const saved = localStorage.getItem('log_sess');
+    if (saved) {
+        try {
+            const s = JSON.parse(saved);
+            token = s.token || '';
+            username = s.username || '';
+            if (token) enterApp();
+        } catch {}
+    }
+})();
+</script>
+</body>
+</html>

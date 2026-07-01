@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 
 import pytest
 
@@ -402,8 +403,9 @@ def test_init_device_dispatch_clientside_when_flag(monkeypatch):
     client._ssh_python_json = _fake
     res = client.init_device(device_index=0)
     assert res["initialized"] == 1
-    # argv: APV_SRC TASK_DIR LOCK_FILE device_count device_index
-    assert captured["args"] == [mc._JH_APV_SRC, mc._JH_TASK_DIR, mc._JH_LOCK_FILE, "0", "0"]
+    # argv: APV_SRC TASK_DIR LOCK_FILE device_count device_index localhost_ssh_pass
+    assert captured["args"] == [mc._JH_APV_SRC, mc._JH_TASK_DIR, mc._JH_LOCK_FILE, "0", "0",
+                                 os.environ.get("IST_LOCALHOST_SSH_PASS", "")]
     assert captured["timeout"] == 300          # 串口 clear 慢(多台序列~174s)，给足余量
     assert "clear config all" in captured["script"]
 

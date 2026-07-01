@@ -106,11 +106,18 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 
 ### skill/agent prompt 编写红线
 
-写 skill/agent 的 `.md` prompt 时：
+写 skill/agent 的 `.md` prompt 时（融合 Anthropic 官方 [skill best practices](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices) + 本项目实证；官方 meta-skill `skill-creator` 在 github.com/anthropics/skills）：
 
-- **只陈述事实与现象，让 LLM 据此自己判断、行动；不写指令/否定**。禁用「必须 / 务必 / 不要 / 不自己推断 / 原样转达 / 不可只甩」这类指令性、否定式措辞。例：写「某 case 的 CUT 原因 = `rounds` 末轮的 `feedback_full`」，而非「必须复述、不许自己编归因」。
+- **按「自由度」匹配语气（官方 degrees of freedom——这是总纲）**：先判这一步是哪种路况——
+  - **高自由度**（多种做法都对、靠上下文定，如「该探哪条命令 / 该用什么形态断言」这类领域判断）：陈述事实与现象 + 用祈使把动作说清 + 解释**为什么**，让 LLM 据此自己判断；期望值不写死答案（见下）。如开阔田野，给方向、信任模型。
+  - **低自由度**（脆弱、只有一条安全路径，如 emit 结构契约、固定执行序列）：可用精确约束（「按 X→Y→Z 顺序」「这条命令不改」）。如窄桥两侧悬崖，精确护栏在这里是对的、不算违规。
+  - **真正要避免的**：把 ALL-CAPS 的「必须/务必/绝不/永远」当**默认**手段、且不解释 why（官方称 yellow flag）。**不是避免一切祈使**——官方默认 prefer 祈使式（「先读 X，再做 Y」）；把该说清的动作藏成模糊名词化陈述，反而让 LLM 多解码一层、语义发虚。（旧版「只陈述、一律禁指令」在这点上走过头了。）
 - **零写死领域命令**：prompt 里不出现具体设备命令（如 `show statistics sdns pool` / `Hit:N` / 具体 sdns 语法）；该探/该断言哪条命令，靠 LLM 查手册/先例/footprint 得出。
-- **不写死答案与具体例子**：不给「应改成 X」式的具体命令例子——LLM 会把它当通用规则一刀切套用、误伤异类。实证：grade 重做意见写死「算法类 case 补 `show statistics`」→ GA 算法本该用 `dig` 验证命中、却被迫套 `show statistics` 写出 `Hit:\d+` 恒真断言 → 3 个 GA case 连续 CUT escalate（回归）。
+- **示例分两类，别一刀切禁**：
+  - **输出形态/格式**的示例（断言长什么样、provenance JSON 的结构骨架）——官方鼓励，帮 LLM 看清形态，可给。
+  - **领域判断答案**的具体例子（「算法类应改成 `show statistics`」）——禁。LLM 会当通用规则一刀切套用、误伤异类。实证：grade 重做意见写死「算法类补 `show statistics`」→ GA 本该 `dig` 验命中、却被迫套出 `Hit:\d+` 恒真断言 → 3 个 GA case 连续 CUT 回归。
+- **术语一致 + 假设 LLM 已聪明**：同一概念自始至终用同一个词（别一会儿「成员 IP」一会儿「落点」——术语漂移会让 LLM 误判同/异）；不解释 LLM 已知的基础（RR 是什么、dig 是什么），把 token 留给真正的踩坑点。
+- **改 prompt 前先有 eval（官方 eval-first）**：把要防的回归固化成可机读断言（如「产出 excel 不含写死的 `Hit:\s+1` / 命中 IP」），改完跑 eval + baseline 对比，别只靠肉眼看一次产物就下结论。
 
 ## main 子包结构
 

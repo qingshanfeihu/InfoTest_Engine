@@ -201,18 +201,18 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["run_shell"] = run_shell
             _TOOL_REGISTRY["run_python"] = run_python
         except ImportError:
-            pass
+            logger.debug("工具 run_shell/run_python 未可用，跳过注册")
         try:
             from main.ist_core.tools.device import dev_rest, dev_ssh
             _TOOL_REGISTRY["dev_ssh"] = dev_ssh
             _TOOL_REGISTRY["dev_rest"] = dev_rest
         except ImportError:
-            pass
+            logger.debug("工具 dev_ssh/dev_rest 未可用，跳过注册")
         try:
             from main.ist_core.tools.knowledge.kb_bug_search import kb_bug_search
             _TOOL_REGISTRY["kb_bug_search"] = kb_bug_search
         except ImportError:
-            pass
+            logger.debug("工具 kb_bug_search 未可用，跳过注册")
         try:
             from main.ist_core.tools.knowledge.footprint_lookup import (
                 kb_footprint,
@@ -220,7 +220,7 @@ def _get_tool_registry() -> dict[str, Any]:
 
             _TOOL_REGISTRY["kb_footprint"] = kb_footprint
         except ImportError:
-            pass
+            logger.debug("工具 kb_footprint 未可用，跳过注册")
         # 单 case 编译/上机 tools（draft/grade 子 agent 用）
         try:
             from main.ist_core.tools.device import (
@@ -238,7 +238,7 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["dev_probe"] = dev_probe
             _TOOL_REGISTRY["dev_init_device"] = dev_init_device
         except ImportError:
-            pass
+            logger.debug("工具 compile_emit/dev_probe/dev_run_case 未可用，跳过注册")
         # 批量编译 tools（ist_compile 编译链用）：解析清单 + 合并打包 + fan-out + 串行上机
         try:
             from main.ist_core.tools.device import (
@@ -252,7 +252,7 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["compile_fanout"] = compile_fanout
             _TOOL_REGISTRY["dev_run_batch"] = dev_run_batch
         except ImportError:
-            pass
+            logger.debug("工具 compile_prep/compile_emit_merged/compile_fanout/dev_run_batch 未可用，跳过注册")
         try:
             from main.ist_core.tools.device.precedent_tools import (
                 compile_score,
@@ -261,12 +261,12 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["compile_precedent"] = compile_precedent
             _TOOL_REGISTRY["compile_score"] = compile_score
         except ImportError:
-            pass
+            logger.debug("工具 compile_precedent/compile_score 未可用，跳过注册")
         try:
             from main.ist_core.tools.knowledge.command_builder import build_command
             _TOOL_REGISTRY["build_command"] = build_command
         except ImportError:
-            pass
+            logger.debug("工具 build_command 未可用，跳过注册")
     return _TOOL_REGISTRY
 
 

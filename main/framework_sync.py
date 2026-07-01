@@ -16,11 +16,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Optional
 
 from main.case_compiler.device_mcp_client import _connect, JUMPHOST
+
+logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent
 _MIRROR = _ROOT / "knowledge" / "framework" / "mirror"
@@ -47,8 +50,8 @@ def _load_meta() -> dict:
     if _META.is_file():
         try:
             return json.loads(_META.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            logger.warning("同步元数据文件损坏，将从头同步: %s", _META, exc_info=True)
     return {"version": 1, "by_path": {}, "synced_at": None}
 
 

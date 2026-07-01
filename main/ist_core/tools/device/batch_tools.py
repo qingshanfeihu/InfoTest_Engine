@@ -208,7 +208,8 @@ def dev_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
     try:
         from main.ist_core.tools.deepagent.file_tools import _resolve_inside_root
         p = _resolve_inside_root(xlsx_path, must_exist=True)
-    except Exception:
+    except Exception:  # noqa: BLE001
+        logger.debug("xlsx 路径解析失败(将回退兜底): %s", xlsx_path, exc_info=True)
         p = None
     if p is None or not Path(p).is_file():
         cands = [Path(xlsx_path)]
@@ -247,6 +248,7 @@ def dev_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
     try:
         from main.case_compiler import env_pool as _pool
     except Exception:  # noqa: BLE001
+        logger.debug("加载 env_pool 失败，回退单环境模式", exc_info=True)
         _pool = None
     try:
         with _ctx.ExitStack() as _stack:
@@ -261,6 +263,7 @@ def dev_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
                                        "message": "所有自动化环境都忙，请稍后重试。"},
                                       ensure_ascii=False)
                 except Exception:  # noqa: BLE001
+                    logger.warning("环境池 acquire 异常，回退单环境", exc_info=True)
                     env = None
             client = _stack.enter_context(FrameworkMCPClient(env))
             dres = client.deliver(module, submit, str(p))

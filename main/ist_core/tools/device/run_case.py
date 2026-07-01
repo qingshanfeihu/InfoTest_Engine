@@ -74,7 +74,8 @@ def dev_run_case(
     try:
         from main.ist_core.tools.deepagent.file_tools import _resolve_inside_root
         p = _resolve_inside_root(xlsx_path, must_exist=True)
-    except Exception:
+    except Exception:  # noqa: BLE001
+        logger.debug("xlsx 路径解析失败(将回退兜底): %s", xlsx_path, exc_info=True)
         p = None
     if p is None or not Path(p).is_file():
         # 兜底:裸路径 + 常见重定向根都试一遍
@@ -267,20 +268,22 @@ def _do_probe(cmd: str) -> str:
     try:
         from main.case_compiler.config import get_config
         _build = get_config().build
-    except Exception:
+    except Exception:  # noqa: BLE001
+        logger.debug("读取 compiler config 失败，build 使用空串", exc_info=True)
         _build = ""
     # 1) 新版 FastMCP apv_ssh_execute —— status + 对齐 ^，不剥回显
     try:
         from main.case_compiler.device_mcp_client import probe_via_fastmcp, _redact
         fr = probe_via_fastmcp(cmd, build=_build)
     except Exception:  # noqa: BLE001
+        logger.debug("FastMCP 探针失败(将回退 stdio): cmd=%s", cmd, exc_info=True)
         fr = None
     if isinstance(fr, dict) and fr.get("text"):
         text = fr["text"]
         try:
             text = _redact(str(text))
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("脱敏处理失败，使用原始文本", exc_info=True)
         # apv_ssh_execute 文本已自带 command/status/回显+对齐 ^，原样回灌(仅打 dev_probe 来源标)
         return f"=== dev_probe (fastmcp apv_ssh) ===\n{text}"
     # 2) 回退：老 stdio probe_show（剥回显，无效命令只剩裸 ^）
@@ -303,7 +306,7 @@ def _do_probe(cmd: str) -> str:
         from main.case_compiler.device_mcp_client import _redact
         output = _redact(str(output)) if output else output
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("脱敏处理失败，使用原始输出", exc_info=True)
     return (f"=== dev_probe ===\n"
             f"command: {cmd}\n"
             f"--- 设备回显(经跳转机)---\n"

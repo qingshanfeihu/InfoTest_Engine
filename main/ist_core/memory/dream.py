@@ -78,7 +78,8 @@ def _load_existing_facts(footprint_dir: Path) -> dict[str, dict[str, list]]:
     for f in footprint_dir.rglob("*.json"):
         try:
             d = _json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception:  # noqa: BLE001
+            logger.debug("footprint JSON 解析失败: %s", f, exc_info=True)
             continue
         fid = d.get("feature_id")
         if not fid:

@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import time
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from main.case_compiler.config import get_config
 
@@ -69,6 +72,7 @@ def framework_ready(env: Any, timeout: int = 8) -> bool:
                   password=_password(env), timeout=timeout, banner_timeout=timeout,
                   auth_timeout=timeout, look_for_keys=False, allow_agent=False)
     except Exception:  # noqa: BLE001
+        logger.debug("跳板机 SSH 连接失败: host=%s", env.jumphost, exc_info=True)
         return False
     try:
         _i, o, _e = c.exec_command(f"test -f {env.server_path} && echo OK", timeout=timeout)
@@ -78,6 +82,7 @@ def framework_ready(env: Any, timeout: int = 8) -> bool:
             return True
         return _device_reachable_via(c, env, timeout=timeout)
     except Exception:  # noqa: BLE001
+        logger.debug("探活检查失败: host=%s", env.jumphost, exc_info=True)
         return False
     finally:
         try:
@@ -110,6 +115,7 @@ def _device_reachable_via(c: Any, env: Any, timeout: int = 8) -> bool:
         _i2, o2, _e2 = c.exec_command(chk, timeout=timeout)
         return "OPEN" in o2.read().decode("utf-8", "replace")
     except Exception:  # noqa: BLE001
+        logger.debug("设备可达性探活异常(保守放行)", exc_info=True)
         return True   # 探活逻辑异常 → 保守放行，不误杀
 
 
@@ -415,13 +421,14 @@ def resolve_device_ip(build: str = "", env: Any = None) -> str | None:
             _DEVICE_IP_CACHE[key] = ip
             return ip
         return None
-    except Exception:
+    except Exception:  # noqa: BLE001
+        logger.debug("解析设备 IP 失败: build=%s", build, exc_info=True)
         return None
     finally:
         if c is not None:
             try:
                 c.close()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
 
 
@@ -446,7 +453,8 @@ def fastmcp_call(tool: str, arguments: dict, env: Any = None,
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", "replace")
-    except Exception:
+    except Exception:  # noqa: BLE001
+        logger.debug("FastMCP HTTP 请求失败: url=%s tool=%s", url, tool, exc_info=True)
         return None
     obj = None
     for line in raw.splitlines():
@@ -466,7 +474,8 @@ def fastmcp_call(tool: str, arguments: dict, env: Any = None,
         return None
     try:
         return obj["result"]["content"][0]["text"]
-    except Exception:
+    except Exception:  # noqa: BLE001
+        logger.debug("FastMCP 响应解析失败: tool=%s obj=%s", tool, obj, exc_info=True)
         return None
 
 

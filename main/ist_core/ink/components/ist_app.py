@@ -11,12 +11,15 @@ Replaces the Textual-based IstApp. Uses Python Ink renderer for:
 
 from __future__ import annotations
 
+import logging
 import os
 import time as _time
 import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from main.ist_core.ink.app import InkApp
 from main.ist_core.ink.components.footer import FooterPane, _format_elapsed
@@ -359,8 +362,8 @@ class IstInkApp:
                                 chunk = f.read()
                                 offset = f.tell()
                             new_lines = [ln.strip() for ln in chunk.split("\n") if ln.strip()]
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001
+                    logger.debug("编译日志读取失败", exc_info=True)
                 try:
                     ft = get_fork_tokens()
                     if not new_lines and ft == last_ft:
@@ -375,8 +378,8 @@ class IstInkApp:
                         # 只在用户跟看(底部 sticky)时渲染;往上滚则不渲染,放行用户滚动
                         if new_lines and self._transcript.node.sticky_scroll:
                             self._app.render()
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001
+                    logger.debug("编译日志 UI 更新失败", exc_info=True)
 
         threading.Thread(target=_poll, daemon=True).start()
 

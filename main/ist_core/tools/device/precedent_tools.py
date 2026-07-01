@@ -56,6 +56,7 @@ def _load_mirror_corpus() -> list[dict]:
             try:
                 ws = openpyxl.load_workbook(fp, data_only=True).active
             except Exception:  # noqa: BLE001
+                logger.debug("mirror 先例 xlsx 加载失败: %s", fp, exc_info=True)
                 continue
             # 读全表：autoid 在 col1（18 位数字），case 标题在 col4，E/F/G 在 col5/6/7。
             raw = []
@@ -115,6 +116,7 @@ def _load_intent_index() -> dict:
             _INTENT_INDEX_PATH.read_text(encoding="utf-8")
         )
     except Exception:  # noqa: BLE001
+        logger.debug("意图索引加载失败(退化为不可用): %s", _INTENT_INDEX_PATH, exc_info=True)
         _INTENT_INDEX_CACHE = {}
     return _INTENT_INDEX_CACHE
 

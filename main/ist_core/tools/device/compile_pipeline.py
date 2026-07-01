@@ -64,7 +64,7 @@ def _emit_progress(text: str) -> None:
         from main.ist_core.events import get_default_bus
         get_default_bus().emit("evidence_added", payload={"text": text})
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("流水线进度 emit 失败", exc_info=True)
 
 
 def _project_root() -> Path:
@@ -92,6 +92,7 @@ def _grade_extract_facts(xp: Path, prov: Path) -> dict:
         facts = mod.extract(str(xp), str(prov))
         return facts if isinstance(facts, dict) else {}
     except Exception:  # noqa: BLE001
+        logger.debug("grade_extract 加载/执行失败: xp=%s", xp, exc_info=True)
         return {}
 
 

@@ -59,6 +59,21 @@ def _last_user_query(messages: list) -> str:
     return ""
 
 
+def _extract_username_from_thread_id(thread_id: str) -> str | None:
+    """从 thread_id 提取 username。
+
+    thread_id 格式: {username}_{channel}_{ms}_{rand}
+    从环境变量 IST_SSH_USER 获取最可靠；若无则尝试解析 thread_id。
+    """
+    env_user = os.environ.get("IST_SSH_USER", "").strip()
+    if env_user:
+        return env_user
+    # fallback: thread_id 第一个 _ 前的部分
+    if thread_id and "_" in thread_id:
+        return thread_id.split("_", 1)[0]
+    return None
+
+
 
 
 
@@ -95,6 +110,9 @@ class MemoryInjectionMiddleware(AgentMiddleware):
         if not query:
             query = self._query_extractor(messages or [])
 
+        # 从 thread_id 提取 username 用于 L2 记忆隔离
+        username = _extract_username_from_thread_id(thread_id)
+
         
         if thread_id:
             try:
@@ -109,7 +127,7 @@ class MemoryInjectionMiddleware(AgentMiddleware):
             try:
                 keys = self._key_resolvers(messages)
                 for _ns, key in keys[:self._max_items]:
-                    content = self._store.read_long_term_by_path(key)
+                    content = self._store.read_long_term_by_path(key, username=username)
                     if content:
                         snippet = content if len(content) <= 800 else content[:797] + "..."
                         sections.append(f"## {key}\n{snippet}")
@@ -120,7 +138,7 @@ class MemoryInjectionMiddleware(AgentMiddleware):
         remaining = self._max_items - len(sections)
         if remaining > 0 and query:
             try:
-                hits = self._store.read_long_term(query, top_k=remaining)
+                hits = self._store.read_long_term(query, top_k=remaining, username=username)
                 if hits:
                     lt_parts = []
                     for path, content in hits:
@@ -284,9 +302,10 @@ class MemoryWriteMiddleware(AgentMiddleware):
             write_plan = self._finalizer(messages, self._store)
             if write_plan:
                 self._finalized.add(thread_id)
+                username = _extract_username_from_thread_id(thread_id)
                 for path, content in write_plan.items():
                     try:
-                        self._store.upsert_long_term(path, content, mode="replace")
+                        self._store.upsert_long_term(path, content, mode="replace", username=username)
                         logger.info("memory write: %s (%d chars)", path, len(content))
                     except Exception as exc:
                         logger.warning("memory write 失败 %s: %s", path, exc)

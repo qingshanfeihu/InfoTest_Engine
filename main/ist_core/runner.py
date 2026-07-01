@@ -70,6 +70,15 @@ def _load_input(args: argparse.Namespace) -> Any:
     print("❌ 必须提供 query 或 --input FILE", file=sys.stderr)
     sys.exit(2)
 
+def _resolve_thread_id() -> str:
+    """生成 thread_id。Web session 用 {username}_{session_id}，CLI 兜底用随机 ID。"""
+    user = os.environ.get("IST_SSH_USER", "").strip()
+    session = os.environ.get("IST_SESSION_ID", "").strip()
+    if user and session:
+        return f"{user}_{session}"
+    return f"run-{uuid.uuid4().hex[:8]}"
+
+
 
 def run_single(
     user_input: Any,
@@ -96,7 +105,9 @@ def run_single(
     mode = "async" if stream else "sync"
     graph = build_ist_core_graph(checkpointer=checkpointer, checkpointer_mode=mode)
 
-    thread_id = thread_id or f"run-{uuid.uuid4().hex[:8]}"
+    #旧
+    #thread_id = thread_id or f"run-{uuid.uuid4().hex[:8]}"
+    thread_id = thread_id or _resolve_thread_id()
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
 
     initial_state: dict[str, Any] = {

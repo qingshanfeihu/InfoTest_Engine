@@ -206,14 +206,14 @@ class PgAuditSink:
         self._resolve_user_ids(rows)
         sql = """
             INSERT INTO ist_audit.audit_log (
-                user_id, session_id, run_id, thread_id, recorded_at,
+                user_id, session_id, conversation_id, run_id, thread_id, recorded_at,
                 event_kind, event_summary, event_payload,
                 model_name, token_input, token_output, token_cache_hit, token_cache_miss,
                 tool_name, tool_input, tool_output, tool_duration_ms,
                 file_path, file_operation,
                 source_ip, is_error, error_message, tags
             ) VALUES (
-                %(user_id)s, %(session_id)s, %(run_id)s, %(thread_id)s, %(recorded_at)s,
+                %(user_id)s, %(session_id)s, %(conversation_id)s, %(run_id)s, %(thread_id)s, %(recorded_at)s,
                 %(event_kind)s, %(event_summary)s, %(event_payload)s,
                 %(model_name)s, %(token_input)s, %(token_output)s, %(token_cache_hit)s, %(token_cache_miss)s,
                 %(tool_name)s, %(tool_input)s, %(tool_output)s, %(tool_duration_ms)s,
@@ -294,6 +294,7 @@ class PgAuditSink:
 
         user_id = tags.get("user_id") or None
         session_id = tags.get("session_id") or None
+        conversation_id = tags.get("conversation_id") or None
         thread_id = tags.get("thread_id") or tags.get("configurable_thread_id") or None
         _username = tags.get("session_user") or None
 
@@ -341,6 +342,7 @@ class PgAuditSink:
         return {
             "user_id": user_id,
             "session_id": session_id,
+            "conversation_id": conversation_id,
             "run_id": event.get("run_id", ""),
             "thread_id": thread_id,
             "recorded_at": recorded_at,

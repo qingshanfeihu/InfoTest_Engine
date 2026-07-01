@@ -32,6 +32,8 @@ from main.ist_core.events import get_default_bus
 
 logger = logging.getLogger("ist_web")
 
+
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _SANDBOX = _PROJECT_ROOT / "workspace" / "inputs"
 _WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -167,13 +169,23 @@ async def login(body: dict, request: Request):
         logger.error("login create_session 失败: %s", exc)
         raise HTTPException(status_code=500, detail="会话创建失败")
 
+    # 创建默认对话（关联到 auth session）
+    conv = None
+    try:
+        conv = _get_session_mgr().create_conversation(username, session_id=session_id)
+    except Exception as exc:
+        logger.debug("login create_conversation 失败: %s", exc)
+
     logger.info("login ok user=%r role=%s session=%s ip=%s", username, role, session_id, ip)
     get_default_bus().emit(
         "auth_login",
         payload={"username": username, "role": role},
         tags={"session_id": session_id, "source_ip": ip, "session_user": username},
     )
-    return {"token": jwt_token, "session_id": session_id, "username": username, "role": role}
+    result = {"token": jwt_token, "session_id": session_id, "username": username, "role": role}
+    if conv:
+        result["conversation_id"] = conv["conversation_id"]
+    return result
 
 
 @app.post("/api/logout")
@@ -269,6 +281,125 @@ def _set_winsize(fd: int, cols: int, rows: int):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
+# ------------------------------------------------------------------
+# 对话管理 API
+# ------------------------------------------------------------------
+
+@app.get("/api/conversations")
+async def list_conversations(session_id: str = "", token: str = "", limit: int = 20, offset: int = 0):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    limit = max(1, min(limit, 100))
+    items = _get_session_mgr().list_conversations(sess["username"], limit=limit, offset=offset)
+    return {"items": items, "limit": limit, "offset": offset}
+
+
+@app.post("/api/conversations")
+async def create_conversation(body: dict, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    title = (body.get("title") or "新对话").strip()[:200]
+    model_name = body.get("model_name")
+    try:
+        conv = _get_session_mgr().create_conversation(sess["username"], title=title, model_name=model_name, session_id=session_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    return conv
+
+
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    conv = _get_session_mgr().get_conversation(sess["username"], conversation_id)
+    if not conv:
+        raise HTTPException(404, "对话不存在")
+    return conv
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    ok = _get_session_mgr().delete_conversation(sess["username"], conversation_id)
+    if not ok:
+        raise HTTPException(404, "对话不存在")
+    return {"ok": True}
+
+
+@app.put("/api/conversations/{conversation_id}/activate")
+async def activate_conversation(conversation_id: str, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    result = _get_session_mgr().activate_conversation(sess["username"], conversation_id)
+    if not result:
+        raise HTTPException(404, "对话不存在")
+    return result
+
+
+@app.get("/api/conversations/{conversation_id}/context")
+async def get_conversation_context(conversation_id: str, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    username = sess["username"]
+    conv = _get_session_mgr().get_conversation(username, conversation_id)
+    if not conv:
+        raise HTTPException(404, "对话不存在")
+
+    thread_id = f"{username}_{conversation_id}"
+    working_memory = ""
+    try:
+        from main.ist_core.memory.store import MemoryStore
+        from main.ist_core.memory.backend import get_default_root
+        ms = MemoryStore(backend=None, root_disk=get_default_root())
+        working_memory = ms.read_working(thread_id, max_lines=200)
+    except Exception:
+        pass
+
+    checkpoint_summary = None
+    try:
+        from main.ist_core.graph import _make_checkpointer
+        cp = _make_checkpointer()
+        if cp:
+            config = {"configurable": {"thread_id": thread_id}}
+            state = cp.get(config)
+            if state:
+                msgs = state.get("values", {}).get("messages", [])
+                if msgs:
+                    checkpoint_summary = {
+                        "message_count": len(msgs),
+                        "last_message": str(msgs[-1].content)[:200] if hasattr(msgs[-1], "content") else str(msgs[-1])[:200],
+                    }
+    except Exception:
+        pass
+
+    return {
+        "conversation": conv,
+        "checkpoint_summary": checkpoint_summary,
+        "working_memory": working_memory,
+    }
+
+
+@app.put("/api/conversations/{conversation_id}/title")
+async def rename_conversation(conversation_id: str, body: dict, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    title = (body.get("title") or "").strip()[:200]
+    if not title:
+        raise HTTPException(400, "标题不能为空")
+    ok = _get_session_mgr().rename_conversation(sess["username"], conversation_id, title)
+    if not ok:
+        raise HTTPException(404, "对话不存在")
+    return {"ok": True}
+
+
 @app.websocket("/ws/terminal")
 async def ws_terminal(websocket: WebSocket):
     """WebSocket PTY 桥接：spawn TUI 子进程，双向转发。"""
@@ -283,11 +414,12 @@ async def ws_terminal(websocket: WebSocket):
         await websocket.close()
         return
     username = sess["username"]
+    conversation_id = auth.get("conversation_id", session_id)
 
     cols = auth.get("cols", 120)
     rows = auth.get("rows", 40)
 
-    
+
     master_fd, slave_fd = pty.openpty()
     _set_winsize(master_fd, cols, rows)
 
@@ -302,7 +434,9 @@ async def ws_terminal(websocket: WebSocket):
     env["LANG"] = env.get("LANG", "en_US.UTF-8")
     env["PYTHONIOENCODING"] = "utf-8"
     env["IST_SSH_USER"] = username
-    env["IST_SESSION_ID"] = session_id
+    env["IST_SESSION_ID"] = conversation_id       # thread_id 用：{username}_{conversation_id}
+    env["IST_AUTH_SESSION_ID"] = session_id         # auth session_id，审计日志用
+    env["IST_CONVERSATION_ID"] = conversation_id    # conversation_id，审计日志用
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-u", "-m", "main.ist_core.tui.cli",
@@ -354,6 +488,27 @@ async def ws_terminal(websocket: WebSocket):
                                     ).decode("ascii")
                                     osc = f"\x1b]7001;{b64}\x07"
                                     os.write(master_fd, osc.encode("ascii"))
+                            elif d.get("type") == "switch_conversation":
+                                # HTTP 切换对话：校验归属 + 更新 is_active
+                                new_conv_id = d.get("conversation_id", "")
+                                if new_conv_id:
+                                    result = _get_session_mgr().activate_conversation(username, new_conv_id)
+                                    if result:
+                                        # 通过 OSC 序列通知 TUI 子进程切换 thread_id
+                                        # ESC ] 7003 ; <conversation_id> BEL
+                                        b64 = base64.b64encode(new_conv_id.encode("utf-8")).decode("ascii")
+                                        osc = f"\x1b]7003;{b64}\x07"
+                                        os.write(master_fd, osc.encode("ascii"))
+                                        await websocket.send_json({
+                                            "type": "switched",
+                                            "conversation_id": new_conv_id,
+                                            "title": d.get("title", ""),
+                                        })
+                                    else:
+                                        await websocket.send_json({
+                                            "type": "error",
+                                            "msg": "对话不存在",
+                                        })
                         except (json.JSONDecodeError, KeyError):
                             os.write(master_fd, msg["text"].encode("utf-8"))
                 elif msg["type"] == "websocket.disconnect":

@@ -161,8 +161,10 @@ def _cmd_version(args: str, app: "IstApp") -> SlashCommandResult:
 
 
 def _cmd_threads(args: str, app: "IstApp") -> SlashCommandResult:
+    import os
+    username = getattr(app, "_username", "") or os.environ.get("IST_SSH_USER", "").strip()
     try:
-        threads = app._checkpoint_repo.list_threads(limit=20)
+        threads = app._checkpoint_repo.list_threads(limit=20, username=username or None)
     except Exception as exc:  # noqa: BLE001
         return ErrorResult(text=f"failed to list threads: {exc}")
     if not threads:

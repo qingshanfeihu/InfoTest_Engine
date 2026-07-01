@@ -271,6 +271,10 @@ class IstInkApp:
         from main.ist_core.tui.state import TuiState
         self.tui_state = TuiState(thread_id=self._thread_id or "")
 
+        # 对话管理（延迟初始化）
+        self._checkpoint_repo_obj = None
+        self._username = os.environ.get("IST_SSH_USER", "").strip()
+
     def append_transcript_info(self, text: str) -> None:
         """线程安全地向 transcript 追加一行（供 KMS 等后台任务回写进度）。"""
         with self._app.lock:
@@ -282,6 +286,33 @@ class IstInkApp:
         with self._app.lock:
             self._update_thinking_line(text)
             self._app.render()
+
+    @property
+    def _checkpoint_repo(self):
+        """延迟初始化 CheckpointRepo。"""
+        if self._checkpoint_repo_obj is None:
+            from main.ist_core.tui.checkpoint_repo import CheckpointRepo
+            self._checkpoint_repo_obj = CheckpointRepo()
+        return self._checkpoint_repo_obj
+
+    def _on_thread_selected(self, thread_id: str) -> None:
+        """切换到指定 thread_id（由 /resume 等 slash 命令调用）。"""
+        if self._bridge and self._bridge.is_running:
+            raise RuntimeError("当前对话正在进行中，请等待完成后再切换")
+        self._thread_id = thread_id
+        self.tui_state = TuiState(thread_id=thread_id)
+        if self._bridge:
+            self._bridge.switch_thread(thread_id)
+        with self._app.lock:
+            self._transcript.append_message(f"已切换到对话: {thread_id[-16:]}")
+            self._app.render()
+
+    def _switch_conversation(self, conversation_id: str) -> None:
+        """切换到指定对话（由前端 switch_conversation 消息触发）。"""
+        if not self._username:
+            return
+        new_tid = f"{self._username}_{conversation_id}"
+        self._on_thread_selected(new_tid)
 
     def run(self) -> None:
         """Start the TUI (blocking)."""

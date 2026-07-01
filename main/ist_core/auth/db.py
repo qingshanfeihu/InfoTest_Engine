@@ -1,6 +1,7 @@
 """PostgreSQL 连接管理与 ist_audit schema 初始化。
 
-复用 graph.py 的 psycopg3 连接模式：autocommit=True, prepare_threshold=0, dict_row。
+psycopg3 连接模式：autocommit=True, dict_row。
+prepare_threshold 使用默认值（5），避免首次执行参数化查询时类型推断失败。
 """
 
 from __future__ import annotations
@@ -46,10 +47,31 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user_id
 CREATE INDEX IF NOT EXISTS idx_sessions_expires
     ON ist_audit.sessions(expires_at) WHERE is_valid = TRUE;
 
+CREATE TABLE IF NOT EXISTS ist_audit.conversations (
+    conversation_id  VARCHAR(80) PRIMARY KEY,
+    user_id          UUID NOT NULL REFERENCES ist_audit.users(id) ON DELETE CASCADE,
+    session_id       VARCHAR(80) REFERENCES ist_audit.sessions(session_id) ON DELETE SET NULL,
+    title            VARCHAR(200) NOT NULL DEFAULT '新对话',
+    model_name       VARCHAR(64),
+    message_count    INTEGER NOT NULL DEFAULT 0,
+    last_message_at  TIMESTAMPTZ,
+    is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_user_time
+    ON ist_audit.conversations(user_id, last_message_at DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_conversations_active
+    ON ist_audit.conversations(user_id, is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_conversations_session
+    ON ist_audit.conversations(session_id);
+
 CREATE TABLE IF NOT EXISTS ist_audit.audit_log (
     id            BIGSERIAL PRIMARY KEY,
     user_id       UUID REFERENCES ist_audit.users(id),
     session_id    VARCHAR(80) REFERENCES ist_audit.sessions(session_id),
+    conversation_id VARCHAR(80) REFERENCES ist_audit.conversations(conversation_id),
     run_id        VARCHAR(32) NOT NULL,
     thread_id     VARCHAR(64),
     recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -77,6 +99,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_user_time
     ON ist_audit.audit_log(user_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_session
     ON ist_audit.audit_log(session_id);
+CREATE INDEX IF NOT EXISTS idx_audit_conversation
+    ON ist_audit.audit_log(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_audit_run
     ON ist_audit.audit_log(run_id);
 CREATE INDEX IF NOT EXISTS idx_audit_event_kind
@@ -103,6 +127,12 @@ CREATE TABLE IF NOT EXISTS ist_audit.token_daily_summary (
 );
 CREATE INDEX IF NOT EXISTS idx_token_daily_user
     ON ist_audit.token_daily_summary(user_id, date DESC);
+
+-- 迁移：给已有表添加新列
+ALTER TABLE IF EXISTS ist_audit.conversations
+    ADD COLUMN IF NOT EXISTS session_id VARCHAR(80) REFERENCES ist_audit.sessions(session_id) ON DELETE SET NULL;
+ALTER TABLE IF EXISTS ist_audit.audit_log
+    ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(80) REFERENCES ist_audit.conversations(conversation_id);
 """
 
 
@@ -125,7 +155,7 @@ def _build_dsn() -> str:
 def get_pg_connection() -> psycopg.Connection:
     """获取 PG 连接（autocommit, dict_row）。"""
     dsn = _build_dsn()
-    return psycopg.connect(dsn, autocommit=True, prepare_threshold=0, row_factory=dict_row)
+    return psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
 
 
 @contextmanager

@@ -52,6 +52,15 @@ def _to_event_payload(lc_event: dict[str, Any]) -> dict[str, Any]:
             content = chunk.get("content")
         if isinstance(content, str):
             payload["content"] = content
+        # reasoning_content（思考增量）：mimo 深度思考期以此逐步返回，content 为空。
+        # 抽出来让 reducer 识别「思考相位」（footer 显示真实 think 状态）+ 逐字渲染。
+        ak = getattr(chunk, "additional_kwargs", None)
+        if ak is None and isinstance(chunk, dict):
+            ak = chunk.get("additional_kwargs")
+        if isinstance(ak, dict):
+            rc = ak.get("reasoning_content")
+            if isinstance(rc, str) and rc:
+                payload["reasoning"] = rc
     if "input" in data:
         payload["input"] = _safe_str(data["input"])[:500]
     if "output" in data:

@@ -249,7 +249,15 @@ class MessageReducer:
         self._output_token_count = 0
 
     def _on_token(self, event: IstCoreEvent) -> None:
-        content = (event.get("payload") or {}).get("content") or ""
+        payload = event.get("payload") or {}
+        reasoning = payload.get("reasoning")
+        # 思考增量（mimo 深度思考期以 reasoning_content 逐步返回，content 为空）：
+        # 此刻 mimo 真在深度思考 → 置 thinking 相位，驱动 footer 显示真实 think 状态。
+        if isinstance(reasoning, str) and reasoning:
+            self._llm_phase = "thinking"
+            self._output_token_count += max(1, len(reasoning) // 4)
+            return
+        content = payload.get("content") or ""
         if not isinstance(content, str) or not content:
             return
         self._llm_phase = "output"

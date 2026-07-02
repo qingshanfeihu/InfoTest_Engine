@@ -57,6 +57,7 @@ def _bare_app() -> IstInkApp:
     app._tool_start_stack = []
     app._subagent_inner_summaries = {}
     app._subagent_thinking_lines = []
+    app._main_thinking_lines = []
     app._tool_output_blocks = []
     app._tool_use_row = {}
     app._tool_outputs_expanded = False
@@ -163,3 +164,31 @@ def test_replay_snapshot_thinking_expanded_shows_full_text() -> None:
 
     lines = app._transcript.lines
     assert any(long_thought in l for l in lines), lines
+
+
+def test_ctrl_t_folds_all_main_thinking_not_just_last() -> None:
+    """回归:ctrl+t 折叠主 agent 的**所有** thinking 行,不只最后一条。
+
+    旧 bug:_toggle_thinking 只重渲染 _last_thinking_idx(单条);earlier 主 thinking 块在
+    _thinking_expanded=True 期间烤成全文后,ctrl+t 折不回去(会留一堆展开的 ∴ 全文)。
+    """
+    app = _bare_app()
+    app._thinking_expanded = True  # 展开态:每条 thinking 渲染全文
+
+    thoughts = ["第一段思考 alpha", "第二段思考 beta", "第三段思考 gamma"]
+    for i, t in enumerate(thoughts):
+        blk = make_thinking_block(t)
+        msg = Message(uuid=f"m:{i}", role="assistant", content=(blk,))
+        app._render_content_block(blk, msg)
+        app._transcript.append_message(f" ⏺ tool {i}")  # 夹工具行,模拟真实交织、推进行号
+
+    lines = app._transcript.lines
+    assert sum(1 for t in thoughts if any(t in l for l in lines)) == 3, lines
+    assert len(app._main_thinking_lines) == 3
+
+    app._toggle_thinking()  # 按 ctrl+t 折叠
+
+    lines = app._transcript.lines
+    for t in thoughts:  # 关键:3 段全文全部折成占位,一条不剩
+        assert not any(t in l for l in lines), (t, lines)
+    assert sum(1 for l in lines if "ctrl+t to expand" in l) == 3, lines

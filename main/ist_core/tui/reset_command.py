@@ -127,24 +127,45 @@ def reset_working_memory(result: ResetResult) -> None:
 
 
 def reset_runtime_temp(result: ResetResult) -> None:
-    """清空 ``runtime/large_tool_results`` 与 ``runtime/conversation_history``。"""
-    runtime = _project_root() / "runtime"
-    for subdir in ("large_tool_results", "conversation_history"):
-        target = runtime / subdir
-        if not target.exists():
-            continue
-        count = 0
-        for item in target.iterdir():
-            try:
-                if item.is_dir():
-                    shutil.rmtree(item)
-                else:
-                    item.unlink()
-                count += 1
-            except Exception as exc:  # noqa: BLE001
-                result.errors.append(f"runtime/{subdir}/{item.name}: {exc}")
-        if count:
-            result.cleared_items.append(f"runtime/{subdir} ({count} 项)")
+    """清空大结果 / 会话历史 offload 缓存。
+
+    落点历史上在 ``runtime/``，现默认在 ``offload_artifacts_dir()``
+    （``/tmp/ist_core_artifacts``，见 ``memory.backend``）。**两处都清**——
+    legacy ``runtime/`` 兜底 + 当前 artifacts 落点，避免 offload 移位后
+    "reset 了却没清到真缓存"（安全评审 drift 提示）。
+    """
+    from main.ist_core.memory.backend import offload_artifacts_dir
+
+    roots: list[Path] = [_project_root() / "runtime"]
+    try:
+        art = Path(offload_artifacts_dir())
+        if art.resolve() not in {r.resolve() for r in roots}:
+            roots.append(art)
+    except Exception:  # noqa: BLE001
+        pass
+
+    seen: set[str] = set()
+    for root in roots:
+        for subdir in ("large_tool_results", "conversation_history"):
+            target = root / subdir
+            if not target.exists():
+                continue
+            key = str(target.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            count = 0
+            for item in target.iterdir():
+                try:
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                    count += 1
+                except Exception as exc:  # noqa: BLE001
+                    result.errors.append(f"{root.name}/{subdir}/{item.name}: {exc}")
+            if count:
+                result.cleared_items.append(f"{root.name}/{subdir} ({count} 项)")
 
 
 def reset_dream_state(result: ResetResult) -> None:

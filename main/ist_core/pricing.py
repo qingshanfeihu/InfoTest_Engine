@@ -23,8 +23,12 @@ def compute_cost_rmb(
     input_hit: int,
     output: int,
 ) -> float | None:
-    """按模型单价计算成本（元）。未知模型返回 None。"""
-    price = PRICING_RMB.get(model)
+    """按模型单价计算成本（元）。未知模型返回 None。
+
+    三方聚合网关的模型名常带 provider 前缀（如 ``deepseek/deepseek-v4-pro``），
+    价格表按裸模型名收录——精确命中优先，miss 时取最后一段再查。
+    """
+    price = PRICING_RMB.get(model) or PRICING_RMB.get(model.rpartition("/")[-1])
     if not price:
         return None
     return (

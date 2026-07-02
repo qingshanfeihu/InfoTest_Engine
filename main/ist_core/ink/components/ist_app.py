@@ -238,6 +238,7 @@ class IstInkApp:
         self._last_thinking_text: str = ""
         self._tool_output_blocks: list[dict] = []
         self._subagent_thinking_lines: list[dict] = []  # fork ⎿ ∴ Thinking 行 {idx, full},供 ctrl+t 就地展开全文
+        self._main_thinking_lines: list[dict] = []  # 主 agent 每条 ∴ thinking 行 {idx, full},供 ctrl+t 全部就地折叠/展开(不只最后一条)
         self._load_tui_config()
         # ask_user 交互式问答的活跃会话（None=非问答模式）
         self._ask_user: Any = None
@@ -372,6 +373,8 @@ class IstInkApp:
                     with self._app.lock:
                         self._footer.update(fork_input=ft[0], fork_output=ft[1])
                         if new_lines:
+                            # 供 footer 判「worker 静默多久」（无相位时 busy 行标注在等 worker）
+                            self._footer.fork_last_event_ts = _time.time()
                             self._transcript.append_messages(
                                 [f"   {D}· {ln}{X}" for ln in new_lines]
                             )
@@ -954,6 +957,7 @@ class IstInkApp:
         self._suppress_thinking_until_done = False
         self._subagent_inner_summaries = {}
         self._subagent_thinking_lines = []
+        self._main_thinking_lines = []
         # B2：新 run 清空 tool_use 行号映射，避免旧行号污染本轮插入定位
         self._tool_use_row = {}
         self._transcript.append_message("")
@@ -982,7 +986,18 @@ class IstInkApp:
         prev = getattr(self, '_prev_snapshot', None)
         self._prev_snapshot = snapshot
 
-        
+        # 思考期（reasoning delta 到达、还没 content）：streaming_text 仍为 None，下面的 streaming
+        # 分支不执行 → footer 相位更新被跳过，显示不出「深度思考中」。这里补一步：把 thinking
+        # 相位喂给 footer，让尾字段随 mimo 真实思考期显示真实状态（reducer 已按 reasoning delta
+        # 置 _llm_phase="thinking"）。不 return——本轮无新消息，继续走后续渲染无害。
+        if snapshot.streaming_text is None and snapshot.llm_phase == "thinking":
+            self._footer.update(
+                llm_phase="thinking",
+                output_token_count=snapshot.output_token_count,
+            )
+            self._app.render()
+
+
         if snapshot.streaming_text is not None:
             self._flush_pending_tools()
             rendered = self._render_markdown(snapshot.streaming_text)
@@ -1205,9 +1220,11 @@ class IstInkApp:
                 self._transcript.append_message(
                     f" {D}\x1b[3m∴ Thinking{X} {D}(ctrl+t to expand){X}"
                 )
-            # 记录最后一条 thinking 的行号 + 全文，供 ctrl+t 展开/折叠切换
-            self._last_thinking_idx = self._transcript.message_count() - 1
+            # 记录每条 thinking 的行号 + 全文，供 ctrl+t 就地折叠/展开（全部，不只最后一条）
+            _t_idx = self._transcript.message_count() - 1
+            self._last_thinking_idx = _t_idx
             self._last_thinking_text = block.thinking.strip()
+            self._main_thinking_lines.append({"idx": _t_idx, "full": block.thinking.strip()})
 
         elif block.type == BLOCK_TOOL_USE:
             self._ai_stream_idx = -1
@@ -1610,6 +1627,7 @@ class IstInkApp:
         self._transcript.clear()
         self._subagent_inner_summaries = {}
         self._subagent_thinking_lines = []
+        self._main_thinking_lines = []
         self._tool_output_blocks = []
         self._tool_use_row = {}
         self._ai_stream_idx = -1
@@ -1650,20 +1668,18 @@ class IstInkApp:
             pass
 
     def _toggle_thinking(self) -> None:
-        """Toggle thinking blocks (Ctrl+T):主 agent 最后一条 thinking + fork 子 agent 的 ⎿ ∴ Thinking 行。"""
+        """Toggle thinking blocks (Ctrl+T):主 agent 的**所有** thinking 行 + fork 子 agent 的 ⎿ ∴ Thinking 行。"""
         D = self._DIM
         X = self._RESET
         self._thinking_expanded = not self._thinking_expanded
         self._persist_verbose()
-        # 主 agent 的最后一条 thinking 行
-        idx = getattr(self, '_last_thinking_idx', -1)
-        text = getattr(self, '_last_thinking_text', "")
-        if idx >= 0 and text:
+        # 主 agent 的**所有** thinking 行（不只最后一条）——就地折叠/展开
+        for rec in getattr(self, "_main_thinking_lines", []):
             if self._thinking_expanded:
-                new_line = f" {D}\x1b[3m∴ {text}{X}"
+                new_line = f" {D}\x1b[3m∴ {rec['full']}{X}"
             else:
                 new_line = f" {D}\x1b[3m∴ Thinking{X} {D}(ctrl+t to expand){X}"
-            self._transcript.update_message_at(idx, new_line)
+            self._transcript.update_message_at(rec["idx"], new_line)
         # fork 子 agent 的 ⎿ ∴ Thinking 行:就地展开全文 / 折回占位(不改行数,故 idx 稳定)
         for rec in getattr(self, "_subagent_thinking_lines", []):
             if self._thinking_expanded:

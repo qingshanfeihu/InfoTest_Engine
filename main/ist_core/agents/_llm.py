@@ -144,18 +144,27 @@ def build_explore_model(**kwargs: Any):
     return _build_chat_model(model_name, **kwargs)
 
 
+def _reasoning_from_raw(raw_chunk_dict) -> str | None:
+    """从 raw stream chunk dict 取 delta.reasoning_content（思考增量），无则 None。"""
+    try:
+        choices = raw_chunk_dict.get("choices") or raw_chunk_dict.get("chunk", {}).get("choices") or []
+        if not choices:
+            return None
+        delta = choices[0].get("delta") or {}
+        rc = delta.get("reasoning_content") or delta.get("reasoning")
+        return rc if isinstance(rc, str) and rc else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _patch_chunk_with_reasoning(chunk, raw_chunk_dict) -> None:
     """把 raw_chunk['choices'][0]['delta']['reasoning_content'] 拷到 chunk.message.additional_kwargs."""
     if chunk is None:
         return
+    rc = _reasoning_from_raw(raw_chunk_dict)
+    if not rc:
+        return
     try:
-        choices = raw_chunk_dict.get("choices") or raw_chunk_dict.get("chunk", {}).get("choices") or []
-        if not choices:
-            return
-        delta = choices[0].get("delta") or {}
-        rc = delta.get("reasoning_content") or delta.get("reasoning")
-        if not rc:
-            return
         msg = getattr(chunk, "message", None)
         if msg is None:
             return
@@ -200,7 +209,23 @@ def _get_chat_openai_with_reasoning():
                 chunk, default_chunk_class, base_generation_info
             )
             if isinstance(chunk, dict):
-                _patch_chunk_with_reasoning(gen_chunk, chunk)
+                if gen_chunk is not None:
+                    _patch_chunk_with_reasoning(gen_chunk, chunk)
+                else:
+                    # mimo 深度思考期的 reasoning chunk 是 content=null 的纯思考增量，
+                    # super() 视其为空 delta 返回 None → 会被丢弃：思考无法流式，footer 也
+                    # 无从得知 mimo 此刻真在思考。若该 chunk 带 reasoning_content，构造一个
+                    # 空 content + reasoning 的 gen chunk 保住它，让思考 delta 上抛为流式事件
+                    # （reducer 据此置 thinking 相位 + 逐字渲染；最终消息里 reasoning 也不丢）。
+                    rc = _reasoning_from_raw(chunk)
+                    if rc:
+                        from langchain_core.messages import AIMessageChunk  # noqa: PLC0415
+                        from langchain_core.outputs import ChatGenerationChunk  # noqa: PLC0415
+                        gen_chunk = ChatGenerationChunk(
+                            message=AIMessageChunk(
+                                content="", additional_kwargs={"reasoning_content": rc}
+                            )
+                        )
             return gen_chunk
 
         def _get_request_payload(self, input_, *, stop=None, **kwargs):

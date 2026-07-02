@@ -26,6 +26,9 @@ _VALID_LAYERS = ("G", "E", "V")
 # source.kind 取值：来源类型，供 writeback/verify 按类型路由。
 _VALID_SOURCE_KINDS = (
     "footprint",      # G：footprint 节点（feature_id）
+    "emit_auto",      # 机械骨架：emit 在 worker 漏传 provenance 时按步骤结构自动生成——
+                      # 无离线溯源 ref；其 G 命令=真实入卷命令，写回凭「上机 PASS」设备实证
+                      # + merger 命令签名兜底校验（比滞后手册更硬的证据,见 CNAME 文法实证）。
     "precedent",      # G/V：先例 xlsx
     "env_facts",      # E：拓扑事实源
     "manual",         # V：手册行

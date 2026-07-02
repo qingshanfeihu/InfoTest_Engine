@@ -459,3 +459,78 @@ def test_emit_rejects_short_numeric_autoid():
     import shutil
     for d in ("_pytest_shortid_reject", "_pytest_shortid_ok"):
         shutil.rmtree(CP._project_root() / "workspace" / "outputs" / d, ignore_errors=True)
+
+
+def test_emit_rejects_manual_ip_cleanup_in_test_env():
+    """test_env 变更触发机 IP(ip addr add/del)无条件拒绝(必崩门第三条,OBS-17 根因)。
+
+    框架 ssh_server 对 add 自动记账(不去重)并在下一 case 开头 delete 恢复:
+    - 自行 del → 恢复对已删 IP delete 报错 → 崩整份文件(dongkl_final 22 unknown 级联);
+    - 跨 case 重复 add 同一 IP → 恢复第二条必失败 → RTNETLINK 残留污染后续 case 回显
+      (第五轮 8/9、第七轮 7/8 成批假 fail)。
+    触发机网络状态归框架管理;轮转按请求轮转,无需多源 IP。add 与 del 均拒。
+    """
+    import json as _json
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
+    for tag, cmd in (("del", "ip addr del 172.16.34.210/24 dev ens192"),
+                     ("add", "ip addr add 172.16.34.210/24 dev ens192")):
+        steps = [
+            {"E": "test_env", "F": "routera", "G": cmd, "desc": "变更触发机IP"},
+            {"E": "test_env", "F": "routera", "G": "dig @172.16.34.70 x.com", "desc": "触发"},
+            {"E": "check_point", "F": "found", "G": "x", "desc": "断言"},
+        ]
+        out = compile_emit.invoke({"autoid": "AIDIP", "steps_json": _json.dumps(steps, ensure_ascii=False),
+                                   "init_commands": "sdns on", "out_name": f"_pytest_ip{tag}_reject"})
+        assert out.startswith("error"), (tag, out)
+        assert "manual_ip_cleanup" in out and "假 fail" in out, (tag, out)
+    # 普通 test_env(dig,不动 IP)不触发
+    steps_ok = [
+        {"E": "test_env", "F": "routera", "G": "dig @172.16.34.70 x.com", "desc": "触发"},
+        {"E": "check_point", "F": "found", "G": "x", "desc": "断言"},
+    ]
+    out_ok = compile_emit.invoke({"autoid": "AIDIP2", "steps_json": _json.dumps(steps_ok, ensure_ascii=False),
+                                  "init_commands": "sdns on", "out_name": "_pytest_ipok"})
+    assert "manual_ip_cleanup" not in out_ok, out_ok
+    import shutil
+    for d in ("_pytest_ipdel_reject", "_pytest_ipadd_reject", "_pytest_ipok"):
+        shutil.rmtree(CP._project_root() / "workspace" / "outputs" / d, ignore_errors=True)
+
+
+def test_emit_rejects_empty_or_literal_backslash_n_commands():
+    """命令载荷完整性门(必崩门第四条,第八轮实证):G 空/None 与字面 \\n 必拒。
+
+    LLM 重编 steps_json 质量问题曾批量漏进 xlsx——"None" 被发给设备、多命令拼一行,
+    11 个 case 全部被设备 ^ 拒。载荷形态机械可判,与命令内容无关。
+    """
+    import json as _json
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
+    base_cp = {"E": "check_point", "F": "found", "G": "x", "desc": "断言"}
+    obs = {"E": "APV_0", "F": "cmd_config", "G": "show version", "desc": "观测"}
+    # G=None(json null) 与字面 "None" → 拒；纯空串占位步 → 放行(框架零循环无害)
+    out = compile_emit.invoke({"autoid": "AIDN", "steps_json": _json.dumps(
+        [{"E": "APV_0", "F": "cmds_config", "G": None, "desc": "空配置"}, obs, base_cp]),
+        "init_commands": "sdns on", "out_name": "_pytest_gnone"})
+    assert out.startswith("error") and "empty_command_payload" in out, out
+    out_lit = compile_emit.invoke({"autoid": "AIDN2", "steps_json": _json.dumps(
+        [{"E": "APV_0", "F": "cmds_config", "G": "None", "desc": "字面None"}, obs, base_cp]),
+        "init_commands": "sdns on", "out_name": "_pytest_gnone2"})
+    assert "empty_command_payload" in out_lit, out_lit
+    out_empty = compile_emit.invoke({"autoid": "AIDN3", "steps_json": _json.dumps(
+        [{"E": "APV_0", "F": "cmds_config", "G": "", "desc": "空占位"}, obs, base_cp]),
+        "init_commands": "sdns on", "out_name": "_pytest_gempty"})
+    assert "empty_command_payload" not in out_empty, out_empty
+    # G 含字面 \n（JSON 里双反斜杠 → 解析后是字面反斜杠+n）
+    out2 = compile_emit.invoke({"autoid": "AIDBN", "steps_json":
+        '[{"E":"APV_0","F":"cmds_config","G":"cmd a\\\\ncmd b","desc":"拼行"},'
+        '{"E":"APV_0","F":"cmd_config","G":"show version","desc":"观测"},'
+        '{"E":"check_point","F":"found","G":"x","desc":"断言"}]',
+        "init_commands": "sdns on", "out_name": "_pytest_gbn"})
+    assert out2.startswith("error") and "literal_backslash_n" in out2, out2
+    # 真实换行的多命令 → 放行
+    out3 = compile_emit.invoke({"autoid": "AIDOK", "steps_json": _json.dumps(
+        [{"E": "APV_0", "F": "cmds_config", "G": "cmd a\ncmd b", "desc": "多命令"}, obs, base_cp]),
+        "init_commands": "sdns on", "out_name": "_pytest_gok"})
+    assert "empty_command_payload" not in out3 and "literal_backslash_n" not in out3, out3
+    import shutil
+    for d in ("_pytest_gnone", "_pytest_gnone2", "_pytest_gempty", "_pytest_gbn", "_pytest_gok"):
+        shutil.rmtree(CP._project_root() / "workspace" / "outputs" / d, ignore_errors=True)

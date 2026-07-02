@@ -309,15 +309,86 @@ def check_no_found_times_mandatory(steps: list) -> StructuralResult:
     return result
 
 
+def _check_no_manual_ip_cleanup(steps: list, result: StructuralResult) -> None:
+    """test_env 步禁止 ``ip addr add/del``(触发机网络状态变更)——框架契约的机械事实。
+
+    框架 ``lib/ssh_server.py`` 对 test_env 主机上执行过的 ``ip addr add`` **自动记账**
+    (ip_list,不去重),并在主机对象生命周期结束时(实证:下一 case 开头)逐条
+    ``re.sub('addr add','addr delete')`` 恢复。两条实证的必炸路径:
+    - case 内自行 del → 框架恢复对已删 IP delete → RTNETLINK 报错 → 崩整份文件
+      (dongkl_final: 1 pass + 22 unknown 级联);
+    - 多个 case add 同一 IP → 记账两条 → 恢复时第二条 delete 必失败 → 失败输出残留
+      触发机 SSH 通道,污染后续 case 的 dig 回显 → 成批假 fail(第五轮 8/9、第七轮 7/8)。
+    触发机网络状态是框架管理的基础设施;rr/wrr 轮转按请求轮转、不按源,不需要多源 IP——
+    删掉 ip addr 步,直接用拓扑既有触发机发请求。
+    """
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        e = str(s.get("E", "")).strip()
+        g = " ".join(str(s.get("G", "") or "").split())
+        if e == "test_env" and ("ip addr " in g or "ip address " in g) and (
+                " add" in g or " del" in g):
+            result.add(
+                "manual_ip_cleanup",
+                "test_env 变更触发机 IP(ip addr add/del)——框架对 add 自动记账(不去重)并在"
+                "下一 case 开头 delete 恢复:自行 del 或跨 case 重复 add 都会让恢复失败,"
+                "**崩整份文件或以 RTNETLINK 残留污染后续 case 的回显(成批假 fail)**。"
+                "删掉这个步骤——触发机网络状态由框架管理;轮转类测试按请求轮转,无需多源 IP,"
+                "直接用拓扑既有触发机发请求。",
+                i,
+            )
+
+
+def _check_command_payload_sanity(steps: list, result: StructuralResult) -> None:
+    """命令载荷完整性——G 列空/None、或含**字面** ``\\n`` 转义(非真实换行)必拒。
+
+    两个实证的必拒形态(2026-07-02 第八轮:LLM 重编 steps_json 质量问题批量漏进 xlsx,
+    11 个 case 全部 G(^) 被设备拒):
+    - G 为空/None:框架把单元格 str 化后原样发送,设备收到 "None" → ``^`` 拒;
+    - G 含字面反斜杠 n(``\\\\n`` 两字符,非换行符):多条命令被拼成一行发送,设备在第二条
+      命令词处 ``^`` 拒。多命令的正确形态是**真实换行**分隔(cmds_config 逐行发送)。
+    机械可判、与命令内容无关——不看命令是什么,只看载荷形态。
+    """
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        e = str(s.get("E", "")).strip()
+        if e not in ("APV_0", "test_env"):
+            continue   # 只查会发给设备/触发机的命令步;check_point 的 G 是断言表达式
+        g_raw = s.get("G")
+        g = str(g_raw) if g_raw is not None else ""
+        # 精确对齐框架行为:G 为**空串**时 cmds_config 对 splitlines() 零循环、什么也不发
+        # ——无害(实证 merge 空 init 的占位步,case 照常 PASS),放行。
+        # 危险形态是 None(json null,下游 str 化成 "None")与字面 "None" 字符串——发给设备必 ^ 拒。
+        if g_raw is None or g.strip().lower() == "none":
+            result.add(
+                "empty_command_payload",
+                "命令步 G 列为 None/字面\"None\"——框架 str 化后原样发送,设备收到 \"None\" 必被"
+                " ^ 拒。补上真实命令或删掉该步(纯空串占位步无害,不在此列)。",
+                i,
+            )
+        elif "\\n" in g:
+            result.add(
+                "literal_backslash_n",
+                "命令 G 列含**字面** \\\\n(反斜杠+n 两个字符,不是换行符)——多条命令会被拼成"
+                "一行发送,设备在第二条命令处必 ^ 拒。多命令用**真实换行**分隔(JSON 里写 \\n "
+                "转义会由解析还原为换行;若你在字符串里写了 \\\\\\\\n 就成了字面反斜杠,改掉)。",
+                i,
+            )
+
+
 def check_crash_gates_mandatory(steps: list) -> StructuralResult:
     """必崩形态**无条件**拒绝门集合——与 strict_structural opt-in 解耦(A 层机械崩溃门)。
 
-    收录标准(严进):该形态上机**保证** TypeError 崩整份 pytest 文件(该 case 之后全不跑)——
-    误判即真错、不存在误杀好制品的可能。当前两条:
+    收录标准(严进):该形态上机**保证**崩整份 pytest 文件(崩溃点之后全不跑)——
+    误判即真错、不存在误杀好制品的可能。当前三条:
     - found_times:框架分派只传 2 参必崩(_check_no_found_times;dongkl 首跑 31 unknown 根因)。
     - 悬空断言:check_point(I 空)前无 result 生产步 → found(None) 必崩(_check_dangling_assertions;
       实证 dongkl 778012 重编版:配置步后直接断言,worker 漏传 strict_structural 使 opt-in 门被
       跳过而漏网 → 第三轮上机 1 pass + 33 unknown)。
+    - test_env 自行 ip addr del:与框架自动恢复双重清理,崩下一 case(_check_no_manual_ip_cleanup;
+      实证 dongkl_final 22 unknown 级联)。
     教训同源:必崩类检查躲在 opt-in 开关后面就等于没有——draft agent 会漏传参数。启发式/
     allowlist 类门仍留 strict_structural(可能误杀,须可选);必崩类一律进本门。
     """
@@ -325,5 +396,7 @@ def check_crash_gates_mandatory(steps: list) -> StructuralResult:
     if isinstance(steps, list):
         _check_no_found_times(steps, result)
         _check_dangling_assertions(steps, result)
+        _check_no_manual_ip_cleanup(steps, result)
+        _check_command_payload_sanity(steps, result)
     return result
 

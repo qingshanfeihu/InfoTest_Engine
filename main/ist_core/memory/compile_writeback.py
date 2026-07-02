@@ -45,9 +45,12 @@ class WritebackResult:
 def _g_step_to_rawfact(step, autoid: str, manual_glob: str) -> RawFact | None:
     """把一个 G 层 provenance step 转成 cli_command RawFact（供 merge_fact 写回）。
 
-    只处理 source.kind in (footprint, manual, skeleton) 且 G 是配置命令的步骤。
-    evidence_file/quote 取 source.ref——merge_fact 会校验 quote 在 file 真实命中，
-    对不上则 skip（这是防幻觉的关键，不在这里自己判）。
+    只处理 layer==G 且 G 是 APV 配置命令的步骤（kind 影响 evidence 解析，不影响是否处理）。
+    footprint/skeleton/emit_auto：命令原文作 quote，evidence_file 取 manual_glob（merge 在手册
+    里找命中）；manual：ref 形如 "cli_10.5_Chapter11:1234"，evidence_file 取文件名部分。
+    emit_auto（emit 机械骨架，无离线 ref）同 footprint 路径——命令是真实入卷命令，写回凭上机
+    PASS 设备实证 + merge_fact 的命令签名兜底校验。evidence 对不上则 merge skip（防幻觉关键，
+    不在这里自己判）。
     """
     if step.layer != "G":
         return None

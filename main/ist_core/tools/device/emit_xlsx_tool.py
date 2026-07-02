@@ -732,6 +732,15 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         if not isinstance(steps, list) or not steps:
             return f"error: cases[{idx}] (autoid={autoid}) steps 必须是非空列表"
 
+        # 丢弃 G 空的命令步(零信息量占位)。历史 merge 产物常带「初始化配置/G 空」占位行;
+        # openpyxl 把空串单元格**落盘成 None**,再经回读-重写链条后框架 str(None)="None"
+        # 原样发给设备 → ^ 拒、整 case fail(实证 final4 19 个 case 连锁)。空步一律不进成品。
+        steps = [s for s in steps if not (isinstance(s, dict)
+                 and str(s.get("E", "")).strip() in ("APV_0", "test_env")
+                 and not str(s.get("G") or "").strip())]
+        if not steps:
+            return f"error: cases[{idx}] (autoid={autoid}) 过滤空命令步后 steps 为空"
+
         # 分布区间断言展开（每 case 独立；merged 不带 provenance，只展开 steps）
         steps, _dist_plan, _dist_err = expand_distribution_steps(steps)
         if _dist_err:

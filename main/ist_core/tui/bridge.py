@@ -161,10 +161,17 @@ class GraphBridge:
                 self._last_final_state = {}
                 self._sink.reducer.set_run_status("done")
             elif is_transient_error(exc):
-                # 瞬态连接抖动（RemoteProtocolError / 429 / 限流等）：记日志但不往前台发
-                # run_error，避免干扰用户阅读。模型层 max_retries + resilience 外层重试
-                # 已经处理过，走到这里是重试耗尽，但系统仍可继续下一轮。
-                logger.debug("GraphBridge 瞬态错误(不显示前台): %s", exc)
+                # 瞬态连接抖动（RemoteProtocolError / 限流等）重试耗尽。曾 logger.debug 完全
+                # 静默——用户只见 turn 空转结束、无从知晓这轮没跑成（违背如实报告）。改为
+                # 前台一行简短提示（非红色 run_error 级），系统仍可继续下一轮。
+                logger.warning("GraphBridge 瞬态错误(重试耗尽): %s", exc)
+                self._sink.reducer.dispatch({
+                    "kind": "info",
+                    "run_id": self._thread_id,
+                    "seq": 0,
+                    "ts": "",
+                    "payload": {"info_text": f"⚠ 本轮因端点瞬态压力中止(重试已耗尽): {str(exc)[:120]}——可直接重发"},
+                })
                 self._sink.reducer.set_run_status("done")
             else:
                 logger.exception("GraphBridge worker crashed")

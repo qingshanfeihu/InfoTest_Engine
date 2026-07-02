@@ -14,7 +14,6 @@ import os
 from contextlib import contextmanager
 from typing import Any
 
-from main.common.llm_helpers import supports_thinking_toggle
 
 logger = logging.getLogger(__name__)
 
@@ -85,21 +84,22 @@ def _build_chat_model(model_name: str, **kwargs: Any):
     extra_body = dict(kwargs.pop("extra_body", None) or {})
     base_url, api_key = _resolve_endpoint()
 
-    # 深度思考显式锁定(不再靠端点默认,防默认变更)。MiMo 与 DeepSeek 同用 thinking.type=enabled/disabled
-    # (extra_body 传)。IST_THINKING=on|off 控制;默认 on。**v4-pro 默认思考开→慢;agentic loop 应 off**
-    # (用 pro 的能力 + chat 的速度)。已显式传 extra_body.thinking 的不覆盖;不支持该参数的端点不注入。
+    # 深度思考显式锁定(不再靠端点默认,防默认变更)。thinking 参数的 **schema 随模型族**
+    # (mimo/deepseek=enabled/disabled;minimax=adaptive/disabled——实证同一网关下取值不同,
+    # 按 URL 判定必 400),故按模型名族注入;未知族不注入(端点默认,绝不赌 400)。
+    # IST_THINKING=on|off 控制;默认 on。已显式传 extra_body.thinking 的不覆盖。
     if "thinking" not in extra_body:
+        from main.common.llm_helpers import thinking_param_for_model
         _think = (os.environ.get("IST_THINKING") or "on").strip().lower()
-        if supports_thinking_toggle(base_url):
-            if _think in ("on", "1", "true", "enabled"):
-                extra_body["thinking"] = {"type": "enabled"}
-            elif _think in ("off", "0", "false", "disabled"):
-                extra_body["thinking"] = {"type": "disabled"}
+        _on = _think in ("on", "1", "true", "enabled")
+        _param = thinking_param_for_model(model_name, _on)
+        if _param is not None:
+            extra_body["thinking"] = _param
 
-    # 深度思考开启时 mimo 强制 temperature=1.0/top_p=0.95、不接受自定义采样参数(官方文档
+    # 深度思考开启(enabled/adaptive)时端点多强制自家采样参数、不接受自定义(如 mimo 官方
     # deep-thinking 页)。再发 0.0/0.5 是冗余,且可能触发端点告警或被静默忽略。仅未开 thinking
     # 时设确定性默认采样。
-    if extra_body.get("thinking", {}).get("type") != "enabled":
+    if extra_body.get("thinking", {}).get("type") not in ("enabled", "adaptive"):
         kwargs.setdefault("temperature", 0.0)
         kwargs.setdefault("top_p", 0.5)
     _stream = _resolve_streaming()
@@ -186,6 +186,22 @@ def _get_chat_openai_with_reasoning():
 
     from langchain_openai import ChatOpenAI  # type: ignore[import-not-found]
 
+    def _is_thinking_param_rejection(exc: BaseException) -> bool:
+        """端点拒绝 ``thinking`` 参数的错误特征（借鉴 cc-switch thinking_rectifier 的
+        错误驱动整流模式：列举已知拒绝文案特征，命中才整流，绝不过宽）。
+
+        实证样本：minimax "invalid params, invalid thinking.type: \\"enabled\\"
+        (allowed: adaptive, disabled)"；其他端点常见 "unknown parameter: thinking" /
+        "extra inputs are not permitted"。
+        """
+        s = str(exc).lower()
+        if "thinking" not in s:
+            return False
+        return any(k in s for k in (
+            "invalid", "not permitted", "unknown parameter", "unsupported",
+            "unexpected", "allowed:",
+        ))
+
     class ChatOpenAIWithReasoning(ChatOpenAI):
         """ChatOpenAI 子类，双向支持 reasoning_content（DeepSeek 多轮 + qwen 流式）.
 
@@ -202,12 +218,54 @@ def _get_chat_openai_with_reasoning():
         修复，所以在子类层面打补丁。
         """
 
+        # ── minimax `<think>` 内联剥离 ─────────────────────────────────────────
+        # minimax 系把思考以 ``<think>...</think>`` 内联在 content（非 reasoning_content
+        # 字段）。不剥离的话：思考文本被当正文渲染（⏺ 块）、进多轮上下文污染、且"纯思考
+        # 响应"被 agent 判为最终答复提前收口。这里把 think 段转入 reasoning_content 通道
+        # ——与 mimo/deepseek 对齐后，TUI 思考渲染/回传链路原样复用。
+        # 流式用实例级状态机（think 段跨多个 chunk）；标签本身跨 chunk 切割的场景极罕见
+        # （<think> 通常是模板特殊 token 整块到达），不做部分标签缓冲。
+        def _split_think_inline(self, text: str) -> tuple[str, str]:
+            """按 <think>/</think> 状态机切分 (正文, 思考)；状态存 self._mm_in_think。"""
+            if not text:
+                return "", ""
+            out, reason = [], []
+            buf = text
+            while buf:
+                if getattr(self, "_mm_in_think", False):
+                    j = buf.find("</think>")
+                    if j < 0:
+                        reason.append(buf); buf = ""
+                    else:
+                        reason.append(buf[:j]); buf = buf[j + 8:]
+                        self._mm_in_think = False
+                else:
+                    i = buf.find("<think>")
+                    if i < 0:
+                        out.append(buf); buf = ""
+                    else:
+                        out.append(buf[:i]); buf = buf[i + 7:]
+                        self._mm_in_think = True
+            return "".join(out), "".join(reason)
+
         def _convert_chunk_to_generation_chunk(
             self, chunk, default_chunk_class, base_generation_info
         ):
             gen_chunk = super()._convert_chunk_to_generation_chunk(
                 chunk, default_chunk_class, base_generation_info
             )
+            if gen_chunk is not None:
+                msg = getattr(gen_chunk, "message", None)
+                if msg is not None and isinstance(getattr(msg, "content", None), str) \
+                        and ("<think>" in msg.content or "</think>" in msg.content
+                             or getattr(self, "_mm_in_think", False)):
+                    body, reason = self._split_think_inline(msg.content)
+                    msg.content = body
+                    if reason:
+                        if getattr(msg, "additional_kwargs", None) is None:
+                            msg.additional_kwargs = {}
+                        prev = msg.additional_kwargs.get("reasoning_content") or ""
+                        msg.additional_kwargs["reasoning_content"] = prev + reason
             if isinstance(chunk, dict):
                 if gen_chunk is not None:
                     _patch_chunk_with_reasoning(gen_chunk, chunk)
@@ -287,9 +345,81 @@ def _get_chat_openai_with_reasoning():
                         if getattr(gm, "additional_kwargs", None) is None:
                             gm.additional_kwargs = {}
                         gm.additional_kwargs["reasoning_content"] = rc
+                    # minimax <think> 内联(非流式整段)：剥入 reasoning_content 通道
+                    if gm is not None and isinstance(getattr(gm, "content", None), str) \
+                            and "<think>" in gm.content:
+                        self._mm_in_think = False
+                        body, reason = self._split_think_inline(gm.content)
+                        gm.content = body
+                        if reason:
+                            if getattr(gm, "additional_kwargs", None) is None:
+                                gm.additional_kwargs = {}
+                            prev = gm.additional_kwargs.get("reasoning_content") or ""
+                            gm.additional_kwargs["reasoning_content"] = prev + reason
             except Exception:  # noqa: BLE001
                 pass
             return result
+
+        # ── thinking 参数整流重试（cc-switch rectifier 模式）────────────────────
+        # 模型族表(thinking_param_for_model)是快路径;端点仍拒 thinking 参数时(表错/
+        # 未知网关方言),按错误文案特征命中 → 移除 thinking → 立即重试一次,并把
+        # self.extra_body 就地降级(本会话后续请求不再带)——永不因参数方言空转。
+        def _drop_thinking_param(self, exc: BaseException) -> bool:
+            eb = dict(self.extra_body or {})
+            if "thinking" not in eb:
+                return False
+            dropped = eb.pop("thinking")
+            self.extra_body = eb
+            logger.warning(
+                "端点拒绝 thinking 参数(%s)——已移除 %s 并重试;本会话后续请求降级不再携带",
+                str(exc)[:140], dropped,
+            )
+            return True
+
+        def _generate(self, *args, **kwargs):
+            try:
+                return super()._generate(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                if _is_thinking_param_rejection(exc) and self._drop_thinking_param(exc):
+                    return super()._generate(*args, **kwargs)
+                raise
+
+        async def _agenerate(self, *args, **kwargs):
+            try:
+                return await super()._agenerate(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                if _is_thinking_param_rejection(exc) and self._drop_thinking_param(exc):
+                    return await super()._agenerate(*args, **kwargs)
+                raise
+
+        def _stream(self, *args, **kwargs):
+            yielded = False
+            try:
+                for ch in super()._stream(*args, **kwargs):
+                    yielded = True
+                    yield ch
+            except Exception as exc:  # noqa: BLE001
+                # 参数拒绝发生在建流前(首 chunk 前 4xx);已吐过 chunk 说明不是参数问题,不重试防重复内容
+                if (not yielded and _is_thinking_param_rejection(exc)
+                        and self._drop_thinking_param(exc)):
+                    for ch in super()._stream(*args, **kwargs):
+                        yield ch
+                else:
+                    raise
+
+        async def _astream(self, *args, **kwargs):
+            yielded = False
+            try:
+                async for ch in super()._astream(*args, **kwargs):
+                    yielded = True
+                    yield ch
+            except Exception as exc:  # noqa: BLE001
+                if (not yielded and _is_thinking_param_rejection(exc)
+                        and self._drop_thinking_param(exc)):
+                    async for ch in super()._astream(*args, **kwargs):
+                        yield ch
+                else:
+                    raise
 
     _CHAT_OPENAI_REASONING_CLS = ChatOpenAIWithReasoning
     return ChatOpenAIWithReasoning

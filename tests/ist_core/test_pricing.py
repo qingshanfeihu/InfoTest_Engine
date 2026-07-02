@@ -30,3 +30,14 @@ def test_exact_hit_takes_precedence_over_basename():
     finally:
         PRICING_RMB.pop("vendor/special-model", None)
         PRICING_RMB.pop("special-model", None)
+
+
+def test_thinking_param_follows_model_family():
+    """thinking 参数 schema 随模型族而非网关(实证同一网关 deepseek=enabled、minimax=adaptive)。"""
+    from main.common.llm_helpers import thinking_param_for_model as f
+    assert f("mimo-v2.5-pro", True) == {"type": "enabled"}
+    assert f("deepseek/deepseek-v4-pro", False) == {"type": "disabled"}
+    assert f("minimax/minimax-m3", True) == {"type": "adaptive"}   # enabled 会 400
+    assert f("minimax/minimax-m3", False) == {"type": "disabled"}
+    assert f("qwen/qwen3.6-plus", True) is None                    # 未知族不注入
+    assert f("", True) is None

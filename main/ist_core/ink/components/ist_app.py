@@ -1001,6 +1001,16 @@ class IstInkApp:
         if snapshot.streaming_text is not None:
             self._flush_pending_tools()
             rendered = self._render_markdown(snapshot.streaming_text)
+            # 正文尚空(minimax <think> 剥离后 content 为空 / 首个 chunk 是纯思考)时**不建 ⏺ 行**——
+            # 否则每段纯思考响应留一个空 ⏺ 项目符号(实测 minimax 满屏空 ⏺)。思考走 footer/BLOCK_THINKING
+            # 通道显示,不占正文项目符号。等真正有正文再建行。
+            if self._ai_stream_idx < 0 and not rendered.strip():
+                self._footer.update(
+                    llm_phase=snapshot.llm_phase or "thinking",
+                    output_token_count=snapshot.output_token_count,
+                )
+                self._app.render()
+                return
             if self._ai_stream_idx < 0:
                 self._stream_commit_idx = -1  # 新流开始,放弃上一段未匹配的提交占位
                 self._ai_stream_idx = self._transcript.message_count()
@@ -1067,6 +1077,15 @@ class IstInkApp:
                     f"  \x1b[2m✻ Cooked for {_format_elapsed(_elapsed)}"
                     f" · ↑ {_fmt(_run_in)} · ↓ {_fmt(_run_out)} tokens\x1b[0m"
                 )
+                # 零产出哨兵(症状级防御):turn "正常结束"却零输入零输出 = 模型层被静默吞错
+                # (实证 tokensec 余额尽时 402 未冒泡,TUI 呈现 0.8s 空转,用户无从知晓)。
+                # 不论异常在哪层被转成空响应,零产出这个症状机械可判——显式告警。
+                if _run_in == 0 and _run_out == 0 and _elapsed < 30:
+                    self._transcript.append_message(
+                        "  \x1b[31m⚠ 本轮模型零响应(0 token)——大概率 API 异常被静默吞掉:"
+                        "请检查供应商余额/网关状态(如 402 Insufficient Balance)、"
+                        "或查看 runtime/logs 最新 run-*.jsonl。\x1b[0m"
+                    )
                 self._run_start_time = 0.0
 
             if self._plan_panel.is_visible:

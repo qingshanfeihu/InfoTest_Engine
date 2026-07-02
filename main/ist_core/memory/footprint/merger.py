@@ -42,19 +42,30 @@ _MARKDOWN_ROOT = ("knowledge", "data", "markdown")
 
 
 def _resolve_evidence_path(evidence_file: str) -> Path | None:
-    """把 evidence_file 解析为可读的绝对路径。
+    """把 evidence_file 解析为可读的绝对路径——**拒绝落在 agent 可写区(workspace)内的文件**。
 
-    不硬编码具体子目录（product/qa/...），而是在 markdown 树下通用解析：
-    1. 直接当项目相对/绝对路径
-    2. 在 knowledge/data/markdown 下按 basename 递归匹配（兼容 LLM 只给文件名 /
-       未来新增子目录桶的情况）
+    安全（评审中危：幻觉命令注入）：evidence_file 可能含 agent 输入（如 verify 写回的 manual_glob）。
+    evidence 门的信任前提是证据源**只读、非 agent 掌控**；若 evidence_file 指向 agent 自己 fs_write
+    到 `workspace/outputs/` 的文件，门就被架空——agent 把命令写进该文件即 100% 过门、往 footprint
+    注入幻觉命令。故拒绝 workspace 内的证据（agent 唯一可写区，正是攻击面）；md_root / 手册 / 框架
+    mirror 等只读源照常。
+    不硬编码具体子目录（product/qa/...），在 markdown 树下通用解析：
+    1. 当路径解析，但**不得落在 workspace 内**
+    2. 在 knowledge/data/markdown 下按 basename 递归匹配（结果天然在只读手册根内）
     """
     if not evidence_file:
         return None
     root = _project_root()
 
-    direct = root / evidence_file
-    if direct.is_file():
+    def _in_workspace(p: Path) -> bool:
+        try:
+            p.resolve().relative_to((root / "workspace").resolve())
+            return True
+        except ValueError:
+            return False
+
+    direct = (root / evidence_file).resolve()
+    if direct.is_file() and not _in_workspace(direct):
         return direct
 
     md_root = root.joinpath(*_MARKDOWN_ROOT)
@@ -64,8 +75,8 @@ def _resolve_evidence_path(evidence_file: str) -> Path | None:
     name = Path(evidence_file).name
     if not name:
         return None
-    
-    for p in md_root.rglob(name):
+
+    for p in md_root.rglob(name):   # md_root 内,天然非 workspace
         if p.is_file():
             return p
     return None
@@ -327,6 +338,14 @@ def merge_fact(routed: RoutedFact, footprint_dir: Path) -> MergeResult:
     """
     fact = routed.fact
     target_path = footprint_dir / routed.target_file
+
+    # 安全：写盘前收敛,挡 target_file(含 feature_id)里的 / .. 穿越到 footprint 根外——
+    # 与 router 的 feature_id 白名单纵深防御(dream/verify 写核共用此闸)。安全评审高危项。
+    try:
+        target_path.resolve().relative_to(Path(footprint_dir).resolve())
+    except ValueError:
+        return MergeResult(action="skip", target_file=routed.target_file,
+                           detail="path escapes footprint dir")
 
     if fact.fact_kind not in LEVEL_KINDS.get(routed.level, set()):
         return MergeResult(action="skip", target_file=routed.target_file, detail="kind not allowed at level")

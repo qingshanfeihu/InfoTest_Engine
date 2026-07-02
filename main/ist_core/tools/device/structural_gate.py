@@ -272,13 +272,15 @@ def check_structural_constraints(autoid: str, steps: list, init: str = "") -> St
 
 
 def _check_no_found_times(steps: list, result: StructuralResult) -> None:
-    """拒绝 found_times 断言——框架 xlsx 分派**不支持**它,必崩整份文件。
+    """拒绝 found_times 断言——框架 xlsx 分派**不支持**它,必崩整份文件(A 层机械事实,非语义判断)。
 
     实证(lib/test_xlsx.py 无任何 found_times/times 特殊处理):check_point 一律走 generic 2 参分派
     `func(expect, result)`,而 `check_point.found_times(expect, result, times)` 需 3 参 →
     `TypeError: found_times() missing 1 required positional argument: 'times'` → pytest 崩、
     该 case 之后全不跑(实证 yzg 10 pass 后崩、14 不执行)。
     改用 `found`(出现即可)或 `abs_found`(字面);要"恰好 N 次"语义,框架表达不了,换断言。
+    注:这是**机械崩溃**判定(等同语法错),与"某 claim 可不可证伪"的语义判断(归 verifiability 工具 +
+    LLM)是两码事——本门只认 F==found_times 这个必崩形态,不在这里算可证伪性。
     """
     for i, s in enumerate(steps):
         if not isinstance(s, dict):
@@ -290,4 +292,38 @@ def _check_no_found_times(steps: list, result: StructuralResult) -> None:
                 "改用 found(出现即可)/abs_found(字面匹配);'恰好 N 次'语义本框架表达不了。",
                 i,
             )
+
+
+def check_no_found_times_mandatory(steps: list) -> StructuralResult:
+    """found_times **无条件**拒绝门——与 strict_structural opt-in 解耦(A 层机械崩溃门)。
+
+    found_times 保证崩框架(分派只传 2 参必 TypeError,见 _check_no_found_times);其拒绝绝不该可选。
+    实证:draft agent 偶尔漏传 `strict_structural=True`(tool 默认 False 的 prompt 指令) → 整个结构门
+    跳过 → found_times 漏进 excel → 上机崩、崩溃点后全 case unknown(dongkl 实测 31 unknown 根因)。
+    故 emit **无条件**先跑这一条(其余启发式门仍留 strict_structural opt-in)。等同 SWE-agent 的
+    linter"语法不对不让 edit 过"——机械可判、误判即真错,不误杀好制品。
+    """
+    result = StructuralResult()
+    if isinstance(steps, list):
+        _check_no_found_times(steps, result)
+    return result
+
+
+def check_crash_gates_mandatory(steps: list) -> StructuralResult:
+    """必崩形态**无条件**拒绝门集合——与 strict_structural opt-in 解耦(A 层机械崩溃门)。
+
+    收录标准(严进):该形态上机**保证** TypeError 崩整份 pytest 文件(该 case 之后全不跑)——
+    误判即真错、不存在误杀好制品的可能。当前两条:
+    - found_times:框架分派只传 2 参必崩(_check_no_found_times;dongkl 首跑 31 unknown 根因)。
+    - 悬空断言:check_point(I 空)前无 result 生产步 → found(None) 必崩(_check_dangling_assertions;
+      实证 dongkl 778012 重编版:配置步后直接断言,worker 漏传 strict_structural 使 opt-in 门被
+      跳过而漏网 → 第三轮上机 1 pass + 33 unknown)。
+    教训同源:必崩类检查躲在 opt-in 开关后面就等于没有——draft agent 会漏传参数。启发式/
+    allowlist 类门仍留 strict_structural(可能误杀,须可选);必崩类一律进本门。
+    """
+    result = StructuralResult()
+    if isinstance(steps, list):
+        _check_no_found_times(steps, result)
+        _check_dangling_assertions(steps, result)
+    return result
 

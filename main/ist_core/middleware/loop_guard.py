@@ -228,29 +228,38 @@ def _build_reminder(stats: dict[str, Any], *, dup_thr: int, empty_thr: int, soft
         triggers.append(
             f"最近 {empty_count} 次搜索**无命中**（no matches / 空结果）。"
         )
-    budget_hit = count >= soft_budget and not triggers
-    if budget_hit:
-        triggers.append(
-            f"本轮已发起 {count} 次工具调用仍未收敛。"
+    # dup / empty 是真死循环信号 → 强提醒「停止重复尝试」
+    if triggers:
+        body = " ".join(triggers)
+        return (
+            f"<system-reminder data-source=\"{_REMINDER_TAG}\">\n"
+            f"⚠ 循环护栏：{body}\n\n"
+            "停止重复尝试。Don't retry the identical action blindly——立刻改变策略，三选一：\n"
+            "1. **收敛输出**：基于已经找到的材料给出结论；对未在文档命中的部分，"
+            "如实标注「知识库未找到 / 未在文档直接命中」，给出基于现有证据的最佳判断，"
+            "不要假装找到了。\n"
+            "2. **升级检索**：若确实需要更广的搜索，改用 explore 子代理或换不同的关键词/路径，"
+            "不要原样重发同一个 grep。\n"
+            "3. **向用户澄清**：若信息缺口必须用户补充，用 ask_user 提问。\n"
+            "继续重复相同的无效搜索是不允许的。\n"
+            "</system-reminder>"
         )
 
-    if not triggers:
-        return None
+    # 仅软预算超标、且无 dup / 无 empty（每次调用都在取新信息，非空转）——这不是死循环。
+    # 给「有效推进就继续」的温和提示，绝不诱导提前收尾 / 汇报——否则会误伤 34-case 批量编译
+    # 这类合法密集调用（main-orchestrated 主 agent ~每 2 次调用编 1 个 case，25 次软预算≈14 个
+    # case 就被逼着「收敛输出 / ask_user」提前结束整轮）。dup/empty 硬门仍兜底真死循环。
+    if count >= soft_budget:
+        return (
+            f"<system-reminder data-source=\"{_REMINDER_TAG}\">\n"
+            f"ℹ 本轮已发起 {count} 次工具调用（数量偏多，但未见重复 / 空转）。\n"
+            "这是提示、不是要你停：若你在**有效推进**（每次调用都取得新信息或产出新结果，"
+            "如逐个编译 / 检索不同目标），**继续即可，无需收敛、无需提前向用户汇报或收尾**；"
+            "只有当你察觉自己在**原地打转、反复取同类信息**时，才停下改变策略或用 ask_user 澄清。\n"
+            "</system-reminder>"
+        )
 
-    body = " ".join(triggers)
-    return (
-        f"<system-reminder data-source=\"{_REMINDER_TAG}\">\n"
-        f"⚠ 循环护栏：{body}\n\n"
-        "停止重复尝试。Don't retry the identical action blindly——立刻改变策略，三选一：\n"
-        "1. **收敛输出**：基于已经找到的材料给出结论；对未在文档命中的部分，"
-        "如实标注「知识库未找到 / 未在文档直接命中」，给出基于现有证据的最佳判断，"
-        "不要假装找到了。\n"
-        "2. **升级检索**：若确实需要更广的搜索，改用 explore 子代理或换不同的关键词/路径，"
-        "不要原样重发同一个 grep。\n"
-        "3. **向用户澄清**：若信息缺口必须用户补充，用 ask_user 提问。\n"
-        "继续重复相同的无效搜索是不允许的。\n"
-        "</system-reminder>"
-    )
+    return None
 
 
 class LoopGuardMiddleware(AgentMiddleware):

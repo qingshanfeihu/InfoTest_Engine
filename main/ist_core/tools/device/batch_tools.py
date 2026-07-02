@@ -269,7 +269,27 @@ def dev_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
             dres = client.deliver(module, submit, str(p))
             if dres.get("error"):
                 return json.dumps({"error": f"deliver 失败: {dres.get('error')}"}, ensure_ascii=False)
-            run = client.run_and_wait(module, submit, build, autoids, max_s=total_max)
+
+            # 跑批进度 → evidence fastlog（TUI 300ms tail 同一文件即实时显示，零 TUI 改动）。
+            # 降噪：完成数变化或 ≥30s 心跳才写一行；任何异常静默——可观测性不拖垮跑批。
+            _t0 = time.time()
+            _prog_state = {"done": -1, "ts": 0.0}
+            def _on_poll(st: dict) -> None:
+                try:
+                    from main.ist_core.skills.loader import _fork_emit
+                    done = len(st.get("results") or {})
+                    now = time.time()
+                    if done == _prog_state["done"] and now - _prog_state["ts"] < 30:
+                        return
+                    _prog_state["done"], _prog_state["ts"] = done, now
+                    tail_lines = (st.get("log_tail") or "").strip().splitlines()
+                    tail = f" · {tail_lines[-1].strip()[-70:]}" if tail_lines else ""
+                    _fork_emit(f"▸ 上机进度 {done}/{len(autoids)} · {int(now - _t0)}s{tail}")
+                except Exception:  # noqa: BLE001
+                    pass
+
+            run = client.run_and_wait(module, submit, build, autoids, max_s=total_max,
+                                      progress_cb=_on_poll)
             if run.get("busy") or run.get("error") == "device_busy":
                 return json.dumps({"error": "device_busy", "busy": True,
                                    "message": run.get("message") or "环境忙：正在验证上一个用例，请稍后重试。"},
@@ -311,3 +331,213 @@ def dev_run_batch(xlsx_path: str, autoids_json: str, module: str = "",
         return json.dumps({"error": f"批量上机异常: {exc}", "partial": out}, ensure_ascii=False)
 
     return json.dumps(out, ensure_ascii=False)
+
+
+def _scan_xlsx_for_check_method(xlsx_path: str, method: str) -> list:
+    """扫 xlsx 找用了某 check_point 方法（如 found_times）的行，返回 [(autoid, 行号)]。
+
+    供 digest 在识别到文件级崩溃（某断言崩整份 pytest）时**点名元凶 case**，让归因落到
+    具体 autoid，而非笼统"框架崩了"。失败静默返回空（点名是增益、非硬依赖）。
+    """
+    try:
+        import openpyxl
+        from main.ist_core.tools.deepagent.file_tools import _resolve_inside_root
+        p = _resolve_inside_root(xlsx_path, must_exist=True)
+        ws = openpyxl.load_workbook(p, data_only=True).active
+        hits, cur = [], None
+        for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+            cells = [str(c).strip() if c is not None else "" for c in row]
+            if cells and cells[0].isdigit() and len(cells[0]) >= 12:
+                cur = cells[0]
+            if method in cells and "check_point" in cells:
+                hits.append((cur, i))
+        return hits
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _fail_signatures(text: str) -> set[str]:
+    """从裁决明细抽 fail 签名集合（``fail to find[:]? <expect>`` 的 expect 前 60 字符）。
+
+    跨轮对照用：两轮签名集合**交集非空** = 同签名 fail（同一断言以同样方式不中）。
+    保守短截断——签名只用于同/异判定，不追求完整还原 expect。
+    """
+    import re
+    return {m.group(1).strip()[:60]
+            for m in re.finditer(r"fail to find:?\s*([^\r\n]{1,80})", text or "")}
+
+
+@tool(parse_docstring=True)
+def dev_run_batch_digest(xlsx_path: str, autoids_json: str, module: str = "",
+                         build: str = "", max_s_each: int = _RUN_DEFAULT_MAX_S) -> str:
+    """整份 xlsx 上机单跑 + 逐 case 四层归因，回**精简可读**摘要（不被 offload）。
+
+    与 ``dev_run_batch`` 同参、同上机方式（整份单跑 O(N)），但**替你把大结果就地消化**——
+    这是把 ist_verify 的确定性核（首跑 → 拆逐 case → 四层归因）提炼成一次调用：
+
+    - 全量逐 case 明细（causality / device_context / framework_traceback）落
+      ``workspace/outputs/<feature>/last_run.json``（**缩进 JSON**：``fs_read`` 可分页、
+      ``fs_grep <autoid>`` 可定位、``run_python`` 可 ``json.load``）；
+    - 每个非 pass case 过确定性四层归因（与 ``compile_attribute`` 同款分类器，瞬态>E>G>默认V）；
+    - **只返回** summary 计数 + 逐 case 一行表 + 明细文件指针（几 KB → 不触发 offload）。
+
+    为什么要它：``dev_run_batch`` 原样返回的大 JSON 会被 middleware offload 成单块，agent
+    读得回、却难就地逐 case 解析（且 ``run_python``/``run_shell`` 够不到 offload 落点）。本工具在
+    **进程内**消化完，agent 拿到的是已分类的小摘要；要深挖某个 case 的完整 device_context，
+    再对 ``last_run.json`` ``fs_read`` / ``fs_grep <autoid>`` 即可（它在 workspace 内、全工具可用）。
+
+    含 ``<RUNTIME>`` 占位的 case 首跑必 fail（框架找字面 "<RUNTIME>"），属预期待回填——
+    先看 digest 里它归到哪层，回填仍走 ``compile_runtime_slots`` / ``compile_runtime_fill``。
+
+    Args:
+        xlsx_path: 合并后的 case.xlsx 本地路径。
+        autoids_json: JSON 数组字符串，要取裁决的 autoid 列表。
+        module: staging 子模块（默认取 compiler config）。
+        build: 目标设备 build（默认取 compiler config）。
+        max_s_each: 整份预算下限（同 ``dev_run_batch``）。
+
+    Returns:
+        人类可读摘要：summary 计数 + 逐 case 表（autoid | verdict | 归因层 | reflow | causality 尾）
+        + 全量明细文件路径。上机错误 / device_busy 原样透传。
+    """
+    from pathlib import Path
+    from main.ist_core.tools.device.fail_attribution import attribute_fail
+
+    # 进程内跑 dev_run_batch：拿到的完整 JSON 不经 offload（offload 只在 tool→agent 时发生）
+    raw = dev_run_batch.func(xlsx_path, autoids_json, module, build, max_s_each)
+    try:
+        results = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return raw
+    if not isinstance(results, list):
+        return raw   # error / device_busy / partial dict 原样透传
+
+    cnt = {"pass": 0, "fail": 0, "unknown": 0}
+    layers = {"G": 0, "undetermined": 0}
+    rows: list[tuple] = []
+    for rec in results:
+        aid = rec.get("autoid", "?")
+        verdict = rec.get("verdict", "unknown")
+        cnt[verdict] = cnt.get(verdict, 0) + 1
+        causal = (rec.get("causality") or "").strip().replace("\n", " ")
+        tail = causal[-90:] if causal else ""
+        if verdict == "pass":
+            rows.append((aid, "pass", "-", "-", tail))
+        elif verdict == "unknown":
+            tb = (rec.get("framework_traceback") or "").strip()
+            note = "崩溃/未跑到"
+            if tb:
+                note += f"; tb尾: {tb.splitlines()[-1][:70]}"
+            rows.append((aid, "unknown", "?", "-", note))
+        else:  # fail → 机械预判只认设备 ^ 拒绝；其余给原文不猜（见 fail_attribution）
+            detail = rec.get("device_context") or rec.get("detail_tail") or causal
+            ar = attribute_fail(detail)
+            layers[ar.layer] = layers.get(ar.layer, 0) + 1
+            rec["_digest_layer"] = ar.layer   # 落盘供下一轮跨轮对照
+            if ar.layer == "G":
+                from main.ist_core.tools.device.fail_attribution import caret_rejected_commands
+                cmds = caret_rejected_commands(detail, limit=2)
+                note = ("⚠配置被拒(^): " + " ; ".join(c[:60] for c in cmds)) if cmds else tail
+                rows.append((aid, "fail", "G(^)", "→G", note))
+            else:
+                rows.append((aid, "fail", "-", "待归因", tail))
+
+    # 全量明细落 workspace（缩进 JSON，全工具可用）——feature 目录 = xlsx 的父目录
+    detail_disp = ""
+    repeat_ids: list[str] = []          # 连续两轮同签名 fail（非瞬态实锤）
+    transient_recur_ids: list[str] = []  # 上轮归瞬态、本轮复现 fail（误归瞬态）
+    try:
+        from main.ist_core.tools.deepagent.file_tools import _resolve_inside_root, _WORKSPACE_ROOT
+        xp = _resolve_inside_root(xlsx_path, must_exist=True)
+        out_file = Path(xp).parent / "last_run.json"
+        # 跨轮对照（机械事实）：覆盖写之前读上一轮结果。瞬态定义=不可复现——
+        # 同签名连续两轮 fail 即系统性问题（实证 dongkl：5 个"瞬态"下一轮 100% 复现=全部误归）。
+        prev_map: dict[str, dict] = {}
+        try:
+            if out_file.exists():
+                for r0 in json.loads(out_file.read_text(encoding="utf-8")):
+                    if isinstance(r0, dict) and r0.get("autoid"):
+                        prev_map[str(r0["autoid"])] = r0
+        except Exception:  # noqa: BLE001
+            prev_map = {}
+        if prev_map:
+            for rec in results:
+                if not isinstance(rec, dict) or rec.get("verdict") != "fail":
+                    continue
+                p = prev_map.get(str(rec.get("autoid")))
+                if not p or p.get("verdict") != "fail":
+                    continue
+                if p.get("_digest_layer") == "transient":
+                    transient_recur_ids.append(str(rec.get("autoid")))
+                sig_now = _fail_signatures((rec.get("causality") or "") + (rec.get("device_context") or ""))
+                sig_prev = _fail_signatures((p.get("causality") or "") + (p.get("device_context") or ""))
+                if sig_now & sig_prev:
+                    rec["_repeat_fail_same_signature"] = True
+                    repeat_ids.append(str(rec.get("autoid")))
+        out_file.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            detail_disp = str(out_file.relative_to(_WORKSPACE_ROOT.parent))
+        except Exception:  # noqa: BLE001
+            detail_disp = str(out_file)
+    except Exception as exc:  # noqa: BLE001
+        detail_disp = f"(明细落盘失败: {exc})"
+
+    # 文件级崩溃识别：unknown 常是"某 case 断言崩了整份 pytest → 崩溃点后全 unknown（级联）"。
+    # 认已知崩溃签名（如 found_times），扫 xlsx 点名元凶 case，给**正确归因**——编译缺陷、
+    # 非框架 bug、非各 case 各自失败、非"逐 case 排查"。这是 bare main 最易归因错的地方。
+    crash_note = ""
+    tb_joined = "\n".join(
+        rec.get("framework_traceback", "") for rec in results
+        if rec.get("verdict") == "unknown" and rec.get("framework_traceback")
+    )
+    if tb_joined:
+        from main.ist_core.tools.device.fail_attribution import attribute_file_crash
+        hit = attribute_file_crash(tb_joined)
+        if hit:
+            name, guide = hit
+            culprits = _scan_xlsx_for_check_method(xlsx_path, name)
+            who = ("元凶 case: " + ", ".join(f"{a}(行{r})" for a, r in culprits[:8])
+                   ) if culprits else "（未在 xlsx 定位到，可能在合并前的单 case draft）"
+            crash_note = (
+                f"⚠ 文件级崩溃(编译缺陷,非框架bug): {name} 断言崩了整份 pytest → 崩溃点之后 "
+                f"{cnt.get('unknown', 0)} 个 unknown 是**级联**(后续 case 根本没跑)、非各自失败。\n"
+                f"   崩因: {guide}\n   {who}\n"
+                f"   → 正确处置: **重编移除/替换这些 case 的 {name} 断言**(走 ist_compile 重编)；"
+                f"不是改框架、不是逐 case 排查、excel **确实要动**。"
+            )
+
+    lines = ["=== dev_run_batch_digest ==="]
+    lines.append(f"excel: {xlsx_path} | 总 case: {len(results)}")
+    lines.append(
+        f"真通过 P:{cnt.get('pass', 0)} | fail F:{cnt.get('fail', 0)} "
+        f"(G(^拒绝):{layers['G']} 待归因:{layers['undetermined']}) "
+        f"| unknown:{cnt.get('unknown', 0)}"
+    )
+    lines.append(f"全量明细: {detail_disp}")
+    if repeat_ids or transient_recur_ids:
+        lines.append("")
+        if repeat_ids:
+            lines.append(
+                f"⚠ 跨轮对照:连续两轮**同签名** fail({len(repeat_ids)}个): {', '.join(repeat_ids)}\n"
+                f"   → 非瞬态、且上轮修法无效。**冻结同法重编**(第三轮同法大概率再 fail)；按环境阻塞"
+                f"/疑似产品缺陷处置:先核实环境事实(该 IP/配置在设备上的真实状态),环境正常则走"
+                f" kb_bug_search 比对缺陷库、产出缺陷候选记录,而非继续重编。"
+            )
+        if transient_recur_ids:
+            lines.append(
+                f"⚠ 上轮归\"瞬态\"本轮复现 fail({len(transient_recur_ids)}个): {', '.join(transient_recur_ids)}\n"
+                f"   → 瞬态=不可复现;复现即误归,按系统性问题重新归因(G/E/V/产品缺陷)。"
+            )
+    if crash_note:
+        lines.append("")
+        lines.append(crash_note)
+    lines.append("")
+    lines.append("autoid | verdict | 归因层 | reflow | causality/note(尾)")
+    for r in rows:
+        lines.append(" | ".join(str(x) for x in r))
+    lines.append("")
+    lines.append(f"深挖某 case: fs_read {detail_disp} 或 fs_grep <autoid> 该文件看完整 device_context。")
+    lines.append("归因说明: G(^)=设备语法拒绝(协议级确定事实,先修它——同 case 后续解析/断言失败多为下游后果); "
+                 "待归因=未做机械预判,读 last_run.json 里该 case 的 device_context 原文自行判 "
+                 "E(可达性/环境)/V(断言期望值)/瞬态(换时间重跑即消失;连续两轮同签名 fail 不是瞬态)/疑似产品缺陷。")
+    return "\n".join(lines)

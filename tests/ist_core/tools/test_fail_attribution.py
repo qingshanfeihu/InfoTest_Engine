@@ -1,66 +1,95 @@
-"""V3 步骤5：四层归因（fail_attribution）。"""
+"""V3 步骤5：fail 机械预判（fail_attribution）。
+
+2026-07-02 收缩重写：预判只认**一个协议级事实**——设备语法拒绝标记 ``^``。
+曾经的瞬态/E/G marker 关键字表已删（强字典猜语义，实证两类误归：裸 "dig" 把配置
+被拒抢归 E；"timed out" 把配置错的下游超时归瞬态不回流）。其余 fail 一律
+undetermined——device_context 原文交给 LLM 归因。
+"""
 
 from __future__ import annotations
 
-from main.ist_core.tools.device.fail_attribution import attribute_fail, AttributionResult
+from main.ist_core.tools.device.fail_attribution import (
+    attribute_fail, AttributionResult, attribute_file_crash,
+    has_device_syntax_caret, caret_rejected_commands,
+)
 
 
-def test_transient_highest_priority():
-    # 即使含 dig 字样，SSH 超时也优先判瞬态（不回流）
-    r = attribute_fail("dig query failed: SSH connection timed out")
-    assert r.layer == "transient"
-    assert r.reflow is False
-    assert r.target_layer == ""
+# ── ^ 语法拒绝：唯一的机械 G 判定 ─────────────────────────────────────────
+
+_CARET_CTX = (
+    'APV(config)#sdns pool cname "pool_cname" "target.autotest.com"\n'
+    'sdns pool cname "pool_cname" "target.autotest.com" \n'
+    '               ^\n'
+    'APV(config)#sdns host pool "autotest.com" "pool_cname"\n'
+    'The pool "pool_cname" does not exist.\n'
+    'Failed to execute the command\n'
+    'dig @172.16.34.70 autotest.com cname +time=2 +tries=1\n'
+    ';; connection timed out; no servers could be reached\n'
+)
 
 
-def test_transient_variants():
-    for d in ["SSH session dropped", "connection refused", "NXDOMAIN returned",
-              "broken pipe", "EOF occurred in violation"]:
-        assert attribute_fail(d).layer == "transient"
-
-
-def test_e_layer_dig_no_answer():
-    r = attribute_fail("dig returned no answer for the VIP")
-    assert r.layer == "E"
-    assert r.reflow is True
-    assert r.target_layer == "E"
-
-
-def test_g_layer_invalid_command():
-    r = attribute_fail("% invalid command at sdns listener")
+def test_caret_rejection_is_g_even_with_downstream_noise():
+    """有 ^（设备语法拒绝）→ G，确定无疑——即使 context 同时含 dig 输出、
+    timed out、does not exist 等下游后果文本（实证 994928：旧 marker 表把它抢归 E）。"""
+    r = attribute_fail(_CARET_CTX)
     assert r.layer == "G"
-    assert r.target_layer == "G"
+    assert r.reflow is True and r.target_layer == "G"
+    assert "^" in r.reason and "下游" in r.reason
+    assert "sdns pool cname" in r.reason        # 被拒命令原文进 reason（给证据）
 
 
-def test_g_layer_config_not_applied():
-    r = attribute_fail("configuration failed: feature 未生效")
-    assert r.layer == "G"
+def test_caret_helpers():
+    assert has_device_syntax_caret(_CARET_CTX)
+    assert not has_device_syntax_caret("dig output\nANSWER: 1.2.3.4\n")
+    cmds = caret_rejected_commands(_CARET_CTX)
+    assert cmds and "sdns pool cname" in cmds[0]
 
 
-def test_v_layer_default_assertion_miss():
-    # 有回显、无瞬态/E/G 信号 → V 错
-    r = attribute_fail("check_point found 0 times, expected the backend ip but got different value")
-    assert r.layer == "V"
-    assert r.reflow is True
-    assert r.target_layer == "V"
+# ── 无 ^：一律 undetermined，不做关键字猜测 ────────────────────────────────
+
+def test_no_caret_returns_undetermined_not_keyword_guess():
+    """dig 超时/无解析/SSH 字样都不再触发关键字预归因——原文交给 LLM。"""
+    for ctx in (
+        ";; connection timed out; no servers could be reached",   # 旧表会误判瞬态/E
+        "#### Fail Num 1: fail to find \\b1.2.3.4\\b in: ANSWER 5.6.7.8",  # 旧表默认 V
+        "ssh connection reset by peer",                            # 旧表判瞬态
+        "The pool \"p1\" does not exist.\nFailed to execute the command",  # 旧表判 G(关键字)
+    ):
+        r = attribute_fail(ctx)
+        assert r.layer == "undetermined", ctx
+        assert "device_context" in r.reason      # 指路看原文
+        assert "瞬态" in r.reason                # 给瞬态判定标准（复现≠瞬态），不替 LLM 下结论
 
 
-def test_v_layer_uses_provenance_target():
-    # 断言不命中，但 provenance 标该断言其实依赖 G 段 → 回流目标用 provenance
-    r = attribute_fail("assertion did not match output",
-                       failing_assertion_layer="G")
-    assert r.layer == "V"
-    assert r.target_layer == "G"
+def test_undetermined_carries_provenance_target_as_hint():
+    r = attribute_fail("some fail detail", failing_assertion_layer="V")
+    assert r.layer == "undetermined" and r.target_layer == "V"
+    r2 = attribute_fail("some fail detail", failing_assertion_layer="X")
+    assert r2.target_layer == ""                 # 非法层不透传
 
 
 def test_render():
-    r = attribute_fail("SSH timeout")
-    assert "transient" in r.render() and "不回流" in r.render()
-    r2 = attribute_fail("dig no answer")
-    assert "回流→E层" in r2.render()
+    g = AttributionResult("G", "设备语法拒绝(^)", reflow=True, target_layer="G")
+    assert "[G]" in g.render() and "回流→G层" in g.render()
+    u = AttributionResult("undetermined", "未预判", reflow=True, target_layer="")
+    assert "待归因" in u.render() or "回流与否待归因后定" in u.render()
 
 
-def test_priority_e_over_g():
-    # 同时含 E 和 G 信号，E 优先（先判可达性）
-    r = attribute_fail("dig no answer; also % invalid command")
-    assert r.layer == "E"
+# ── 文件级崩溃签名（确定性事实，保留）────────────────────────────────────
+
+def test_file_crash_found_times_recognized():
+    """found_times() missing 崩溃签名 → 识别为编译缺陷，指引重编改 found/abs_found。"""
+    tb = ("E   TypeError: found_times() missing 1 required positional argument: 'times'\n"
+          "test_xlsx.py:304")
+    hit = attribute_file_crash(tb)
+    assert hit is not None
+    name, guide = hit
+    assert name == "found_times"
+    assert "重编" in guide and ("found" in guide or "abs_found" in guide)
+    assert "框架 bug" in guide  # 明确说明非框架 bug（这是 main 最易归因错处）
+
+
+def test_file_crash_unknown_signature_returns_none():
+    """未识别的崩溃签名 → None（交由泛型 unknown 处理，不硬套 found_times）。"""
+    assert attribute_file_crash("SomeOther: RuntimeError boom") is None
+    assert attribute_file_crash("") is None

@@ -21,6 +21,7 @@ from main.ist_core.tools.deepagent.exec_tools import run_shell, run_python
 from main.ist_core.tools.device import dev_rest, dev_ssh, dev_run_case, dev_probe, dev_init_device
 from main.ist_core.tools.device import (
     dev_run_batch,
+    dev_run_batch_digest,  # 整份上机 + 逐 case 四层归因 + 明细落 workspace，回精简摘要(不 offload)
     compile_attribute,
     compile_emit,  # main-orchestrated 兜底单 case；worker 主路也用
     compile_prep,  # main-orchestrated：解析脑图→manifest（main 自己拆 case 清单）
@@ -32,6 +33,7 @@ from main.ist_core.tools.device import (
 )
 from main.ist_core.tools.knowledge.kb_bug_search import kb_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
+from main.ist_core.tools.knowledge.footprint_writeback import compile_footprint_writeback
 from main.ist_core.tools.skills import invoke_skill
 from main.ist_core.tools.skills.file_server import qa_file_server
 from main.ist_core.tools.ask_user import ask_user
@@ -62,7 +64,8 @@ def _default_generic_tools() -> list[Any]:
         # emit_merged/precedent/score）下放到 compile_pipeline 内部 + draft/grade fork，
         # 主 agent 仅调 compile_pipeline 一次；ist_verify 上机验证链用下面这组。
         dev_run_batch,
-        compile_attribute,   # 上机 fail 四层归因
+        dev_run_batch_digest,   # 整份上机 + 逐 case 归因 + 明细落 workspace，回精简分类摘要（推荐：大结果不 offload、可直接看分类）
+        compile_attribute,   # 上机 fail 四层归因（单 case；digest 已内置批量归因）
         compile_pipeline,  # 确定性编译流水线（保留当 fallback）
         compile_emit,  # main-orchestrated 兜底单 case
         compile_prep,  # main-orchestrated：解析脑图→manifest（main 自己拆 case 清单）
@@ -70,6 +73,7 @@ def _default_generic_tools() -> list[Any]:
         compile_grade_extract,  # main-orchestrated：合并前确定性自查（grade 之外第二道闸，防放水）
         compile_runtime_slots,  # 列 <RUNTIME> 待回填槽位
         compile_runtime_fill,  # 上机真实值锁死回填（不反复改）
+        compile_footprint_writeback,  # 真 PASS 的 G 段文法写回 footprint（verify 步7 自演化 ρ_k）
 
         kb_bug_search,
 

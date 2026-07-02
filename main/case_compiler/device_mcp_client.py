@@ -714,12 +714,15 @@ class FrameworkMCPClient:
                            {"task_id": task_id, "build": build, "case_ids": case_ids})]).get("run_cases_status", {})
 
     def run_and_wait(self, module: str, autoid: str, build: str, case_ids: list[str],
-                     poll_s: int = 10, max_s: int = 600) -> dict:
+                     poll_s: int = 10, max_s: int = 600, progress_cb=None) -> dict:
         """提交一个 staging 用例并轮询到 done，返回最终 status。
 
         撞锁（设备正在验证上一个用例）时**不静默放弃**，把 server 的结构化 busy
         信号原样上抛（含 running_autoid / elapsed_s / message），由上层 agent 决定
         等待、跳过还是上报——而不是把"环境忙"误当成"提交失败"。
+
+        progress_cb: 每次轮询后以当次 status dict 回调（含 ``results``/``log_tail``），
+        供上层输出跑批进度；回调异常吞掉——可观测性不拖垮跑批。
         """
         sub = self.run(module, autoid, build)
         if sub.get("busy") or sub.get("error") == "device_busy":
@@ -735,6 +738,11 @@ class FrameworkMCPClient:
         while time.time() < deadline:
             time.sleep(poll_s)
             last = self.status(tid, build, case_ids)
+            if progress_cb is not None:
+                try:
+                    progress_cb(last)
+                except Exception:  # noqa: BLE001
+                    pass
             st = (last.get("status") or {}).get("state")
             if st in ("done", "error"):
                 break

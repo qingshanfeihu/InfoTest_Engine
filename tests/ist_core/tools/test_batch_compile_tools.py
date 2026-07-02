@@ -151,8 +151,12 @@ class _FakeClient:
         self.calls.append(("deliver", autoid))
         return self._deliver
 
-    def run_and_wait(self, module, autoid, build, autoids, max_s):
+    def run_and_wait(self, module, autoid, build, autoids, max_s, progress_cb=None):
         self.calls.append(("run", autoid))
+        # 模拟两次轮询进度回调（results 渐增 + log_tail），供进度 fastlog 测试
+        if progress_cb is not None:
+            progress_cb({"results": {"B100": {}}, "log_tail": "case B100 running"})
+            progress_cb({"results": {"B100": {}, "B101": {}}, "log_tail": "case B101 running"})
         return self._run
 
     def fetch_batch_details(self, submit_autoid):
@@ -257,3 +261,149 @@ def test_run_batch_deliver_fail_errors(tmp_path, _patch_client):
     out = dev_run_batch.invoke({"xlsx_path": path, "autoids_json": json.dumps(autoids)})
     res = json.loads(out)
     assert "error" in res and "deliver" in res["error"]
+
+
+# ── dev_run_batch_digest：整份上机 + 逐 case 四层归因 + 明细落 workspace ──────────
+# 提炼自 ist_verify 确定性核（首跑→拆逐case→四层归因），给 bare main 一键可调：大结果在
+# **进程内**消化，agent 只拿几 KB 分类摘要（不被 offload），深挖再 fs_read/grep 明细文件。
+# 测试用 mock dev_run_batch.func 隔离 digest 的 value-add（分类/计数/落盘/精简返回），不碰真设备。
+
+def _digest_setup_sandbox(tmp_path, monkeypatch):
+    """把 file_tools 沙箱根指到 tmp，建 workspace/outputs/feat/case.xlsx（占位存在即可，
+    digest 不读它内容，只用它的父目录定 last_run.json 落点）。返回 feature 目录。"""
+    import main.ist_core.tools.deepagent.file_tools as ft
+    ws = tmp_path / "workspace"
+    outd = ws / "outputs" / "feat"
+    outd.mkdir(parents=True)
+    (outd / "case.xlsx").write_bytes(b"PK\x03\x04stub")
+    (tmp_path / "knowledge" / "data").mkdir(parents=True)
+    monkeypatch.setattr(ft, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(ft, "_AGENT_ROOT", tmp_path / "knowledge" / "data")
+    monkeypatch.setattr(ft, "_WORKSPACE_ROOT", ws)
+    monkeypatch.delenv("IST_SESSION_DIR", raising=False)
+    monkeypatch.delenv("IST_USER_DIR", raising=False)
+    return outd
+
+
+# 机械预判只认 ^（设备语法拒绝）→ G；其余 fail 一律 undetermined（原文交 LLM 归因）。
+_DIGEST_SYNTH = [
+    {"autoid": "A_pass", "verdict": "pass", "causality": "successed to find 1.1.1.1", "detail_tail": "ok"},
+    {"autoid": "A_g", "verdict": "fail", "causality": "fail to find", "detail_tail": "x",
+     "device_context": "APV(config)#sdns pool cnome p1\nsdns pool cnome p1\n          ^\nFailed to execute the command"},  # G：^ 语法拒绝
+    {"autoid": "A_e", "verdict": "fail", "causality": "fail to find", "detail_tail": "x",
+     "device_context": "dig: no answer from server"},          # 待归因（旧表判 E）
+    {"autoid": "A_v", "verdict": "fail", "causality": "fail to find 2.2.2.2", "detail_tail": "x",
+     "device_context": "ANSWER 2.2.2.2 (expected 3.3.3.3)"},   # 待归因（旧表默认 V）
+    {"autoid": "A_t", "verdict": "fail", "causality": "fail", "detail_tail": "x",
+     "device_context": "ssh connection timed out"},            # 待归因（旧表误判瞬态不回流）
+    {"autoid": "A_u", "verdict": "unknown", "causality": "", "detail_tail": "",
+     "framework_traceback": "Traceback (most recent call last)\nKeyError: 'pool'"},
+]
+
+
+def test_digest_classifies_counts_and_persists(tmp_path, monkeypatch):
+    from main.ist_core.tools.device import batch_tools, dev_run_batch_digest
+    outd = _digest_setup_sandbox(tmp_path, monkeypatch)
+    monkeypatch.setattr(batch_tools.dev_run_batch, "func",
+                        lambda *a, **k: json.dumps(_DIGEST_SYNTH, ensure_ascii=False))
+    out = dev_run_batch_digest.invoke(
+        {"xlsx_path": "workspace/outputs/feat/case.xlsx", "autoids_json": '["A_pass"]'})
+    # 计数 + 分层（P/F(G(^)/待归因)/unknown）——机械只认 ^，其余不猜
+    assert "P:1" in out and "F:4" in out and "unknown:1" in out
+    assert "G(^拒绝):1 待归因:3" in out
+    # 逐 case：^ 拒绝点名被拒命令原文；其余标待归因（不再猜 E/V/瞬态）
+    assert "A_g | fail | G(^)" in out and "配置被拒" in out and "sdns pool cnome" in out
+    assert "A_e | fail | - | 待归因" in out
+    assert "A_v | fail | - | 待归因" in out
+    assert "A_t | fail | - | 待归因" in out
+    assert "A_u | unknown" in out and "KeyError" in out
+    # 全量明细落 workspace：缩进 JSON、可 json.load、6 条齐全
+    lr = outd / "last_run.json"
+    assert lr.exists()
+    data = json.loads(lr.read_text(encoding="utf-8"))
+    assert len(data) == 6 and data[1]["autoid"] == "A_g"
+    assert lr.read_text(encoding="utf-8").count("\n") > 6   # indent=2 → 多行，fs_read 可分页
+
+
+def test_digest_passes_through_device_busy(tmp_path, monkeypatch):
+    """上机 error/device_busy → digest 原样透传，不崩、不落假 last_run。"""
+    from main.ist_core.tools.device import batch_tools, dev_run_batch_digest
+    outd = _digest_setup_sandbox(tmp_path, monkeypatch)
+    monkeypatch.setattr(batch_tools.dev_run_batch, "func",
+                        lambda *a, **k: json.dumps({"error": "device_busy", "busy": True}))
+    out = dev_run_batch_digest.invoke(
+        {"xlsx_path": "workspace/outputs/feat/case.xlsx", "autoids_json": '["A"]'})
+    assert "device_busy" in out
+    assert not (outd / "last_run.json").exists()   # 出错不落盘
+
+
+def test_digest_flags_found_times_crash_as_compile_defect(tmp_path, monkeypatch):
+    """unknown 带 found_times 崩溃 traceback → digest 醒目标"文件级崩溃(编译缺陷,非框架bug)"，
+    把 bare main 最易犯的"框架bug/无需改excel"误判**在工具层纠正**（这是 goal 的核心）。"""
+    from main.ist_core.tools.device import batch_tools, dev_run_batch_digest
+    _digest_setup_sandbox(tmp_path, monkeypatch)
+    crashed = [
+        {"autoid": "203031753342777976", "verdict": "pass", "causality": "successed to find"},
+        {"autoid": "203031753342778072", "verdict": "unknown", "causality": "",
+         "framework_traceback": "E  TypeError: found_times() missing 1 required positional argument: 'times'"},
+        {"autoid": "203031754277681841", "verdict": "unknown", "causality": "",
+         "framework_traceback": "found_times() missing"},
+    ]
+    monkeypatch.setattr(batch_tools.dev_run_batch, "func",
+                        lambda *a, **k: json.dumps(crashed, ensure_ascii=False))
+    out = dev_run_batch_digest.invoke(
+        {"xlsx_path": "workspace/outputs/feat/case.xlsx", "autoids_json": '["A"]'})
+    assert "文件级崩溃" in out and "编译缺陷" in out and "非框架bug" in out
+    assert "found_times" in out and "重编" in out
+    assert "级联" in out                       # 说清 unknown 是级联、非各自失败
+    assert "excel" in out                      # 明确 excel 要动（纠正"无需改excel"误判）
+
+
+def test_digest_cross_run_repeat_and_transient_recur(tmp_path, monkeypatch):
+    """跨轮对照(确定性止损地基):同签名连续两轮 fail + 上轮"瞬态"标签本轮复现,摘要必须点名。
+
+    实证(dongkl 第四→五轮):上轮归"瞬态"的 5 个 case 下一轮 100% 复现 fail=全部误归;
+    同签名 fail 连续多轮被逐 case 重编无效烧钱。瞬态定义=不可复现——复现即系统性问题,
+    该判定纯机械(比对两轮 last_run.json),不靠 LLM 自觉。
+    注:新版机械预判不再产 transient 标签(见 fail_attribution 收缩重写);"上轮瞬态复现"
+    分支保留用于兼容旧格式 last_run.json / LLM 归因后回写的标签——本测试手工构造旧格式验证。
+    """
+    from main.ist_core.tools.device import batch_tools, dev_run_batch_digest
+    outd = _digest_setup_sandbox(tmp_path, monkeypatch)
+    round1 = [
+        {"autoid": "R_sig", "verdict": "fail", "causality": "#### Fail Num 1: fail to find \\b1.2.3.4\\b in:",
+         "device_context": "ANSWER 5.6.7.8 (expected 1.2.3.4)"},          # 签名 \b1.2.3.4\b
+        {"autoid": "R_trans", "verdict": "fail", "causality": "fail",
+         "device_context": "ssh connection timed out"},
+        {"autoid": "R_ok", "verdict": "pass", "causality": "successed to find"},
+    ]
+    monkeypatch.setattr(batch_tools.dev_run_batch, "func",
+                        lambda *a, **k: json.dumps(round1, ensure_ascii=False))
+    out1 = dev_run_batch_digest.invoke(
+        {"xlsx_path": "workspace/outputs/feat/case.xlsx", "autoids_json": '["R_sig"]'})
+    assert "跨轮对照" not in out1                       # 首轮无上一轮,不报
+    # 模拟旧格式/LLM 回写:R_trans 上轮被归瞬态(新版机械预判不产该标签,但旧数据存在)
+    lr = outd / "last_run.json"
+    data1 = json.loads(lr.read_text(encoding="utf-8"))
+    for r in data1:
+        if r["autoid"] == "R_trans":
+            r["_digest_layer"] = "transient"
+    lr.write_text(json.dumps(data1, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    round2 = [
+        {"autoid": "R_sig", "verdict": "fail", "causality": "#### Fail Num 1: fail to find \\b1.2.3.4\\b in:",
+         "device_context": "ANSWER 5.6.7.8 (expected 1.2.3.4)"},          # 同签名再 fail
+        {"autoid": "R_trans", "verdict": "fail", "causality": "fail",
+         "device_context": "ssh connection timed out"},                    # "瞬态"复现
+        {"autoid": "R_ok", "verdict": "pass", "causality": "successed to find"},
+    ]
+    monkeypatch.setattr(batch_tools.dev_run_batch, "func",
+                        lambda *a, **k: json.dumps(round2, ensure_ascii=False))
+    out2 = dev_run_batch_digest.invoke(
+        {"xlsx_path": "workspace/outputs/feat/case.xlsx", "autoids_json": '["R_sig"]'})
+    assert "跨轮对照" in out2 and "R_sig" in out2       # 同签名连续两轮点名
+    assert "冻结同法重编" in out2                        # 止损指引
+    assert "上轮归\"瞬态\"本轮复现" in out2 and "R_trans" in out2   # 误归瞬态点名(旧标签兼容)
+    data2 = json.loads((outd / "last_run.json").read_text(encoding="utf-8"))
+    sig_rec = next(r for r in data2 if r["autoid"] == "R_sig")
+    assert sig_rec.get("_repeat_fail_same_signature") is True

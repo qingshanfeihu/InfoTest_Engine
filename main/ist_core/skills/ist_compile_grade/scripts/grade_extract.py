@@ -97,6 +97,12 @@ _UNBOUNDED_DIGIT_RE = re.compile(r"\\d")
 # 字面 IPv4 标志：expect 写死一个成员 IP（点可能转义成 \.）——dig found 它＝断言"这一发必中它"。
 # 分布算法(rr/wrr)下命中哪个由运行时轮转起点定，写死单次命中落点＝observe-then-assert（偶对偶错）。
 _LITERAL_IPV4_RE = re.compile(r"\d{1,3}(?:\\?\.\d{1,3}){3}")
+# 命中归属锚点结构签名：emit member_regex_for_ips 生成的形态 `\b(?:ip1|ip2|...)\b`（哪怕只有
+# 1 个 IP 也套非捕获组）。跟 _BOUNDED_RANGE_RE 同样的理由——compile-worker 目前不传
+# provenance_json（架构现状，非本模块能改），只靠 source_kind==membership_derived 排除会在
+# 主链路里失效；这个"\b(?:…)\b 非捕获组"形状本身就跟手写裸字面量 `\b172\.16\.35\.213\b`
+# （没有 (?:...)包裹）不同，可离线识别、不依赖 provenance。
+_MEMBER_ANCHOR_SHAPE_RE = re.compile(r"\\b\(\?:.+\)\\b")
 
 
 # ── 新增 pool 命中归属锚定（结构信号，pool→成员IP 映射由确定文法拼出，不猜领域语义）───────────
@@ -258,6 +264,8 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
       unanchored_new_pools(中途新增绑定到 host、成员 IP 从未被任何 check_point 引用过的 pool 名),
       new_member_unanchored_suspect(unanchored_new_pools 非空 → 疑似漏用命中归属锚定该新增 pool，
         是否要紧交给 grade 结合 need_intent 判——不是所有 case 都有顺序/归属类 claim），
+      has_membership_anchor(该 case 是否用过命中归属锚点/member 声明；双通道识别——source_kind
+        精确 + G 列形状签名兜底，不依赖 provenance 是否存在），
       suspect_count
 
     确定性判据（脏活，非终判；严格按论文三层）：
@@ -358,11 +366,19 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
         # <RUNTIME> 除外——membership_derived(member 声明展开)断言的是"这次输出∈某 pool 的成员集合"
         # (归属判定，可能是多成员 alternation 也可能是单成员 pool)，不是"这一发必中这一个写死的值"，
         # 结构上都含字面 IP 但语义不同，漏排会把合法的命中归属断言误判成偶对偶错的假断言。
+        # 排除双通道：source_kind（有 provenance 时精确）+ _MEMBER_ANCHOR_SHAPE_RE（provenance
+        # 缺失时兜底——compile-worker 目前不传 provenance_json，纯靠 source_kind 会在主链路失效）。
         asserts_literal_hit_ip = bool(
             _dist_ctx and mode == "found" and observe_kind == "behavior" and not cp_h
             and cp_src_kind not in ("captured_relation", "distribution_derived",
                                     "membership_derived", "device_runtime")
+            and not _MEMBER_ANCHOR_SHAPE_RE.search(expect)
             and _LITERAL_IPV4_RE.search(expect))
+        # 命中归属锚点识别（案例级 has_membership_anchor 用）：同上双通道——source_kind 精确 +
+        # 形状签名兜底，不依赖 provenance 是否存在（compile-worker 主路现状不传）。
+        is_membership_anchor = bool(
+            mode in ("found", "not_found")
+            and (cp_src_kind == "membership_derived" or _MEMBER_ANCHOR_SHAPE_RE.search(expect)))
 
         suspect = (layer_mismatch or query_object_invalid or spec_conflict_suspect
                    or count_hardcoded_suspect or asserts_literal_hit_ip)
@@ -418,6 +434,7 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
             "count_tautology_suspect": count_tautology_suspect,
             "count_hardcoded_suspect": count_hardcoded_suspect,
             "asserts_literal_hit_ip": asserts_literal_hit_ip,
+            "is_membership_anchor": is_membership_anchor,
             "suspect": suspect,
             "suspect_reason": "；".join(reasons),
         })
@@ -453,6 +470,7 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
     first_cp_row = check_points[0]["row_line"] if check_points else None
     unanchored_new_pools = _unanchored_new_pools(config_so_far, config_line_rows, first_cp_row, check_points)
     new_member_unanchored_suspect = bool(unanchored_new_pools)
+    has_membership_anchor = any(c["is_membership_anchor"] for c in check_points)
 
     suspect_count = (sum(1 for c in check_points if c["suspect"])
                      + (1 if weak_v_coverage_suspect else 0)
@@ -481,6 +499,7 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
         "distribution_coverage_gap_suspect": distribution_coverage_gap_suspect,
         "unanchored_new_pools": unanchored_new_pools,
         "new_member_unanchored_suspect": new_member_unanchored_suspect,
+        "has_membership_anchor": has_membership_anchor,
         "suspect_count": suspect_count,
         "check_points": check_points,
     }

@@ -43,9 +43,9 @@ def classify(ext: dict) -> str:
     """据 grade_extract 信号机读分类一个 case。"""
     if ext.get("new_member_unanchored_suspect"):
         return "BAD_UNANCHORED"
-    has_membership = any(
-        c.get("source_kind") == "membership_derived" for c in ext.get("check_points", []))
-    if has_membership:
+    # has_membership_anchor 是双通道判据（source_kind 精确 + 形状签名兜底），不直接复刻
+    # source_kind 判断——单独复刻会在 provenance 缺失时（compile-worker 主路现状）失配。
+    if ext.get("has_membership_anchor"):
         return "GOOD_ANCHORED"
     return "OK_NO_NEW_POOL"
 

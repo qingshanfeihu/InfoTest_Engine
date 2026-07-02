@@ -257,6 +257,32 @@ def _probe_uncacheable(result: str) -> bool:
     return False
 
 
+def _annotate_if_empty_probe(text: str) -> str:
+    """探针回显**实质为空**（剥标头/命令行/裸提示符后无内容）时附时机语义提示。
+
+    实证（OBS-15）：worker 编译期探统计类命令拿到裸提示符就困惑重试/转 grep 文档。
+    根因是 probe 的时机语义——每个 case 跑完框架清配置，编译期设备是干净态，
+    统计/会话/状态类数据只在 case 执行中存在，此时探必空。这不是探针故障。
+    """
+    body = []
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if not s or s.startswith(("===", "---", "command:", "status:")):
+            continue
+        # 裸提示符行（如 `XXX#` / `XXX>`）不算实质内容
+        if len(s) <= 40 and (s.endswith("#") or s.endswith(">")) and " " not in s:
+            continue
+        if s == "(无输出)":
+            continue
+        body.append(s)
+    if body:
+        return text
+    return (f"{text}\n"
+            "（提示：回显为空不代表探针故障——编译期设备是**干净态**（每个 case 跑完框架即清配置），"
+            "统计/会话/状态类数据只在 case 执行中存在，编译期探它们恒空。本探针的有效域：命令语法验证"
+            "（无效命令有 ^ 报错）、持久配置查看。输出**格式**请查产品手册/规格文档或先例，别再重试探空。）")
+
+
 def _do_probe(cmd: str) -> str:
     """真探一次设备。**永不抛**——失败返回 'error:'/包装文本。
 
@@ -285,7 +311,7 @@ def _do_probe(cmd: str) -> str:
         except Exception:  # noqa: BLE001
             logger.debug("脱敏处理失败，使用原始文本", exc_info=True)
         # apv_ssh_execute 文本已自带 command/status/回显+对齐 ^，原样回灌(仅打 dev_probe 来源标)
-        return f"=== dev_probe (fastmcp apv_ssh) ===\n{text}"
+        return _annotate_if_empty_probe(f"=== dev_probe (fastmcp apv_ssh) ===\n{text}")
     # 2) 回退：老 stdio probe_show（剥回显，无效命令只剩裸 ^）
     try:
         from main.case_compiler.device_mcp_client import FrameworkMCPClient
@@ -307,10 +333,11 @@ def _do_probe(cmd: str) -> str:
         output = _redact(str(output)) if output else output
     except Exception:  # noqa: BLE001
         logger.debug("脱敏处理失败，使用原始输出", exc_info=True)
-    return (f"=== dev_probe ===\n"
-            f"command: {cmd}\n"
-            f"--- 设备回显(经跳转机)---\n"
-            f"{output if output else '(无输出)'}")
+    return _annotate_if_empty_probe(
+        f"=== dev_probe ===\n"
+        f"command: {cmd}\n"
+        f"--- 设备回显(经跳转机)---\n"
+        f"{output if output else '(无输出)'}")
 
 
 @tool(parse_docstring=True)

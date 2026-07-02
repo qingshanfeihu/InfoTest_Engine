@@ -114,3 +114,17 @@ def test_concurrent_single_flight(monkeypatch):
         t.join()
     assert len(calls) == 1                 # 5 并发只真探一次
     assert len(set(results.values())) == 1 # 都拿同一结果
+
+
+def test_annotate_if_empty_probe_adds_timing_hint():
+    """探针回显实质为空（裸提示符/无输出）→ 附时机语义提示（OBS-15：编译期干净态，探统计恒空）。"""
+    from main.ist_core.tools.device.run_case import _annotate_if_empty_probe
+    # 裸提示符（fastmcp 路径实测形态）
+    out = _annotate_if_empty_probe("=== dev_probe (fastmcp apv_ssh) ===\ncommand: show statistics x\nstatus: ok\nAPV#")
+    assert "干净态" in out and "有效域" in out
+    # (无输出) 形态（stdio 路径）
+    out2 = _annotate_if_empty_probe("=== dev_probe ===\ncommand: show x\n--- 设备回显(经跳转机)---\n(无输出)")
+    assert "干净态" in out2
+    # 有实质内容 → 原样返回不加提示
+    out3 = _annotate_if_empty_probe("=== dev_probe ===\ncommand: show x\n--- 设备回显(经跳转机)---\nPool Name: p1  Hit: 3")
+    assert "干净态" not in out3 and out3.endswith("Hit: 3")

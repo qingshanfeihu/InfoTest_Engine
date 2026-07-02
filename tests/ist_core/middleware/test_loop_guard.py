@@ -163,3 +163,41 @@ def test_disabled_via_env(monkeypatch):
 
     out = mw._maybe_reminder_messages(_Req(msgs))
     assert len(out) == len(msgs)  # 关闭后不注入
+
+
+def test_soft_budget_reminder_is_gentle_not_stop(monkeypatch):
+    """仅软预算超标、无 dup/空（合法密集调用，如批量编译 34 个 case）→ 温和提示、不诱导收尾。
+
+    回归：main-orchestrated 编译 ~每 2 次调用编 1 个 case，25 次软预算 ≈14 个 case 就被旧的
+    「停止重复尝试 / 收敛输出 / ask_user」逼停整轮。修复后软预算只给「有效推进就继续」的提示。
+    """
+    monkeypatch.setenv("IST_LOOP_SOFT_BUDGET", "5")
+    mw = LoopGuardMiddleware()
+    msgs = [HumanMessage(content="编译 34 个 case")]
+    # 6 次各不相同、都有产出的工具调用（productive，无 dup/无空）
+    for i in range(6):
+        tc_id = f"c{i}"
+        msgs.append(_ai_with_tool_call(tc_id, "invoke_skill", {"skill": "compile_worker", "brief": f"case{i}"}))
+        msgs.append(_tool_result(tc_id, f"已产出 workspace/outputs/case{i}/case.xlsx"))
+    out = mw._maybe_reminder_messages(_Req(msgs))
+    assert len(out) == len(msgs) + 1          # 有注入（软预算超标）
+    last = out[-1].content
+    assert "loop-guard" in last               # 仍是 loop-guard 注入（会被 _last_human_index 跳过）
+    assert "停止重复尝试" not in last          # 关键：不含强停指令
+    assert "收敛输出" not in last              # 不诱导收尾
+    assert "继续即可" in last                  # 温和提示：有效推进就继续
+
+
+def test_soft_budget_yields_to_dup_signal(monkeypatch):
+    """dup 与软预算同时满足时 → 走强提醒（真死循环优先），不被软路径吞掉。"""
+    monkeypatch.setenv("IST_LOOP_SOFT_BUDGET", "3")
+    monkeypatch.setenv("IST_LOOP_DUP_THRESHOLD", "3")
+    mw = LoopGuardMiddleware()
+    msgs = [HumanMessage(content="翻译配置")]
+    for i in range(4):
+        tc_id = f"c{i}"
+        msgs.append(_ai_with_tool_call(tc_id, "fs_grep", {"pattern": "same", "path": "p"}))
+        msgs.append(_tool_result(tc_id, "(no matches)"))
+    out = mw._maybe_reminder_messages(_Req(msgs))
+    last = out[-1].content
+    assert "停止重复尝试" in last  # dup 触发 → 强提醒，而非软预算温和提示

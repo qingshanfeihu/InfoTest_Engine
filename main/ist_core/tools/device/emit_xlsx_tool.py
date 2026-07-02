@@ -489,6 +489,12 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
     autoid = (autoid or "").strip()
     if not autoid:
         return "error: 必须指定 autoid"
+    # autoid 短号格式门(A 层机械):需求系统 autoid 为 18 位数字(20303…);纯数字却不足 15 位
+    # 必是完整号的尾段缩写(实证 deepseek 重编把 brief 里的短号 778012 原样烧进 xlsx ID 列 →
+    # 需求关联/框架报告 ID 断链)。非纯数字 id(测试/特殊场景)不受限——宁漏勿杀。
+    if autoid.isdigit() and len(autoid) < 15:
+        return (f"error: autoid '{autoid}' 疑似短号(纯数字但不足 15 位)。请传完整需求系统 autoid"
+                f"(18 位,如 203031753342778012)——短号烧进 xlsx 会导致需求关联与框架报告 ID 断链。")
     try:
         steps = json.loads(steps_json) if isinstance(steps_json, str) else steps_json
         if not isinstance(steps, list) or not steps:
@@ -552,6 +558,16 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
                                       expected_save_variant=expected_save_variant)
     if gate:
         return f"error: {gate}"
+
+    # 必崩形态**无条件**拒绝门集合(A 层机械崩溃,与 strict_structural opt-in 解耦):
+    # found_times(分派只传 2 参必 TypeError) + 悬空断言(check_point 前无 result 生产步 →
+    # found(None) 必崩)。两者都崩整份文件——等同语法错、机械可判、误判即真错,拒绝绝不该 opt-in
+    # (实证两次:found_times 漏网→dongkl 首跑 31 unknown;悬空断言漏网→778012 重编 33 unknown)。
+    # 语义"可证伪性"归 verifiability 工具 + LLM,不在此门。
+    from main.ist_core.tools.device.structural_gate import check_crash_gates_mandatory
+    _ftres = check_crash_gates_mandatory(steps)
+    if not _ftres.ok:
+        return f"error: {_ftres.render(autoid)}"
 
     # v2 结构约束门(opt-in,命题3.18 correct-by-construction):命令∈allowlist + 断言非悬空。
     # 与 grade 独立的确定性强制;v1(strict_structural=False)跳过,行为零变化。

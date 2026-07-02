@@ -136,19 +136,18 @@ def test_real_compile_skill_listing_has_triggers():
     assert "[触发:" in compile_line and ("excel" in compile_line.lower() or "case.xlsx" in compile_line)
 
 
-def test_verify_skill_disabled_and_compile_stays_decoupled():
-    """ist_verify 当前挂 .disabled（main-orchestrated 架构下待配套改造，暂不进 listing）。
+def test_verify_skill_enabled_and_compile_stays_decoupled():
+    """ist_verify 已重新启用（2026-07-02 Phase 2：SKILL.md.disabled → SKILL.md），应进 listing。
 
     编译产出（ist_compile，不上机）与上机验证（ist_verify）解耦这条边界仍要保：
-    即使 verify 暂时禁用，『上机验证』类触发词也不该混回编译入口抢命中——
-    重新启用 ist_verify 时不用回头改 ist_compile 的触发词。
+    『上机验证』类触发词归 ist_verify，不该混进编译入口抢命中。
     """
     skills_dir = Path(__file__).resolve().parents[3] / "main" / "ist_core" / "skills"
     metas = _load_skills_from_dir(skills_dir)
     out = _format_skill_list(metas)
     verify_line = next((l for l in out.splitlines() if "**ist_verify**" in l), "")
     compile_line = next((l for l in out.splitlines() if "**ist_compile**" in l), "")
-    assert not verify_line, "ist_verify 挂 .disabled 期间不应出现在 listing"
-    # 编译入口的触发词不含『上机验证』（避免重新启用 verify 后与它抢命中）
+    assert verify_line, "ist_verify 已启用，应出现在 listing"
+    # 编译入口的触发词不含『上机验证』（解耦：验证触发归 ist_verify）
     compile_trig = compile_line.split("[触发:")[-1] if "[触发:" in compile_line else ""
     assert "上机验证" not in compile_trig, "ist_compile 触发词不应含『上机验证』——归 ist_verify"

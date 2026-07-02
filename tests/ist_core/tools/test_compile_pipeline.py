@@ -375,37 +375,87 @@ def test_load_case_rows_preserves_i_column_for_found_times(tmp_path):
     assert ft and ft[0].get("I") == "16", f"I 列(found_times 次数)丢失: {rows}"
 
 
-def test_merge_roundtrip_keeps_found_times_count(tmp_path, monkeypatch):
-    """fix A 端到端：emit(found_times,I=16) → _load_case_rows → compile_emit_merged，
-    合并产物的 found_times 仍带次数 16（而非被丢成 None → 上机恒 fail）。"""
+def test_emit_rejects_found_times_mandatory(tmp_path, monkeypatch):
+    """found_times 在 emit 被**无条件**拒绝(A 层机械崩溃门,不受 strict_structural opt-in)。
+
+    取代旧「fix A：合并保留 found_times 次数」——found_times 框架 xlsx 分派只传 2 参、缺 times →
+    TypeError 崩整份文件、崩溃点后全 case unknown(dongkl 实测漏网 6 行崩了 31 个 case)。这是**机械
+    可判、误判即真错**的语法错级问题(等同 SWE-agent linter),根本不该进 excel。
+    (语义"某 claim 可不可证伪"归 verifiability 工具 + LLM,**不在此门**;见
+    structural_gate._check_no_found_times。)
+    """
     import json as _json
-    import openpyxl
-    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit, compile_emit_merged
-    from main.ist_core.tools.device.precedent_tools import _load_case_rows
-    # 关掉可达性等门的干扰：直接用合法占位命令 + 不触发拓扑门
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
     steps = [
         {"E": "APV_0", "F": "cmd_config", "G": "show sdns listener", "desc": "查看"},
         {"E": "check_point", "F": "found_times", "G": "sdns listener", "I": "16", "desc": "断言16条"},
     ]
+    # strict_structural 默认 False——门仍应无条件拦下(证明与 opt-in 解耦)
     out = compile_emit.invoke({"autoid": "AIDX", "steps_json": _json.dumps(steps, ensure_ascii=False),
-                               "init_commands": "sdns on", "out_name": "_pytest_idrop"})
-    assert "已产出" in out, out
-    root = CP._project_root()
-    xlsx = root / "workspace" / "outputs" / "_pytest_idrop" / "case.xlsx"
-    rows = _load_case_rows(str(xlsx))
-    merged = compile_emit_merged.invoke(
-        {"cases_json": _json.dumps([{"autoid": "AIDX", "title": "t", "steps": rows}], ensure_ascii=False),
-         "out_name": "_pytest_idrop_merged"})
-    assert "已合并" in merged, merged
-    mx = root / "workspace" / "outputs" / "_pytest_idrop_merged" / "case.xlsx"
-    wm = openpyxl.load_workbook(str(mx), data_only=True).active
-    found = False
-    for r in range(29, wm.max_row + 1):
-        if str(wm.cell(r, 6).value or "") == "found_times":
-            assert str(wm.cell(r, 9).value or "") == "16", "合并后 found_times 次数丢失（fix A 回归）"
-            found = True
-    assert found, "合并产物里没找到 found_times 步"
-    # 清理
+                               "init_commands": "sdns on", "out_name": "_pytest_ft_reject"})
+    assert out.startswith("error"), out
+    assert "found_times" in out, out
+    assert ("崩整份文件" in out or "TypeError" in out or "不支持" in out), out   # 机械崩溃理由
+    assert ("found" in out and "abs_found" in out), out                        # 指向合法替代形态
     import shutil
-    shutil.rmtree(root / "workspace" / "outputs" / "_pytest_idrop", ignore_errors=True)
-    shutil.rmtree(root / "workspace" / "outputs" / "_pytest_idrop_merged", ignore_errors=True)
+    shutil.rmtree(CP._project_root() / "workspace" / "outputs" / "_pytest_ft_reject", ignore_errors=True)
+
+
+def test_emit_rejects_dangling_assertion_mandatory(tmp_path, monkeypatch):
+    """悬空断言在 emit 被**无条件**拒绝(必崩门集合,不受 strict_structural opt-in)。
+
+    实证(dongkl 778012 重编版):配置步 cmds_config 后直接 check_point、前面无任何 result 生产步 →
+    框架 found(expect, result=None) 抛 TypeError 崩整份文件 → 第三轮上机 1 pass + 33 unknown。
+    检查本身早已在 _check_dangling_assertions,但躲在 strict_structural(默认 False)后面——worker
+    漏传参数即漏网。本测试钉死:**不传 strict_structural 也必须拦**。
+    """
+    import json as _json
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
+    steps = [
+        {"E": "APV_0", "F": "cmds_config", "G": "sdns on\nsdns pool name pool_v4", "desc": "初始化配置"},
+        {"E": "check_point", "F": "found", "G": "pool_v4", "desc": "验证配置生效(悬空:前面无观测步)"},
+    ]
+    out = compile_emit.invoke({"autoid": "AIDD", "steps_json": _json.dumps(steps, ensure_ascii=False),
+                               "init_commands": "sdns on", "out_name": "_pytest_dangling_reject"})
+    assert out.startswith("error"), out
+    assert "dangling_assertion" in out, out
+    assert ("崩溃整份文件" in out or "TypeError" in out), out   # 机械崩溃理由
+    assert "观测步" in out, out                                  # 修法指引(紧前放不带 H 观测步)
+    # 对照:断言紧前有 cmd_config 观测步(产 result 回显) → 应通过必崩门
+    steps_ok = [
+        {"E": "APV_0", "F": "cmds_config", "G": "sdns on\nsdns pool name pool_v4", "desc": "初始化配置"},
+        {"E": "APV_0", "F": "cmd_config", "G": "show sdns pool", "desc": "观测:产生可检查回显"},
+        {"E": "check_point", "F": "found", "G": "pool_v4", "desc": "验证配置生效"},
+    ]
+    out_ok = compile_emit.invoke({"autoid": "AIDD2", "steps_json": _json.dumps(steps_ok, ensure_ascii=False),
+                                  "init_commands": "sdns on", "out_name": "_pytest_dangling_ok"})
+    assert "dangling_assertion" not in out_ok, out_ok
+    import shutil
+    for d in ("_pytest_dangling_reject", "_pytest_dangling_ok"):
+        shutil.rmtree(CP._project_root() / "workspace" / "outputs" / d, ignore_errors=True)
+
+
+def test_emit_rejects_short_numeric_autoid():
+    """autoid 短号格式门:纯数字但 <15 位=完整 autoid 的尾段缩写,拒绝(OBS-19)。
+
+    实证:deepseek 重编时 main brief 用短号习惯 → worker `compile_emit(autoid='778012')` →
+    短号烧进 xlsx ID 列 → 需求关联/框架报告 ID 断链。非纯数字 id(如测试用 'AIDX')不受限。
+    """
+    import json as _json
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
+    steps = [
+        {"E": "APV_0", "F": "cmd_config", "G": "show sdns pool", "desc": "观测"},
+        {"E": "check_point", "F": "found", "G": "pool_v4", "desc": "断言"},
+    ]
+    out = compile_emit.invoke({"autoid": "778012", "steps_json": _json.dumps(steps, ensure_ascii=False),
+                               "init_commands": "sdns on", "out_name": "_pytest_shortid_reject"})
+    assert out.startswith("error"), out
+    assert "短号" in out and "18 位" in out, out
+    # 完整 18 位数字 autoid 与字母混合测试 id 都放行(不触发本门)
+    for ok_id in ("203031753342778012", "AIDX"):
+        out_ok = compile_emit.invoke({"autoid": ok_id, "steps_json": _json.dumps(steps, ensure_ascii=False),
+                                      "init_commands": "sdns on", "out_name": "_pytest_shortid_ok"})
+        assert "短号" not in out_ok, out_ok
+    import shutil
+    for d in ("_pytest_shortid_reject", "_pytest_shortid_ok"):
+        shutil.rmtree(CP._project_root() / "workspace" / "outputs" / d, ignore_errors=True)

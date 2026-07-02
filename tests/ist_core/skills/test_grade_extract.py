@@ -205,6 +205,54 @@ def test_membership_derived_not_flagged_as_hardcoded_hit_ip(ge, monkeypatch):
     assert r["hardcoded_hit_ip_suspect"] is False
 
 
+def test_member_anchor_shape_not_flagged_without_provenance(ge, monkeypatch):
+    """无 provenance（compile-worker 主路现状：不传 provenance_json）时，member_regex_for_ips
+    生成的 `\\b(?:ip)\\b` 形态仍不该被误判——形状签名兜底，不完全依赖 source_kind（778012
+    实测过：主路 compile_worker 确实不写 provenance，纯靠 source_kind 排除会在这条链路失效）。
+    单成员场景（`(?:` 里只有 1 个 IP、没有 `|` 交替）也要覆盖——不能只认多成员 alternation。"""
+    rows = [
+        {"E": "APV_0", "F": "cmd_config", "G": 'sdns host method "x" "rr"'},
+        {"E": "test_env", "F": "routera", "G": "dig @172.16.34.70 x A +short"},
+        {"E": "check_point", "F": "found", "G": "\\b(?:172\\.16\\.35\\.225)\\b"},
+    ]
+    monkeypatch.setattr(ge, "_load_rows", lambda _p: rows)
+    monkeypatch.setattr(ge, "_load_provenance", lambda _p: None)  # 无 provenance
+    r = ge.extract("fake.xlsx", "-")
+    assert r["check_points"][0]["source_kind"] == ""       # 确认真的没有 provenance 兜底
+    assert r["check_points"][0]["asserts_literal_hit_ip"] is False
+    assert r["hardcoded_hit_ip_suspect"] is False
+
+
+def test_has_membership_anchor_detected_without_provenance(ge, monkeypatch):
+    """case 级 has_membership_anchor 双通道识别：无 provenance 时靠形状签名（回归：eval 脚本
+    此前直接复刻 source_kind 判断，在 compile-worker 主路(不传 provenance)下永远判 False）。"""
+    rows = [
+        {"E": "APV_0", "F": "cmd_config", "G": 'sdns host method "x" "rr"'},
+        {"E": "test_env", "F": "routera", "G": "dig @172.16.34.70 x A +short"},
+        {"E": "check_point", "F": "not_found", "G": "\\b(?:172\\.16\\.35\\.225)\\b"},
+    ]
+    monkeypatch.setattr(ge, "_load_rows", lambda _p: rows)
+    monkeypatch.setattr(ge, "_load_provenance", lambda _p: None)
+    r = ge.extract("fake.xlsx", "-")
+    assert r["check_points"][0]["is_membership_anchor"] is True
+    assert r["has_membership_anchor"] is True
+
+
+def test_bare_literal_ip_without_group_still_flagged(ge, monkeypatch):
+    """对照：没有 `(?:...)` 包裹的裸字面 IP（手写写死单点的典型形态）该拦的还是要拦——
+    形状签名只排除 member 那种非捕获组形态，不放宽对真正写死单点的判定。"""
+    rows = [
+        {"E": "APV_0", "F": "cmd_config", "G": 'sdns host method "x" "rr"'},
+        {"E": "test_env", "F": "routera", "G": "dig @172.16.34.70 x A +short"},
+        {"E": "check_point", "F": "found", "G": "\\b172\\.16\\.35\\.213\\b"},
+    ]
+    monkeypatch.setattr(ge, "_load_rows", lambda _p: rows)
+    monkeypatch.setattr(ge, "_load_provenance", lambda _p: None)
+    r = ge.extract("fake.xlsx", "-")
+    assert r["check_points"][0]["asserts_literal_hit_ip"] is True
+    assert r["hardcoded_hit_ip_suspect"] is True
+
+
 def test_new_member_unanchored_suspect_detects_unreferenced_new_pool(ge, monkeypatch):
     """中途新增绑定的 pool（p4），其成员 IP 从未在任何 check_point 出现过 → suspect（778012 型缺陷：
     全程只用 H 捕获比同异，从未拿新增 pool 的成员集合去锚）。"""

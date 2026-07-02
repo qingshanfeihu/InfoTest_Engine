@@ -151,7 +151,7 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
   - **found→abs_found**：check_point 引用 H 寄存器时自动转字面匹配。
   - **test_env 主机名小写**：`getattr(env, F)` 不转小写。
   - **persistence 掩码**：prefix `24` → 点分 `255.255.255.0`。
-- **独立上机验证** `ist_verify`：对成品 excel 用 `dev_run_batch` 上机。整份 xlsx 单跑 O(N)（deliver+run 一次，超时 `clamp(max(floor, N×45s), 600, 2400)`）。`compile_runtime_fill` 回填 `<RUNTIME>` 断言；`compile_attribute` 四层归因（G/E/V/瞬态）——G/E/V 回流重编，瞬态不回流；真 PASS 写回 footprint。
+- **独立上机验证** `ist_verify`：对成品 excel 用 `dev_run_batch_digest` 上机（跑批进度实时写 evidence fastlog）。整份 xlsx 单跑 O(N)（deliver+run 一次，超时 `clamp(max(floor, N×45s), 600, 2400)`）。`compile_runtime_fill` 回填 `<RUNTIME>` 断言。**归因（2026-07-02 收缩重写）**：机械预判只认两个协议级事实——`compile_attribute` 返回 **G(^)**（设备语法拒绝标记，上游根因、直接采信）与 `found_times` 等文件级崩溃签名（编译缺陷）；**其余一律 undetermined，device_context 原文交 LLM 归因**（E/V/瞬态/疑似产品缺陷——曾有瞬态/E/G marker 关键字表，实证误归已删，勿加回）。digest 跨轮对照机械点名「连续两轮同签名 fail=冻结同法重编」「上轮瞬态本轮复现=误归」；确定性止损跑完为先，真 PASS 写回 footprint。
 - **交付门槛是 grade 断言质量**；上机 pass 不是交付前置。连续 CUT 走 `escalate-when-stuck` / `ask_user`。
 - **红线**：skill/agent 零写死领域命令（靠 LLM 查 `*cli__part*.md`/先例/footprint）；断言期望值溯源先例/手册，不 observe-then-assert。
 

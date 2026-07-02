@@ -104,16 +104,16 @@ def test_footer_thinking_line_input_state():
     assert "接收/处理中" in line
 
 
-def test_footer_thinking_line_no_phase_shows_only_elapsed():
-    """无相位（工具执行/编排间隙，mimo 既非思考也非生成）→ 只留随机词 + 计时：
+def test_footer_thinking_line_no_phase_shows_run_increment_tokens():
+    """无相位（工具执行/编排间隙，等 fork/长工具）→ 随机词 + 计时 + **本轮增量** ↑↓ token：
     - bug2：尾字段**不回退模型名**（停止思考不再显示模型名）
-    - bug A：**不显会话累计 ↑↓ token**（静止总量配 ✶ spinner 会误导成"在动"；
-      会话累计已在下方常驻状态行）
+    - 显**本轮增量**（非会话累计）token——fork_input 实时递增，让用户看到 fork 在烧钱/有进展
+      （区别于旧「静态会话总量配 spinner 误导」的顾虑：增量是动的、有意义的）
     - 不显任何相位状态词
     """
     line = _busy_thinking_line(llm_phase="", input_tokens=515_600, output_tokens=10_400)
     assert "mimo-v2.5-pro" not in line              # bug2：不回退模型名
-    assert "↑" not in line and "↓" not in line      # bug A：不显会话累计 token
+    assert "↑" in line and "↓" in line              # 显本轮增量 token（fork 进展可见）
     assert (
         "深度思考中" not in line
         and "生成回答中" not in line
@@ -123,13 +123,14 @@ def test_footer_thinking_line_no_phase_shows_only_elapsed():
 
 
 def test_footer_thinking_line_live_download_tokens():
-    """思考/回答期 ↓ 用**实时** _output_token_count（不是等 usage 上报、响应结束才有的会话累计）。"""
+    """思考/回答期 ↓ 用**实时** _output_token_count（不是等 usage 上报、响应结束才有的会话累计）。
+    当前格式各相位都带 ↑本轮增量 · ↓实时下载 两箭头。"""
     line = _busy_thinking_line(llm_phase="thinking", output_token_count=1234, output_tokens=0)
     assert "↓ 1.2k tokens" in line                  # 实时下载计数（思考期也增长）
     assert "深度思考中" in line
-    # input 相位显示上传
+    # input 相位：↑本轮增量 · ↓ 两箭头（不再是单箭头 "↑ 2.0k tokens"）
     line2 = _busy_thinking_line(llm_phase="input", input_tokens=2000)
-    assert "↑ 2.0k tokens" in line2
+    assert "↑ 2.0k · ↓" in line2
     assert "接收/处理中" in line2
 
 

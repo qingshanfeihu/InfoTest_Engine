@@ -122,18 +122,22 @@ dev_run_batch_digest(xlsx_path=..., autoids_json='[...]')  # 复验(build/module
 
 **Execution**: Direct（委派 fork）
 
-把本轮**所有** G/E/V 错聚成**一个** reflow brief（逐 autoid + target_layer + 该 case 的 `device_context` 原文 + 应改方向），调**一次** `invoke_skill(skill="ist_compile", brief="只重编这些 fail case 的对应层，基于设备真实输出：<...含 device_context...>")`。
+多个 fail case 要重编时，**一次并发 fan-out、别逐个串行**：给每个 fail case 建一条 brief（autoid + target_layer + 该 case 的 `device_context` 原文 + 应改方向 + 「定向重做：针对问题改、保留正确部分」），聚成 JSON 数组，调**一次**
+`compile_fanout(skill="ist_compile_draft", briefs_json='[{"key":"<autoid>","brief":"<...含device_context+应改方向...>"}, ...]')`
+——N 个 case 的 draft worker **真并发**跑（各自独立 fork 上下文，互不污染、不占 main 上下文），一次返回逐 case 产物。比"逐个 invoke_skill 串行"或"main 自己把 N 个 case 分析完再批量 emit"都快（并行掉最贵的分析+检索）。fan-out 返回后各 case 的新 `case.xlsx` 已在 `outputs/<autoid>/`，回步骤 2 用 `dev_run_batch_digest` 再验（上机才是真门）。
+
+**何时改用 `invoke_skill(ist_compile)`**：需要 grade 质量再审批（断言形态可疑、非单纯 IP/命令订正）时——它内部跑完整 `compile_pipeline`（prep→draft→grade→merge）带收敛环。fan-out draft **跳过 grade**、靠上机复验兜底，适合归因明确的定向订正（G(^) 命令订正、E 层换真实 IP、V 层按设备语义改期望）。
 
 **Rules**:
-- **修 case 的唯一正路 = `invoke_skill(ist_compile)`**（它内部确定性跑 `compile_pipeline`：prep→draft→grade→merge）。**绝不**自己手调 `compile_draft` / `compile_emit` / `compile_score` / `compile_precedent` / `compile_grade` / `compile_prep` / `compile_fanout`——它们是 `compile_pipeline` 的**内部步**，ad-hoc 乱调**不收敛、会把单轮工具调用撞到 recursion 上限（300）整轮崩**（实测反例：这样 churn 4 轮、excel 零改动）。
-- **绝不 `fs_edit` case.xlsx**——二进制，文本编辑改不动；改 case 一律走上面的 reflow 重编。
+- **两条 sanctioned 重编路径**：① `compile_fanout(ist_compile_draft, briefs)`（多 case 并发定向重编，快，跳 grade 靠复验）；② `invoke_skill(ist_compile)`（要 grade 再审时，带收敛环）。**除这两个外绝不**自己 ad-hoc 逐个手调 `compile_emit`/`compile_score`/`compile_precedent`/`compile_prep` 去 churn——单步 ad-hoc 循环不收敛、会把单轮 tool_call 撞 recursion 上限（300）整轮崩（实测反例：churn 4 轮 excel 零改动）。`compile_fanout` 是**批量派发器**（不是被 churn 的单步），用它一次派完、不循环。
+- **绝不 `fs_edit` case.xlsx**——二进制，文本编辑改不动；改 case 一律走上面两条 reflow 路径。
 - **瞬态不回流**——标注"环境排查 / 换时间重跑"，它和编译质量无关。
 - **收敛止损（digest 的跨轮对照信号是硬事实）**：摘要点名「连续两轮同签名 fail」的 case → 上轮修法已被证伪，**这些 case 不进本轮 reflow brief**（第三轮同法大概率再 fail、白烧钱——实测同签名 case 连续两轮重编零转正）。改为：①先核实环境事实（dev_probe/dev_ssh 查该 IP/配置在设备上的真实状态——topology 写的和设备实况可能不符）；②环境确认正常仍复现 → 疑似**产品缺陷**：`kb_bug_search` 比对缺陷库，已知则关联、未知则在最终报告「疑似产品缺陷」区记缺陷候选（复现步骤=case 步骤、期望+文档出处、实际=device_context 证据、版本号）。摘要点名「上轮归瞬态本轮复现」→ 那不是瞬态，按同法重新归因。**无论哪种，流程都跑到终点出完整报告（真 PASS 清单 + 阻塞清单带证据），不中途停摆等人。**
 - 非交互（`infotest -p`）：直接输出归因 + reflow brief，reflow 作为独立步骤由调用方发起。
 - **本 skill 到此即返回**：是否拿重编后的 excel 再 verify 一遍，由**上层**（用户 / goal 循环）决定——verify **不自己套循环**。
 
-**Success criteria**: G/E/V 错聚成一个 reflow brief（或已 invoke 一次 ist_compile）；瞬态单列
-**Artifacts**: reflow_brief
+**Success criteria**: 待重编的 G/E/V 错经**一次** `compile_fanout` 并发派完（或需 grade 再审时 invoke 一次 ist_compile）；连续两轮同签名 fail 的不进重编（走环境核实/产品缺陷出口）；瞬态单列
+**Artifacts**: reflow_brief（fan-out briefs_json）
 
 ### 7. 闭环写回 footprint
 

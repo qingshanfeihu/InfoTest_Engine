@@ -26,6 +26,7 @@ from main.ist_core.tools.device import (
     compile_emit,  # main-orchestrated 兜底单 case；worker 主路也用
     compile_prep,  # main-orchestrated：解析脑图→manifest（main 自己拆 case 清单）
     compile_emit_merged,  # main-orchestrated：合并各 case 单 xlsx 打包
+    compile_fanout,  # main-orchestrated 真并发：N 个 case 一次 fan-out 独立 worker（reflow/批量重编，替代逐个 invoke_skill 串行）
     compile_grade_extract,  # main-orchestrated：合并前确定性自查 suspect（grade 之外的第二道闸）
     compile_pipeline,
     compile_runtime_slots,
@@ -70,6 +71,7 @@ def _default_generic_tools() -> list[Any]:
         compile_emit,  # main-orchestrated 兜底单 case
         compile_prep,  # main-orchestrated：解析脑图→manifest（main 自己拆 case 清单）
         compile_emit_merged,  # main-orchestrated：合并各 case 单 xlsx 打包
+        compile_fanout,  # main-orchestrated 真并发：一次派发 N 个独立 worker（批量重编/reflow，替代逐个 invoke_skill 串行）
         compile_grade_extract,  # main-orchestrated：合并前确定性自查（grade 之外第二道闸，防放水）
         compile_runtime_slots,  # 列 <RUNTIME> 待回填槽位
         compile_runtime_fill,  # 上机真实值锁死回填（不反复改）

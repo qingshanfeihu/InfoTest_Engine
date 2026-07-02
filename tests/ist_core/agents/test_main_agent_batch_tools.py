@@ -14,9 +14,13 @@ from __future__ import annotations
 _MAIN_AGENT_TOOLS = [
     "compile_pipeline", "dev_run_batch",
     "compile_prep", "compile_emit", "compile_emit_merged", "compile_grade_extract",
+    # compile_fanout：main-orchestrated 批量重编/reflow 真并发主路（2026-07-02 上主 agent，
+    # 替代"逐个 invoke_skill 串行"/"赌模型一轮批量 tool_call"；它是批量派发器，不是被 churn 的单步）。
+    "compile_fanout",
 ]
-# main-orchestrated 下仍不挂主 agent:compile_fanout(主 agent 用 invoke_skill 派 worker,不用 fanout)
-_PIPELINE_INTERNAL = ["compile_fanout"]
+# 真·pipeline 内部单步:draft/grade fork 内部件,ad-hoc 逐个手调会 churn 不收敛、撞 recursion
+# 上限整轮崩(见 ist_verify skill 步6 红线)——绝不挂主 agent。
+_PIPELINE_INTERNAL = ["compile_score", "compile_precedent"]
 
 
 def test_orchestration_entries_mounted_on_main_agent():

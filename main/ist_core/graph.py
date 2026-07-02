@@ -124,6 +124,18 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
     
     def on_chat_model_start(self, *args, **kwargs) -> None:  # noqa: D401, ANN002
         self._chat_idx += 1
+        # fork 子 agent 的 LLM 开始 → 向 EventBus 发 phase 事件，
+        # 驱动 footer busy 行显示"接收/处理中"(实时状态、非累加)。
+        # 不发 usage_only(累加归 _FORK_TOKENS、避开双重计数)。
+        try:
+            sub_tags = self._subagent_tags(kwargs)
+            if sub_tags.get("parent_subagent"):
+                self._emit_to_bus(
+                    "llm_start",
+                    tags=sub_tags or None,
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
     def on_llm_end(self, response, **kwargs) -> None:  # noqa: D401, ANN001
         """LangChain 唯一的 LLM 结束 callback（chat + completion 都走这条）.
@@ -235,11 +247,14 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
                 )
         
         if thinking_text:
-            self._emit_to_bus(
-                "info",
-                payload={"name": "thinking_block", "thinking": thinking_text},
-                tags=sub_tags or None,
-            )
+            # fork 的 thinking 块不向 EventBus 发 info(避免与主 transcript 混淆，
+            # 实际 fork thinking 由 fastlog/evidence 行承载)。
+            if not sub_tags.get("parent_subagent"):
+                self._emit_to_bus(
+                    "info",
+                    payload={"name": "thinking_block", "thinking": thinking_text},
+                    tags=sub_tags or None,
+                )
         
         
         
@@ -247,21 +262,35 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         
         
         if has_tool_calls:
-            content = text if text else "[Calling tools]"
-            self._emit_to_bus(
-                "llm_end",
-                payload={"name": "thought", "content": content},
-                tags=sub_tags or None,
-            )
+            if sub_tags.get("parent_subagent"):
+                # fork 的 tool_call thought 不入主 transcript;仅发空 llm_end 清 phase
+                self._emit_to_bus(
+                    "llm_end",
+                    payload={"name": "fork_done"},
+                    tags=sub_tags or None,
+                )
+            else:
+                content = text if text else "[Calling tools]"
+                self._emit_to_bus(
+                    "llm_end",
+                    payload={"name": "thought", "content": content},
+                    tags=sub_tags or None,
+                )
         elif text:
-            
-            
-            
-            self._emit_to_bus(
-                "llm_end",
-                payload={"name": "final_thought", "content": text},
-                tags=sub_tags or None,
-            )
+            if sub_tags.get("parent_subagent"):
+                # fork 的最终 thought 不入主 transcript(由 fastlog 承载);
+                # 仅发空 llm_end 让 reducer 清 phase，避免 footer 永远卡 thinking。
+                self._emit_to_bus(
+                    "llm_end",
+                    payload={"name": "fork_done"},
+                    tags=sub_tags or None,
+                )
+            else:
+                self._emit_to_bus(
+                    "llm_end",
+                    payload={"name": "final_thought", "content": text},
+                    tags=sub_tags or None,
+                )
 
     def on_tool_start(self, serialized, input_str, **kwargs) -> None:  # noqa: D401, ANN001
         self._tool_idx += 1

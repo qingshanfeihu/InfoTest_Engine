@@ -242,32 +242,41 @@ class FooterPane:
         if self._timer_running and self._busy_since:
             elapsed = time.time() - self._busy_since
             elapsed_str = _format_elapsed(elapsed)
-            # 本轮增量 = 当前累计 − 本轮开始时快照（上游修复：busy 行展示本轮增量而非会话累计）
+            # 本轮增量 = 当前累计 − 本轮开始时快照
             _run_in = max(0, self.input_tokens + self.fork_input - self._run_start_input)
+            _run_out = max(0, self.output_tokens + self.fork_output - self._run_start_output)
             # 尾字段 = mimo 当前真实状态（由实际流式相位驱动，零假计时）；前面随机词不动。
             _state = _PHASE_STATE_TEXT.get(self._llm_phase)   # 无相位 → None
             # 有真实相位（input/thinking/output）才带 "token · 状态" 尾字段：
-            #   input=上传(↑，本轮增量)；thinking/output=下载(↓，用实时 _output_token_count——每 token
-            #   累加、含思考期 reasoning，故思考期也实时增长；会话累计 output_tokens 要等 usage
-            #   上报、响应结束前恒 0，故这里不用它)。
-            # 无相位（工具执行 / 编排间隙，mimo 既非思考也非生成）：只留计时——不显 token
-            #   （会话累计已在下方状态行常驻；busy 行再显会话累计是重复、且静止值配 ✶ spinner 会
-            #   误导成"在动"）、不显状态、不显模型名。
+            #   input=上传阶段（↑，本轮增量）；
+            #   thinking/output=生成阶段（↓，用实时 _output_token_count——每 token 累加、
+            #     含思考期 reasoning；input 也叠加到 ↑，让用户看到本轮总消耗）。
             if _state:
                 if self._llm_phase == "input":
-                    _tok = f"↑ {_format_token_count(_run_in)} tokens"
+                    _tok = (
+                        f"↑ {_format_token_count(_run_in)}"
+                        f" · ↓ {_format_token_count(_run_out)} tokens"
+                    )
                 else:  # thinking / output
-                    _tok = f"↓ {_format_token_count(self._output_token_count)} tokens"
+                    _tok = (
+                        f"↑ {_format_token_count(_run_in)}"
+                        f" · ↓ {_format_token_count(self._output_token_count)} tokens"
+                    )
                 thinking_text = f"✶ {self._verb}… ({elapsed_str} · {_tok} · {_state})"
             else:
-                # 无相位常见于 main 阻塞等 fork/长工具。本轮出现过 fork 事件且已静默 ≥15s
-                # → 标注在等 worker（fork 的 LLM 长思考期无新行时，用户不至于以为挂死）。
+                # 无相位常见于 main 阻塞等 fork/长工具。
+                # fork 静默期仍要显本轮 token 增量（fork_input 实时递增），
+                # 让用户看到 fork 在烧钱、有进展；静默 ≥15s 再加 worker 提示。
+                _tok = (
+                    f" · ↑ {_format_token_count(_run_in)}"
+                    f" · ↓ {_format_token_count(_run_out)} tokens"
+                )
                 _fork_wait = ""
                 if self.fork_last_event_ts > (self._busy_since or 0.0):
                     _idle = time.time() - self.fork_last_event_ts
                     if _idle >= 15:
                         _fork_wait = f" · ◌ worker {int(_idle)}s 无新事件"
-                thinking_text = f"✶ {self._verb}… ({elapsed_str}{_fork_wait})"
+                thinking_text = f"✶ {self._verb}… ({elapsed_str}{_tok}{_fork_wait})"
             if self._thinking_cb:
                 self._thinking_cb(thinking_text)
         else:

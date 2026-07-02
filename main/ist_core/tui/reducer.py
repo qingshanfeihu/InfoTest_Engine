@@ -218,7 +218,7 @@ class MessageReducer:
         elif kind == "llm_end":
             self._on_llm_end(event)
         elif kind == "llm_start":
-            self._on_llm_start()
+            self._on_llm_start(event)
         elif kind in ("tool_call", "tool_start"):
             self._on_tool_call(event)
         elif kind in ("tool_result", "tool_end"):
@@ -243,8 +243,12 @@ class MessageReducer:
 
     
 
-    def _on_llm_start(self) -> None:
-        """模型调用开始：footer 显示 input 阶段（尚无流式输出 token）。"""
+    def _on_llm_start(self, event: IstCoreEvent | None = None) -> None:
+        """模型调用开始：footer 显示 input 阶段（尚无流式输出 token）。
+
+        fork 子 agent 的 llm_start 也走这里——只更新 _llm_phase 让 footer
+        显示"接收/处理中"，**不**累加 usage（累加归 _FORK_TOKENS / callback handler）。
+        """
         self._llm_phase = "input"
         self._output_token_count = 0
 

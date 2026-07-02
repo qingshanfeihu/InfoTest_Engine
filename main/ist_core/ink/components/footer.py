@@ -62,6 +62,9 @@ class FooterPane:
         self._cache_hit_tokens: int = 0
         self._llm_phase: str = ""
         self._output_token_count: int = 0
+        # 本轮 run 开始时的累计快照，用于算本轮增量
+        self._run_start_input: int = 0
+        self._run_start_output: int = 0
         self._busy_since: float = 0.0
         self._verb: str = ""
         self._timer: threading.Timer | None = None
@@ -159,6 +162,9 @@ class FooterPane:
             return
         self._busy_since = time.time()
         self._verb = random.choice(_VERBS)
+        # 快照当前累计值，后续算本轮增量
+        self._run_start_input = self.input_tokens + self.fork_input
+        self._run_start_output = self.output_tokens + self.fork_output
         self._timer_running = True
         self._tick()
 
@@ -222,14 +228,15 @@ class FooterPane:
         if self._timer_running and self._busy_since:
             elapsed = time.time() - self._busy_since
             elapsed_str = _format_elapsed(elapsed)
-            _in = self.input_tokens + self.fork_input
-            _out = self.output_tokens + self.fork_output
+            # 本轮增量 = 当前累计 − 本轮开始时快照
+            _run_in = max(0, self.input_tokens + self.fork_input - self._run_start_input)
+            _run_out = max(0, self.output_tokens + self.fork_output - self._run_start_output)
             if self._llm_phase == "output":
                 thinking_text = f"✶ Generating… ({elapsed_str} · ↓ {_format_token_count(self._output_token_count)} tokens · {self.model})"
             elif self._llm_phase == "input":
-                thinking_text = f"✶ Processing… ({elapsed_str} · ↑ {_format_token_count(_in)} tokens · {self.model})"
+                thinking_text = f"✶ Processing… ({elapsed_str} · ↑ {_format_token_count(_run_in)} tokens · {self.model})"
             else:
-                thinking_text = f"✶ {self._verb}… ({elapsed_str} · ↑ {_format_token_count(_in)} · ↓ {_format_token_count(_out)} tokens · {self.model})"
+                thinking_text = f"✶ {self._verb}… ({elapsed_str} · ↑ {_format_token_count(_run_in)} · ↓ {_format_token_count(_run_out)} tokens · {self.model})"
             if self._thinking_cb:
                 self._thinking_cb(thinking_text)
         else:

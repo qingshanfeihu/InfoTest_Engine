@@ -22,7 +22,7 @@ from typing import Any, Callable
 logger = logging.getLogger(__name__)
 
 from main.ist_core.ink.app import InkApp
-from main.ist_core.ink.components.footer import FooterPane, _format_elapsed
+from main.ist_core.ink.components.footer import FooterPane, _format_elapsed, _format_token_count
 from main.ist_core.ink.components.plan_panel import PlanPanel
 from main.ist_core.ink.components.prompt_input import PromptInput
 from main.ist_core.ink.components.transcript import Transcript
@@ -1041,11 +1041,16 @@ class IstInkApp:
             self._ai_stream_idx = -1
             self._stream_commit_idx = -1  # 回合收尾,清掉未匹配的流式占位,防跨回合误更新
 
-            # 回合耗时
+            # 回合耗时 + 本轮 token 用量
             if getattr(self, "_run_start_time", 0.0):
                 _elapsed = _time.time() - self._run_start_time
+                _f = self._footer
+                _run_in = max(0, _f.input_tokens + _f.fork_input - _f._run_start_input)
+                _run_out = max(0, _f.output_tokens + _f.fork_output - _f._run_start_output)
+                _fmt = _format_token_count
                 self._transcript.append_message(
-                    f"  \x1b[2m✻ Cooked for {_format_elapsed(_elapsed)}\x1b[0m"
+                    f"  \x1b[2m✻ Cooked for {_format_elapsed(_elapsed)}"
+                    f" · ↑ {_fmt(_run_in)} · ↓ {_fmt(_run_out)} tokens\x1b[0m"
                 )
                 self._run_start_time = 0.0
 
@@ -1063,11 +1068,16 @@ class IstInkApp:
             self._ai_stream_idx = -1
             self._stream_commit_idx = -1  # 同上,错误收尾也清掉流式占位
 
-            # 回合耗时（错误也显示）
+            # 回合耗时（错误也显示）+ 本轮 token 用量
             if getattr(self, "_run_start_time", 0.0):
                 _elapsed = _time.time() - self._run_start_time
+                _f = self._footer
+                _run_in = max(0, _f.input_tokens + _f.fork_input - _f._run_start_input)
+                _run_out = max(0, _f.output_tokens + _f.fork_output - _f._run_start_output)
+                _fmt = _format_token_count
                 self._transcript.append_message(
-                    f"  \x1b[2m✻ Cooked for {_format_elapsed(_elapsed)}\x1b[0m"
+                    f"  \x1b[2m✻ Cooked for {_format_elapsed(_elapsed)}"
+                    f" · ↑ {_fmt(_run_in)} · ↓ {_fmt(_run_out)} tokens\x1b[0m"
                 )
                 self._run_start_time = 0.0
 

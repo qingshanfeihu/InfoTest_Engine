@@ -56,9 +56,8 @@ class TuiSink:
             logger.exception("TuiSink dispatch error")
 
     def reset(self) -> None:
-        """新 run 开始前重置（保留同一订阅者）。"""
-        self._reducer = MessageReducer()
-        self._reducer.subscribe(self._post)
+        """新 run 开始前重置（保留同一订阅者 + usage 累计）。"""
+        self._reducer.reset()
 
 
 __all__ = ["TuiSink"]

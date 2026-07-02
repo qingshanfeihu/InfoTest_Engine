@@ -170,7 +170,7 @@ class MessageReducer:
             self._messages.clear()
             self._streaming_text = None
             self._status = "idle"
-            self._usage.clear()
+            # _usage 不清——跨 run 累计，footer 显示会话级 token / 费用
             self._llm_phase = ""
             self._output_token_count = 0
             self._inflight_tool_use_ids.clear()

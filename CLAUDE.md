@@ -202,7 +202,42 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 - **缺陷库**：`DEFECT_BACKEND`、`DEFECT_ON_DEMAND_ENABLED`、`CAPTCHA_OCR_RETRY`
 - **设备 SSH**（`device-verify`）：`APV_DEVICE_IP`、`APV_USERNAME`、`APV_PASSWORD`
 - **环境池**：`IST_JUMPHOST_PASS`、`IST_JUMPHOST_HOST`、`IST_ENV_POOL_ENABLED`、`IST_ENV_POOL_HOSTS`
-- **其他**：`NO_PROGRESS=1`、`IST_LOOP_GUARD_ENABLED`
+- **企微机器人**（`wecom_bot/`）：`WECOM_TOKEN`、`WECOM_ENCODING_AES_KEY`、`WECOM_CORP_ID`、`WECOM_AGENT_ID`、`WECOM_APP_SECRET`
+
+## 企业微信自建应用机器人（`wecom_bot/`）
+
+FastAPI 中间件，接收企微加密回调 → 调用 IST-Core → 异步推送 Markdown 结果。
+
+### 架构
+
+| 模块 | 职责 |
+|------|------|
+| `main.py` | FastAPI 路由：GET URL 验证 / POST 消息接收 / health |
+| `wxcrypt.py` | 加解密薄封装（委托 `wechatpy.crypto.WeChatCrypto`） |
+| `wecom_api.py` | 企微 API 客户端：`requests` 同步获取 token + 推送 Markdown |
+| `task_handler.py` | 消息路由 + IST-Core 调用 + 后台任务 + 心跳 + 多轮对话 |
+
+### 消息流程
+
+1. 解密 → `parse_message_xml()` 提取 FromUser/Content
+2. `handle_message()` 路由：
+   - 帮助/状态/新对话/停止/会话 → 同步秒回
+   - 其他 → 异步：回 ack → 后台线程 IST-Core → `requests.post(message/send)` 推送 Markdown
+3. 多轮对话：每个用户固定 `thread_id` + `SqliteSaver` 持久化
+4. 心跳：每 5 分钟推送进度，`/stop` 用 `ctypes` 注入 SystemExit 强制终止
+
+### 启动
+
+```bash
+pip install wechatpy
+python -m wecom_bot.main
+# systemd: sudo systemctl start wecom-bot
+```
+
+### frp 穿透（纯 IP 无域名）
+
+`setup_frp.py` 一键部署：自签证书（CN/SAN 用 `wecom.<IP>.nip.io`）+ 写 frpc.toml + 重启 frpc。
+企微后台 URL：`https://wecom.<IP>.nip.io/wecom/callback`
 
 ## 技术栈
 

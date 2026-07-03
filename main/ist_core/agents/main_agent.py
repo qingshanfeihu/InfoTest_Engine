@@ -37,6 +37,7 @@ from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
 from main.ist_core.tools.knowledge.footprint_writeback import compile_footprint_writeback
 from main.ist_core.tools.skills import invoke_skill
 from main.ist_core.tools.skills.file_server import qa_file_server
+from main.ist_core.tools.skills.download_case import download_agile_case
 from main.ist_core.tools.ask_user import ask_user
 from main.ist_core.tools.memory_tool import remember
 
@@ -83,6 +84,9 @@ def _default_generic_tools() -> list[Any]:
 
 
         invoke_skill,
+
+        # 独立工具：从 Agile 平台拉脑图 JSON 落盘；env 必填 AGILE_AUTH_TOKEN/AGILE_COOKIES
+        download_agile_case,
 
         qa_file_server,
 

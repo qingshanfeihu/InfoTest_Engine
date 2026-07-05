@@ -32,11 +32,15 @@ def merge(state: dict) -> dict:
 
     if round_no == 0:
         target, scope, name = sorted(produced), "full", out_name
-    elif fails:
-        target, scope, name = sorted(fails), "subset", f"{out_name}_fails_r{round_no}"
+    elif fails or produced:
+        # 修复轮:fail(transient 复跑)+重编后的 produced 都只跑**子集**——
+        # 2026-07-06 dongkl 轮实证:旧分支在重编后 fails 清空时误走整卷,
+        # round2/3 把 21 个已 pass 卷重复上机(浪费设备轮+暴露 6/21 翻转)。
+        target = sorted(set(fails) | set(produced))
+        scope, name = "subset", f"{out_name}_fails_r{round_no}"
     else:
-        # 修复轮全过 → 终验整卷(passed+produced 全量)
-        target = sorted(set(led.in_state(L.S_PASSED)) | set(produced))
+        # 子集全过 → 终验整卷(passed 全量,一遍上机交付证据)
+        target = sorted(led.in_state(L.S_PASSED))
         scope, name = "full", out_name
     if not target:
         return {"phase_status": "nothing_to_do", **sh.counts_update(led)}
@@ -140,7 +144,15 @@ def attribute(state: dict) -> dict:
     # 已知缺陷短路(机械,不进 LLM 孔)
     known = sh.read_json(sh.project_root() / "knowledge" / "data" / "auto_env"
                          / "env_capabilities.json", {}) or {}
-    defect_feats = [str(d.get("feature", "")) for d in (known.get("known_defects") or [])]
+    # 匹配增强(2026-07-06):feature 是长描述文本,原样 in ctx 几乎不命中(572672
+    # 的 DC-2a 实证漏过)——按 feature 的命令 token 组匹配(全部 ≥4 字符 token 都在
+    # ctx 即命中),仍是机械判定。
+    defect_feats = []
+    for d in (known.get("known_defects") or []):
+        toks = [w for w in str(d.get("feature", "")).replace("<", " ").replace(">", " ").split()
+                if len(w) >= 4 and w.isascii()]
+        if toks:
+            defect_feats.append(toks)
 
     need_fork: list[str] = []
     for aid in fails:
@@ -162,7 +174,7 @@ def attribute(state: dict) -> dict:
                 layer = getattr(mech, "layer", "") or (mech.get("layer") if isinstance(mech, dict) else "")
             except Exception:  # noqa: BLE001
                 layer = ""
-        if any(f and f in ctx for f in defect_feats):
+        if any(toks and all(w in ctx for w in toks) for toks in defect_feats):
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail="known_defect(DC)")
         elif frozen and int(c.get("rounds_used") or 0) >= max_rounds:
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail="frozen")

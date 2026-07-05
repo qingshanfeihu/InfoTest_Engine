@@ -68,7 +68,11 @@ def _g_step_to_rawfacts(step, autoid: str, manual_glob: str) -> list[RawFact]:
         cmd = cmd.strip()
         if not cmd:
             continue
-        head = cmd.split()
+        # feature_path 与 footprint 命名约定对齐:剥操作前缀(no/show/clear)再取
+        # 命令主体 token——否则 show 类观测命令落 show.* 节点,与配置命令的
+        # statistics.*/sdns.* 树分裂,行为知识和文法散在两处(2026-07-06 实证)。
+        toks = [w for w in cmd.split() if w.lower() not in ("no", "show", "clear")]
+        head = toks or cmd.split()
         feature_path = head[:2] if len(head) >= 2 else head[:1]
         if not feature_path:
             continue

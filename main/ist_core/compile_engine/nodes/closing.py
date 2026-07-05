@@ -78,7 +78,12 @@ def _promote_behavior_candidates(aid: str, led) -> None:
         content = str(c.get("content") or "").strip()
         if not cmd or not content:
             continue
-        head = [t for t in cmd.split() if t.lower() not in ("no", "show", "clear")][:2] or cmd.split()[:1]
+        # 行为知识挂**叶节点**(剥前缀后全 token):截 2 段会落父节点,而 lookup
+        # 对父节点只展开子树命令、不渲染父自身 behaviors——知识存了却读不回
+        # (2026-07-06 种子实证)。参数值 token(数字/IP/含点)剥掉,只留命令词。
+        head = [t for t in cmd.split()
+                if t.lower() not in ("no", "show", "clear")
+                and t.isalpha()] or cmd.split()[:1]
         rf = RawFact(fact_kind="behavior", feature_path=head,
                      fact_key=f"{' '.join(head)}:{hashlib.sha1(content.encode()).hexdigest()[:8]}",
                      cli_syntax=cmd, content=content,

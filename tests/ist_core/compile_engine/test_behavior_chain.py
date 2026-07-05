@@ -84,9 +84,7 @@ def test_promotion_only_on_pass(case_dir, tmp_path, monkeypatch):
 
 def test_prefetch_brings_back_seeded_behavior():
     # P2-G3:曾撞坑 case 的意图 → 预检索块含种入的行为知识(重撞防止的机器断言)
-    from main.ist_core.memory.footprint import get_footprint_index
-    idx = get_footprint_index()
-    hits = idx.search("show statistics sdns pool 命中统计", top_k=5)
-    joined = json.dumps([getattr(h, "__dict__", str(h)) for h in hits],
-                        ensure_ascii=False, default=str)
-    assert "多行" in joined or "跨行" in joined, "种入的行为知识应可被检索命中"
+    # worker 真正消费的是 lookup 渲染(leaf 含 Behaviors 节;行为知识挂叶不挂父)
+    from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
+    body = kb_footprint.func("statistics sdns pool")
+    assert "多行" in body or "跨行" in body, f"lookup 渲染应含行为知识: {body[:300]}"

@@ -66,7 +66,8 @@ def main() -> int:
             continue
         aid, cmd_full = seeded_aids[seed["cmd"]]
         import hashlib
-        head = [t for t in cmd_full.split() if t.lower() not in ("no", "show", "clear")][:2]
+        head = [t for t in cmd_full.split()
+                if t.lower() not in ("no", "show", "clear") and t.isalpha()]
         rf = RawFact(fact_kind="behavior", feature_path=head or cmd_full.split()[:1],
                      fact_key=f"{' '.join(head)}:{hashlib.sha1(seed['content'].encode()).hexdigest()[:8]}",
                      cli_syntax=cmd_full, content=seed["content"],

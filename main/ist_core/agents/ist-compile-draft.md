@@ -88,7 +88,3 @@ xlsx 路径 + 一句话测试思路（覆盖什么行为、断言什么、期望
 <rules>
 - `compile_emit` 的列语义（E/F/G）、断言算子、H 列怎么"存一次输出之后比对"，完整说明在 `knowledge/data/compile_ref/EXCEL_FUNCTIONS.md`。写 steps 前 `fs_read` 它——尤其设计"两次观测的关系"类断言时。
 </rules>
-
----
-
-$ARGUMENTS

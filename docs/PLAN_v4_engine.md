@@ -85,7 +85,7 @@ main agent(编排)
 ### 步骤 4:闭环写回激活(定理3.22;V3 灵魂,机制已在只接触发)
 - **改动**:`ist_verify` 真 PASS 后调 `writeback`:①provenance 里 G/E 段已验证事实 → `merger.merge_fact()`(evidence 门已防幻觉,机制实证存在);②整卷 → 先例库追加 + `build_intent_index` 重建。校准配对同时追加(步骤 1 的数据集持续生长)。
 - **实证依据**:merge_fact/verified_count/reconcile 链路存在(V3 §二核实);V 轮 worker 重犯旧坑=写回不生效的反证。
-- **验收**:①一次上机 PASS 后 footprint `verified_count` 增量 >0 且新先例可被 `compile_precedent` 检索到(同 run 内可测);②**跨脑图断言**:dongkl 全过后编译 yzg,首跑 fail 率 < dongkl 首跑(44%)——ρ_k 增长的外部效度。
+- **验收**:①一次上机 PASS 后 footprint `verified_count` 增量 >0 且新先例可被 `compile_precedent` 检索到(同 run 内可测);②**同域第二脑图断言(2026-07-05 修订)**:写回后编译**同 CLI 域**的第二份脑图,首跑 fail 率低于该域首份脑图的首跑——ρ_k 的增长是按域的。原文写的是 dongkl(sdns pool/method 域)→yzg(listener/HA 域)跨域对照,2026-07-05 实测两域先例几乎零重合、yzg 首跑 fail 80% 全是新域问题(1 个跨 case 网络污染辐射 16 + 4 sancheck),跨域首跑不反映写回效度——该对照测的是"新域冷启动",不是"写回增益"。
 - **风险**:写回污染 → 只写"上机真 PASS"(verdict 明细为准,与凭证门同源的机械判定);evidence 门拒无出处事实(existing 安全闸)。
 
 ### 步骤 5:checker 状态机工具(linalg §8;治 8/15 的 Hit 类 fail)

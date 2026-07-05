@@ -196,6 +196,15 @@ def compile_prep(mindmap_path: str, out_name: str = "") -> str:
         "cases": cases,
     }
     root = Path(__file__).resolve().parents[4]
+    # 环境能力事实源注入(2026-07-05 坑3):双机可用性/已知缺陷/静默失败模式——
+    # 编译前一次查询回答"用例前提在本环境是否成立",不满足的编译期就标注/上报,
+    # 不再靠上机去撞(DC-1/2/3 三条缺陷全是烧了设备时间撞出来的)。缺文件不阻断。
+    try:
+        cap = json.loads((root / "knowledge" / "data" / "auto_env" / "env_capabilities.json")
+                         .read_text(encoding="utf-8"))
+        manifest["env_capabilities"] = cap
+    except Exception:  # noqa: BLE001
+        logger.debug("env_capabilities.json 不可用(manifest 不带该节)", exc_info=True)
     out = root / "workspace" / "outputs" / sub / "manifest.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

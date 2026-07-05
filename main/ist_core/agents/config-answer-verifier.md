@@ -40,7 +40,3 @@ inherit-parent-prompt: true
 - 违规 → `判定：CUT` + 具体违规（哪条命令、什么语义问题、应如何修正）。全部通过 → `判定：PASS`。
 - **输出最后一行必须为机读裁定，单独成行**：`判定：PASS` 或 `判定：CUT`。
 </rules>
-
----
-
-$ARGUMENTS

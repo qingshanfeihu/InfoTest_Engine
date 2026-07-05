@@ -3,7 +3,8 @@
   "dependencies": ["."],
   "graphs": {
     "qa_agent": "./main/ist_core/server_graph.py:graph",
-    "memory_dream": "./main/ist_core/memory/dream_graph.py:graph"
+    "memory_dream": "./main/ist_core/memory/dream_graph.py:graph",
+    "compile_engine": "./main/ist_core/compile_engine/graph.py:graph"
   },
   "env": "./environment",
   "python_version": "3.11"

@@ -133,11 +133,52 @@ def _covers_quote(quote: str, haystack: str) -> bool:
     return False
 
 
+_VERIFIED_RUNS_LEDGER = ("runtime", "logs", "verified_runs.jsonl")
+
+
+def _device_evidence_supports(fact) -> bool:
+    """device_verified 权威源(V6 支柱2a):fact.device_evidence={autoid, run_ts} 指向
+    runtime/logs/verified_runs.jsonl 的一条台账(digest 工具进程写;runtime/ 在 agent
+    文件沙箱黑名单内,agent 伪造不了)。三重校验——台账条目存在 ∧ verdict==pass ∧
+    命令真实出现在该 PASS 卷面的 APV 命令列表里。**门没有放松**:幻觉命令(不在卷面)
+    照拒、fail 卷照拒;强度=设备真实接受过这条命令且整 case 上机通过。
+    ``IST_WRITEBACK_DEVICE_AUTHORITY=0`` 关闭本分支(回手册单权威)。
+    """
+    import os as _os
+    if (_os.environ.get("IST_WRITEBACK_DEVICE_AUTHORITY") or "1").strip().lower() in ("0", "false", "no"):
+        return False
+    dev = getattr(fact, "device_evidence", None) or {}
+    aid = str(dev.get("autoid") or "").strip()
+    run_ts = dev.get("run_ts")
+    cmd = (getattr(fact, "cli_syntax", "") or getattr(fact, "content", "") or "").strip()
+    if not aid or run_ts is None or not cmd:
+        return False
+    ledger = _project_root().joinpath(*_VERIFIED_RUNS_LEDGER)
+    if not ledger.is_file():
+        return False
+    try:
+        for line in ledger.read_text(encoding="utf-8", errors="ignore").splitlines():
+            try:
+                rec = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            if (str(rec.get("autoid")) == aid
+                    and abs(float(rec.get("run_ts", -1)) - float(run_ts)) < 1e-6
+                    and str(rec.get("verdict")) == "pass"):
+                cmds = [str(c).strip() for c in (rec.get("apv_cmds") or [])]
+                body = re.split(r"[<\[{]", cmd)[0].strip()
+                return any(c == cmd or (body and c.startswith(body)) for c in cmds)
+    except OSError:
+        return False
+    return False
+
+
 def _evidence_supports(fact) -> bool:
     """验证 evidence_quote 能在 evidence_file 中真实命中。
 
     known_issue 类型有 issue_id 自带凭证，不走这个闸。
     cli/rule/behavior 缺 evidence_quote 或 evidence_file 直接判 false。
+    device_evidence 非空时优先走 _device_evidence_supports(第二权威源,V6 支柱2a)。
 
     判定：
     1. 归一化后整段子串命中 → 通过（LLM 老实引用的常见情形）
@@ -145,6 +186,13 @@ def _evidence_supports(fact) -> bool:
        （容忍 LLM 在首尾轻微改写/补字，但不容忍整体编造）
     覆盖率与语言、quote 绝对长度无关，不再用 `>=N 字符` 这种硬阈值。
     """
+    if getattr(fact, "device_evidence", None):
+        if _device_evidence_supports(fact):
+            return True
+        # 设备证据校验不过时**不回落手册**——传了 device_evidence 表示调用方明知
+        # 该命令不在手册,校验失败即拒(防"传个假 ref 混过手册分支"的绕行)。
+        return False
+
     if not fact.evidence_quote or not fact.evidence_file:
         return False
 

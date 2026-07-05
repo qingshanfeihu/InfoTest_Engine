@@ -50,10 +50,30 @@ def compile_footprint_writeback(autoid: str, provenance_path: str,
     if prov is None:
         return f"跳过写回：provenance 解析失败（autoid={autoid}）——不写回。"
 
+    # device_verified 第二权威源(V6 支柱2a):上机真 PASS 时,从 verified_runs.jsonl
+    # 台账定位该 autoid 最近一条 PASS 记录——手册 evidence 不中的运行时命令
+    # (v12 实证 28/28 skip 的根因)经它降级重试,门在 merger 侧三重校验。
+    device_run_ref = None
+    if on_device_passed:
+        try:
+            import json as _json
+            ledger = Path(__file__).resolve().parents[4] / "runtime" / "logs" / "verified_runs.jsonl"
+            if ledger.is_file():
+                for line in ledger.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    try:
+                        rec = _json.loads(line)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if str(rec.get("autoid")) == (autoid or "").strip() and str(rec.get("verdict")) == "pass":
+                        device_run_ref = {"autoid": str(rec["autoid"]), "run_ts": rec.get("run_ts")}
+        except Exception:  # noqa: BLE001
+            device_run_ref = None
+
     try:
         res = writeback_verified_case(
             prov, KNOWLEDGE_FOOTPRINTS,
             manual_glob=manual_glob, on_device_passed=on_device_passed,
+            device_run_ref=device_run_ref,
         )
     except Exception as e:  # noqa: BLE001
         return f"写回异常（autoid={autoid}）：{e}"
@@ -62,6 +82,7 @@ def compile_footprint_writeback(autoid: str, provenance_path: str,
     lines = [
         f"footprint 写回 autoid={prov.autoid} [{tag}]："
         f"G 段写入 {res.g_facts_written} / 跳过 {res.g_facts_skipped}"
+        + (f"(其中设备实证 {res.g_facts_device_verified})" if res.g_facts_device_verified else "")
     ]
     for d in res.details[:12]:
         lines.append(f"  {d}")

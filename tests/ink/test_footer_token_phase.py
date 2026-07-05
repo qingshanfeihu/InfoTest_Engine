@@ -172,3 +172,23 @@ def test_footer_no_phase_no_worker_wait_when_fork_fresh_or_absent():
     f2._refresh()
     f2._stop_timer()
     assert "◌ worker" not in (next((t for t in reversed(captured2) if t), ""))
+
+
+def test_sticky_error_shows_and_clears():
+    # 粘性错误条(2026-07-05 遗留#5):error 驻留状态行(单行截断),下一轮 busy 自动清
+    f = FooterPane()
+    f.update(status="error")
+    f.set_sticky_error("compile_emit 失败: G 列为 None\n第二行明细")
+    line = f._status_line.value
+    assert "✖" in line and "G 列为 None" in line and "第二行明细" in line and "\n" not in line
+    f.update(status="thinking")   # 新一轮开始 → 驻留解除
+    assert "✖" not in f._status_line.value
+    f._stop_timer()
+
+
+def test_sticky_error_truncated_to_single_width():
+    f = FooterPane()
+    f.update(status="error")
+    f.set_sticky_error("x" * 300)
+    seg = f._status_line.value.split("·")[0]
+    assert "…" in seg and len(seg) < 130

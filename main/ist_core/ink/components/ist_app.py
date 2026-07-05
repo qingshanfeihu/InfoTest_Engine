@@ -1127,6 +1127,7 @@ class IstInkApp:
                 )
                 self._run_start_time = 0.0
 
+            _err_text = ""
             if snapshot.messages:
                 last = snapshot.messages[-1]
                 for b in last.content:
@@ -1134,8 +1135,12 @@ class IstInkApp:
                         self._transcript.append_message(
                             f" \x1b[31m[error]\x1b[0m {b.text}"
                         )
+                        _err_text = b.text
                         break
             self._footer.update(status="error", llm_phase="", output_token_count=0)
+            # 粘性错误条:transcript 的 [error] 行会被后续输出滚出屏,把摘要驻留在
+            # footer 状态行直到下一轮 run 开始(实证:批量编译长会话里错误无感知)。
+            self._footer.set_sticky_error(_err_text or "run error(详见上方 [error] 行)")
 
         self._app.render()
 

@@ -922,3 +922,25 @@ def test_emit_provenance_trailing_garbage_salvaged():
         assert (Path("workspace/outputs") / aid / "case.provenance.json").is_file()
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+
+
+def test_fanout_produced_field_probes_disk(monkeypatch, tmp_path):
+    # 「产没产出」以落盘为准工具化:worker 派发每项带 produced 机读字段
+    import main.ist_core.tools.device.batch_tools as bt
+    aid_has, aid_none = "203099999999900088", "203099999999900089"
+    root = bt._project_root()
+    d = root / "workspace" / "outputs" / aid_has
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "case.xlsx").write_bytes(b"x")
+    try:
+        monkeypatch.setattr(bt, "_run_skill_fork", lambda *a, **k: ("说产出了但看盘", True), raising=False)
+        import json as _json
+        out = _json.loads(bt.compile_fanout.func(
+            skill="compile-worker",
+            briefs_json=[{"key": aid_has, "brief": "b1"}, {"key": aid_none, "brief": "b2"}]))
+        by_key = {r["key"]: r for r in out}
+        assert by_key[aid_has]["produced"] is True
+        assert by_key[aid_none]["produced"] is False
+    finally:
+        import shutil as _sh
+        _sh.rmtree(d, ignore_errors=True)

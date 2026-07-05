@@ -29,6 +29,40 @@ DEFAULT_REQUEST_TIMEOUT = 300.0
 DEFAULT_MAX_RETRIES = 2
 
 
+def _sanitize_dangling_tool_calls(msgs: list) -> int:
+    """OpenAI dict 消息序列消毒:assistant.tool_calls 的每个 id 必须被紧随的连续
+    tool 消息段回应——缺的**原地插入**占位 tool 消息,返回补的条数。
+
+    根因(2026-07-05 dongkl 死锁):摘要边界把 assistant(tool_calls) 与 tool 回应
+    切开后,供应商每轮 400(insufficient tool messages following tool_calls),
+    上层吞成零响应,会话锁死。此处是请求发出前的最终形态,上游怎么切都兜得住。
+    """
+    i = 0
+    fixed = 0
+    while i < len(msgs):
+        m = msgs[i] if isinstance(msgs[i], dict) else {}
+        calls = m.get("tool_calls") or [] if m.get("role") == "assistant" else []
+        if not calls:
+            i += 1
+            continue
+        j = i + 1
+        answered: set[str] = set()
+        while j < len(msgs) and isinstance(msgs[j], dict) and msgs[j].get("role") == "tool":
+            answered.add(str(msgs[j].get("tool_call_id")))
+            j += 1
+        missing = [c for c in calls
+                   if str((c or {}).get("id")) not in answered]
+        for k, c in enumerate(missing):
+            msgs.insert(j + k, {
+                "role": "tool",
+                "tool_call_id": str((c or {}).get("id") or "unknown"),
+                "content": "[该工具调用被会话历史截断,没有产生结果;如果它仍然必要,重新发起。]",
+            })
+            fixed += 1
+        i = j + len(missing)
+    return fixed
+
+
 def _resolve_timeout_retries() -> tuple[float, int]:
     """从 env 解析 (request_timeout 秒, max_retries)；非法值回退默认。"""
     try:
@@ -302,6 +336,17 @@ def _get_chat_openai_with_reasoning():
 
         def _get_request_payload(self, input_, *, stop=None, **kwargs):
             payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+            # 悬空 tool_calls 消毒(最终 payload 层,2026-07-05 dongkl 死锁取证):
+            # 摘要/剪枝等上游中间件可能把 assistant(tool_calls) 与其 tool 回应切开
+            # ——OpenAI 兼容供应商对此一律 400,错误被吞成「零响应」,会话每轮 400
+            # 死锁。外层 middleware 修不到摘要后的视图(实证 sanitize→summarization
+            # →LLM 的洋葱顺序),只有这里是发出前的最终形态。
+            try:
+                _fixed = _sanitize_dangling_tool_calls(payload.get("messages") or [])
+                if _fixed:
+                    logger.warning("payload 消毒: 补 %d 条悬空 tool_call 占位回应", _fixed)
+            except Exception:  # noqa: BLE001 — 消毒绝不挂请求
+                logger.debug("payload 消毒失败(放行原文)", exc_info=True)
             try:
                 from langchain_core.messages import AIMessage  # noqa: PLC0415
 

@@ -463,7 +463,69 @@ def _gate_unreachable_listener(autoid: str, steps: list, init: str = "") -> str 
 
 
 
+_EMIT_REASON_PATTERNS = (
+    ("组合子无效", "blocks_invalid"),
+    ("provenance 解析失败", "prov_parse"),
+    ("provenance steps 数", "prov_shape"),
+    ("必传 provenance", "prov_missing"),
+    ("G 列为 None", "payload_empty"),
+    ("解析失败", "parse"),
+    ("违反结构约束", "structural"),
+    ("违反用户决策", "user_decision"),
+    ("frozen", "frozen"),
+    ("冻结", "frozen"),
+    ("lint", "lint"),
+)
+
+
+def _emit_stat(autoid: str, out: str, channel: str) -> None:
+    """emit 出口台账(runtime/logs/emit_stats.jsonl)——打回率的机读事实源
+    (E2 基线 48-52% 来自 fastlog 解析;此后量化门直接聚合本文件)。追加失败静默。"""
+    try:
+        import time as _t
+        ok = not str(out).startswith("error:")
+        reason = "ok"
+        if not ok:
+            reason = "other"
+            for pat, cls in _EMIT_REASON_PATTERNS:
+                if pat in out:
+                    reason = cls
+                    break
+        rec = {"ts": _t.time(), "autoid": str(autoid), "ok": ok,
+               "reason_class": reason, "channel": channel}
+        p = Path(__file__).resolve().parents[4] / "runtime" / "logs" / "emit_stats.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001
+        logger.debug("emit_stats 记账失败(忽略)", exc_info=True)
+
+
+def _with_emit_stats(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def _wrapped(*args, **kwargs):
+        out = fn(*args, **kwargs)
+        try:
+            _aid = kwargs.get("autoid") or (args[0] if args else "")
+            if kwargs.get("blocks"):
+                _ch = "blocks"
+            elif isinstance(kwargs.get("steps"), list):
+                _ch = "steps"
+            elif (kwargs.get("steps_path") or "").strip():
+                _ch = "steps_path"
+            else:
+                _ch = "json_string"
+            _emit_stat(str(_aid), str(out), _ch)
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+    return _wrapped
+
+
 @tool(parse_docstring=True)
+@_with_emit_stats
 def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                  out_name: str = "", strict_structural: bool = False,
                  provenance_json: str = "", expected_save_variant: str = "",
@@ -562,6 +624,14 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
         if _prov_obj is not None and _bprov is not None:
             _prov_obj["steps"] = _bprov
             provenance = _prov_obj
+            provenance_json = ""
+        elif _prov_obj is None and _bprov and (
+                os.environ.get("IST_PROV_AUTOASSEMBLE") or "1").strip().lower() not in ("0", "false", "no"):
+            # 自动组装(V6 支柱3):worker 未传 provenance 时,用展开器按 block 的
+            # ref/cmd_ref/asserts[].ref 机械组装的 steps 直接成 IR——"LLM 拼 JSON+
+            # 门打回"的形态税(E2 实证打回率 48-52% 的主体)在构造上消失。
+            # 显式 provenance 仍最优先;IST_PROV_AUTOASSEMBLE=0 回旧行为(必传门)。
+            provenance = {"autoid": autoid, "steps": _bprov}
             provenance_json = ""
 
     # 步骤载荷三通道,优先级 steps(原生数组)> steps_path(workspace 文件)> steps_json(字符串,兼容)。
@@ -1196,10 +1266,42 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
     except Exception as e:  # noqa: BLE001
         return f"error: emit 失败: {e}"
 
+    # 回填重放(2026-07-05 生命周期洞修复):重合并从 per-case 卷重建,会静默丢掉
+    # 此前 compile_runtime_fill 写进旧合并卷的值。fill 侧已把成功回填按内容键
+    # (autoid+原 G 全文)记到同目录 runtime_fills.json——这里对新卷按内容匹配重放:
+    # 卷面未变必中,重编过的 case 必不中(安全跳过,如实报数,不猜)。
+    replay_note = ""
+    try:
+        _side = out.parent / "runtime_fills.json"
+        if _side.is_file():
+            from main.case_compiler.runtime_fill import apply_fills, list_runtime_slots
+            _recs = [r for r in json.loads(_side.read_text(encoding="utf-8")) if isinstance(r, dict)]
+            _slots = {(s.autoid, s.observe_cmd, s.current_g): s for s in list_runtime_slots(out)}
+            _fills, _skipped = [], 0
+            for r in _recs:
+                s = _slots.get((str(r.get("autoid")), str(r.get("observe_cmd")),
+                                str(r.get("g_original"))))
+                if s is None:
+                    _skipped += 1
+                    continue
+                _fills.append({"slot_id": s.slot_id,
+                               "runtime_value": str(r.get("runtime_value") or ""),
+                               "evidence": str(r.get("evidence") or "")})
+            if _fills:
+                _res = apply_fills(out, _fills, project_root=root, run_meta="merged-replay")
+                replay_note = (f"\n回填重放: 恢复 {len(_res.filled)}/{len(_recs)} 个已验证回填值"
+                               f"(卷面已变跳过 {_skipped} 个——重编过的 case 需重新上机取值)")
+            elif _recs:
+                replay_note = (f"\n回填重放: 0/{len(_recs)}——sidecar 记录与新卷面全部不匹配"
+                               "(相关 case 已重编,原回填值失效,需重新上机取值)")
+    except Exception:  # noqa: BLE001
+        logger.debug("runtime_fills 重放失败(合并本身已完成)", exc_info=True)
+
     autoids = [c.autoid for c in case_irs]
     return (f"=== compile_emit_merged ===\n"
             f"已合并 {len(case_irs)} 个真 case + 1 哨兵 → {out}\n"
             f"autoids: {autoids}\n"
-            f"round-trip 统计: {stats}\n"
+            f"round-trip 统计: {stats}"
+            f"{replay_note}\n"
             f"(case_count 应={len(case_irs)}+1哨兵={len(case_irs)+1})\n"
             f"编译到此结束；上机验证由独立 ist-verify 流程触发。")

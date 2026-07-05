@@ -23,7 +23,8 @@ E/F/H 列语义、观测-断言排序)全部由本展开器保证——悬空断
   只观测不断言(轮转填充/发流量)。
 - ``{"kind":"SLEEP", "seconds":N}``
 
-host 语义:``APV_0``=被测设备(观测走 cmd_config);其余=测试机主机名(E=test_env,
+host 语义:``APV_0``/``APV_1``=被测设备第一/二台(观测走 cmd_config;双机场景 CONFIG
+也可带 host 指定下发目标,默认 APV_0);其余=测试机主机名(E=test_env,
 F=主机名,须在网络事实源中)。
 """
 
@@ -33,15 +34,37 @@ from typing import Any
 
 _ASSERT_OPS = ("found", "not_found", "abs_found")
 
+# ref 前缀 → provenance source.kind(与 provenance_ir._VALID_SOURCE_KINDS 对齐)。
+# worker 在组合子上标 ref(如 "footprint:sdns.pool.method"/"manual:cli_10.5_Chapter20:415"/
+# "config_derived"),展开器据此**自动组装** provenance——worker 不再手拼 IR JSON
+# (实证 2026-07-05:provenance 形态摩擦占 emit 打回的主体,打回率 48-52%)。
+_REF_KINDS = ("footprint", "manual", "precedent", "env_facts", "intent",
+              "config_derived", "skeleton", "device_runtime", "distribution_derived",
+              "membership_derived", "captured_relation")
+
+
+def _parse_ref(ref: Any) -> dict:
+    """`"<kind>:<体>"` 或裸 kind → {kind, ref};无/不认识 → emit_auto(fail-open,不拒)。"""
+    s = str(ref or "").strip()
+    if not s:
+        return {"kind": "emit_auto", "ref": ""}
+    head, _, tail = s.partition(":")
+    if head in _REF_KINDS:
+        return {"kind": head, "ref": tail.strip()}
+    return {"kind": "emit_auto", "ref": s}
+
 
 def _err(i: int, kind: str, msg: str) -> str:
     return f"blocks[{i}]({kind}): {msg}"
 
 
+_DUT_HOSTS = ("APV_0", "APV_1")   # 框架双设备槽(test_xlsx.py 原生支持;APV_1=拓扑第二台 …71)
+
+
 def _observe_step(host: str, cmd: str, desc: str, save_as: str = "") -> dict:
     host = (host or "").strip()
-    if host == "APV_0":
-        st = {"E": "APV_0", "F": "cmd_config", "G": cmd, "desc": desc}
+    if host in _DUT_HOSTS:
+        st = {"E": host, "F": "cmd_config", "G": cmd, "desc": desc}
     else:
         st = {"E": "test_env", "F": host, "G": cmd, "desc": desc}
     if save_as:
@@ -55,9 +78,11 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
 
     Returns:
         (steps, expanded_provenance_steps, err)。err 非 None 时前两者为 None。
-        provenance_steps 传入时须与 blocks 等长(worker 在语义层标注,一个组合子
-        一条 layer/source);展开器把每条复制到该组合子展开出的每个 step,保持
-        与 steps 逐位对齐(emit 的 backfill_efg 契约)。
+        provenance_steps 传入时须与 blocks 等长(一个组合子一条 layer/source),
+        展开器把每条复制到该组合子的每个 step;**不传时自动组装**——layer 由
+        kind 机械映射(命令步→G、断言步→V、SLEEP→E),source 从各 block 的
+        ref/cmd_ref/asserts[].ref 前缀解析(见 _parse_ref)——worker 只标来源,
+        不拼 IR 结构。两种情况返回值都与 steps 逐位对齐(backfill_efg 契约)。
     """
     if not isinstance(blocks, list) or not blocks:
         return None, None, "blocks 必须是非空数组"
@@ -76,6 +101,7 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
         desc = str(b.get("desc", "") or "")
         pv = provenance_steps[i] if provenance_steps is not None else None
         produced = 0
+        block_auto: list[dict] = []   # 自动组装通道:本组合子展开各步的 {layer, source}
         if kind == "CONFIG":
             cmds = b.get("cmds")
             if not isinstance(cmds, list) or not cmds or not all(isinstance(c, str) for c in cmds):
@@ -92,11 +118,17 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
             cmds = [c.strip() for c in cmds if c.strip()]
             if not cmds:
                 return None, None, _err(i, kind, "cmds 全为空——填真实命令(每条一个元素)")
+            # 双机:CONFIG 可带 host 指定第二台(默认 APV_0)。2026-07-05 yzg 双机递归
+            # 实证:旧版写死 APV_0,组合子语言表达不了 APV_1 配置,worker 被迫退 steps 通道。
+            _dut = str(b.get("host") or "APV_0").strip()
+            if _dut not in _DUT_HOSTS:
+                return None, None, _err(i, kind, f"CONFIG.host 只能是 {_DUT_HOSTS} 之一(被测设备),收到 {_dut!r}")
             if len(cmds) == 1:
-                steps.append({"E": "APV_0", "F": "cmd_config", "G": cmds[0], "desc": desc})
+                steps.append({"E": _dut, "F": "cmd_config", "G": cmds[0], "desc": desc})
             else:
-                steps.append({"E": "APV_0", "F": "cmds_config", "G": "\n".join(cmds), "desc": desc})
+                steps.append({"E": _dut, "F": "cmds_config", "G": "\n".join(cmds), "desc": desc})
             produced = 1
+            block_auto.append({"layer": "G", "source": _parse_ref(b.get("ref"))})
         elif kind == "OBSERVE_ASSERT":
             cmd = str(b.get("cmd", "") or "").strip()
             host = str(b.get("host", "") or "").strip()
@@ -107,6 +139,7 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
                 return None, None, _err(i, kind, "asserts 必须是非空断言列表;只观测不断言用 OBSERVE_ONLY")
             steps.append(_observe_step(host, cmd, desc))
             produced = 1
+            block_auto.append({"layer": "G", "source": _parse_ref(b.get("cmd_ref") or b.get("ref"))})
             for j, a in enumerate(asserts):
                 if not isinstance(a, dict):
                     return None, None, _err(i, kind, f"asserts[{j}] 必须是对象")
@@ -119,6 +152,7 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
                 steps.append({"E": "check_point", "F": op, "G": pattern,
                               "desc": str(a.get("desc", "") or "")})
                 produced += 1
+                block_auto.append({"layer": "V", "source": _parse_ref(a.get("ref"))})
         elif kind == "CAPTURE_COMPARE":
             host = str(b.get("host", "") or "").strip()
             cap = str(b.get("capture_cmd", "") or "").strip()
@@ -136,6 +170,10 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
             steps.append({"E": "check_point", "F": op, "G": "", "H": reg,
                           "desc": desc + ("(两次相同)" if relation == "same" else "(两次不同)")})
             produced = 3
+            _src = _parse_ref(b.get("ref"))
+            block_auto.extend([{"layer": "G", "source": dict(_src)},
+                               {"layer": "G", "source": dict(_src)},
+                               {"layer": "V", "source": {"kind": "captured_relation", "ref": ""}}])
         elif kind == "OBSERVE_ONLY":
             cmd = str(b.get("cmd", "") or "").strip()
             host = str(b.get("host", "") or "").strip()
@@ -143,6 +181,7 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
                 return None, None, _err(i, kind, "host 与 cmd 必填")
             steps.append(_observe_step(host, cmd, desc))
             produced = 1
+            block_auto.append({"layer": "G", "source": _parse_ref(b.get("ref"))})
         elif kind == "SLEEP":
             try:
                 sec = int(b.get("seconds"))
@@ -152,6 +191,7 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
                 return None, None, _err(i, kind, f"seconds 须在 1..300,收到 {sec}")
             steps.append({"E": "time", "F": "sleep", "G": str(sec), "desc": desc})
             produced = 1
+            block_auto.append({"layer": "E", "source": {"kind": "emit_auto", "ref": ""}})
         else:
             _keys = list(b.keys())
             return None, None, _err(i, kind or "缺kind",
@@ -163,4 +203,10 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
             base = pv if isinstance(pv, dict) else {}
             for _ in range(produced):
                 prov_out.append(dict(base))
-    return steps, (prov_out if provenance_steps is not None else None), None
+        else:
+            # 自动组装:block_auto 与本组合子的 produced 逐位对齐(展开器自身保证;
+            # 不齐=展开器 bug,用 emit_auto 补齐兜底而非崩)
+            while len(block_auto) < produced:
+                block_auto.append({"layer": "G", "source": {"kind": "emit_auto", "ref": ""}})
+            prov_out.extend(block_auto[:produced])
+    return steps, prov_out, None

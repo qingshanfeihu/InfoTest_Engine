@@ -25,6 +25,8 @@ from main.ist_core.tools.device import (
     compile_attribute,
     submit_attribution,
     compile_emit,  # main-orchestrated 兜底单 case；worker 主路也用
+    compile_user_decision,  # 欠定拍板落机读约束文件（锚取台账,不手抄）
+    compile_engine_run,  # V6:一句话跑整条编译闭环(状态机图,断点续跑)
     compile_prep,  # main-orchestrated：解析脑图→manifest（含意图族聚类,族摊销路由）
     compile_skeleton,  # 族摊销:取族首成品的配置骨架,族内 brief 复用
     compile_writeback,  # 闭环:上机真PASS写回先例库(ρ_k增长)
@@ -77,6 +79,8 @@ def _default_generic_tools() -> list[Any]:
         compile_pipeline,  # 确定性编译流水线（保留当 fallback）
         compile_emit,  # main-orchestrated 兜底单 case
         compile_prep,  # main-orchestrated：解析脑图→manifest（含意图族聚类,族摊销路由）
+        compile_user_decision,  # 欠定拍板落机读约束文件（锚取台账,不手抄）
+        compile_engine_run,  # V6:一句话跑整条编译闭环(状态机图,断点续跑)
     compile_skeleton,  # 族摊销:取族首成品的配置骨架,族内 brief 复用
     compile_writeback,  # 闭环:上机真PASS写回先例库(ρ_k增长)
         compile_emit_merged,  # main-orchestrated：合并各 case 单 xlsx 打包
@@ -203,6 +207,15 @@ def build_main_agent(**kwargs: Any):
         except Exception as exc:  # noqa: BLE001
             logger.info("LoopGuardMiddleware 不可用: %s", exc)
 
+        # 消息序列消毒:悬空 tool_calls(截断历史)补合成 ToolMessage——否则供应商
+        # 每轮 400,会话死锁在「零响应」(2026-07-05 dongkl 重测实证)。IST_MSG_SANITIZE=0 关。
+        try:
+            from main.ist_core.middleware.message_sanitize import MessageSanitizeMiddleware
+
+            middleware.append(MessageSanitizeMiddleware())
+        except Exception as exc:  # noqa: BLE001
+            logger.info("MessageSanitizeMiddleware 不可用: %s", exc)
+
         # 工具渐进披露(C2):按会话激活域过滤 request.tools,基础组常驻、
                 # compile/device 组按激活给。默认开(对照轮验收后翻,IST_TOOL_GATING_ENABLED=0 关)。
         try:
@@ -221,6 +234,16 @@ def build_main_agent(**kwargs: Any):
             middleware.append(ToolResultPruneMiddleware())
         except Exception as exc:  # noqa: BLE001
             logger.info("ToolResultPruneMiddleware 不可用: %s", exc)
+
+        # 工具结果统一信封(坑1 修复):全部工具返回包 <tool_result name= status=>,
+        # 数据面 XML 在横切层一次解决(单工具手改只覆盖了 3/36 且 fork 全漏)。
+        # IST_TOOL_ENVELOPE=0 关。
+        try:
+            from main.ist_core.middleware.tool_envelope import ToolEnvelopeMiddleware
+
+            middleware.append(ToolEnvelopeMiddleware())
+        except Exception as exc:  # noqa: BLE001
+            logger.info("ToolEnvelopeMiddleware 不可用: %s", exc)
 
         
         

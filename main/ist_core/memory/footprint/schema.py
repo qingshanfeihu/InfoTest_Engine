@@ -34,6 +34,10 @@ class RawFact:
     
     evidence_file: str = ""
     evidence_quote: str = ""
+    # 第二权威源(V6 支柱2a):设备实证——{autoid, run_ts} 指向 runtime/logs/
+    # verified_runs.jsonl 的一条上机 PASS 台账;非空时 merge 的 evidence 门走
+    # device_verified 分支(命令必须真实出现在该 PASS 卷面上),不再要求手册命中。
+    device_evidence: dict = field(default_factory=dict)
 
     
     source_thread: str = ""

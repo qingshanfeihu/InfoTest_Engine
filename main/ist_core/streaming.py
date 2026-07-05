@@ -105,7 +105,7 @@ async def astream_to_bus(
         # 不再手搓上层"事件间隔"idle 守卫:它基于 astream_events 上层事件计时,而 mimo 深度思考期端点
         # 在底层周期性吐空 delta chunk(<120s),这些 chunk 在 _convert_chunk_to_generation_chunk 因
         # delta 为空被丢成 None、不上抛 on_chat_model_stream 事件 → 上层"零事件"被误判 stall
-        # (实测精确 300s 误杀长思考,亦会误伤 ist_verify 上机长跑等单步长耗时)。职责收口到官方底层 timer。
+        # (实测精确 300s 误杀长思考,亦会误伤 ist-verify 上机长跑等单步长耗时)。职责收口到官方底层 timer。
         while True:
             try:
                 ev = await _agen.__anext__()

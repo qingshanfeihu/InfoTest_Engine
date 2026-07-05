@@ -1,7 +1,7 @@
 """PerTurnSkillReminder listing 过滤。
 
 只过滤 disable-model-invocation: true（完全不可见，invoke_skill 也拒）。
-user-invocable: false 的 fork 子流程（ist_compile_draft/grade、review-verification）
+user-invocable: false 的 fork 子流程（ist-compile-draft/grade、review-verification）
 仍进主 agent listing——它们由 inline 编排 skill 的 body 引导主 agent 经 invoke_skill
 派发，派发者就是主 agent，必须对模型可见；只是不进 TUI /skill 用户菜单。
 """
@@ -34,14 +34,14 @@ def test_skill_eligible_for_listing():
 def test_load_skills_from_dir_includes_fork_subflows():
     """fork 子流程 skill（user-invocable: false）仍进主 agent listing。
 
-    它们由 inline 编排 skill（ist_compile / test-list-review）的 body 引导
+    它们由 inline 编排 skill（ist-compile / test-list-review）的 body 引导
     主 agent 经 invoke_skill 派发，派发者是主 agent，必须对模型可见。
     listing 唯一过滤条件是 disable-model-invocation: true。
     """
     skills_dir = Path(__file__).resolve().parents[3] / "main" / "ist_core" / "skills"
     names = {m["name"] for m in _load_skills_from_dir(skills_dir)}
     assert "test-list-review" in names
-    assert "ist_compile" in names
+    assert "ist-compile" in names
     assert "review-verification" in names
 
 
@@ -118,17 +118,17 @@ def test_trigger_keywords_case_and_colon_variants():
 
 
 def test_real_compile_skill_listing_has_triggers():
-    """真实 ist_compile skill：listing 必须含描述 + 编译类触发词。
+    """真实 ist-compile skill：listing 必须含描述 + 编译类触发词。
 
     这是用户报告「编译脑图用例没命中编译编排 skill」的端到端回归保护。
-    入口为 ist_compile（编译编排链）；用 **ist_compile** 精确匹配编排器行，
-    避开 ist_compile_draft / ist_compile_grade fork 子流程行（子串会误命中）。
+    入口为 ist-compile（编译编排链）；用 **ist-compile** 精确匹配编排器行，
+    避开 ist-compile-draft / ist-compile-grade fork 子流程行（子串会误命中）。
     """
     skills_dir = Path(__file__).resolve().parents[3] / "main" / "ist_core" / "skills"
     metas = _load_skills_from_dir(skills_dir)
     out = _format_skill_list(metas)
-    compile_line = next((l for l in out.splitlines() if "**ist_compile**" in l), "")
-    assert compile_line, "ist_compile 未出现在 listing"
+    compile_line = next((l for l in out.splitlines() if "**ist-compile**" in l), "")
+    assert compile_line, "ist-compile 未出现在 listing"
     # orchestrate 已删除，不应再出现
     assert "ist_compile_orchestrate" not in out, "orchestrate 已删除，listing 不应再含它"
     # 用户高频用词进了 description 或触发词
@@ -137,17 +137,17 @@ def test_real_compile_skill_listing_has_triggers():
 
 
 def test_verify_skill_enabled_and_compile_stays_decoupled():
-    """ist_verify 已重新启用（2026-07-02 Phase 2：SKILL.md.disabled → SKILL.md），应进 listing。
+    """ist-verify 已重新启用（2026-07-02 Phase 2：SKILL.md.disabled → SKILL.md），应进 listing。
 
-    编译产出（ist_compile，不上机）与上机验证（ist_verify）解耦这条边界仍要保：
-    『上机验证』类触发词归 ist_verify，不该混进编译入口抢命中。
+    编译产出（ist-compile，不上机）与上机验证（ist-verify）解耦这条边界仍要保：
+    『上机验证』类触发词归 ist-verify，不该混进编译入口抢命中。
     """
     skills_dir = Path(__file__).resolve().parents[3] / "main" / "ist_core" / "skills"
     metas = _load_skills_from_dir(skills_dir)
     out = _format_skill_list(metas)
-    verify_line = next((l for l in out.splitlines() if "**ist_verify**" in l), "")
-    compile_line = next((l for l in out.splitlines() if "**ist_compile**" in l), "")
-    assert verify_line, "ist_verify 已启用，应出现在 listing"
-    # 编译入口的触发词不含『上机验证』（解耦：验证触发归 ist_verify）
+    verify_line = next((l for l in out.splitlines() if "**ist-verify**" in l), "")
+    compile_line = next((l for l in out.splitlines() if "**ist-compile**" in l), "")
+    assert verify_line, "ist-verify 已启用，应出现在 listing"
+    # 编译入口的触发词不含『上机验证』（解耦：验证触发归 ist-verify）
     compile_trig = compile_line.split("[触发:")[-1] if "[触发:" in compile_line else ""
-    assert "上机验证" not in compile_trig, "ist_compile 触发词不应含『上机验证』——归 ist_verify"
+    assert "上机验证" not in compile_trig, "ist-compile 触发词不应含『上机验证』——归 ist-verify"

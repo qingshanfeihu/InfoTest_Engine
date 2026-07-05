@@ -258,9 +258,13 @@ class FooterPane:
                         f" · ↓ {_format_token_count(_run_out)} tokens"
                     )
                 else:  # thinking / output
+                    # ↓ 口径恒定为本轮累计;当次调用的实时估算以 (+N) 增量并列——
+                    # 旧版此处直接显示当次估算(每调用清零),与等待分支的累计口径在同一
+                    # 显示位轮换,用户读成"不同步/退化成 total"(2026-07-03 实证两次)。
                     _tok = (
                         f"↑ {_format_token_count(_run_in)}"
-                        f" · ↓ {_format_token_count(self._output_token_count)} tokens"
+                        f" · ↓ {_format_token_count(_run_out)}"
+                        f"(+{_format_token_count(self._output_token_count)}) tokens"
                     )
                 thinking_text = f"✶ {self._verb}… ({elapsed_str} · {_tok} · {_state})"
             else:

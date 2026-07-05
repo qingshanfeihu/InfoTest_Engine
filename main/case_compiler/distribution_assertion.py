@@ -185,7 +185,10 @@ def expand_distribution_step(step: dict) -> tuple[list[dict] | None, str | None]
             g = f"{anchor}[^\\n]*{field}{rng}"
         out.append({
             "E": "check_point", "F": "found", "G": g,
-            "desc": str(b.get("desc") or f"{anchor} 累计命中∈[{lo},{hi}]（分布区间断言）"),
+            # fallback desc 写人话:交付卷 desc 是执行工程师读的,不出现内部术语
+            # (「分布区间断言」)与集合符号(∈)——2026-07-05 v12 交付卷抽查 29/154 条
+            # 违规全部来自本模板,worker 给了 desc 则原样用。
+            "desc": str(b.get("desc") or f"{anchor} 池累计命中应在 {lo} 到 {hi} 次之间"),
         })
     return out, None
 

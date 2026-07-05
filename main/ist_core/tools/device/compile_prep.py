@@ -1,6 +1,6 @@
 """compile_prep: 脑图(mind-map JSON)→ 批量编译 manifest(JSON 中间表示)。
 
-批量编译的第一步:把一个脑图文件解析成结构化 manifest,供 ist_compile 编译链(compile_pipeline)按阶段调度。
+批量编译的第一步:把一个脑图文件解析成结构化 manifest,供 ist-compile 编译链(compile_pipeline)按阶段调度。
 
 **零硬编码红线(第一原则,见计划 linear-imagining-galaxy.md)**:
 本工具**只产"需求 + 分组 + 先例引用"**,绝不产任何设备命令/参数/断言。manifest 里
@@ -161,12 +161,38 @@ def compile_prep(mindmap_path: str, out_name: str = "") -> str:
     titles = Counter(c["title"] for c in cases)
     dup_titles = {t: n for t, n in titles.items() if n > 1}
 
+    # 意图族聚类(V4 步骤3,H_G 摊销的路由依据;定理3.10)。族键=首步(配置意图)句式的
+    # 参数化(数字→N、去空白)——2026-07-04 实证:该键在 dongkl 34 case 聚出 14 族、
+    # 25/34 被多成员族覆盖、最大族 12(rr/wrr/ga 全系共享配置基线,族内骨架重合 45-51%);
+    # 曾试 _intent_similarity(词重叠+bigram)在同数据上聚出 0 族,不可用。
+    # 纯代码零语义判断:同族=配置前置的自然语言句式相同,骨架选择仍由族首 worker(LLM)做。
+    import re as _re
+    def _family_key(c: dict) -> str:
+        si = c.get("step_intents") or []
+        first = (si[0].get("desc") or "") if si else ""
+        return _re.sub(r"\s+", "", _re.sub(r"\d+", "N", first))
+    fam_map: dict[str, list[str]] = {}
+    for c in cases:
+        fam_map.setdefault(_family_key(c), []).append(c["autoid"])
+    fam_id = 0
+    families = []
+    for key, aids in fam_map.items():
+        fam_id += 1
+        fid = f"F{fam_id:02d}"
+        for c in cases:
+            if c["autoid"] in aids:
+                c["family"] = fid
+        families.append({"family": fid, "size": len(aids), "head": aids[0],
+                         "members": aids, "key_hint": key[:60]})
+    families.sort(key=lambda f: -f["size"])
+
     sub = (out_name or p.stem).strip().replace("/", "_")
     manifest = {
         "batch_id": f"compile-{sub}",
         "source": str(p),
         "case_count": len(cases),
         "groups": dict(groups),
+        "families": families,
         "cases": cases,
     }
     root = Path(__file__).resolve().parents[4]
@@ -179,8 +205,82 @@ def compile_prep(mindmap_path: str, out_name: str = "") -> str:
             f"manifest 已落盘: {out}\n"
             f"脑图: {p.name}  case 总数: {len(cases)}\n"
             f"分组({len(groups)}): {dict(list(groups.items())[:12])}\n"
+            f"意图族({len(families)}): "
+            + "; ".join(f"{f['family']}×{f['size']}" for f in families[:8])
+            + f"\n≥4 成员的族先派族首(head)全力编写,族首过门后族内 brief 附其配置骨架"
+            f"(compile_skeleton 取),族内只做差异绑定——同族配置基线实测重合 45-51%,"
+            f"逐 case 重推导是重复支付。<4 成员的族按原流程逐个派。\n"
             f"重名标题数: {len(dup_titles)}(autoid 是主键,标题重名不去重,各自独立编译)\n"
             f"{dup_note}\n"
             f"--- manifest 只含需求(标题/分组/步骤/期望),不含任何命令 ---\n"
             f"每个 case 的 init_commands/steps/assertions_provenance 都是 null,\n"
             f"由 draft 子 agent 现场查手册/先例后回填。下一步:编排器按 case 组 brief 派发 draft。")
+
+
+@tool(parse_docstring=True)
+def compile_skeleton(autoid: str) -> str:
+    """取一个已编译成品卷的配置骨架(init + 全部配置步命令原文),供同族 case 复用。
+
+    族摊销(V4 步骤3,定理3.10 H_G 共享):族首 case 全力推导出的配置基线,族内 case
+    直接引用后只做差异绑定——同族配置命令实测重合 45-51%,逐 case 重新查手册推导
+    同一套基线是重复支付。纯反解零语义:命令原文逐行返回,取舍仍由族内 worker 判断。
+
+    Args:
+        autoid: 族首 case 的完整 autoid(其 case.xlsx 已在 workspace/outputs/<autoid>/)。
+
+    Returns:
+        配置骨架文本(init 与配置步的命令逐行)+ 断言形态摘要;卷不存在则 error。
+    """
+    import re as _re
+    aid = (autoid or "").strip()
+    # 安全:autoid 白名单(路径分量净化)——aid="../.." 可读 outputs 外任意 case.xlsx
+    # 并把 G 列命令原文回显给 agent(安全评审中危读穿越项)。
+    if not _re.fullmatch(r"[A-Za-z0-9_.\-]+", aid) or ".." in aid:
+        return f"error: autoid 非法(只允许字母数字._-,禁 ..): {aid!r}"
+    root = Path(__file__).resolve().parents[4]
+    xp = root / "workspace" / "outputs" / aid / "case.xlsx"
+    if not xp.is_file():
+        return f"error: {aid} 的 case.xlsx 不存在——族首要先编完过门,才能给族内供骨架。"
+    # 过门检查:族首必须持有对应当前卷面的新鲜凭证——否则 emit 半途的残卷会把坏骨架
+    # 扩散到全族(红线评审弱门:文案说"编完过门"但只验了 xlsx 存在)。
+    credf = xp.parent / ".grade_credential.json"
+    if credf.is_file():
+        try:
+            import json as _j
+            cred = _j.loads(credf.read_text(encoding="utf-8"))
+            if abs(float(cred.get("xlsx_mtime", -1)) - xp.stat().st_mtime) >= 1e-6:
+                return (f"error: {aid} 凭证与当前卷面不匹配(族首编到一半或改过)——"
+                        "等族首过门拿到新鲜凭证再取骨架,别用残卷供全族。")
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        return (f"error: {aid} 无凭证(族首还没过 emit 门)——族首过门后才能给族内供骨架。")
+    try:
+        import openpyxl
+        ws = openpyxl.load_workbook(xp).active
+        cfg_lines: list[str] = []
+        shapes: list[str] = []
+        for r in ws.iter_rows(min_row=2):
+            E = str(r[4].value or "")
+            F = str(r[5].value or "")
+            G = str(r[6].value or "")
+            H = str(r[7].value or "")
+            if E == "APV_0" and F in ("cmds_config", "cmd_config"):
+                cfg_lines.extend(ln for ln in G.split("\n") if ln.strip())
+            elif E == "check_point":
+                shapes.append(f"{F}" + ("(H引用)" if H.strip() else ""))
+        if not cfg_lines:
+            return f"error: {aid} 卷面没有配置步(不是常规成品卷?)"
+        # 去重保序
+        seen: set[str] = set()
+        uniq = [c for c in cfg_lines if not (c in seen or seen.add(c))]
+        from collections import Counter
+        shape_summary = dict(Counter(shapes))
+        return (f"=== 族骨架(来自 {aid}) ===\n"
+                f"配置命令({len(uniq)} 条,已按卷面顺序去重):\n"
+                + "\n".join(uniq)
+                + f"\n断言形态摘要: {shape_summary}\n"
+                "用法:族内 case 的 CONFIG 组合子以此为基线,按本 case 的脑图差异增删"
+                "(权重/成员/池数等参数不同处必须改);差异之外不重新推导。")
+    except Exception as exc:  # noqa: BLE001
+        return f"error: 骨架反解失败: {exc}"

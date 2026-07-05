@@ -108,7 +108,19 @@ def _tool_display_arg(name: str, args: dict) -> str:
         return (cmd[:60] + "…") if len(cmd) > 60 else cmd
     if name == "invoke_skill":
         skill = args.get("skill") or _extract_from_raw(args, "skill") or ""
-        return str(skill)[:40]
+        # 批派可观察性:brief 信封/正文里的 autoid 一并带出(否则并发派 8 个 worker
+        # 全是裸「⏺ Skill」行,分不清派的哪个 case——2026-07-03 实证)。
+        import re as _re2
+        blob = str(args.get("brief") or "") + str(args.get("raw") or "")
+        m = _re2.search(r"20303175\d{8,10}", blob)
+        aid = f"…{m.group(0)[-6:]}" if m else ""
+        if skill and aid:
+            return f"{skill} · {aid}"
+        if skill:
+            return str(skill)[:40]
+        # skill 名都抽不到时给 raw 首段,别渲染成裸工具名
+        raw = str(args.get("raw") or "")
+        return (raw[:40] + "…") if raw else ""
     first_val = next(iter(args.values()), "")
     if isinstance(first_val, str) and len(first_val) > 60:
         return first_val[:60] + "…"

@@ -776,7 +776,19 @@ class FrameworkMCPClient:
         except Exception:
             return ""
 
-    def fetch_batch_details(self, submit_autoid: str, max_chars_each: int = 3500) -> dict[str, str]:
+    STALE_LOG_MARK = "<<STALE_LOG>>"
+
+    def jumphost_epoch(self) -> float:
+        """跳板机当前 epoch 秒。run-identity 基线用它——staging 日志与它在**同一台机器**
+        的时钟下,天然无设备/本地时差问题(设备与本地实测偏差 +5h40m,墙钟比较不可用)。"""
+        try:
+            _i, o, _e = self._c.exec_command("date +%s", timeout=15)
+            return float(o.read().decode("utf-8", "replace").strip())
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    def fetch_batch_details(self, submit_autoid: str, max_chars_each: int = 3500,
+                            min_epoch: float = 0.0) -> dict[str, str]:
         """整份 xlsx 一次上机后,从 **submit_autoid 的 staging** 读回**所有内层 case** 的逐
         check_point 明细。返回 {inner_autoid: detail_text}。
 
@@ -784,13 +796,20 @@ class FrameworkMCPClient:
         autoid** 的 staging 下:``ist_staging_*/{submit_autoid}/test_xlsx/case.xlsx/<inner>/<inner>.txt``
         ——不是各自 autoid 的独立 staging。故一次提交后用本方法一把捞齐,**不必逐 autoid 重复整跑**
         (旧 dev_run_batch O(N²) 的根因)。一条 SSH 命令带分隔符 cat 全部,减少往返。
+
+        min_epoch(run-identity 绑定):staging 目录跨 run 复用——上一次执行被打断时旧
+        ``<inner>.txt`` 原样留存,新收割会把**旧执行**的结果当本次的(2026-07-04 实证:两轮
+        digest 收割到被打断执行的日志,0/34、1/34 假结果各一轮,归因据此全部误导)。传本次
+        deliver 时刻的跳板机 epoch:mtime 早于它的日志条目值置为 ``STALE_LOG_MARK``,调用方
+        据此判 unknown 而非采信。
         """
         base_glob = (f"/home/test/apv_src/report/*/*/ist_staging_*/{submit_autoid}"
                      f"/test_xlsx/case.xlsx")
         cmd = (f"base=$(ls -dt {base_glob} 2>/dev/null | head -1); "
                f"[ -z \"$base\" ] && exit 0; "
                f"for d in \"$base\"/*/; do a=$(basename \"$d\"); "
-               f"if [ -f \"$d/$a.txt\" ]; then echo \"<<<CASE:$a>>>\"; cat \"$d/$a.txt\"; fi; done")
+               f"if [ -f \"$d/$a.txt\" ]; then m=$(stat -c %Y \"$d/$a.txt\" 2>/dev/null || echo 0); "
+               f"echo \"<<<CASE:$a|$m>>>\"; cat \"$d/$a.txt\"; fi; done")
         out: dict[str, str] = {}
         try:
             _i, o, _e = self._c.exec_command(cmd, timeout=120)
@@ -801,9 +820,19 @@ class FrameworkMCPClient:
             mark = chunk.find(">>>")
             if mark < 0:
                 continue
-            aid = chunk[:mark].strip()
+            head = chunk[:mark].strip()
+            aid, _, mtime_s = head.partition("|")
+            aid = aid.strip()
             body = chunk[mark + 3:]
-            if aid:
+            if not aid:
+                continue
+            try:
+                mtime = float(mtime_s or 0)
+            except ValueError:
+                mtime = 0.0
+            if min_epoch > 0 and 0 < mtime < min_epoch:
+                out[aid] = self.STALE_LOG_MARK
+            else:
                 out[aid] = _redact(body[-max_chars_each:])
         return out
 

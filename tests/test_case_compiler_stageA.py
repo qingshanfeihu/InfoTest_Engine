@@ -112,7 +112,7 @@ def test_server_cmd_composed():
 
 
 def test_default_init_g_indented():
-    # default_init 默认空（不写死任何模块命令——消除 sdns 硬编码，见 ist_compile 架构）。
+    # default_init 默认空（不写死任何模块命令——消除 sdns 硬编码，见 ist-compile 架构）。
     cfg = CompilerConfig()
     assert cfg.default_init_g() == ""
     # 仅当显式配置 default_init 时才返回内容，且每行 4 空格缩进。

@@ -85,6 +85,11 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         self._tool_idx = 0
         self._tool_name_stack: list[str] = []
         self._seen_tool_run_ids: set[str] = set()
+        # run_id → fork agent 名。LangChain 只在 *_start 回调传 metadata,end/error 不传,
+        # 所以 fork 判定必须在 on_chat_model_start 记账、on_llm_end 查账——直接在 end 里
+        # 调 _subagent_tags 恒判不出 fork(2026-07-02 实证:fork usage 因此全量误发
+        # usage_only 进主计数,footer 显示恰为真实消耗的 2 倍)。
+        self._fork_llm_runs: dict[str, str] = {}
         import time as _t
 
         self._t0 = _t.monotonic()
@@ -130,6 +135,9 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         try:
             sub_tags = self._subagent_tags(kwargs)
             if sub_tags.get("parent_subagent"):
+                rid = str(kwargs.get("run_id") or "")
+                if rid:
+                    self._fork_llm_runs[rid] = sub_tags["parent_subagent"]
                 self._emit_to_bus(
                     "llm_start",
                     tags=sub_tags or None,
@@ -227,10 +235,21 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         text = (text or "").strip()
 
         sub_tags = self._subagent_tags(kwargs)
+        # end 回调的 kwargs 不带 metadata → 上面判不出 fork;用 start 时记的账本补全。
+        rid = str(kwargs.get("run_id") or "")
+        if not sub_tags.get("parent_subagent"):
+            fork_name = self._fork_llm_runs.pop(rid, "")
+            if fork_name:
+                sub_tags["parent_subagent"] = fork_name
+                if getattr(self, "_current_task_tool_use_id", ""):
+                    sub_tags.setdefault("parent_tool_use_id", self._current_task_tool_use_id)
+        else:
+            self._fork_llm_runs.pop(rid, None)
 
         # fork 子 agent 的 usage 不发 EventBus（reducer 会跳过），直接写 _FORK_TOKENS。
-        # 主 agent 的 usage 正常发 EventBus（这是主 agent usage 的唯一来源——
-        # astream_events 看不到 agent.invoke() 内部的 LLM 事件）。
+        # 主 agent 的 usage 正常发 EventBus——usage_only 是主 agent usage 的唯一权威源;
+        # astream_events 的 on_chat_model_end 也可能带同一份 usage(qa_node async 化后
+        # 该路径重新可见),reducer 端只认 usage_only,防双计。
         if usage:
             if sub_tags.get("parent_subagent"):
                 try:
@@ -291,6 +310,10 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
                     payload={"name": "final_thought", "content": text},
                     tags=sub_tags or None,
                 )
+
+    def on_llm_error(self, error, **kwargs) -> None:  # noqa: D401, ANN001
+        # 失败的调用没有 on_llm_end,清掉账本条目防泄漏。
+        self._fork_llm_runs.pop(str(kwargs.get("run_id") or ""), None)
 
     def on_tool_start(self, serialized, input_str, **kwargs) -> None:  # noqa: D401, ANN001
         self._tool_idx += 1

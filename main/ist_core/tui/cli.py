@@ -278,7 +278,9 @@ def main(argv: list[str] | None = None) -> int:
         # 强制改 FileHandler(runtime/logs/tui.log),force=True 清掉任何已有 stderr handler。
         from pathlib import Path as _Path
         try:
-            _logdir = _Path(__file__).resolve().parents[2] / "runtime" / "logs"
+            # parents[3]=项目根(cli.py 在 main/ist_core/tui/ 下);此前 parents[2] 把日志
+            # 写进 main/runtime/logs/,与全项目约定的 runtime/logs/ 分家,排障时找不到。
+            _logdir = _Path(__file__).resolve().parents[3] / "runtime" / "logs"
             _logdir.mkdir(parents=True, exist_ok=True)
             logging.basicConfig(
                 level=log_level,
@@ -286,6 +288,20 @@ def main(argv: list[str] | None = None) -> int:
                 handlers=[logging.FileHandler(_logdir / "tui.log", encoding="utf-8")],
                 force=True,
             )
+            # logging 只管 logger 输出;warnings、线程未捕获异常 traceback
+            # (threading.excepthook 默认打 stderr)、第三方库直写仍进终端——渲染器
+            # 独占同一 tty,这类字节直进屏幕就是永久残影(diff 模型不知情、不重写)。
+            # fd 级 dup2 到 tui.log:C 扩展/子线程的 stderr 也一并落文件。渲染器写
+            # stdout,不受影响。
+            import os as _os
+            _logf = _logdir / "tui.log"
+            _errf = open(_logf, "a", encoding="utf-8")  # noqa: SIM115
+            try:
+                _os.chmod(_logf, 0o600)  # 第三方异常栈万一含敏感串,限本用户可读(纵深)
+            except OSError:
+                pass
+            _os.dup2(_errf.fileno(), sys.stderr.fileno())
+            sys.stderr = _errf
         except Exception:
             logging.basicConfig(level=log_level, format="%(levelname)s %(name)s: %(message)s")
     _ensure_env()

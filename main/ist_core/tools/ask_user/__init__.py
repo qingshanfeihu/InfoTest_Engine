@@ -179,9 +179,16 @@ def ask_user(questions: list[dict[str, Any]]) -> str:
         return "User cancelled the question (no answer)."
 
     
+    # 回传键 = header(短键,优先)/题干截短——旧版回显题干全文,多题时 transcript
+    # 单行渲染必截断、后续题目被挤掉(2026-07-03 实证);agent 刚问过全部题目,短键
+    # 足以映射,答案本身完整保留。
+    header_by_q = {str(q.get("question", "")): str(q.get("header", "") or "")
+                   for q in questions}
     parts = []
     for q_text, a in answers.items():
         if isinstance(a, list):
             a = ", ".join(str(x) for x in a)
-        parts.append(f'"{q_text}"="{a}"')
+        h = header_by_q.get(str(q_text), "")
+        key = h if h else (str(q_text)[:40] + ("…" if len(str(q_text)) > 40 else ""))
+        parts.append(f'"{key}"="{a}"')
     return "User has answered your questions: " + ". ".join(parts)

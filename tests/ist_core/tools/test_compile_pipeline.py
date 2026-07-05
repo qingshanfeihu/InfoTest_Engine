@@ -74,7 +74,7 @@ def test_pipeline_per_case_no_barrier(monkeypatch):
     # execute_fork_skill(skill, brief)：draft brief 含"需求："→落 xlsx 返回路径；
     # grade brief 含"xlsx_path="→返回 PASS。
     def fake_fork(skill, brief, tag="", summary_sink=None):
-        if skill == "ist_compile_draft":
+        if skill == "ist-compile-draft":
             # 从 brief 提 autoid
             aid = brief.split("autoid=")[1].split("，")[0].strip()
             calls.append(("draft", aid))
@@ -94,11 +94,11 @@ def test_pipeline_per_case_no_barrier(monkeypatch):
     monkeypatch.setattr(loader_mod, "execute_fork_skill", fake_fork)
 
     res = CP._run_pipeline("dongkl.txt", "10.5", "t_pipe",
-                           draft_skill="ist_compile_draft", grade_skill="ist_compile_grade")
+                           draft_skill="ist-compile-draft", grade_skill="ist-compile-grade")
     # 两 case 各 draft 一次 + grade 一次，全 PASS → merge 2
     assert ("prep", "dongkl.txt") in calls
     assert ("draft", "111") in calls and ("draft", "222") in calls
-    assert calls.count(("grade", "ist_compile_grade")) == 2
+    assert calls.count(("grade", "ist-compile-grade")) == 2
     assert ("merge", 2) in calls
     assert sorted(res["done"]) == ["111", "222"]
     assert not res["escalated"]
@@ -123,7 +123,7 @@ def test_pipeline_observability_aggregates_llm_and_tool_calls(monkeypatch):
         def invoke(self, d): return self._fn(d)
 
     def fake_fork(skill, brief, tag="", summary_sink=None):
-        if skill == "ist_compile_draft":
+        if skill == "ist-compile-draft":
             aid = brief.split("autoid=")[1].split("，")[0].strip()
             cdir = root / "workspace" / "outputs" / aid
             cdir.mkdir(parents=True, exist_ok=True)
@@ -144,7 +144,7 @@ def test_pipeline_observability_aggregates_llm_and_tool_calls(monkeypatch):
     monkeypatch.setattr(loader_mod, "execute_fork_skill", fake_fork)
 
     res = CP._run_pipeline("x.txt", "10.5", "t_obs",
-                           draft_skill="ist_compile_draft", grade_skill="ist_compile_grade")
+                           draft_skill="ist-compile-draft", grade_skill="ist-compile-grade")
     obs = res["observability"]["total"]
     # 2 case，各 draft(ai=5)+grade(ai=2) → draft_llm=10 grade_llm=4 合计=14
     assert obs["draft_llm_rounds"] == 10
@@ -176,7 +176,7 @@ def test_pipeline_escalates_after_max_rounds(monkeypatch):
         def invoke(self, d): return self._fn(d)
 
     def fake_fork(skill, brief, tag="", summary_sink=None):
-        if skill == "ist_compile_draft":
+        if skill == "ist-compile-draft":
             n_draft["n"] += 1
             aid = brief.split("autoid=")[1].split("，")[0].strip()
             cdir = root / "workspace" / "outputs" / aid
@@ -193,7 +193,7 @@ def test_pipeline_escalates_after_max_rounds(monkeypatch):
     monkeypatch.setattr(loader_mod, "execute_fork_skill", fake_fork)
 
     res = CP._run_pipeline("x.txt", "10.5", "t_esc",
-                           draft_skill="ist_compile_draft", grade_skill="ist_compile_grade")
+                           draft_skill="ist-compile-draft", grade_skill="ist-compile-grade")
     assert res["done"] == []
     assert "111" in res["escalated"]
     assert n_draft["n"] == CP._MAX_REWORK_ROUNDS  # 重做到上限
@@ -218,7 +218,7 @@ def _setup_single_case(monkeypatch, out_name, fake_fork):
     monkeypatch.setattr(em, "compile_emit_merged", _Fake(lambda d: "merged"))
     monkeypatch.setattr(loader_mod, "execute_fork_skill", fake_fork)
     return CP._run_pipeline("x.txt", "10.5", out_name,
-                            draft_skill="ist_compile_draft", grade_skill="ist_compile_grade")
+                            draft_skill="ist-compile-draft", grade_skill="ist-compile-grade")
 
 
 def test_draft_recursion_escalates_immediately_no_rework(monkeypatch):
@@ -226,9 +226,9 @@ def test_draft_recursion_escalates_immediately_no_rework(monkeypatch):
     n_draft = {"n": 0}
 
     def fake_fork(skill, brief, tag="", summary_sink=None):
-        if skill == "ist_compile_draft":
+        if skill == "ist-compile-draft":
             n_draft["n"] += 1
-            return ("ERROR: fork skill 'ist_compile_draft' execution failed: "
+            return ("ERROR: fork skill 'ist-compile-draft' execution failed: "
                     "[recursion-limit] Recursion limit of 200 reached")
         return "判定：PASS"
 
@@ -248,7 +248,7 @@ def test_fork_wallclock_timeout_escalates_and_not_transient(monkeypatch):
     n_draft = {"n": 0}
 
     def fake_fork(skill, brief, tag="", summary_sink=None):
-        if skill == "ist_compile_draft":
+        if skill == "ist-compile-draft":
             n_draft["n"] += 1
             _t.sleep(1.0)                          # 超 0.2s 墙钟 → 看门狗放弃等待
             return "xlsx: never"
@@ -270,7 +270,7 @@ def test_fork_run_token_propagates_into_watchdog_thread(monkeypatch):
 
     def fake_fork(skill, brief, tag="", summary_sink=None):
         seen[skill] = run_case._current_run_token.get()   # 看门狗线程内读 contextvar
-        if skill == "ist_compile_draft":
+        if skill == "ist-compile-draft":
             aid = brief.split("autoid=")[1].split("，")[0].strip()
             cdir = CP._project_root() / "workspace" / "outputs" / aid
             cdir.mkdir(parents=True, exist_ok=True)
@@ -280,7 +280,7 @@ def test_fork_run_token_propagates_into_watchdog_thread(monkeypatch):
 
     res = _setup_single_case(monkeypatch, "t_token", fake_fork)
     assert res["done"] == ["111"]
-    assert seen.get("ist_compile_draft", "").startswith("run-")   # 非 None、是本 run token
+    assert seen.get("ist-compile-draft", "").startswith("run-")   # 非 None、是本 run token
 
 
 def test_transient_retry_capped_by_total_wallclock(monkeypatch):
@@ -290,9 +290,9 @@ def test_transient_retry_capped_by_total_wallclock(monkeypatch):
     n_draft = {"n": 0}
 
     def fake_fork(skill, brief, tag="", summary_sink=None):
-        if skill == "ist_compile_draft":
+        if skill == "ist-compile-draft":
             n_draft["n"] += 1
-            return "ERROR: fork skill 'ist_compile_draft' execution failed: Request timed out"
+            return "ERROR: fork skill 'ist-compile-draft' execution failed: Request timed out"
         return "判定：PASS"
 
     res = _setup_single_case(monkeypatch, "t_transcap", fake_fork)
@@ -519,13 +519,15 @@ def test_emit_rejects_empty_or_literal_backslash_n_commands():
         [{"E": "APV_0", "F": "cmds_config", "G": "", "desc": "空占位"}, obs, base_cp]),
         "init_commands": "sdns on", "out_name": "_pytest_gempty"})
     assert "empty_command_payload" not in out_empty, out_empty
-    # G 含字面 \n（JSON 里双反斜杠 → 解析后是字面反斜杠+n）
+    # G 含字面 \n（JSON 里双反斜杠 → 解析后是字面反斜杠+n）→ **自动纠正为真实换行**
+    # (2026-07-04 V轮 token 取证:拒绝打回一轮 worker+grade 重做 ≈1-2M token,而命令语境
+    # 字面 \n 只可能是想换行写错了,无损替换 + 返回注明即可,17 卷的重做轮直接消失)
     out2 = compile_emit.invoke({"autoid": "AIDBN", "steps_json":
         '[{"E":"APV_0","F":"cmds_config","G":"cmd a\\\\ncmd b","desc":"拼行"},'
         '{"E":"APV_0","F":"cmd_config","G":"show version","desc":"观测"},'
         '{"E":"check_point","F":"found","G":"x","desc":"断言"}]',
         "init_commands": "sdns on", "out_name": "_pytest_gbn"})
-    assert out2.startswith("error") and "literal_backslash_n" in out2, out2
+    assert "已产出" in out2 and "自动把" in out2, out2
     # 真实换行的多命令 → 放行
     out3 = compile_emit.invoke({"autoid": "AIDOK", "steps_json": _json.dumps(
         [{"E": "APV_0", "F": "cmds_config", "G": "cmd a\ncmd b", "desc": "多命令"}, obs, base_cp]),

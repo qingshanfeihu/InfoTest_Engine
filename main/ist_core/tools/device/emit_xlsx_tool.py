@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -27,6 +28,25 @@ logger = logging.getLogger(__name__)
 # 让真实 case 都不是最后一个、走正常执行路径。哨兵自己当 last_case 不执行,无副作用。
 # 这对单 case 和多 case 合并是同一条契约:cases=[真case..., _sentinel]。
 _SENTINEL_AUTOID = "999999999999999"
+
+# 同 autoid 的 steps_json 连续解析失败计数(进程内):worker 对解析错误常原样重试
+# (2026-07-02 实证单 case 连摔 25 次),连败达阈值时在报错里附停止重试的升级指引。
+# 成功解析即清零;fork LoopGuard 对"参数微变的连续 error"不敏感,这层是精准补位。
+import threading as _threading
+
+_EMIT_FAIL_STREAK: dict[str, int] = {}
+_EMIT_FAIL_LOCK = _threading.Lock()
+
+
+def _emit_fail_streak_bump(autoid: str) -> int:
+    with _EMIT_FAIL_LOCK:
+        _EMIT_FAIL_STREAK[autoid] = _EMIT_FAIL_STREAK.get(autoid, 0) + 1
+        return _EMIT_FAIL_STREAK[autoid]
+
+
+def _emit_fail_streak_clear(autoid: str) -> None:
+    with _EMIT_FAIL_LOCK:
+        _EMIT_FAIL_STREAK.pop(autoid, None)
 
 
 def _parse_autoids_arg(autoids: str | list[str] | None) -> tuple[list[str] | None, str | None]:
@@ -444,9 +464,14 @@ def _gate_unreachable_listener(autoid: str, steps: list, init: str = "") -> str 
 
 
 @tool(parse_docstring=True)
-def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
+def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                  out_name: str = "", strict_structural: bool = False,
-                 provenance_json: str = "", expected_save_variant: str = "") -> str:
+                 provenance_json: str = "", expected_save_variant: str = "",
+                 steps: list | str | None = None, steps_path: str = "",
+                 override_frozen_reason: str = "",
+                 provenance: dict | list | str | None = None,
+                 provenance_path: str = "",
+                 blocks: list | None = None) -> str:
     """从步骤列表产出结构正确的 case.xlsx(克隆框架原生模板,你不用管模板结构/列对齐)。
 
     **用这个,别用 run_python 手搓 openpyxl**——手搓总在 27 行说明区/C=0/C=1/E-F-G 列对齐上
@@ -472,19 +497,31 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
 
     Args:
         autoid: case autoid for the first case row column A.
-        steps_json: JSON array string; each element a dict with keys E/F/G and optional H/I/desc.
+        steps_json: (兼容通道)JSON array string。**优先用 ``steps`` 原生数组**——字符串通道
+            经供应商 function-calling 序列化会在 JSON 后拖尾脏字符(实证单轮 73% 解析失败),
+            数组通道没有这层暴露面。
+        blocks: **最优先**。语义组合子的原生数组,5 种 kind——CONFIG(cmds 命令列表,每条一个元素)/ OBSERVE_ASSERT(host+cmd+asserts 断言列表,op 取 found、not_found、abs_found)/ CAPTURE_COMPARE(host+capture_cmd+relation 取 same 或 differs,寄存器自动分配)/ OBSERVE_ONLY(host+cmd)/ SLEEP(seconds)。你只做语义决策,捕获比较三步式、寄存器、E-F-H 列由工具展开——悬空断言、字面反斜杠n、未定义寄存器在这个语言下写不出来。传 blocks 时 provenance 按组合子粒度一对一(数量相等),展开由工具同步。
+        steps: 备选。步骤 dict 的原生数组(不是 JSON 字符串),每元素含 E/F/G 与可选 H/I/desc;需要 blocks 表达不了的形态时才用。
+        steps_path: 备选文件通道。workspace 内 JSON 文件路径(如 workspace/outputs/<autoid>/steps.json,
+            内容为步骤数组——workspace 只有 outputs/ 子目录可写);steps 数组反复拖尾/超长时,
+            先 fs_write 落文件再传路径,绕开参数序列化。
+        override_frozen_reason: 该 case 被上机跨轮对照冻结(连续两轮同签名 fail=同法已证无效)时
+            必传——一句话说明这次换了什么法(改了哪类断言/配置/触发)。不传则拒绝重编;
+            这不是要你走形式,是防拿同一套写法原样再撞一轮。
         init_commands: file-level preconfig (C=1) commands, newline separated; empty uses project default.
         out_name: output subdir under workspace/outputs; empty uses autoid.
         strict_structural: v2 编译链置 True 时启用结构约束门（命令∈手册allowlist + 断言非悬空，
             correct-by-construction）；v1 默认 False 行为不变。违反结构约束直接打回带原因。
-        provenance_json: v3 三层 Provenance IR（CaseProvenance JSON）。默认空＝V2 行为不变；
-            传入则旁挂 case.provenance.json（每步标 G/E/V 层 + 来源），供 grade/verify/writeback 复用。
+        provenance: 首选原生对象通道,必传。三层 Provenance IR(dict,含 steps 数组,每步标 layer 取 G/E/V 之一,source 含 kind 与 ref)——它是审批免重检索、上机四层归因、PASS 写回知识库的唯一依据,缺失则拒绝产出。字符串通道经供应商序列化实证拖尾失败,对象通道没有这层暴露面。
+        provenance_json: 兼容通道,同上但为 JSON 字符串,优先用 provenance。
+        provenance_path: 备选文件通道(workspace 内 JSON 文件路径,如 workspace/outputs/<autoid>/prov.json)。
+            provenance 原生对象反复被供应商吞掉/null 化时,先 fs_write 落文件再传路径。
         expected_save_variant: 仅配置保存/持久化类用例传（memory|file|all|net）。脑图要求"执行
             write all 后..."就传 "all"。持久化门据此校验你用的保存命令没被换族(write all 不能写成
             write memory)。非持久化用例留空。
 
     Returns:
-        产出路径 + round-trip 行数统计。编译到此结束；上机验证由独立 ist_verify 流程触发。
+        产出路径 + round-trip 行数统计。编译到此结束；上机验证由独立 ist-verify 流程触发。
     """
     autoid = (autoid or "").strip()
     if not autoid:
@@ -495,12 +532,236 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
     if autoid.isdigit() and len(autoid) < 15:
         return (f"error: autoid '{autoid}' 疑似短号(纯数字但不足 15 位)。请传完整需求系统 autoid"
                 f"(18 位,如 203031753342778012)——短号烧进 xlsx 会导致需求关联与框架报告 ID 断链。")
+    # 组合子通道(V4 步骤2,最优先):worker 只做语义决策,展开器保证底层表示——
+    # 悬空断言/未定义寄存器/带H步后直接断言/字面\n 在组合子语言下不可表达
+    # (实证:34 已验证卷反解 5 组合子 round-trip 33/34 字节级等价,唯一失败卷=上机 fail 卷)。
+    # 展开产物仍走下游全部机械门作自检(应零触发,触发=展开器 bug)。
+    if blocks not in (None, []):
+        if not isinstance(blocks, list):
+            return (f"error: case {autoid} blocks 必须是原生数组(语义组合子列表),"
+                    "不要序列化成字符串——收到 " + type(blocks).__name__)
+        from main.case_compiler.blocks import expand_blocks
+        _prov_steps = None
+        _prov_obj: dict | None = None
+        if provenance is not None and isinstance(provenance, dict):
+            _prov_obj = dict(provenance)
+            _prov_steps = _prov_obj.get("steps")
+        elif provenance_json and str(provenance_json).strip():
+            try:
+                _pj0 = json.loads(str(provenance_json))
+                if isinstance(_pj0, dict):
+                    _prov_obj = _pj0
+                    _prov_steps = _pj0.get("steps")
+            except Exception:  # noqa: BLE001
+                return (f"error: case {autoid} blocks 模式下 provenance_json 解析失败——"
+                        "改传 provenance 原生对象(steps 数与 blocks 数相等,一个组合子一条)。")
+        _bsteps, _bprov, _berr = expand_blocks(blocks, _prov_steps)
+        if _berr:
+            return f"error: case {autoid} 组合子无效——{_berr}"
+        steps = _bsteps
+        if _prov_obj is not None and _bprov is not None:
+            _prov_obj["steps"] = _bprov
+            provenance = _prov_obj
+            provenance_json = ""
+
+    # 步骤载荷三通道,优先级 steps(原生数组)> steps_path(workspace 文件)> steps_json(字符串,兼容)。
+    # 原生数组没有"长字符串参数拖尾"的暴露面(2026-07-02 实证字符串通道单轮 73% 解析失败);
+    # 供应商仍可能把数组 stringify(mimo 实证),故 steps 收到 str 也双收。
+    _payload: list | None = None
+    _src = ""
+    if steps not in (None, []):
+        if isinstance(steps, list):
+            _payload = list(steps)
+        else:
+            _src = str(steps)
+    elif (steps_path or "").strip():
+        sp = (steps_path or "").strip()
+        root = Path(__file__).resolve().parents[4]
+        p = Path(sp) if sp.startswith("/") else (root / sp)
+        try:
+            p = p.resolve()
+            ws = (root / "workspace").resolve()
+            if not p.is_relative_to(ws):
+                return f"error: steps_path 必须在 workspace/ 内: {sp}"
+            if not p.is_file():
+                return f"error: steps_path 文件不存在: {sp}(先 fs_write 落文件再传路径)"
+            _src = p.read_text(encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            return f"error: steps_path 读取失败: {e}"
+    else:
+        if isinstance(steps_json, list):
+            _payload = steps_json
+        else:
+            _src = steps_json if isinstance(steps_json, str) else str(steps_json or "")
+    if _payload is None:
+        if not (_src or "").strip():
+            # 空载荷同样计连败(2026-07-05 v12 实证:供应商间歇性把整个数组参数吞掉,
+            # 211027 空载荷原样重试 30+ 次——旧版只有 steps_json 解析分支有连败升级,
+            # 这个分支直接 return,worker 在同一堵墙上撞到 fork 预算耗尽)。
+            _streak = _emit_fail_streak_bump(autoid)
+            _msg = (f"error: case {autoid} 步骤载荷为空——blocks/steps/steps_path/steps_json "
+                    "四个通道都没传有效内容(你的数组参数可能被供应商序列化整个丢弃了)。"
+                    "首选 blocks 语义组合子(原生数组);组合子表达不了的形态用 steps 原生数组。")
+            if _streak >= 2:
+                _msg += ("\n→ 已连续空载荷:别原样重试。先 fs_write 把步骤数组写到 "
+                         f"workspace/outputs/{autoid}/steps.json,再传 steps_path=该路径"
+                         "——文件通道不经过参数序列化,吞不掉。")
+            if _streak >= 3:
+                _msg += (f"\n⚠ 已连续 {_streak} 次空载荷。若 steps_path 也传不进,停止重试,"
+                         "把本报错原样写进你的返回交 orchestrator 重派。")
+            return _msg
+        try:
+            _payload = json.loads(_src)
+        except Exception as e:  # noqa: BLE001
+            # 回显收到参数的首尾片段(repr 让不可见字符现形):解析失败的常见根因是
+            # LLM 供应商在 tool_call 长字符串参数后拖尾(实证 JSON 闭合后跟 2-11 字符
+            # 意图词如 ]push / ]doublecheck);报错只给 char 位置时 worker 看不到自己
+            # 实际传了什么,反复换姿势重试全部无效。首尾片段让 worker 对症改,
+            # 并引导切换 steps 原生数组或 steps_path 文件通道。
+            head = repr(_src[:120])
+            tail = repr(_src[-120:]) if len(_src) > 240 else ""
+            streak = _emit_fail_streak_bump(autoid)
+            msg = (f"error: steps_json 解析失败: {e}\n"
+                   f"实际收到的参数(len={len(_src)}) 开头: {head}"
+                   + (f"\n结尾: {tail}" if tail else ""))
+            if streak >= 2:
+                msg += ("\n→ 换通道:改传 steps 原生数组(不是 JSON 字符串),"
+                        "或先 fs_write 把步骤数组写到 workspace/outputs/<autoid>/steps.json"
+                        " 再传 steps_path(workspace 只有 outputs/ 可写)——"
+                        "都没有字符串拖尾这层暴露面。")
+            if streak >= 3:
+                msg += (f"\n⚠ 该 case 已连续 {streak} 次解析失败——别再原样重试;"
+                        "若换通道仍失败,停止重试,把这段报错原样写进你的返回交 orchestrator 处理。")
+            return msg
+    if not isinstance(_payload, list) or not _payload:
+        return "error: steps 必须是非空数组(每元素为含 E/F/G 的 dict)"
+    _emit_fail_streak_clear(autoid)
+    steps = _payload
+
+    # 冻结闸门(A 层):digest 跨轮对照发现连续两轮同签名 fail 时在 outputs/<autoid>/ 落
+    # .frozen.json——同法已证无效。重编必须显式声明换法(override_frozen_reason),
+    # 文本止损指引曾被实证绕过(直接 ad-hoc 重编),此门把「是否换法」变成必答题;
+    # 声明后记入冻结历史并放行(换法自由保留)。
     try:
-        steps = json.loads(steps_json) if isinstance(steps_json, str) else steps_json
-        if not isinstance(steps, list) or not steps:
-            return "error: steps_json 必须是非空列表"
-    except Exception as e:  # noqa: BLE001
-        return f"error: steps_json 解析失败: {e}"
+        _fz_path = Path(__file__).resolve().parents[4] / "workspace" / "outputs" / autoid / ".frozen.json"
+        if _fz_path.is_file():
+            _ov = (override_frozen_reason or "").strip()
+            if not _ov:
+                _fz = {}
+                try:
+                    _fz = json.loads(_fz_path.read_text(encoding="utf-8"))
+                except Exception:  # noqa: BLE001
+                    pass
+                _sig = " | ".join((_fz.get("signatures") or [])[:2])
+                return (f"error: case {autoid} 已被上机跨轮对照冻结(连续两轮同签名 fail,同法已证无效"
+                        + (f";签名: {_sig}" if _sig else "") +
+                        ")。重编须传 override_frozen_reason=一句话说明这次换了什么法"
+                        "(改了哪类断言/配置/触发);若判断是环境阻塞,先按 ist-verify 的止损指引"
+                        "核实环境,不要原样再撞。")
+            try:
+                _fz = json.loads(_fz_path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                _fz = {}
+            _hist = _fz.get("overrides") or []
+            import time as _t1
+            _hist.append({"reason": _ov, "ts": _t1.time()})
+            _fz["overrides"] = _hist
+            _fz_path.write_text(json.dumps(_fz, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        logger.debug("frozen 门校验异常(放行)", exc_info=True)
+
+    # user_decision 落地门(A 层):用户在 ask_user 拍板的断言形态是硬约束——worker 挑省事
+    # 形态会把用户选择跑偏(777976 实证选分布产出关系断言;593516 实证有序轨迹语义被静默
+    # 降级成参与统计,用户从未批准)。orchestrator 带决策重派前把 user_decision.json 写进
+    # outputs/<autoid>/,此处对产物机械核对;文件不存在=无决策约束,零行为变化。
+    try:
+        _ud_path = Path(__file__).resolve().parents[4] / "workspace" / "outputs" / autoid / "user_decision.json"
+        if _ud_path.is_file():
+            _ud = json.loads(_ud_path.read_text(encoding="utf-8"))
+            _form = str(_ud.get("expected_assertion_form") or "").strip()
+            _fvals = [str(s.get("F", "") or "").strip() for s in steps if isinstance(s, dict)]
+            _has_h = any(str(s.get("H", "") or "").strip() for s in steps if isinstance(s, dict))
+            _need = {"dist": "dist" in _fvals, "member": "member" in _fvals,
+                     "captured_relation": _has_h}
+            if _form in _need and not _need[_form]:
+                return (f"error: case {autoid} 违反用户决策——用户拍板的断言形态是 {_form},"
+                        f"产物步骤里没有(F 列出现: {sorted(set(_fvals))},含 H 捕获: {_has_h})。"
+                        "按 user_decision.json 的形态重写断言,不许换更省事的形态。")
+            _kinds = _ud.get("claim_kinds_preserved") or []
+            # 有序轨迹判定按台账的 ordering_sensitive 布尔(工具落盘的机读事实),不枚举
+            # kind 名——orchestrator 会自创 kind(实证 rotation_order_after_delete 绕过
+            # 了只认 new_member_last 的旧检查,靠 grade 兜住);new_member_last 保留兼容。
+            _ordering_kinds = {"new_member_last"}
+            try:
+                _nd_path = _ud_path.parent / "needs_decision.json"
+                if _nd_path.is_file():
+                    _nd = json.loads(_nd_path.read_text(encoding="utf-8"))
+                    for _c in (_nd.get("claims") or []):
+                        if _c.get("ordering_sensitive") and _c.get("claim_kind"):
+                            _ordering_kinds.add(str(_c["claim_kind"]))
+            except Exception:  # noqa: BLE001
+                pass
+            if any(k in _ordering_kinds for k in _kinds):
+                _presents = [s.get("member", {}).get("present") for s in steps
+                             if isinstance(s, dict) and str(s.get("F", "") or "").strip() == "member"
+                             and isinstance(s.get("member"), dict)]
+                if not (True in _presents and False in _presents):
+                    return (f"error: case {autoid} 保留了有序轨迹类 claim(user_decision 的"
+                            " claim_kinds_preserved 与台账 ordering_sensitive 标记)——产物必须有"
+                            "顺序锚:按时间顺序一段 not_found(目标 pool 成员集,member 声明"
+                            " present=false)接一段 found(present=true)。只有分布/参与统计证不了"
+                            "顺序,属语义降级,拒绝落盘;若该顺序语义已被证伪不可验,把欠定原样"
+                            "上报 orchestrator 回用户改预期,并同步更新 user_decision.json。")
+    except Exception:  # noqa: BLE001
+        logger.debug("user_decision 门校验异常(放行)", exc_info=True)
+
+    # provenance 三通道,优先级同 steps:原生对象 > provenance_path(workspace 文件) > 字符串。
+    # (2026-07-05 v12 实证:供应商把原生 provenance 传成 {"steps": null} / 整体吞掉——
+    # 文件通道是与 steps_path 同款的兜底,载荷通道一致性原则覆盖 provenance。)
+    if provenance is not None and not (isinstance(provenance, str) and not provenance.strip()):
+        if isinstance(provenance, (dict, list)):
+            provenance_json = json.dumps(provenance, ensure_ascii=False)
+        elif isinstance(provenance, str):
+            provenance_json = provenance
+    elif (provenance_path or "").strip() and not (provenance_json and provenance_json.strip()):
+        _pp = (provenance_path or "").strip()
+        _root = Path(__file__).resolve().parents[4]
+        _p = Path(_pp) if _pp.startswith("/") else (_root / _pp)
+        try:
+            _p = _p.resolve()
+            if not _p.is_relative_to((_root / "workspace").resolve()):
+                return f"error: provenance_path 必须在 workspace/ 内: {_pp}"
+            if not _p.is_file():
+                return f"error: provenance_path 文件不存在: {_pp}(先 fs_write 落文件再传路径)"
+            provenance_json = _p.read_text(encoding="utf-8")
+        except Exception as _e:  # noqa: BLE001
+            return f"error: provenance_path 读取失败: {_e}"
+
+    # provenance 必传门(V4 步骤0,2026-07-04):主路 worker 34 卷 provenance=0 的实证——
+    # 它断掉则 grade 免检索/四层归因/上机写回全部无依据(V3 名存实亡的机械根因)。
+    # prompt 层约束在长上下文下必被遗忘(2026-07-02 零 grade 合并同型事故),故 A 层强制。
+    if not (provenance_json and provenance_json.strip()):
+        if (os.environ.get("IST_PROVENANCE_OPTIONAL") or "").strip() != "1":
+            return (f"error: case {autoid} 缺 provenance——请随 steps 一并传 provenance(原生对象,"
+                    "含 steps 数组,每步 {layer: G|E|V, source: {kind, ref}};与卷面步骤逐位对齐)。"
+                    "它是审批免重检索、上机四层归因、PASS 写回知识库的唯一依据。"
+                    "layer 含义:G=命令骨架(来源 footprint/手册) E=环境绑定(来源拓扑) "
+                    "V=断言语义(来源先例/手册/用户决策)。")
+
+    # provenance_json 前缀抢救:供应商在长字符串参数后拖尾(同 steps_json 的坑,2026-07-03
+    # 实测 mimo 单轮 3 个 case 各摔 5 次)——JSON 本体合法、尾部粘了杂散 token 时,取第一个
+    # 完整 JSON 值继续,不让整次 emit 因此报废。真正的坏 JSON(前缀都解不出)仍走原报错。
+    if provenance_json and isinstance(provenance_json, str) and provenance_json.strip():
+        _ps = provenance_json.strip()
+        try:
+            json.loads(_ps)
+        except Exception:  # noqa: BLE001
+            try:
+                _obj, _end = json.JSONDecoder().raw_decode(_ps)
+                if isinstance(_obj, dict) and _ps[_end:].strip():
+                    provenance_json = json.dumps(_obj, ensure_ascii=False)
+            except Exception:  # noqa: BLE001
+                pass  # 前缀也解不出 → 保留原串,由下游 parse_provenance 给出明确报错
 
     # 分布区间断言（F="dist"）→ 确定性展开成 N 条锚定区间正则的 found check_point（算法类 rr/wrr）。
     # 守恒/反恒真门不过直接打回；展开在所有结构门与 caseir 之前，下游只见普通 found。
@@ -536,6 +797,26 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
 
     # 文件级前置
     init_g = init_commands.strip() if init_commands.strip() else get_config().default_init_g()
+    # 字面 \n 自动纠正(拒绝改纠正,2026-07-04 V轮 token 取证):worker 批量在命令载荷里
+    # 写字面反斜杠+n(LLM 在 JSON 字符串里双转义),一轮 17 卷。命令语境(init 与
+    # APV_0/test_env 的 G 列)里字面 \n 没有任何合法用途——设备/dig/shell 语法都不用它,
+    # 只可能是"想要换行"写错了。此前按必崩形态拒绝打回重做:每卷一轮 worker+grade 重做
+    # ≈1-2M token,17 卷纯纠正一个双转义 ≈20M 白烧。无损替换,返回文本注明教 worker 下次
+    # 写对;check_point 的 G 是正则([^\n] 合法),不在纠正范围。必须在 init_rows 构造与
+    # 各 gate 之前做——写卷面与门检查都要看到纠正后的值。
+    _fixed_literal_n = 0
+    if "\\n" in init_g:
+        init_g = init_g.replace("\\n", "\n")
+        _fixed_literal_n += 1
+    if isinstance(steps, list):
+        for _s in steps:
+            if not isinstance(_s, dict):
+                continue
+            if str(_s.get("E", "")).strip() in ("APV_0", "test_env"):
+                _g = _s.get("G")
+                if isinstance(_g, str) and "\\n" in _g:
+                    _s["G"] = _g.replace("\\n", "\n")
+                    _fixed_literal_n += 1
     init_rows = [Row(test_object="APV_0", method="cmds_config", data=init_g)]
 
     # 可达性校验门:配置/触发用的 IP 必须在拓扑可达集(挡住 1.1.1.1 等不可达示例 IP)
@@ -565,7 +846,13 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
     # (实证两次:found_times 漏网→dongkl 首跑 31 unknown;悬空断言漏网→778012 重编 33 unknown)。
     # 语义"可证伪性"归 verifiability 工具 + LLM,不在此门。
     from main.ist_core.tools.device.structural_gate import check_crash_gates_mandatory
-    _ftres = check_crash_gates_mandatory(steps)
+    # init_commands 与 steps 走同一门:init 会成为卷面首个 cmds_config 步,载荷形态问题
+    # (字面 \n、None)同样必被设备 ^ 拒。此前只扫 steps,init 通道漏网——2026-07-04 V轮
+    # 实证 worker 批量在 init 里写字面 \n,17 个卷 emit 放行、到 grade 的成品 lint 才被拦。
+    _gate_steps = list(steps) if isinstance(steps, list) else steps
+    if isinstance(_gate_steps, list) and (init_g or "").strip():
+        _gate_steps = [{"D": "初始化配置", "E": "APV_0", "F": "cmds_config", "G": init_g}] + _gate_steps
+    _ftres = check_crash_gates_mandatory(_gate_steps)
     if not _ftres.ok:
         return f"error: {_ftres.render(autoid)}"
 
@@ -603,8 +890,15 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
         from main.case_compiler.provenance_ir import parse_provenance, backfill_efg
         prov = parse_provenance(provenance_json)
         if prov is None:
-            return (f"error: case {autoid} provenance_json 解析失败（非合法 CaseProvenance JSON）。"
-                    "provenance 是 grade 核来源的依据，不能缺/坏——修正 JSON 后重新 emit。")
+            try:
+                json.loads(provenance_json)
+                _bad = "JSON 可解析但结构不符(需 {autoid, steps:[{layer,source:{kind,ref}},…]})"
+            except Exception as _je:  # noqa: BLE001
+                _bad = f"JSON 本体坏: {_je}"
+            return (f"error: case {autoid} provenance 解析失败——{_bad}；开头 80 字符: "
+                    f"{provenance_json.strip()[:80]!r}。"
+                    "改用 provenance **原生对象参数**(直接传 dict,不要序列化成字符串塞 "
+                    "provenance_json)——字符串通道会拖尾/双转义,对象通道没有这层暴露面。")
         if not backfill_efg(prov, steps):
             n_prov = len(getattr(prov, "steps", []) or [])
             return (f"error: case {autoid} provenance 步数({n_prov}) 与 emit steps 数({len(steps)}) 不一致。"
@@ -635,11 +929,40 @@ def compile_emit(autoid: str, steps_json: str, init_commands: str = "",
         except Exception as e:  # noqa: BLE001
             prov_note = f"\n⚠ 存在旧 provenance 但删除失败: {e}（建议手动清理，防 grade 误用 stale 来源）。"
 
+    _fix_note = ""
+    if _fixed_literal_n:
+        _fix_note = (f"\n⚠ 已自动把 {_fixed_literal_n} 处命令载荷里的字面反斜杠n纠正为真实换行"
+                     "(命令语境它只可能是想换行写错了;JSON 字符串里写单反斜杠 n 即可,双反斜杠成字面字符)。")
+
+    # lint 凭证(V4 步骤1,2026-07-04):合并门的判据从「grade PASS」换源为「过全部机械门」。
+    # 实证依据(942 对时点配对):grade verdict 判别力 PASS 56% vs CUT 53%(3pp,统计无效),
+    # CUT+重做后上机通过率不升——LLM 审 LLM 不构成质量门,机械 lint + 上机 oracle 才是。
+    # emit 走到这里=8 道门+crash-gate 全过,直接落凭证(xlsx_mtime 精确签名,直改立即失效);
+    # source 字段区分来源,IST_GRADE_MAINPATH=1 时合并门只认 grade(旧行为一键回退)。
+    try:
+        import time as _time
+        _credp = Path(out).parent / ".grade_credential.json"
+        _cred: dict = {}
+        if _credp.is_file():
+            try:
+                _cred = json.loads(_credp.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                _cred = {}
+        _cred.update({
+            "autoid": autoid, "xlsx": str(out),
+            "xlsx_mtime": Path(out).stat().st_mtime,
+            "verdict": "PASS", "source": "lint",
+            "lint_ok": True, "verdict_ts": _time.time(),
+        })
+        _credp.write_text(json.dumps(_cred, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        logger.debug("lint 凭证落盘失败(合并门会如实报缺)", exc_info=True)
+
     return (f"=== compile_emit ===\n"
             f"已产出结构正确的 xlsx(克隆框架模板): {out}\n"
             f"case={autoid}  steps={len(case.steps)}  check_points=有\n"
-            f"round-trip 统计: {stats}{prov_note}\n"
-            f"编译到此结束；上机验证由独立 ist_verify 流程触发。")
+            f"round-trip 统计: {stats}{prov_note}{_fix_note}\n"
+            f"编译到此结束；上机验证由独立 ist-verify 流程触发。")
 
 
 @tool(parse_docstring=True)
@@ -677,7 +1000,13 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
 
     Returns:
         产出路径 + round-trip 对账(case 数应=输入数+1哨兵)。编译到此结束；
-        上机验证由独立 ist_verify 流程触发。
+        上机验证由独立 ist-verify 流程触发。
+
+    Note:
+        autoids 路径带 grade 凭证机械门:每个 autoid 需在当前 case.xlsx 上实跑过
+        grade(compile_score 落盘的 score.json,且不早于 case.xlsx)。缺凭证/过期
+        凭证 → 拒绝合并并列出 case 清单。cases_json 路径(compile_pipeline 内部)
+        不走此门——pipeline 自带 grade 环节与机读判定解析。
     """
     # 首选:从 autoids 回读各成品 case.xlsx(main-orchestrated 不用自己提供 steps;
     # 复用 compile_pipeline merge 同一套 _load_case_rows,init 作为首步已含回读结果)。
@@ -688,11 +1017,48 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         from main.ist_core.tools.device.precedent_tools import _load_case_rows
         root = Path(__file__).resolve().parents[4]
         cases = []
+        no_grade: list[str] = []
+        stale_grade: list[str] = []
+        cut_grade: list[str] = []
         for aid in aid_list:
             aid = str(aid).strip()
             xp = root / "workspace" / "outputs" / aid / "case.xlsx"
             if not xp.is_file():
                 return f"error: autoid {aid} 的 case.xlsx 不存在({xp});该 case 可能没编译成功,先补编/重派 worker"
+            # grade 实跑凭证机械门(A 层):每个 case 必须在**当前这份** case.xlsx 上实跑过
+            # grade 链路(compile_score 落盘 .grade_credential.json)。凭证缺失=从没 grade;
+            # 凭证记录的 xlsx_mtime 不等于当前 xlsx mtime=重编后没重新 grade。校验内容签名
+            # 字段(xlsx_mtime)而非文件 mtime——2026-07-03 实测 grade fork 会自发 run_python
+            # 写同类文件,mtime 冒充得了、精确的 xlsx_mtime 值冒充不了(它只能从工具落盘获得)。
+            # orchestrator 自查/探针零信号都不构成豁免——2026-07-02 实证 34-case 零 grade
+            # 直接合并交付,prompt 层约束在长上下文下会被遗忘,故此门确定性强制。
+            # V4 步骤1(2026-07-04)凭证换源:默认主路认「lint 凭证」(emit 过全部机械门时
+            # 自动落盘,source=lint)与 grade 凭证(source=grade)两者;实证依据=942 对时点
+            # 配对里 grade verdict 判别力仅 3pp(PASS 56% vs CUT 53%)、CUT 重做零质量增益,
+            # 质量门=机械 lint+上机 oracle。IST_GRADE_MAINPATH=1 恢复旧行为(只认 grade)。
+            _grade_mainpath = (os.environ.get("IST_GRADE_MAINPATH") or "").strip() == "1"
+            sj = xp.parent / ".grade_credential.json"
+            cred_ok = False
+            cred_verdict = ""
+            cred_source = ""
+            if sj.is_file():
+                try:
+                    cred = json.loads(sj.read_text(encoding="utf-8"))
+                    cred_ok = abs(float(cred.get("xlsx_mtime", -1)) - xp.stat().st_mtime) < 1e-6
+                    cred_verdict = str(cred.get("verdict") or "").upper()
+                    cred_source = str(cred.get("source") or "grade")
+                except Exception:  # noqa: BLE001
+                    cred_ok = False
+            if not sj.is_file():
+                no_grade.append(aid)
+            elif not cred_ok:
+                stale_grade.append(aid)
+            elif _grade_mainpath and cred_source != "grade":
+                # 旧模式:lint 凭证不算 grade 实跑,按"从未 grade"处理
+                no_grade.append(aid)
+            elif cred_verdict == "CUT":
+                # submit_verdict 提交的判定就是 CUT——带 CUT 合并=拿弱产物充数,直接拒。
+                cut_grade.append(aid)
             try:
                 rows = _load_case_rows(str(xp))  # 含 init 首步 APV_0 + 全步骤(E/F/G/H/I/desc),遇哨兵停
             except Exception as e:  # noqa: BLE001
@@ -700,6 +1066,33 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
             if not rows:
                 return f"error: {aid} 回读 steps 为空(case.xlsx 数据区空?)"
             cases.append({"autoid": aid, "steps": rows})  # init 已在 steps 首行,不另传(传了会重复)
+        if no_grade or stale_grade or cut_grade:
+            parts = []
+            if no_grade:
+                parts.append(f"从未 grade(缺凭证): {', '.join(no_grade)}")
+            if stale_grade:
+                parts.append(f"重编后未重新 grade(凭证对应的不是当前 case.xlsx): {', '.join(stale_grade)}")
+            if cut_grade:
+                parts.append(f"grade 判定为 CUT(按重做意见重派 worker,别带 CUT 合并): {', '.join(cut_grade)}")
+            return ("error: 合并被 grade 凭证门拒绝——以下 case 没有在当前 case.xlsx 上实跑过 grade 审批:\n"
+                    + "\n".join(parts)
+                    + "\n对每个列出的 case 派 ist-compile-grade(其流程会调 compile_score 落盘凭证),"
+                      "拿到 判定：PASS 后再合并;判 CUT 的按重做意见重派 worker。")
+        # 成品卷 lint(最后防线):凭证全绿也可能是 lint 挂点上线前落的旧凭证,或卷面在
+        # 凭证之后又被直改。合并是终卷产出的最后一道必经之路,对每卷再跑必崩/必假 lint——
+        # 一个必崩 case 会让整份 pytest 39 秒崩掉、其余 33 个全不跑(2026-07-04 两轮实证)。
+        from main.ist_core.tools.device.structural_gate import lint_xlsx_case
+        lint_bad: list[str] = []
+        for aid in aid_list:
+            xp = root / "workspace" / "outputs" / str(aid).strip() / "case.xlsx"
+            lr = lint_xlsx_case(xp)
+            if not lr.ok:
+                lint_bad.append(f"{aid}: " + "; ".join(f"[{it.code}]" for it in lr.violations))
+        if lint_bad:
+            return ("error: 合并被成品卷 lint 拒绝——以下 case 存在机械可判的必崩/必假形态"
+                    "(一个必崩 case 会崩掉整份 pytest,其余全不跑):\n  "
+                    + "\n  ".join(lint_bad)
+                    + "\n修正后重新 grade 再合并(违例详情见对应 grade/score 返回)。")
     else:
         try:
             cases = json.loads(cases_json)
@@ -809,4 +1202,4 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
             f"autoids: {autoids}\n"
             f"round-trip 统计: {stats}\n"
             f"(case_count 应={len(case_irs)}+1哨兵={len(case_irs)+1})\n"
-            f"编译到此结束；上机验证由独立 ist_verify 流程触发。")
+            f"编译到此结束；上机验证由独立 ist-verify 流程触发。")

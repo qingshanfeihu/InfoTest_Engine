@@ -126,7 +126,9 @@ def test_footer_thinking_line_live_download_tokens():
     """思考/回答期 ↓ 用**实时** _output_token_count（不是等 usage 上报、响应结束才有的会话累计）。
     当前格式各相位都带 ↑本轮增量 · ↓实时下载 两箭头。"""
     line = _busy_thinking_line(llm_phase="thinking", output_token_count=1234, output_tokens=0)
-    assert "↓ 1.2k tokens" in line                  # 实时下载计数（思考期也增长）
+    # 口径统一(2026-07-03):↓ 恒显本轮累计,当次调用实时估算以 (+N) 并列——
+    # 同一显示位不再随相位切换含义(旧版 thinking 显当次、等待显累计,被读成"不同步")。
+    assert "↓ 0(+1.2k) tokens" in line              # 累计 0 + 当次实时 1.2k
     assert "深度思考中" in line
     # input 相位：↑本轮增量 · ↓ 两箭头（不再是单箭头 "↑ 2.0k tokens"）
     line2 = _busy_thinking_line(llm_phase="input", input_tokens=2000)

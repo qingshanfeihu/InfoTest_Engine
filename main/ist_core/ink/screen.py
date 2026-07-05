@@ -383,19 +383,30 @@ def diff_screens(prev: Screen, curr: Screen, style_pool: StylePool, char_pool: C
                 continue
             
             span_start = x
+            # 宽字符对齐防御:span 起点落在 spacer(宽字符右半格)上时左扩一格带上头格——
+            # 光标定位到宽字符右半开写,终端会把整个宽字符擦成半字/空格,物理与网格模型
+            # 从此失同步且增量 diff 永不重写头格(残影钉死,V轮乱码取证的"�"形态)。
+            # 左扩后整字重写,物理与模型逐格一致。
+            if span_start > 0 and (curr_row[span_start].width == CELL_SPACER
+                                   or prev_row[span_start].width == CELL_SPACER):
+                span_start -= 1
+                x = span_start
             buf: list[str] = []
             last_style_id = style_pool.none
+            first_cell = True
             while x < width:
                 pc2 = prev_row[x]
                 cc2 = curr_row[x]
-                if pc2.char_id == cc2.char_id and pc2.style_id == cc2.style_id and pc2.hyperlink_id == cc2.hyperlink_id:
+                if (not first_cell and pc2.char_id == cc2.char_id
+                        and pc2.style_id == cc2.style_id and pc2.hyperlink_id == cc2.hyperlink_id):
                     break
+                first_cell = False
                 transition = style_pool.transition(last_style_id, cc2.style_id)
                 buf.append(transition)
                 buf.append(char_pool.get(cc2.char_id))
                 last_style_id = cc2.style_id
                 x += 1
-            
+
             if last_style_id != style_pool.none:
                 buf.append("\x1b[0m")
             ops.append(DiffOp(x=span_start, y=y, content="".join(buf)))

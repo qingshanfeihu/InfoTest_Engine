@@ -279,7 +279,18 @@ class InkApp:
             apply_selection_overlay(self._curr_screen, self.selection, self._style_pool)
 
 
+        # 周期性自愈:diff 增量渲染假设「屏幕模型 == 物理终端」,但两类污染会打破它且
+        # 增量路径永远修不回来——① CJK 宽字符在 span 边界/行尾的终端差异处理(残半字、
+        # wrap 污染下一行);② 任何绕过渲染器直写 stdout 的字节(子线程日志/异常)。
+        # 实证(2026-07-04 V轮):中文重度界面 + footer/busy 行 token 数字 300ms 级高频
+        # 微更新,叠影/散落数字/断字持续累积到不可读。距上次全量重绘超过阈值时,本帧
+        # 改走 render_full(逐格重写含空格、DEC 2026 原子包帧,无 erase 空白相不闪)——
+        # 残影存活期被压到阈值内,自愈不依赖用户 Ctrl+L。
+        now = time.time()
+        if not full and now - getattr(self, "_last_full_paint", 0.0) >= 2.0:
+            full = True
         if full:
+            self._last_full_paint = now
             ansi = render_full(self._curr_screen, self._style_pool, self._char_pool)
         else:
             ansi = render_frame(self._prev_screen, self._curr_screen, self._style_pool, self._char_pool)

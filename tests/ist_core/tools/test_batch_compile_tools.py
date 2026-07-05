@@ -264,7 +264,7 @@ def test_run_batch_deliver_fail_errors(tmp_path, _patch_client):
 
 
 # ── dev_run_batch_digest：整份上机 + 逐 case 四层归因 + 明细落 workspace ──────────
-# 提炼自 ist_verify 确定性核（首跑→拆逐case→四层归因），给 bare main 一键可调：大结果在
+# 提炼自 ist-verify 确定性核（首跑→拆逐case→四层归因），给 bare main 一键可调：大结果在
 # **进程内**消化，agent 只拿几 KB 分类摘要（不被 offload），深挖再 fs_read/grep 明细文件。
 # 测试用 mock dev_run_batch.func 隔离 digest 的 value-add（分类/计数/落盘/精简返回），不碰真设备。
 
@@ -407,3 +407,518 @@ def test_digest_cross_run_repeat_and_transient_recur(tmp_path, monkeypatch):
     data2 = json.loads((outd / "last_run.json").read_text(encoding="utf-8"))
     sig_rec = next(r for r in data2 if r["autoid"] == "R_sig")
     assert sig_rec.get("_repeat_fail_same_signature") is True
+
+
+# ---------------------------------------------------------------------------
+# grade 凭证机械门(autoids 路径):合并前每 case 必须在当前 case.xlsx 上实跑过
+# grade(compile_score 落盘 score.json)。2026-07-02 实证 34-case 零 grade 直接
+# 合并交付——prompt 层约束在长上下文下会被遗忘,此门确定性强制。
+# ---------------------------------------------------------------------------
+
+def _emit_gate_case(autoid: str) -> str:
+    """用 compile_emit 落一个最小合法 case 到 outputs/<autoid>/,返回 xlsx 路径。"""
+    from main.ist_core.tools.device import compile_emit
+    steps = [
+        {"E": "APV_0", "F": "cmd_config", "G": "show version", "desc": "观测版本"},
+        {"E": "check_point", "F": "found", "G": "Version", "desc": "有版本回显"},
+    ]
+    out = compile_emit.invoke({
+        "autoid": autoid, "steps_json": json.dumps(steps, ensure_ascii=False),
+        "out_name": autoid,
+    })
+    assert "已产出" in out, f"前置 emit 失败: {out}"
+    from pathlib import Path
+    return str(Path("workspace/outputs") / autoid / "case.xlsx")
+
+
+def test_merged_autoids_credential_gate_dual_mode(monkeypatch):
+    """凭证门双模式(V4 步骤1,2026-07-04 凭证换源)。
+
+    新主路:emit 过全部机械门即自动落 lint 凭证(source=lint)→ 合并放行——实证依据
+    942 对时点配对:grade verdict 判别力 3pp(PASS 56% vs CUT 53%),LLM 审 LLM 不构成
+    质量门,质量=机械 lint+上机 oracle。IST_GRADE_MAINPATH=1 恢复旧行为:lint 凭证
+    不算 grade 实跑,按"从未 grade"拒。
+    """
+    import shutil
+    from pathlib import Path
+    aid = "PYTEST_GATE_NOGRADE"
+    try:
+        _emit_gate_case(aid)
+        # 新主路:lint 凭证放行
+        out = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
+                                          "out_name": "_pytest_gate_merged"})
+        assert "已合并" in out, out
+        # 旧模式:只认 grade 实跑凭证
+        monkeypatch.setenv("IST_GRADE_MAINPATH", "1")
+        out2 = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
+                                           "out_name": "_pytest_gate_merged"})
+        assert "grade 凭证门" in out2 and aid in out2 and "从未 grade" in out2
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(Path("workspace/outputs") / "_pytest_gate_merged", ignore_errors=True)
+
+
+def test_merged_autoids_rejects_stale_grade_credential():
+    import os
+    import shutil
+    from pathlib import Path
+    aid = "PYTEST_GATE_STALE"
+    try:
+        xp = Path(_emit_gate_case(aid))
+        sj = xp.parent / ".grade_credential.json"
+        # 签名指向旧 mtime(重编后没重新 grade);文件 mtime 再新也冒充不了
+        sj.write_text(json.dumps({"overall": 0.8, "abstain": False,
+                                  "xlsx_mtime": xp.stat().st_mtime - 100}), encoding="utf-8")
+        out = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
+                                          "out_name": "_pytest_gate_merged"})
+        assert "grade 凭证门" in out and "重编后未重新 grade" in out
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(Path("workspace/outputs") / "_pytest_gate_merged", ignore_errors=True)
+
+
+def test_merged_autoids_passes_with_fresh_grade_credential():
+    import os
+    import shutil
+    from pathlib import Path
+    aid = "PYTEST_GATE_OK"
+    try:
+        xp = Path(_emit_gate_case(aid))
+        sj = xp.parent / ".grade_credential.json"
+        # 有效凭证:签名精确等于当前 xlsx mtime(只有 compile_score 工具落盘能拿到)
+        sj.write_text(json.dumps({"overall": 0.8, "abstain": False,
+                                  "xlsx_mtime": xp.stat().st_mtime}), encoding="utf-8")
+        out = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
+                                          "out_name": "_pytest_gate_merged"})
+        assert "grade 凭证门" not in out
+        assert "已合并 1 个真 case + 1 哨兵" in out
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(Path("workspace/outputs") / "_pytest_gate_merged", ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# steps_json 解析失败的可自诊报错:回显收到参数首尾(供应商拖尾可见)+ 连败升级指引
+# ---------------------------------------------------------------------------
+
+def test_emit_parse_error_echoes_param_and_escalates_on_streak():
+    from main.ist_core.tools.device import compile_emit
+    from main.ist_core.tools.device.emit_xlsx_tool import _emit_fail_streak_clear
+    aid = "PYTEST_STREAK_CASE"
+    _emit_fail_streak_clear(aid)
+    bad = '[{"E":"APV_0","F":"cmd_config","G":"show version"}]trailing-garbage'
+    try:
+        outs = [compile_emit.invoke({"autoid": aid, "steps_json": bad, "out_name": aid})
+                for _ in range(3)]
+        # 回显:首段片段可见,含实际长度
+        assert "实际收到的参数" in outs[0] and "trailing-garbage" in outs[0]
+        # 前两次不带升级指引,第三次起带
+        assert "连续" not in outs[0] and "连续 3 次" in outs[2]
+        assert "停止重试" in outs[2]
+        # 成功一次即清零
+        good = '[{"E":"APV_0","F":"cmd_config","G":"show version","desc":"观测"},' \
+               '{"E":"check_point","F":"found","G":"Version","desc":"回显"}]'
+        ok = compile_emit.invoke({"autoid": aid, "steps_json": good, "out_name": aid})
+        assert "已产出" in ok
+        out_again = compile_emit.invoke({"autoid": aid, "steps_json": bad, "out_name": aid})
+        assert "连续" not in out_again  # streak 已清零,重新从 1 计
+    finally:
+        import shutil
+        from pathlib import Path
+        _emit_fail_streak_clear(aid)
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# steps 载荷三通道(P0 结构化):原生数组 / workspace 文件 / 字符串兼容
+# ---------------------------------------------------------------------------
+
+_GATE_STEPS = [
+    {"E": "APV_0", "F": "cmd_config", "G": "show version", "desc": "观测版本"},
+    {"E": "check_point", "F": "found", "G": "Version", "desc": "有版本回显"},
+]
+
+
+def test_emit_native_steps_array():
+    from main.ist_core.tools.device import compile_emit
+    import shutil
+    from pathlib import Path
+    aid = "PYTEST_CH_ARRAY"
+    try:
+        out = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
+        assert "已产出" in out
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+
+
+def test_emit_steps_array_stringified_still_accepted():
+    from main.ist_core.tools.device import compile_emit
+    import shutil
+    from pathlib import Path
+    aid = "PYTEST_CH_STRARR"
+    try:
+        out = compile_emit.invoke({"autoid": aid, "steps": json.dumps(_GATE_STEPS),
+                                   "out_name": aid})
+        assert "已产出" in out
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+
+
+def test_emit_steps_path_channel_and_sandbox():
+    from main.ist_core.tools.device import compile_emit
+    import shutil
+    from pathlib import Path
+    aid = "PYTEST_CH_PATH"
+    tmp = Path("workspace/tmp"); tmp.mkdir(parents=True, exist_ok=True)
+    f = tmp / "steps_pytest_ch.json"
+    try:
+        f.write_text(json.dumps(_GATE_STEPS), encoding="utf-8")
+        out = compile_emit.invoke({"autoid": aid, "steps_path": str(f), "out_name": aid})
+        assert "已产出" in out
+        # workspace 外路径拒绝
+        out2 = compile_emit.invoke({"autoid": aid, "steps_path": "/etc/hosts", "out_name": aid})
+        assert "必须在 workspace/ 内" in out2
+    finally:
+        f.unlink(missing_ok=True)
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+
+
+def test_emit_parse_error_suggests_channel_switch():
+    from main.ist_core.tools.device import compile_emit
+    from main.ist_core.tools.device.emit_xlsx_tool import _emit_fail_streak_clear
+    aid = "PYTEST_CH_SUGGEST"
+    _emit_fail_streak_clear(aid)
+    bad = json.dumps(_GATE_STEPS) + "push"
+    try:
+        compile_emit.invoke({"autoid": aid, "steps_json": bad, "out_name": aid})
+        out2 = compile_emit.invoke({"autoid": aid, "steps_json": bad, "out_name": aid})
+        assert "换通道" in out2 and "steps_path" in out2
+    finally:
+        _emit_fail_streak_clear(aid)
+
+
+# ---------------------------------------------------------------------------
+# P0 结构化:批量工具入参双收 + autoid 对 xlsx 全集校验
+# ---------------------------------------------------------------------------
+
+def test_coerce_json_array_dual_channel():
+    from main.ist_core.tools.device.batch_tools import _coerce_json_array
+    assert _coerce_json_array(["a", "b"], "x") == (["a", "b"], None)
+    assert _coerce_json_array('["a","b"]', "x") == (["a", "b"], None)
+    assert _coerce_json_array("", "x") == ([], None)
+    arr, err = _coerce_json_array('["a"]push', "x")
+    assert arr is None and "原生数组" in err
+
+
+def test_dev_run_batch_rejects_autoid_not_in_xlsx():
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import dev_run_batch
+    from main.ist_core.tools.device.batch_tools import _xlsx_real_autoids
+    aid = "203031750000000001"  # 合法形态的 18 位
+    try:
+        from main.ist_core.tools.device import compile_emit
+        out = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
+        assert "已产出" in out
+        xp = f"workspace/outputs/{aid}/case.xlsx"
+        assert _xlsx_real_autoids(xp) == [aid]
+        # 手抄截断 id → 显式拒绝(不静默误匹配)
+        res = dev_run_batch.invoke({"xlsx_path": xp, "autoids_json": ["778012"]})
+        assert "不在该 xlsx 数据区" in res and "778012" in res
+        # 原生数组直收:卷内 id 通过校验(会走到后续 config/设备段,不因参数被拒)
+        res2 = dev_run_batch.invoke({"xlsx_path": xp, "autoids_json": '["778012"]'})
+        assert "不在该 xlsx 数据区" in res2  # 字符串通道同样校验
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# P1 结构化:submit_verdict 工具(grade 交付)+ 合并门认凭证判定
+# ---------------------------------------------------------------------------
+
+def test_submit_verdict_validation_and_credential():
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import submit_verdict, compile_emit
+    aid = "203031750000000101"  # 18位合法形态(submit_verdict 校验位数)
+    try:
+        compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
+        # 校验:verdict 枚举、CUT 必须给 root_cause
+        assert "error" in submit_verdict.invoke({"autoid": aid, "verdict": "MAYBE"})
+        assert "root_cause" in submit_verdict.invoke({"autoid": aid, "verdict": "CUT"})
+        out = submit_verdict.invoke({
+            "autoid": aid, "verdict": "PASS",
+            "caveats": ["英文错误回显需第一发核对"],
+            "report_md": "# 审批报告\n断言覆盖到位。"})
+        assert "已提交判定" in out
+        cred = json.loads((Path("workspace/outputs") / aid / ".grade_credential.json")
+                          .read_text(encoding="utf-8"))
+        assert cred["verdict"] == "PASS" and cred["caveats"] and "xlsx_mtime" in cred
+        assert (Path("workspace/outputs") / aid / "grade_report.md").is_file()
+        # 凭证签名有效 → 合并门放行
+        merged = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
+                                             "out_name": "_pytest_sv_merged"})
+        assert "grade 凭证门" not in merged and "已合并 1 个真 case" in merged
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(Path("workspace/outputs") / "_pytest_sv_merged", ignore_errors=True)
+
+
+def test_merged_rejects_cut_verdict_credential():
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import submit_verdict, compile_emit
+    aid = "203031750000000102"  # 18位合法形态
+    try:
+        compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
+        submit_verdict.invoke({"autoid": aid, "verdict": "CUT", "root_cause": "可修复",
+                               "report_md": "断言太弱,重做。"})
+        merged = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
+                                             "out_name": "_pytest_sv_merged"})
+        assert "grade 凭证门" in merged and "判定为 CUT" in merged and aid in merged
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(Path("workspace/outputs") / "_pytest_sv_merged", ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# P1/P2 结构化:submit_attribution 落盘 + last_run merge/round + 瞬态护栏复活
+# ---------------------------------------------------------------------------
+
+def test_submit_attribution_evidence_gate_and_writeback(tmp_path, monkeypatch):
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import submit_attribution, compile_emit
+    aid = "203031750000000002"
+    try:
+        compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
+        outd = Path("workspace/outputs") / aid
+        lr = outd / "last_run.json"
+        lr.write_text(json.dumps([{
+            "autoid": aid, "verdict": "fail", "_round": 2,
+            "causality": "#### Fail Num 1: fail to find: \\b1\\.2\\.3\\.4\\b in:",
+            "device_context": "ssh connection timed out while dialing jumphost",
+        }], ensure_ascii=False), encoding="utf-8")
+        xp = str(outd / "case.xlsx")
+        # evidence 非原文子串 → 拒
+        r1 = submit_attribution.invoke({
+            "xlsx_path": xp, "autoid": aid, "layer": "transient",
+            "disposition": "env_blocked", "evidence": "连接超时了(转述)"})
+        assert "原文" in r1 and "error" in r1
+        # 原文子串 → 落盘
+        r2 = submit_attribution.invoke({
+            "xlsx_path": xp, "autoid": aid, "layer": "transient",
+            "disposition": "env_blocked",
+            "evidence": "ssh connection timed out",
+            "fix_direction": "等环境恢复后原样复跑"})
+        assert "归因已落盘" in r2
+        rec = json.loads(lr.read_text(encoding="utf-8"))[0]
+        assert rec["_attribution"]["layer"] == "transient"
+        assert rec["_attribution"]["round"] == 2
+        # defect_candidate 必填字段校验
+        r3 = submit_attribution.invoke({
+            "xlsx_path": xp, "autoid": aid, "layer": "product_defect",
+            "disposition": "defect_candidate",
+            "evidence": "ssh connection timed out",
+            "defect_candidate": {"repro": "x"}})
+        assert "缺必填字段" in r3
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+
+
+def test_digest_merge_keeps_other_rounds_and_revives_transient_guard(monkeypatch):
+    """merge 写盘不丢上一轮记录;上轮 _attribution.layer=transient 本轮复现 → 护栏点名。"""
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import compile_emit, dev_run_batch_digest
+    from main.ist_core.tools.device import batch_tools
+    aid = "203031750000000003"
+    other = "203031750000000099"   # 上一轮跑过、本轮不在结果里的 case
+    try:
+        compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
+        outd = Path("workspace/outputs") / aid
+        lr = outd / "last_run.json"
+        lr.write_text(json.dumps([
+            {"autoid": aid, "verdict": "fail", "_round": 1,
+             "causality": "#### Fail Num 1: fail to find: PATTERN_X in:",
+             "device_context": "dig said NXDOMAIN",
+             "_attribution": {"layer": "transient", "disposition": "env_blocked"}},
+            {"autoid": other, "verdict": "pass", "_round": 1},
+        ], ensure_ascii=False), encoding="utf-8")
+        round2 = [{"autoid": aid, "verdict": "fail",
+                   "causality": "#### Fail Num 1: fail to find: PATTERN_X in:",
+                   "device_context": "dig said NXDOMAIN again"}]
+        monkeypatch.setattr(batch_tools.dev_run_batch, "func",
+                            lambda *a, **k: json.dumps(round2, ensure_ascii=False))
+        out = dev_run_batch_digest.invoke({"xlsx_path": str(outd / "case.xlsx"),
+                                           "autoids_json": [aid]})
+        assert "上轮归\"瞬态\"本轮复现" in out and aid in out       # 护栏复活(读 _attribution)
+        data = {r["autoid"]: r for r in json.loads(lr.read_text(encoding="utf-8"))}
+        assert other in data and data[other]["_round"] == 1        # merge 不丢别的记录
+        assert data[aid]["_round"] == 2                            # round 自增
+        assert data[aid]["_fail_signatures"]                       # 签名落盘
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# P2 结构化:欠定台账落盘 + user_decision 落地门(形态/顺序锚机械核对)
+# ---------------------------------------------------------------------------
+
+def test_needs_decision_ledger_written_on_underdetermined():
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import compile_check_verifiability
+    aid = "PYTEST_ND_LEDGER"
+    try:
+        out = compile_check_verifiability.invoke({
+            "autoid": aid, "algo": "rr", "n_requests": 1, "n_pools": 3,
+            "claim_kind": "new_member_last"})
+        assert "NEEDS_USER_DECISION" in out
+        nd = json.loads((Path("workspace/outputs") / aid / "needs_decision.json")
+                        .read_text(encoding="utf-8"))
+        c = next(x for x in nd["claims"] if x["claim_kind"] == "new_member_last")
+        assert c["ordering_sensitive"] is True and c.get("min_requests")
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+
+
+def test_user_decision_gate_blocks_form_and_ordering_downgrade():
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import compile_emit
+    aid = "PYTEST_UD_GATE"
+    outd = Path("workspace/outputs") / aid
+    try:
+        outd.mkdir(parents=True, exist_ok=True)
+        (outd / "user_decision.json").write_text(json.dumps({
+            "decision": "改过程", "expected_assertion_form": "dist",
+            "claim_kinds_preserved": ["new_member_last"]}), encoding="utf-8")
+        # 形态违约:用户选 dist,产物只有普通 found → 拒
+        r1 = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
+        assert "违反用户决策" in r1 and "dist" in r1
+        # 形态对但缺顺序锚(new_member_last 只有 present=true 的 member)→ 拒
+        steps2 = [
+            {"E": "APV_0", "F": "cmd_config", "G": "show version", "desc": "观测"},
+            {"E": "check_point", "F": "dist",
+             "dist": {"total": 6, "buckets": [
+                 {"pattern": "p1", "expect": 2, "tolerance": 1},
+                 {"pattern": "p2", "expect": 2, "tolerance": 1},
+                 {"pattern": "p3", "expect": 2, "tolerance": 1}]},
+             "desc": "分布区间"},
+            {"E": "check_point", "F": "member",
+             "member": {"ips": ["172.16.35.213"], "present": True}, "desc": "命中新增池"},
+        ]
+        r2 = compile_emit.invoke({"autoid": aid, "steps": steps2, "out_name": aid})
+        assert "顺序锚" in r2
+        # 完整:not_found 段接 found 段 → 过 user_decision 门(后续结构门另说)
+        steps3 = steps2[:2] + [
+            {"E": "check_point", "F": "member",
+             "member": {"ips": ["172.16.35.213"], "present": False}, "desc": "覆盖原池一轮未命中新增"},
+            {"E": "APV_0", "F": "cmd_config", "G": "show version", "desc": "再观测"},
+            {"E": "check_point", "F": "member",
+             "member": {"ips": ["172.16.35.213"], "present": True}, "desc": "此后命中新增"},
+        ]
+        r3 = compile_emit.invoke({"autoid": aid, "steps": steps3, "out_name": aid})
+        assert "违反用户决策" not in r3 and "顺序锚" not in r3
+    finally:
+        shutil.rmtree(outd, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# P3 结构化:冻结闸门(digest 落 .frozen.json → emit 要求 override_frozen_reason)
+# ---------------------------------------------------------------------------
+
+def test_frozen_gate_requires_override_reason():
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import compile_emit
+    aid = "PYTEST_FROZEN"
+    outd = Path("workspace/outputs") / aid
+    try:
+        outd.mkdir(parents=True, exist_ok=True)
+        (outd / ".frozen.json").write_text(json.dumps({
+            "reason": "连续两轮同签名 fail(同法已证无效)",
+            "signatures": ["fail to find: PATTERN_X"]}), encoding="utf-8")
+        r1 = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
+        assert "已被上机跨轮对照冻结" in r1 and "override_frozen_reason" in r1
+        r2 = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid,
+                                  "override_frozen_reason": "断言从写死计数改为分布区间"})
+        assert "已产出" in r2
+        fz = json.loads((outd / ".frozen.json").read_text(encoding="utf-8"))
+        assert fz["overrides"][0]["reason"].startswith("断言从写死")
+    finally:
+        shutil.rmtree(outd, ignore_errors=True)
+
+
+def test_digest_repeat_fail_writes_frozen_marker(monkeypatch):
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import compile_emit, dev_run_batch_digest
+    from main.ist_core.tools.device import batch_tools
+    aid = "203031750000000004"
+    try:
+        compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
+        outd = Path("workspace/outputs") / aid
+        (outd / "last_run.json").write_text(json.dumps([
+            {"autoid": aid, "verdict": "fail", "_round": 1,
+             "causality": "#### Fail Num 1: fail to find: PATTERN_Y in:",
+             "device_context": "x"}]), encoding="utf-8")
+        round2 = [{"autoid": aid, "verdict": "fail",
+                   "causality": "#### Fail Num 1: fail to find: PATTERN_Y in:",
+                   "device_context": "x"}]
+        monkeypatch.setattr(batch_tools.dev_run_batch, "func",
+                            lambda *a, **k: json.dumps(round2, ensure_ascii=False))
+        out = dev_run_batch_digest.invoke({"xlsx_path": str(outd / "case.xlsx"),
+                                           "autoids_json": [aid]})
+        assert "冻结同法重编" in out
+        assert (outd / ".frozen.json").is_file()
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+
+
+def test_user_decision_gate_ordering_by_ledger_flag():
+    """自创 kind(非 new_member_last)+台账 ordering_sensitive=true → 门同样要求顺序锚。"""
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import compile_emit
+    aid = "PYTEST_UD_LEDGER"
+    outd = Path("workspace/outputs") / aid
+    try:
+        outd.mkdir(parents=True, exist_ok=True)
+        (outd / "user_decision.json").write_text(json.dumps({
+            "decision": "改过程", "expected_assertion_form": "dist",
+            "claim_kinds_preserved": ["rotation_order_after_delete"]}), encoding="utf-8")
+        (outd / "needs_decision.json").write_text(json.dumps({
+            "autoid": aid, "claims": [
+                {"claim_kind": "rotation_order_after_delete", "ordering_sensitive": True}]}),
+            encoding="utf-8")
+        steps = [
+            {"E": "APV_0", "F": "cmd_config", "G": "show version", "desc": "观测"},
+            {"E": "check_point", "F": "dist",
+             "dist": {"total": 6, "buckets": [
+                 {"pattern": "p1", "expect": 3, "tolerance": 1},
+                 {"pattern": "p3", "expect": 3, "tolerance": 1}]}, "desc": "分布"},
+        ]
+        out = compile_emit.invoke({"autoid": aid, "steps": steps, "out_name": aid})
+        assert "顺序锚" in out   # 旧版只认 new_member_last 会放行,新版按台账布尔拦
+    finally:
+        shutil.rmtree(outd, ignore_errors=True)
+
+
+def test_emit_provenance_trailing_garbage_salvaged():
+    """provenance_json 尾部拖尾(JSON 本体合法)→ 前缀抢救继续 emit,不报废。"""
+    import shutil
+    from pathlib import Path
+    from main.ist_core.tools.device import compile_emit
+    aid = "PYTEST_PROV_TAIL"
+    prov = json.dumps({"autoid": aid, "provisional": True, "steps": [
+        {"layer": "G", "source": {"kind": "manual", "ref": "x:1"}},
+        {"layer": "V", "source": {"kind": "manual", "ref": "x:2"}}]}) + "push"
+    try:
+        out = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS,
+                                   "out_name": aid, "provenance_json": prov})
+        assert "已产出" in out and "provenance_json 解析失败" not in out
+        assert (Path("workspace/outputs") / aid / "case.provenance.json").is_file()
+    finally:
+        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)

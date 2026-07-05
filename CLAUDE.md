@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 InfoTest Engine 把技术文档（网络 / IPv6 / HTTP/2 / 网关配置指南等）和测试用例（xlsx）转成 markdown 落地，让 IST-Core agent 用 `fs_read` / `fs_grep` / `fs_ls` / `fs_write` / `fs_edit` 直读直写，配合可切换的 LLM provider（默认走 `OPENAI_*` 通用兼容端点，示例小米 MiMo `mimo-v2.5-pro`；可切 DeepSeek 原生端点）提供测试评审、用例编译与上机验证能力。
 
-**架构原则**：`knowledge/data/orgin/` 经 KMS 分桶后转 markdown 直出；知识消费靠 agent 直读 + Footprint 已验证 CLI 事实树；用例编译走确定性 `compile_*` 工具链，与上机验证（`ist_verify`）解耦。
+**架构原则**：`knowledge/data/orgin/` 经 KMS 分桶后转 markdown 直出；知识消费靠 agent 直读 + Footprint 已验证 CLI 事实树；用例编译走确定性 `compile_*` 工具链，与上机验证（`ist-verify`）解耦。
 
 ## 常用命令
 
@@ -36,13 +36,15 @@ infotest                                       # Textual 终端 TUI（默认）
 infotest --server                              # Web Terminal（ink，默认 :8080；PID 见 .web_server.pid）
 langgraph dev --no-browser --port 2024         # 可选：LangGraph dev server（Studio/debug）
 
-# E2E 评审回归（cookie 121100 套件，约 3-6 min）
-.venv/bin/python -m scripts.debug.e2e_cookie_review_v2 --tag <fix_name>
+# 回归（venv 在 ~/.venvs/infotest-engine,不在仓库内）
+~/.venvs/infotest-engine/bin/python -m pytest tests/ -q        # 全量(含 stub-LLM 链路 e2e + prompt 结构门 + skill 标准包门)
+# 旧文档提过 scripts.debug.e2e_cookie_review_v2——该脚本从未入 git 已丢失,勿引用;
+# prompt/编排改动的行为验证走 34-case 编译对照轮(cmux 实跑)。
 ```
 
 ## TUI 验证（优先用 cmux skill 直接抓屏，勿走后台）
 
-改了 ink/Textual TUI（`main/ist_core/ink/` / `tui/`）后，**优先用 cmux skill 直接读终端 pane 验证**：`cmux read-screen --surface <id>` 实时抓屏，`cmux send` / `cmux send-key` 驱动输入。**不要用后台命令轮询抓屏**——不可靠、易看漏/看错。重启 infotest 若用 `kill`，先 `printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l'; stty sane; clear` 清鼠标跟踪；更稳的是 Ctrl-C + Ctrl-D 干净退出。编译 fork 步骤明细全量写 `runtime/logs/compile_evidence.live.log`（fastlog），`tail -f` 看过程，TUI 内只摘要不刷高频明细。
+改了 ink/Textual TUI（`main/ist_core/ink/` / `tui/`）后，**优先用 cmux skill 直接读终端 pane 验证**：`cmux read-screen --surface <id>` 实时抓屏，`cmux send` / `cmux send-key` 驱动输入。**不要用后台命令轮询抓屏**——不可靠、易看漏/看错。重启 infotest 若用 `kill`，先 `printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l'; stty sane; clear` 清鼠标跟踪；更稳的是 Ctrl-C + Ctrl-D 干净退出。编译 fork 步骤明细全量写 `runtime/logs/compile_evidence.<pid>.live.log`（fastlog，按 TUI 进程 PID 命名，用 `ls -t runtime/logs/compile_evidence.*.live.log | head -1` 找当前的），`tail -f` 看过程，TUI 内只摘要不刷高频明细。
 
 ## 关键架构决策
 
@@ -77,10 +79,12 @@ main/ist_core/tools/
   deepagent/     — 通用文件/执行原语：fs_ls / fs_glob / fs_grep / fs_read / fs_write / fs_edit / run_python / run_shell
   device/        — 设备/跳板机：dev_ssh / dev_rest / dev_probe / dev_run_case / dev_run_batch
                    编译链：compile_pipeline / compile_prep / compile_fanout / compile_emit / compile_emit_merged
-                          / compile_precedent / compile_score / compile_attribute / compile_runtime_slots / compile_runtime_fill
-  knowledge/     — kb_footprint / kb_bug_search
+                          / compile_precedent / compile_score / compile_check_verifiability / compile_grade_extract
+                          / submit_verdict / submit_attribution
+                          / compile_attribute / compile_runtime_slots / compile_runtime_fill
+  knowledge/     — kb_footprint / kb_bug_search / kb_memory_search（长期记忆 BM25 拉式检索）
   ask_user/      — ask_user
-  skills/        — invoke_skill
+  skills/        — invoke_skill / agent_define（动态生成 dyn-* 子 agent）
   memory_tool.py — remember
   _shared/       — metadata / env_facts / ablation
 ```
@@ -92,10 +96,11 @@ main/ist_core/tools/
 | Skill | 类型 | 用途 |
 |-------|------|------|
 | `test-list-review` | user-invocable | 测试用例/策略评审（主入口） |
-| `ist_compile` | inline | 脑图 → case.xlsx 编译编排（调 `compile_pipeline`） |
-| `ist_compile_draft` | fork | 编译子流程：先例检索 + emit 草稿 |
-| `ist_compile_grade` | fork | 编译子流程：断言质量审批 |
-| `ist_verify` | user-invocable | 成品 excel 上机验证 + 归因 |
+| `ist-compile` | inline | 脑图 → case.xlsx 编译编排（v5 main-orchestrated；`compile_pipeline` 为 fallback） |
+| `compile-worker` | fork | 编译子流程：单 case 自由理解编写（main-orchestrated 主路 worker） |
+| `ist-compile-draft` | fork | 编译子流程：先例检索 + emit 草稿（pipeline fallback 路径） |
+| `ist-compile-grade` | fork | 编译子流程：断言质量审批 |
+| `ist-verify` | user-invocable | 成品 excel 上机验证 + 归因 |
 | `device-verify` | user-invocable | 设备 SSH 只读/配置验证 |
 | `config-automation` | inline | 示例 IP → 环境真实 IP 替换 |
 | `config-answer` | inline | 配置问答 |
@@ -103,6 +108,8 @@ main/ist_core/tools/
 | `escalate-when-stuck` | inline | 连续失败上报 |
 
 user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
+
+**资产封装标准**（2026-07-05 对标官方 Agent Skills 规范收口，全景见 `docs/AUDIT_skill_standard_alignment.md`）：skill 名一律小写连字符（旧下划线名经 `loader.resolve_skill_dirname` 别名互通，TUI slash 本就互通）；SKILL.md frontmatter 必带 name/description/context（fork 另带 agent），user-invocable 必带 when_to_use；agent 定义（`agents/*.md`）统一 `<role>→<task>→<rules>` XML 骨架（rules 收尾紧邻 brief），frontmatter 必带 tools 白名单；主 agent 系统提示五块 XML（`<role>/<rules>/<workflow>/<tool_guidance>/<env>`，`_prompt.py`）。机器门：`tests/ist_core/skills/test_skill_package_standard.py` + `tests/ist_core/agents/test_prompt_structure.py`（承重锚点保真）。**工具渐进披露**（`middleware/tool_gating.py`，`IST_TOOL_GATING_ENABLED=1` 开，默认关待对照轮翻默认）：基础组常驻，compile_*/submit_*/dev_* 按 invoke_skill 映射或既有使用激活，未知 skill fail-open——基础模式常驻工具 schema 67k→26k 字符。**动态子 agent**：`agent_define` 工具按同一骨架生成 `dyn-*` fork agent（tools ⊆ 注册表、inherit-parent-prompt 强制、runtime/ 落盘仅此一条有闸路径），invoke_skill 单发 / `compile_fanout(skill="dyn-…", briefs_path=…)` 批量派发。
 
 ### skill/agent prompt 编写红线
 
@@ -137,22 +144,33 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 - `main/function_llm.py` — DashScope chat_completion（kms_classifier + memory dream consolidate 用）
 - `main/langchain_env.py` — `environment` 文件 dotenv loader
 
-## 用例编译（`main/case_compiler/` + `ist_compile_*` skill）
+## 用例编译（`main/case_compiler/` + 编译链 skill）
 
-把人工测试用例（脑图）编译成断言真覆盖目标行为的 `case.xlsx`。**走平台正路**：用户在 TUI 让 main agent 编译，main agent 作为编排器派发子流程。**编译入口为 `ist_compile`**：对每个脑图只调一次 `compile_pipeline`（单条是 N=1 特例）。**编译与上机验证解耦**：编译只产出 excel；上机走 `ist_verify`。
+把人工测试用例（脑图）编译成断言真覆盖目标行为的 `case.xlsx`。**走平台正路**：用户在 TUI 让 main agent 编译，main agent 作为编排器派发子流程。**编译入口为 `ist-compile`（v5 起 main-orchestrated）**：main agent 自己当 orchestrator——`compile_prep` 解析脑图→manifest → 逐 case 派 `compile-worker` fork 编写（可批内并发；emit 过全部机械门即落结构凭证）→ 机械探针+抽查核验（`compile_grade_extract`；**不逐 case 派 grade**，见下方「交付门槛」换源条）→ `compile_emit_merged` 合并打包。`compile_pipeline` 保留作 fallback（单条是 N=1 特例）。**编译与上机验证解耦**：编译只产出 excel；上机走 `ist-verify`（唯一语义 oracle）。
 
-- **统一编排** `ist_compile`：main agent 对每个脑图调一次 `compile_pipeline`——`compile_prep` 解析脑图→manifest → 每 case 独立流水线（draft → grade → CUT 重做 ≤3 轮，N case 并发）→ `compile_emit_merged` 合并打包。主 agent **不自己拆步调 prep/fanout/merge**。
-- **两个 fork 子流程**（彼此隔离，消除自生成自评估）：
-  - `ist_compile_draft`：核查前置 → `compile_precedent` 检索先例 → `compile_emit` 生成草稿。
-  - `ist_compile_grade`：`compile_score` 断言质量审批。末行机读标记 `判定：PASS|CUT`，`compile_pipeline._parse_grade_verdict` 优先认它。
+- **grade 凭证机械门**（2026-07-03，A 层强制）：`compile_emit_merged(autoids=…)` 校验每个 autoid 在**当前** case.xlsx 上实跑过 grade——`submit_verdict`/`compile_score` 落盘 `outputs/<autoid>/.grade_credential.json`（校验内容 `xlsx_mtime` 精确签名，LLM 手写文件冒充不了），缺失、过期（重编后未重新 grade）、或判定是 CUT 都拒绝合并。起因：34-case 实跑中 main agent 长上下文下把 grade 从 plan 里遗忘、零审批直接合并交付——prompt 约束再硬也只是 C 层，必派类事实要代码强制。
+- **接口结构化（2026-07-03，取证驱动）**：两轮全量运行取证结论——事故全部出在「过程事实只存在于散文里」，据此把**信封/凭证/台账/载荷**结构化、**判断/评审理由/修法方向**保持自由文本。落地：① emit 步骤载荷三通道（`steps` 原生数组首选 / `steps_path` workspace 文件 / `steps_json` 字符串兼容——字符串通道经供应商序列化实证单轮 73% 拖尾解析失败）；`IST_TOOLS_STRICT=1` 可全局开 function-calling strict。② 批量工具入参双收原生数组（`autoids_json`/`briefs_json`/`fills_json`），`dev_run_batch*` 对 autoid 做 xlsx 全集校验（治手抄截断 id 静默误匹配）。③ grade 交付走 `submit_verdict` 工具（verdict/root_cause 枚举 + caveats 落盘供 verify 消费 + report_md 自由文本）；worker 返回末两行机读尾块（`状态：/产物：`），orchestrator 以落盘文件为 produced 事实源。④ 归因结论走 `submit_attribution` 落盘 last_run.json（layer×disposition + evidence 必须原文子串），瞬态跨轮护栏读它；last_run.json 按 autoid merge + `_round`/`_fail_signatures`（不再整文件覆盖）。⑤ 欠定台账 `needs_decision.json`（含 `ordering_sensitive`）+ 用户决策 `user_decision.json`——emit 出口机械核对断言形态与顺序锚（577976 选分布产关系、593516 有序语义静默降级两类跑偏变必崩门）。⑥ 冻结闸门：digest 跨轮同签名 fail 落 `outputs/<autoid>/.frozen.json`，重编必须传 `override_frozen_reason`；`compile_fanout(evidence_from_xlsx=…)` 自动注入 device_context 原文防转述失真。
+- **编写/审批 fork**（彼此隔离，消除自生成自评估）：
+  - `compile-worker`（agent `compile-worker`，main-orchestrated 主路）：复刻 main 的自由理解逻辑、限定单 case；欠定 claim 经 `compile_check_verifiability` 证伪 → `NEEDS_USER_DECISION` 由 orchestrator 汇总一次 `ask_user`（改描述/改过程/改预期）后带决策重派。
+  - `ist-compile-draft`（pipeline fallback 路径的编写 fork）：核查前置 → `compile_precedent` 检索先例 → `compile_emit` 生成草稿。
+  - `ist-compile-grade`：第一步调 `compile_grade_extract` 探确定性信号 → 验 provenance 来源 → `compile_score` 判分 → **交付调 `submit_verdict`**（判定/根因枚举+caveats+report_md，凭证落盘）。返回末行仍带文本标记 `判定：PASS|CUT`（pipeline fallback 的 `_parse_grade_verdict` 兼容）。
 - **emit 出口结构门**（`emit_xlsx_tool` + `structural_gate`，确定性强制）：
   - **crash-gate**：带 H 的观测步不更新 `result` → 断言前须有「不带 H 的观测步」；捕获比较走 `dig(H=v1)→dig(无H)→check_point(H=v1)`。
   - **found_times 拒绝门**：框架只传 2 参，拒绝 `found_times`。
   - **found→abs_found**：check_point 引用 H 寄存器时自动转字面匹配。
   - **test_env 主机名小写**：`getattr(env, F)` 不转小写。
   - **persistence 掩码**：prefix `24` → 点分 `255.255.255.0`。
-- **独立上机验证** `ist_verify`：对成品 excel 用 `dev_run_batch_digest` 上机（跑批进度实时写 evidence fastlog）。整份 xlsx 单跑 O(N)（deliver+run 一次，超时 `clamp(max(floor, N×45s), 600, 2400)`）。`compile_runtime_fill` 回填 `<RUNTIME>` 断言。**归因（2026-07-02 收缩重写）**：机械预判只认两个协议级事实——`compile_attribute` 返回 **G(^)**（设备语法拒绝标记，上游根因、直接采信）与 `found_times` 等文件级崩溃签名（编译缺陷）；**其余一律 undetermined，device_context 原文交 LLM 归因**（E/V/瞬态/疑似产品缺陷——曾有瞬态/E/G marker 关键字表，实证误归已删，勿加回）。digest 跨轮对照机械点名「连续两轮同签名 fail=冻结同法重编」「上轮瞬态本轮复现=误归」；确定性止损跑完为先，真 PASS 写回 footprint。
-- **交付门槛是 grade 断言质量**；上机 pass 不是交付前置。连续 CUT 走 `escalate-when-stuck` / `ask_user`。
+- **成品卷 lint**（`structural_gate.lint_xlsx_case`，2026-07-04 取证驱动）：门只放 emit 编辑入口挡不住绕行——orchestrator 曾用 `run_python` 直改 case.xlsx，直改版带「dig(H)后直接断言」上机 39 秒崩整份 pytest（连续两轮）。lint 反解成品卷复用崩溃门全集，另加：autoid 18 位（截断 id 曾混进终卷成 35 case）、断言正则可编译（`[^` 曾进卷）、`+short` 与 status 类断言互斥（211027 两轮 fail 根因）、寄存器引用必先捕获、DNS 单标签 ≤63（994838 三轮 fail 根因）。挂**凭证与合并双卡点**：`submit_verdict` 违例拒落 PASS（CUT 放行并把违例并进 caveats）、`compile_score` 违例强制 decision=CUT/lint、`compile_emit_merged` 合并前逐卷再扫（最后防线，防凭证后直改）。回归：`tests/ist_core/tools/test_xlsx_lint_gates.py`。
+- **翻案需新证据**（`submit_verdict`）：同一份卷面（xlsx_mtime 未变）已有 PASS 凭证再判 CUT，意见必须含行级引用（rN/row N/行N）——34 卷收口期实证同卷 PASS↔CUT 随审查抽样漂移翻案 5 轮、无一条编译期可修，无行级新证据的翻案被工具拒绝。grade prompt 同步「意见分级」事实：上机才能回答的疑虑（回显格式/计数器行为/轮转起点）写 caveats 不构成 CUT。
+- **上机互斥**（`dev_run_batch`/`digest`，2026-07-04 取证驱动）：orchestrator 曾同 turn 连发 digest 2-3 次，设备床多 pytest 并发互踩配置、三轮结果报废；且 client 被 Ctrl-C 后设备侧 run 不死，新调用读到**旧执行**的日志（causality 时间戳是照妖镜）。两层防：进程内非阻塞锁（重复调用立即 `run_in_progress` 拒绝）+ deliver 前经跳板机 SSH 探测残留 `pytest.*ist_staging` 进程（有残留默认拒绝，确认弃跑后 `force_clean=True` 清场重跑）。
+- **性能双护栏**（2026-07-04 取证：34 卷闭环 mimo 双会话 ↑≈100M token/¥320+，设备侧单日 25 次真实上机、其中约六成是并发重复/崩溃截断/假 fail 触发的无效轮）：
+  - **run-identity 绑定**（治假结果→无效修复轮）：staging 目录跨 run 复用，被打断执行的旧日志曾被新 digest 收割成 0/34、1/34 假结果。`dev_run_batch` 在 deliver 后取跳板机 epoch 为基线，`fetch_batch_details(min_epoch=…)` 对每个 `<inner>.txt` stat mtime，早于基线的判 `stale_log`→unknown 不采信（同机时钟比较，无设备 +5h40m 时差问题）。
+  - **fresh-PASS grade 短路**（治 token）：`compile_fanout` 对 grade 类派发默认跳过「凭证新鲜且 PASS」的 case（返回 `SKIPPED_FRESH_PASS` 项）——收口期重复 grade 十余次 ≈5-10M token 零信息增量；卷面改动会使凭证过期自然放行，确有行级新证据传 `force_regrade=True`。
+  - **子集复测**（治上机次数）：修复轮只合并 fail 子集上机（digest 摘要在 fail 占少数时给出带 autoid 列表的节流提示），全过后整卷跑一次做交付确认——框架每 case 前清配置、case 间独立，子集与整卷单 case 行为一致。回归：`tests/ist_core/tools/test_perf_gates.py`。
+- **独立上机验证** `ist-verify`：对成品 excel 用 `dev_run_batch_digest` 上机（跑批进度实时写 evidence fastlog）。整份 xlsx 单跑 O(N)（deliver+run 一次，超时 `clamp(max(floor, N×45s), 600, 2400)`）。`compile_runtime_fill` 回填 `<RUNTIME>` 断言。**归因（2026-07-02 收缩重写）**：机械预判只认两个协议级事实——`compile_attribute` 返回 **G(^)**（设备语法拒绝标记，上游根因、直接采信）与 `found_times` 等文件级崩溃签名（编译缺陷）；**其余一律 undetermined，device_context 原文交 LLM 归因**（E/V/瞬态/疑似产品缺陷——曾有瞬态/E/G marker 关键字表，实证误归已删，勿加回）。digest 跨轮对照机械点名「连续两轮同签名 fail=冻结同法重编」「上轮瞬态本轮复现=误归」；确定性止损跑完为先，真 PASS 写回 footprint。
+- **交付门槛 = 机械 lint + 上机 oracle**（2026-07-04 V4 步骤1 换源，用户拍板）：942 对时点配对实证 grade 判 PASS→上机 56% / 判 CUT→53%（判别力 3pp、CUT 重做零增益）——LLM 审 LLM 不构成质量门。emit 过全部机械门即落结构凭证（source=lint）可合并；语义终判在上机。`ist-compile-grade` 保留两个非主路位置：上机 fail 后语义归因辅助、欠定/新形态升级用户前过滤。`IST_GRADE_MAINPATH=1` 一键恢复旧主路（凭证门只认 source=grade）。连续同签名 fail 走冻结/`escalate-when-stuck`/`ask_user`。
+- **V4 引擎计划**：`docs/PLAN_v4_engine.md`（实证驱动：10 项盘上数据调研钉死每步可行性——942 对配对、组合子 round-trip 33/34、参数化句式聚类 14 族、族内骨架重合 45-51%）。步骤 0-5 已全部落地：provenance 必传门（`IST_PROVENANCE_OPTIONAL=1` 回退）、凭证换源、blocks 组合子（`compile_emit(blocks=…)` 最优先通道）、族摊销（`compile_skeleton`）、闭环写回（`compile_writeback` + `compile_footprint_writeback` 双写回，ist-verify 步骤7）、checker 状态机（`compile_expected_hits`）；待验收：34-case 全量对照轮。工程红线：结构化数据一律原生数组/对象通道（字符串通道实证 73% 序列化失败），tools 入参机读校验，prompt 按自由度分层。
+- **载荷通道一致性**（2026-07-04 步骤7，跨版本根因收口，见 `docs/REVIEW_payload_channel_gap.md`）：LLM 只走控制面（决策/判断/路由），数据按**引用**流（路径/autoid/凭证）——入参随 N 增长的工具必须有原生数组+workspace 文件双通道（`compile_fanout(briefs_path=…)` 同 emit `steps_path` 样板，围栏 resolve+is_relative_to）；批量出参必须落盘全文+内联只留尾部/摘要（fanout 单项超 2000 字符自动落 `outputs/<autoid>/fanout_<skill>.md`，机读尾块在末尾不受影响）。LLM 上下文不承载 O(N×|payload|) 数据。实证：18-case briefs 内联被序列化截断→被迫逐个派发、并发全失（20min 6 卷）；198 个历史 run-jsonl「截断×55/分批×34/太大×25」跨版本同病。编排纪律：>6 case 派发必走 `briefs_path`，briefs 用 `run_python`/`fs_write` 从 manifest 机械拼装、不流经 orchestrator 上下文。
 - **红线**：skill/agent 零写死领域命令（靠 LLM 查 `*cli__part*.md`/先例/footprint）；断言期望值溯源先例/手册，不 observe-then-assert。
 
 ## 自动化环境池（多跳板机并行 verify，默认关）
@@ -183,6 +201,8 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 | **Footprint** | `knowledge/footprints/nodes/*.json` | reminder top-k=2 + `kb_footprint` | dream consolidate → router + merger |
 
 **Footprint 知识树**：按 CLI 命令前缀组织的已验证产品事实（语法、决策规则、行为、已知缺陷）。物理结构为扁平 `nodes/<feature_id>.json`（`leaf`/`trunk`/`branch` 是 JSON 内 `level` 字段）。TUI：`/footprint` / `/footprint show` / `/footprint search` / `/footprint stats`。
+
+**拉式回忆通道**（2026-07-05，MiMo-Code 对照补齐，见 `docs/RESEARCH_mimocode_backfill.md`）：注入是推、`kb_memory_search` 是拉——memory/ 在文件工具黑名单内 agent 读不到，本工具经 SQLite FTS5+BM25（懒 reconcile、CJK bigram、长数字尾 6 位衍生 token、相对分数地板 0.15×top1）检索并**把正文带回**。**上下文压缩**：deepagents `create_deep_agent` **自动挂**默认摘要中间件（fraction 阈值+撤出历史落 `runtime/conversation_history/` 可回读+溢出兜底）——勿再传自建摘要实例（双摘要）；旧 `summarization_middleware(max_tokens=28000)` 系死导入从未生效（2026-07-05 已删）。摘要之前另有确定性**工具结果剪枝**（`middleware/tool_result_prune.py`，MiMo prune 移植）：旧工具结果保头 160 字符+剪枝标记，最近 2 轮/invoke_skill/ask_user/小于 2k 的豁免，可剪总量 <20k 不动手（不破缓存）；`IST_PRUNE_TOOL_OUTPUTS=0` 关、`IST_PRUNE_PROTECT_CHARS` 调预算（默认 15 万字符）。
 
 **TUI 记忆命令**：`/memory`、`/remember`、`/footprint`；底栏 `💭 dreaming` / `✓ memory consolidated`。
 

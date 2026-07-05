@@ -381,7 +381,9 @@ def dev_probe(command: str) -> str:
         return "error: empty command"
     first = cmd.split()[0].lower() if cmd.split() else ""
     if first not in ("show", "get"):
-        return f"error: probe 只允许 show/get 开头的只读命令,收到 {first!r}。改配置请用 dev_run_case 整 case 上机。"
+        return (f"error: probe 只允许 show/get 开头的只读命令,收到 {first!r}。"
+                "probe 是编译期理解行为格式用的,不做配置动作;配置/触发/断言写进 case 步骤,"
+                "行为效果由编译后独立的 ist-verify 上机流程验证。")
 
     # run 作用域 single-flight:同一 run 内同命令只真探一次,其余等结果(见上方设计注释)。
     key = " ".join(cmd.lower().split())

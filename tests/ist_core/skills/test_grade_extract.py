@@ -9,7 +9,7 @@ import pytest
 
 _GE_PATH = (
     Path(__file__).resolve().parents[3]
-    / "main/ist_core/skills/ist_compile_grade/scripts/grade_extract.py"
+    / "main/ist_core/skills/ist-compile-grade/scripts/grade_extract.py"
 )
 
 
@@ -208,7 +208,7 @@ def test_membership_derived_not_flagged_as_hardcoded_hit_ip(ge, monkeypatch):
 def test_member_anchor_shape_not_flagged_without_provenance(ge, monkeypatch):
     """无 provenance（compile-worker 主路现状：不传 provenance_json）时，member_regex_for_ips
     生成的 `\\b(?:ip)\\b` 形态仍不该被误判——形状签名兜底，不完全依赖 source_kind（778012
-    实测过：主路 compile_worker 确实不写 provenance，纯靠 source_kind 排除会在这条链路失效）。
+    实测过：主路 compile-worker 确实不写 provenance，纯靠 source_kind 排除会在这条链路失效）。
     单成员场景（`(?:` 里只有 1 个 IP、没有 `|` 交替）也要覆盖——不能只认多成员 alternation。"""
     rows = [
         {"E": "APV_0", "F": "cmd_config", "G": 'sdns host method "x" "rr"'},

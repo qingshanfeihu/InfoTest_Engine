@@ -176,11 +176,24 @@ _MODEL_MAP = {
 }
 
 _TOOL_REGISTRY: dict[str, Any] = {}
+_TOOL_REGISTRY_LOCK = threading.Lock()
 _SUBAGENT_RUNNABLE_CACHE: dict[str, Any] = {}
 
 
 def _get_tool_registry() -> dict[str, Any]:
-    """延迟加载工具注册表——包含所有可能被 fork skill 使用的工具。"""
+    """延迟加载工具注册表——包含所有可能被 fork skill 使用的工具。
+
+    必须整体加锁:并发 fork 首调时,无锁版会让后到线程拿到"正在逐段填充"的
+    半满 registry(晚注册的 compile_precedent/compile_score 缺失),该线程装配的
+    缺工具 runnable 又被 _SUBAGENT_RUNNABLE_CACHE 永久缓存——2026-07-02 实证:
+    首轮 34-case 编译 worker 全程调不到 compile_precedent(ToolNode not-a-valid-tool
+    ×4,退化 glob 瞎找先例),单线程离线不可复现。
+    """
+    with _TOOL_REGISTRY_LOCK:
+        return _build_tool_registry_locked()
+
+
+def _build_tool_registry_locked() -> dict[str, Any]:
     if not _TOOL_REGISTRY:
         from main.ist_core.tools.deepagent import (
             fs_glob,
@@ -227,6 +240,7 @@ def _get_tool_registry() -> dict[str, Any]:
                 compile_emit,
                 compile_check_verifiability,
                 compile_grade_extract,
+                submit_verdict,
                 dev_probe,
                 dev_run_case,
                 dev_init_device,
@@ -234,6 +248,7 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["compile_emit"] = compile_emit
             _TOOL_REGISTRY["compile_check_verifiability"] = compile_check_verifiability
             _TOOL_REGISTRY["compile_grade_extract"] = compile_grade_extract
+            _TOOL_REGISTRY["submit_verdict"] = submit_verdict
             _TOOL_REGISTRY["dev_run_case"] = dev_run_case
             _TOOL_REGISTRY["dev_probe"] = dev_probe
             _TOOL_REGISTRY["dev_init_device"] = dev_init_device
@@ -257,9 +272,13 @@ def _get_tool_registry() -> dict[str, Any]:
             from main.ist_core.tools.device.precedent_tools import (
                 compile_score,
                 compile_precedent,
+                compile_writeback,
             )
             _TOOL_REGISTRY["compile_precedent"] = compile_precedent
             _TOOL_REGISTRY["compile_score"] = compile_score
+            _TOOL_REGISTRY["compile_writeback"] = compile_writeback
+            from main.ist_core.tools.device.checker_tool import compile_expected_hits
+            _TOOL_REGISTRY["compile_expected_hits"] = compile_expected_hits
         except ImportError:
             logger.debug("工具 compile_precedent/compile_score 未可用，跳过注册")
         try:
@@ -268,6 +287,41 @@ def _get_tool_registry() -> dict[str, Any]:
         except ImportError:
             logger.debug("工具 build_command 未可用，跳过注册")
     return _TOOL_REGISTRY
+
+
+def resolve_skill_dirname(name: str) -> str:
+    """skill 名 → 实际目录名(下划线/连字符互通)。
+
+    B1(2026-07-05):skill 名按官方字符集连字符化(ist_compile→ist-compile 等)。
+    旧下划线名仍会出现在历史对话/长会话续聊/旧脚本里——目录级别名兜底,与 TUI
+    slash 的互通语义一致。两种拼法都不存在时原样返回,调用方照常报 not found。
+    """
+    n = (name or "").strip()
+    if not n or (_SKILLS_DIR / n / "SKILL.md").exists():
+        return n
+    for cand in (n.replace("_", "-"), n.replace("-", "_")):
+        if cand != n and (_SKILLS_DIR / cand / "SKILL.md").exists():
+            logger.info("skill 名别名解析: %r → %r(规范名为连字符,调用方可更新)", n, cand)
+            return cand
+    return n
+
+
+# 动态 agent(D 阶段,2026-07-05):main 经 agent_define 工具按 B2 骨架自主生成的
+# fork agent/skill 落这里。在 runtime/ 下=文件工具沙箱黑名单内——LLM 只能走
+# agent_define 的校验闸创建,不能 fs_write 手搓(门挂凭证路)。
+_DYN_SKILLS_DIR = Path(__file__).resolve().parents[3] / "runtime" / "dyn_skills"
+_DYN_AGENTS_DIR = Path(__file__).resolve().parents[3] / "runtime" / "dyn_agents"
+
+
+def skill_md_path(name: str) -> Path:
+    """skill 名 → SKILL.md 路径(静态目录优先,动态目录兜底;都不存在返回静态路径供报错)。"""
+    static = _SKILLS_DIR / name / "SKILL.md"
+    if static.exists():
+        return static
+    dyn = _DYN_SKILLS_DIR / name / "SKILL.md"
+    if dyn.exists():
+        return dyn
+    return static
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -361,6 +415,8 @@ def load_subagent(name: str) -> dict[str, Any] | None:
     """
     md_path = _AGENTS_DIR / f"{name}.md"
     if not md_path.exists():
+        md_path = _DYN_AGENTS_DIR / f"{name}.md"   # 动态生成 agent(agent_define 产物)
+    if not md_path.exists():
         return None
 
     parsed = _parse_skill_md(md_path)
@@ -414,11 +470,22 @@ def get_subagent_runnable(name: str) -> Any | None:
 
         tools = _resolve_tools(spec["tools_spec"])
 
+        # fork 也挂死循环护栏:与主 agent 同一套 LoopGuard(重复指纹/空结果/软预算,
+        # budget-only 温和提醒)。2026-07-02 实证 fork worker 无护栏时在 emit 连败上
+        # 原地打转 25 次无人拉闸(994986);emit 侧另有连败计数指引,两层互补。
+        fork_middleware = []
+        try:
+            from main.ist_core.middleware.loop_guard import LoopGuardMiddleware
+            fork_middleware.append(LoopGuardMiddleware())
+        except Exception:  # noqa: BLE001
+            logger.info("fork LoopGuardMiddleware 不可用,跳过")
+
         runnable = create_agent(
             model,
             system_prompt=spec["system_prompt"],
             tools=tools,
             name=spec["name"],
+            middleware=fork_middleware,
         ).with_config({"recursion_limit": int(os.environ.get("IST_FORK_RECURSION_LIMIT") or 120)})
 
         _SUBAGENT_RUNNABLE_CACHE[spec["name"]] = runnable
@@ -518,19 +585,6 @@ _FORK_TOKENS = [0, 0]  # [input, output]
 _FORK_TOKENS_LOCK = threading.Lock()
 
 
-def _accumulate_fork_tokens(msg: Any) -> None:
-    try:
-        um = getattr(msg, "usage_metadata", None) or {}
-        it = um.get("input_tokens", 0) or 0
-        ot = um.get("output_tokens", 0) or 0
-        if it or ot:
-            with _FORK_TOKENS_LOCK:
-                _FORK_TOKENS[0] += it
-                _FORK_TOKENS[1] += ot
-    except Exception:
-        pass
-
-
 def get_fork_tokens() -> tuple[int, int]:
     """返回 (input, output) fork token 累计(供 TUI 显示)。"""
     with _FORK_TOKENS_LOCK:
@@ -544,10 +598,11 @@ def reset_fork_tokens() -> None:
 
 
 def accumulate_fork_tokens_from_usage(usage: dict) -> None:
-    """从 EventBus 的 usage dict 累加 fork token（由 graph.py callback handler 调用）。
+    """从 callback 的 usage dict 累加 fork token(由 graph.py handler 的 fork 分支调用)。
 
-    _accumulate_fork_tokens 从 AIMessage 读 usage_metadata 永远返回 0
-    （AIMessage 没有该属性），改由 callback handler 直接传 usage dict 过来。
+    这是 _FORK_TOKENS 的唯一写入口。曾有从 AIMessage.usage_metadata 累加的
+    _accumulate_fork_tokens(loader 流式循环里调)与本函数并存——AIMessage 实际
+    带 usage_metadata,两路同时活着即 fork 双计(2026-07-02 实证),已删旧路。
     """
     try:
         it = int(usage.get("input_tokens") or 0)
@@ -737,7 +792,6 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str) -> dict
         for m in msgs[seen:]:
             for line in _fork_step_lines(label, m):
                 _fork_emit(line)
-            _accumulate_fork_tokens(m)
         seen = len(msgs)
     return final_state
 
@@ -761,7 +815,8 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
     指标——compile_pipeline 用它统计每 case draft 的 dev_probe/kb_footprint 调用次数与
     LLM 往返轮数（验证预检索是否真减少 LLM 调用/查找）。fork 异常/早退时清空，不污染调用方。
     """
-    skill_file = _SKILLS_DIR / skill_name / "SKILL.md"
+    skill_name = resolve_skill_dirname(skill_name)
+    skill_file = skill_md_path(skill_name)
     if not skill_file.exists():
         return f"ERROR: fork skill {skill_name!r} not found."
 
@@ -859,10 +914,14 @@ def _render_skill_body(body: str, brief: str) -> str:
     Fork skill 的 body 用 $ARGUMENTS 引用调用者传入的参数。
     如果 body 不含 $ARGUMENTS，则在末尾追加 brief（兼容性兜底）。
     """
+    # 交互面 XML 分节(2026-07-05):brief 是「调用方数据」,SKILL 正文是「行为指令」
+    # ——<brief_from_caller> 标签让 fork 一眼分清边界(worker md 的 <rules> 收尾
+    # 紧邻此块,指令/数据相邻但不混排)。空 brief 不产空标签。
+    tagged = f"<brief_from_caller>\n{brief}\n</brief_from_caller>" if brief else ""
     if "$ARGUMENTS" in body or "${ARGUMENTS}" in body:
-        return body.replace("${ARGUMENTS}", brief).replace("$ARGUMENTS", brief)
+        return body.replace("${ARGUMENTS}", tagged).replace("$ARGUMENTS", tagged)
     if brief:
-        return body.rstrip() + "\n\n## Brief from caller\n\n" + brief
+        return body.rstrip() + "\n\n" + tagged
     return body
 
 

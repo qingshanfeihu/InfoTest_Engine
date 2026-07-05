@@ -177,7 +177,7 @@ def test_soft_budget_reminder_is_gentle_not_stop(monkeypatch):
     # 6 次各不相同、都有产出的工具调用（productive，无 dup/无空）
     for i in range(6):
         tc_id = f"c{i}"
-        msgs.append(_ai_with_tool_call(tc_id, "invoke_skill", {"skill": "compile_worker", "brief": f"case{i}"}))
+        msgs.append(_ai_with_tool_call(tc_id, "invoke_skill", {"skill": "compile-worker", "brief": f"case{i}"}))
         msgs.append(_tool_result(tc_id, f"已产出 workspace/outputs/case{i}/case.xlsx"))
     out = mw._maybe_reminder_messages(_Req(msgs))
     assert len(out) == len(msgs) + 1          # 有注入（软预算超标）

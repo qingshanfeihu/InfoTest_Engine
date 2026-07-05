@@ -40,6 +40,21 @@ def prep(state: dict) -> dict:
         led.save()
         sh.emit(f"prep 完成: {len(led.data['cases'])} case → pending")
 
+    # dispatched 孤儿回收(resume 缺口,2026-07-06):进程死在 worker 在飞时,这些
+    # case 停在 dispatched——重启后无人认领。prep 是幂等重跑入口:无新鲜产出的
+    # dispatched 回收为 pending 重派;盘上已有产出的按 produced 落账(事实优先)。
+    orphans = led.in_state(L.S_DISPATCHED)
+    for aid in orphans:
+        xp = sh.outputs_root() / aid / "case.xlsx"
+        if xp.is_file():
+            led.transition(aid, L.S_PRODUCED, produced_mtime=xp.stat().st_mtime,
+                           last_detail="orphan-recovered(盘上有产出)")
+        else:
+            led.transition(aid, L.S_PENDING, redispatch_reason="orphan_recovered")
+    if orphans:
+        led.save()
+        sh.emit(f"回收 {len(orphans)} 个派发孤儿(进程中断残留)")
+
     return {"phase_status": "ok", "out_name": out_name,
             "manifest_ref": str(manifest.relative_to(sh.project_root())),
             "ledger_ref": str(led.path.relative_to(sh.project_root())),

@@ -623,6 +623,28 @@ def reset_fork_tokens() -> None:
         _FORK_TOKENS[1] = 0
 
 
+# V6 引擎直计开关:引擎图在薄工具内独立 invoke,qa 图的 callback 不传播到
+# 引擎内的 fork(工具边界有意隔离)→ parent_subagent 路零累计、footer 只剩 main
+# 自己的量(2026-07-06 用户实证)。引擎运行期间置 True,execute_fork_skill 从
+# fork 末态 messages 直接累计 usage;v5 路径(callback 活)保持 False 防双计。
+# main agent 同进程单 turn,引擎与 v5 fork 不会并发——模块级布尔即安全。
+_DIRECT_FORK_TALLY = False
+
+
+def set_direct_fork_tally(on: bool) -> None:
+    global _DIRECT_FORK_TALLY
+    _DIRECT_FORK_TALLY = bool(on)
+
+
+def _tally_from_messages(messages: list) -> None:
+    for m in messages or []:
+        um = getattr(m, "usage_metadata", None)
+        if isinstance(um, dict) and (um.get("input_tokens") or um.get("output_tokens")):
+            accumulate_fork_tokens_from_usage({
+                "input_tokens": um.get("input_tokens") or 0,
+                "output_tokens": um.get("output_tokens") or 0})
+
+
 def accumulate_fork_tokens_from_usage(usage: dict) -> None:
     """从 callback 的 usage dict 累加 fork token(由 graph.py handler 的 fork 分支调用)。
 
@@ -875,6 +897,8 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
     _label = (tag or skill_name.replace("ist_compile_", "")).strip() or skill_name
     try:
         result = _invoke_fork_streamed(runnable, rendered_body, _label)
+        if _DIRECT_FORK_TALLY:
+            _tally_from_messages((result or {}).get("messages", []))
     except Exception as exc:
         # 递归上限是「已处理」的预期情况——compile_pipeline 会捕获后**立即 escalate**(不再做
         # 3 轮等价重做:同 brief 必然同样递归 spin)。回带确定性标记 `[recursion-limit]` 让上层

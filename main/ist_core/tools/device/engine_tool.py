@@ -73,6 +73,22 @@ def compile_engine_run(mindmap_path: str, product_version: str,
     from langgraph.types import Command
     from main.ist_core.compile_engine.graph import build_compile_engine_graph
 
+    # fork token 直计:引擎独立 invoke 使 qa 图 callback 不传播,footer 的 fork
+    # 累计通道断——引擎运行期间打开 loader 直计(execute_fork_skill 末态累计),
+    # TUI 每 0.3s 拉 get_fork_tokens 即恢复真实成本显示。
+    from main.ist_core.skills.loader import set_direct_fork_tally
+    set_direct_fork_tally(True)
+    try:
+        return _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)
+    finally:
+        set_direct_fork_tally(False)
+
+
+def _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root) -> str:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    from langgraph.types import Command
+    from main.ist_core.compile_engine.graph import build_compile_engine_graph
+
     with SqliteSaver.from_conn_string(str(db)) as saver:
         graph = build_compile_engine_graph(checkpointer=saver)
         config = {"configurable": {"thread_id": f"engine:{name}"},
@@ -82,20 +98,26 @@ def compile_engine_run(mindmap_path: str, product_version: str,
                 "out_name": name, "max_rounds": int(max_rounds)}
 
         # resume 语义:同 thread 有挂起的 interrupt → 直接从挂起点继续;否则新跑。
-        snap = graph.get_state(config)
-        pending_interrupt = bool(getattr(snap, "next", None)) if snap else False
-        result = graph.invoke(init if not pending_interrupt else None, config)
+        try:
+            snap = graph.get_state(config)
+            pending_interrupt = bool(getattr(snap, "next", None)) if snap else False
+            result = graph.invoke(init if not pending_interrupt else None, config)
 
-        for _ in range(_MAX_INTERRUPT_ROUNDS):
-            intr = (result or {}).get("__interrupt__")
-            if not intr:
-                break
-            payload = getattr(intr[0], "value", None) or {}
-            if not (isinstance(payload, dict) and payload.get("kind") == "ask_decision"):
-                answers = {"_non_interactive": True}   # 未知挂起类型:保守不猜
-            else:
-                answers = _bridge_ask(list(payload.get("questions") or []))
-            result = graph.invoke(Command(resume=answers), config)
+            for _ in range(_MAX_INTERRUPT_ROUNDS):
+                intr = (result or {}).get("__interrupt__")
+                if not intr:
+                    break
+                payload = getattr(intr[0], "value", None) or {}
+                if not (isinstance(payload, dict) and payload.get("kind") == "ask_decision"):
+                    answers = {"_non_interactive": True}   # 未知挂起类型:保守不猜
+                else:
+                    answers = _bridge_ask(list(payload.get("questions") or []))
+                result = graph.invoke(Command(resume=answers), config)
+        except Exception as exc:  # noqa: BLE001 — 引擎异常必须可读返回:进度在
+            # checkpoint+ledger+盘上产物,修复后同参数重调即续跑,已完成的不重烧。
+            logger.exception("compile_engine 异常")
+            return (f"error: 编译引擎异常中断——{type(exc).__name__}: {exc}\n"
+                    f"进度已保存(checkpoint+台账+已产出卷面),修复后同参数重调本工具续跑。")
 
     # 报告摘要(机读全量在 engine_report.json)
     rp = root / "workspace" / "outputs" / name / "engine_report.json"

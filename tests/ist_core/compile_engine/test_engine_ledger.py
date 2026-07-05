@@ -50,3 +50,13 @@ def test_atomic_save_roundtrip(tmp_path):
     led.save()
     led2 = _led(tmp_path)
     assert led2.case("a1")["state"] == L.S_PENDING
+
+
+def test_dispatched_orphan_paths(tmp_path):
+    # resume 缺口回归:dispatched→pending(回收) 与 dispatched→produced 都合法
+    led = _led(tmp_path)
+    led.transition("a1", L.S_PENDING)
+    led.transition("a1", L.S_DISPATCHED)
+    led.transition("a1", L.S_PENDING)      # 孤儿回收路径
+    led.transition("a1", L.S_DISPATCHED)
+    led.transition("a1", L.S_PRODUCED)     # 盘上有产出路径

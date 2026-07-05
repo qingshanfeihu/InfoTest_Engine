@@ -178,7 +178,7 @@ def attribute(state: dict) -> dict:
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail="known_defect(DC)")
         elif frozen and int(c.get("rounds_used") or 0) >= max_rounds:
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail="frozen")
-        elif disp in ("frozen", "product_defect", "env_blocked"):
+        elif disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
         elif disp == "reflow" or layer == "G":
             c["evidence_excerpt"] = ctx[:4000]
@@ -194,6 +194,7 @@ def attribute(state: dict) -> dict:
         from main.ist_core.tools.device.batch_tools import compile_fanout
         briefs = [{"key": aid, "brief": json.dumps({
             "autoid": aid, "last_run_path": str(state.get("last_run_ref")),
+            "xlsx_path": str(state.get("merged_xlsx_ref")),   # submit_attribution 按它定位落盘文件,别让 fork 推断
             "provenance_path": f"workspace/outputs/{aid}/case.provenance.json",
         }, ensure_ascii=False)} for aid in need_fork]
         sh.emit(f"归因 fork: {len(need_fork)} case")
@@ -203,13 +204,22 @@ def attribute(state: dict) -> dict:
         data2 = sh.read_json(last_run, [])
         items2 = {str(it.get("autoid")): it for it in (data2 if isinstance(data2, list) else [])
                   if isinstance(it, dict)}
+        # 落盘兜底(2026-07-06 dongkl 实证):fork 曾把归因写进整卷 last_run(按
+        # xlsx_path 定位)而引擎读本轮子集 last_run——两处按引用合并读,主目录兜底。
+        main_lr = sh.outputs_root() / str(state.get("out_name")) / "last_run.json"
+        if main_lr != last_run and main_lr.is_file():
+            for it in (sh.read_json(main_lr, []) or []):
+                aid2 = str(it.get("autoid", "")) if isinstance(it, dict) else ""
+                if aid2 and (aid2 not in items2 or not items2[aid2].get("_attribution")) \
+                        and isinstance(it.get("_attribution"), dict):
+                    items2.setdefault(aid2, {})["_attribution"] = it["_attribution"]
         for aid in need_fork:
             attr = items2.get(aid, {}).get("_attribution")
             attr = attr if isinstance(attr, dict) else {}
             c = led.case(aid)
             c["attribution"] = attr
             disp = str(attr.get("disposition") or "")
-            if disp in ("frozen", "product_defect", "env_blocked"):
+            if disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
                 led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
             elif disp in ("reflow", "fixed"):
                 c["evidence_excerpt"] = str(items2.get(aid, {}).get("device_context") or "")[:4000]

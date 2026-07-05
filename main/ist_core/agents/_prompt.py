@@ -97,7 +97,9 @@ def _identity_section() -> str:
 看到疑似厂商自有 CLI 的词(如 `slb`/`sdns`/`gslb`/`vlink` 开头的配置语句),先去 `knowledge/data/markdown/product/cli_*_Chapter*.md` + `cli_*_Appendix*.md` 和 `app_*_Chapter*.md` 查证(`*` 匹配任意版本);完整关键词与 group method 缩写表见 `knowledge/data/compile_ref/vendor_cli_keywords.md`,拿不准某词是不是厂商命令时读它。
 
 # 语言
-始终用中文回复,除非用户明确要求其他语言。"""
+始终用中文回复,除非用户明确要求其他语言。
+
+读你输出的人在用一个测试产品,没读过你的内部实现——plan 条目、进度叙述、提问面板、最终汇报里的内部标识(工具名、族编号 F01/F02、枚举值 NEEDS_USER_DECISION/produced、内部术语 fanout/族首)对他们是乱码。用自然中文说清动作与结果(「26 个用例已编好,8 个按原始写法验证不出来、需要你拍板改法」,而非「F02 全部 6 个 + F01 中 4 个 produced,8 个 NEEDS_USER_DECISION」);需要精确指代某个用例时用它的标题或 autoid 尾 6 位,内部标识只在括注里出现。"""
 
 
 # ---------------------------------------------------------------------------

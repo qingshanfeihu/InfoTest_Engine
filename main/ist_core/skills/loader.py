@@ -279,6 +279,17 @@ def _build_tool_registry_locked() -> dict[str, Any]:
             _TOOL_REGISTRY["compile_writeback"] = compile_writeback
             from main.ist_core.tools.device.checker_tool import compile_expected_hits
             _TOOL_REGISTRY["compile_expected_hits"] = compile_expected_hits
+            # 归因孔(compile-attributor,V6)专用
+            from main.ist_core.tools.device import compile_attribute, submit_attribution
+            from main.ist_core.tools.device.runtime_fill_tools import (
+                compile_runtime_slots, compile_runtime_fill,
+            )
+            from main.ist_core.tools.knowledge.behavior_tool import submit_behavior_fact
+            _TOOL_REGISTRY["compile_attribute"] = compile_attribute
+            _TOOL_REGISTRY["submit_attribution"] = submit_attribution
+            _TOOL_REGISTRY["compile_runtime_slots"] = compile_runtime_slots
+            _TOOL_REGISTRY["compile_runtime_fill"] = compile_runtime_fill
+            _TOOL_REGISTRY["submit_behavior_fact"] = submit_behavior_fact
         except ImportError:
             logger.debug("工具 compile_precedent/compile_score 未可用，跳过注册")
         try:
@@ -443,6 +454,29 @@ def load_subagent(name: str) -> dict[str, Any] | None:
     }
 
 
+def _build_fork_middleware() -> list:
+    """fork 子 agent 的中间件栈——与主 agent 对齐(2026-07-05 坑2 修复)。
+
+    曾只挂 LoopGuard:fork worker 单个可跑 900s、堆几十个工具返回,剪枝/信封全漏,
+    上下文裸堆积。现对齐三件:LoopGuard(死循环护栏,2026-07-02 实证 emit 连败打转
+    25 次)/ ToolResultPrune(旧结果剪枝)/ ToolEnvelope(<tool_result> 统一信封)。
+    不挂 ToolGating:fork 工具白名单已由 agents/*.md frontmatter 显式声明。
+    """
+    out: list = []
+    import importlib as _il
+    for _mw_name, _mw_import in (
+        ("LoopGuardMiddleware", "main.ist_core.middleware.loop_guard"),
+        ("MessageSanitizeMiddleware", "main.ist_core.middleware.message_sanitize"),
+        ("ToolResultPruneMiddleware", "main.ist_core.middleware.tool_result_prune"),
+        ("ToolEnvelopeMiddleware", "main.ist_core.middleware.tool_envelope"),
+    ):
+        try:
+            out.append(getattr(_il.import_module(_mw_import), _mw_name)())
+        except Exception:  # noqa: BLE001
+            logger.info("fork %s 不可用,跳过", _mw_name)
+    return out
+
+
 def get_subagent_runnable(name: str) -> Any | None:
     """构建并缓存 subagent 的 LangChain runnable。
 
@@ -470,15 +504,7 @@ def get_subagent_runnable(name: str) -> Any | None:
 
         tools = _resolve_tools(spec["tools_spec"])
 
-        # fork 也挂死循环护栏:与主 agent 同一套 LoopGuard(重复指纹/空结果/软预算,
-        # budget-only 温和提醒)。2026-07-02 实证 fork worker 无护栏时在 emit 连败上
-        # 原地打转 25 次无人拉闸(994986);emit 侧另有连败计数指引,两层互补。
-        fork_middleware = []
-        try:
-            from main.ist_core.middleware.loop_guard import LoopGuardMiddleware
-            fork_middleware.append(LoopGuardMiddleware())
-        except Exception:  # noqa: BLE001
-            logger.info("fork LoopGuardMiddleware 不可用,跳过")
+        fork_middleware = _build_fork_middleware()
 
         runnable = create_agent(
             model,

@@ -274,3 +274,79 @@ def record_main_activity(event: str, tool_name: str = "", detail: str = "") -> N
             _ACTIVE_HEARTBEAT.set_note(f"tool={tool_name}")
     except Exception:  # noqa: BLE001
         pass
+
+
+# ---------------------------------------------------------------------------
+# ForkExecutor:fork 执行机件(V6 步骤1 从 compile_pipeline 抽取,行为不变)
+# ---------------------------------------------------------------------------
+
+import concurrent.futures as _cf
+import contextvars as _ctxvars
+import os as _os
+import time as _time
+
+
+class ForkExecutor:
+    """fork skill 的受控执行器——限流 + 单次墙钟看门狗 + transient 退避重试。
+
+    从 compile_pipeline 的 `_fork_call/_fork_call_bounded` 闭包抽取(2026-07-05
+    V6 步骤1),供旧 pipeline 与 compile_engine 图的 [llm] 孔共用。语义逐条保持:
+    - 单次 fork 跑在看门狗线程,墙钟超 `wallclock_s` 即放弃等待(挂死线程泄漏,
+      数量受并发上限约束);`copy_context()` 带 contextvars 进 worker(dev_probe
+      single-flight 依赖 _current_run_token)。
+    - 超墙钟返回 `[fork-wallclock]` 标记——**故意不被 is_transient_error 命中**,
+      调用方按 wallclock 分支立即 escalate,不做重试放大。
+    - transient 端点错误(丢连接/限流/流中断)→ limiter 降并发 + 指数退避重试,
+      重试次数与总墙钟(`transient_wallclock_s`)双封顶。
+    """
+
+    def __init__(self, limiter: "AdaptiveLimiter", *,
+                 wallclock_s: float | None = None,
+                 transient_retries: int | None = None,
+                 transient_base_sleep: float | None = None,
+                 transient_wallclock_s: float | None = None,
+                 watchdog: "_cf.ThreadPoolExecutor | None" = None) -> None:
+        self.limiter = limiter
+        self.wallclock_s = float(wallclock_s if wallclock_s is not None
+                                 else (_os.environ.get("IST_FORK_WALLCLOCK_S") or 600))
+        self.transient_retries = int(transient_retries if transient_retries is not None else 4)
+        self.transient_base_sleep = float(transient_base_sleep if transient_base_sleep is not None else 3.0)
+        self.transient_wallclock_s = float(
+            transient_wallclock_s if transient_wallclock_s is not None
+            else (_os.environ.get("IST_FORK_TRANSIENT_WALLCLOCK_S") or 1200))
+        self._watchdog = watchdog or _cf.ThreadPoolExecutor(
+            max_workers=int(_os.environ.get("IST_FORK_WATCHDOG_WORKERS") or 64),
+            thread_name_prefix="fork-wd")
+
+    def call_bounded(self, skill: str, brief: str, tag: str,
+                     summary_sink: dict | None) -> str:
+        """单次 fork,看门狗墙钟封顶。"""
+        from main.ist_core.skills.loader import execute_fork_skill
+        ctx = _ctxvars.copy_context()
+        fut = self._watchdog.submit(
+            ctx.run, execute_fork_skill, skill, brief, tag=tag, summary_sink=summary_sink)
+        try:
+            return fut.result(timeout=self.wallclock_s)
+        except _cf.TimeoutError:
+            if summary_sink is not None:
+                summary_sink.clear()   # 超墙钟 fork 无可信 summary,清空防污染调用方
+            return (f"ERROR: [fork-wallclock] fork skill {skill!r} 超 "
+                    f"{int(self.wallclock_s)}s 墙钟未完成 → 放弃(escalate)")
+
+    def call(self, skill: str, brief: str, tag: str = "",
+             summary_sink: dict | None = None) -> str:
+        """调 fork,transient 自动退避重试(次数与总墙钟双封顶)。"""
+        last = ""
+        deadline = _time.monotonic() + self.transient_wallclock_s
+        for attempt in range(self.transient_retries + 1):
+            out = self.call_bounded(skill, brief, tag, summary_sink)
+            if isinstance(out, str) and out.startswith("ERROR:") and is_transient_error(out):
+                self.limiter.record_overload()
+                last = out
+                if attempt < self.transient_retries and _time.monotonic() < deadline:
+                    _time.sleep(self.transient_base_sleep * (2 ** attempt))
+                    continue
+                return out
+            self.limiter.record_success()
+            return out if out is not None else ""
+        return last

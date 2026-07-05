@@ -30,6 +30,102 @@ _OBSERVE_RE = re.compile(
     r"\b(show|statistics|stat|display|dig|nslookup|get|list)\b", re.IGNORECASE
 )
 
+# ---- 分发闭集:一律从 mirror 框架源码**解析**,不手抄(权威=源码,手抄=漂移) ----
+# 失败语义(源码事实):E 不在 devices 表 → locals().get(E)=None → 框架 continue,
+# **整步静默跳过**(test_xlsx.py 分发循环);F 不在对象方法集 → getattr 无默认值
+# AttributeError → **崩整份文件**。mirror 缺失/解析失败 → 对应闭集为空 → 相关
+# 白名单检查自动跳过(fail-open,门宁可少管不误杀)。
+from functools import lru_cache
+
+
+def _mirror_src(rel: str) -> str:
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[4] / "knowledge" / "framework" / "mirror" / rel
+    try:
+        return p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+@lru_cache(maxsize=1)
+def _devices_keys() -> frozenset:
+    """框架 devices dict 的键集(test_xlsx.py `devices = {...}` 字面解析)。"""
+    src = _mirror_src("lib/test_xlsx.py")
+    m = re.search(r"devices\s*=\s*\{(.*?)\}", src, re.S)
+    return frozenset(re.findall(r"'([^']+)'\s*:", m.group(1))) if m else frozenset()
+
+
+@lru_cache(maxsize=1)
+def _host_slot_es() -> frozenset:
+    """直连槽 = devices 表里经 request.getfixturevalue 拿 ssh_server 对象的键
+    (conftest 里 `ssh_server(configer, logger, ...)` 构造的 fixture 名)。"""
+    conftest = _mirror_src("smoke_test/conftest.py")
+    slots = set()
+    for m in re.finditer(r"def (\w+)\([^)]*\):(.*?)(?=\n@|\ndef |\Z)", conftest, re.S):
+        if "ssh_server(" in m.group(2) and "class " not in m.group(2):
+            slots.add(m.group(1))
+    return frozenset(slots & _devices_keys())
+
+
+def _public_methods(rel: str, cls: str) -> frozenset:
+    """解析 mirror 某类的 def 方法名(用例面白名单的原料;私有/框架生命周期方法由
+    调用方按源码事实剔除)。"""
+    src = _mirror_src(rel)
+    m = re.search(rf"class {cls}\b.*?(?=\nclass |\Z)", src, re.S)
+    return frozenset(re.findall(r"\n    def (\w+)\(", m.group(0))) if m else frozenset()
+
+
+# 框架生命周期方法(test_xlsx/conftest 自动调用,用例步骤调它会破坏 per-case 自动
+# 恢复/日志切分——ssh_server.py:63-131 与 check_point.py:83+ 的调用点是依据):
+_LIFECYCLE_FS = frozenset({
+    "__init__", "xlsx_begin", "read_until", "close", "soft_close", "clear",
+    "delete_ip", "delete_route", "load_synonyms", "check_direct_match",
+    "get_same", "get_similar_function",
+})
+
+
+@lru_cache(maxsize=1)
+def _valid_es() -> frozenset:
+    keys = _devices_keys()
+    # check_point/time 不在 devices 表但被框架特殊分发(fixture 参数/内置模块)
+    return (keys | {"check_point", "time"}) if keys else frozenset()
+
+
+@lru_cache(maxsize=1)
+def _valid_fs_by_e() -> dict:
+    env_hosts = _public_methods("lib/env.py", "Env") - _LIFECYCLE_FS
+    cp = _public_methods("lib/check_point.py", "Check_Point") - _LIFECYCLE_FS
+    slot_fs = _public_methods("lib/ssh_server.py", "ssh_server") - _LIFECYCLE_FS
+    out: dict = {}
+    if env_hosts:
+        out["test_env"] = env_hosts
+    if cp:
+        out["check_point"] = cp
+    out["time"] = frozenset({"sleep"})   # E=time 实为 python time 模块,框架仅对 sleep 有参数特判
+    if slot_fs:
+        for slot in _host_slot_es():
+            out[slot] = slot_fs
+    return out
+
+
+@lru_cache(maxsize=4)
+def _execute_returning_actions(src_rel: str) -> frozenset:
+    """解析 mirror 动作注册表源码,返回**有 return 值**的动作名闭集。"""
+    src = _mirror_src(src_rel)
+    if not src:
+        return frozenset()
+    mapping = dict(re.findall(r"'([^']+)':\s*self\.(func_\d+)", src))
+    returning: set[str] = set()
+    for m in re.finditer(r"\n    def (func_\d+)\(self[^)]*\):(.*?)(?=\n    def |\Z)", src, re.S):
+        if re.search(r"\n\s+return\s+\S", m.group(2)):
+            returning.add(m.group(1))
+    return frozenset(name for name, fn in mapping.items() if fn in returning)
+
+
+# 注册表源码位置(E=APV_* 走设备侧 action 混入,E=直连槽走客户端侧 client_action)
+_APV_ACTION_SRC = "lib/apv/apv_action.py"
+_CLIENT_ACTION_SRC = "lib/client_action.py"
+
 
 @dataclass
 class StructuralViolation:
@@ -162,7 +258,22 @@ def _is_observation_step(step: dict) -> bool:
     f = str(step.get("F", "")).strip()
     if e == "test_env":
         return True  # dig/clientc/routera 等触发都回显
+    if e in _host_slot_es():
+        # 直连槽(fixture 返回 ssh_server 对象;mirror lib/test_xlsx.py:176):
+        # cmd 返回整段回显(ssh_server.py:93-106);execute 按动作定(部分动作无 return → None)。
+        if f == "cmd":
+            return True
+        if f == "execute":
+            g = str(step.get("G", "")).strip()
+            action = g.split("：", 1)[0].strip()
+            return action in _execute_returning_actions(_CLIENT_ACTION_SRC)
+        return False
     if e.startswith("APV"):
+        if f == "execute":
+            # APV 类混入设备侧动作注册表(apv.py:23 class APV(...,action,...));按动作定
+            g = str(step.get("G", "")).strip()
+            action = g.split("：", 1)[0].strip()
+            return action in _execute_returning_actions(_APV_ACTION_SRC)
         return f == "cmd_config"   # 单条 cmd_config 产 result 回显；cmds_config（多条）返回 None
     return False
 
@@ -310,11 +421,11 @@ def check_no_found_times_mandatory(steps: list) -> StructuralResult:
 
 
 def _check_no_manual_ip_cleanup(steps: list, result: StructuralResult) -> None:
-    """test_env 步禁止 ``ip addr add/del``(触发机网络状态变更)——框架契约的机械事实。
+    """test_env / 主机直连槽步禁止 ``ip addr add/del``(主机网络状态变更)——框架契约的机械事实。
 
-    框架 ``lib/ssh_server.py`` 对 test_env 主机上执行过的 ``ip addr add`` **自动记账**
-    (ip_list,不去重),并在主机对象生命周期结束时(实证:下一 case 开头)逐条
-    ``re.sub('addr add','addr delete')`` 恢复。两条实证的必炸路径:
+    框架 ``lib/ssh_server.py:93-106`` 的记账在 ``ssh_server.cmd`` 里(``addr add`` → ip_list,
+    不去重),恢复在每 case 开头 ``xlsx_begin → soft_close → delete_ip``——test_env 转发形态
+    与直连槽形态走的是**同一个类的同一条 cmd 路径**,契约对两者同样成立。两条实证的必炸路径:
     - case 内自行 del → 框架恢复对已删 IP delete → RTNETLINK 报错 → 崩整份文件
       (dongkl_final: 1 pass + 22 unknown 级联);
     - 多个 case add 同一 IP → 记账两条 → 恢复时第二条 delete 必失败 → 失败输出残留
@@ -327,15 +438,58 @@ def _check_no_manual_ip_cleanup(steps: list, result: StructuralResult) -> None:
             continue
         e = str(s.get("E", "")).strip()
         g = " ".join(str(s.get("G", "") or "").split())
-        if e == "test_env" and ("ip addr " in g or "ip address " in g) and (
+        if (e == "test_env" or e in _host_slot_es()) and (
+                "ip addr " in g or "ip address " in g
+                or "ip route " in g or "ip -6 route " in g) and (
                 " add" in g or " del" in g):
+            # 同一契约的两半:addr(ip_list,:99-100)与 route(route_list,:95-98)都被
+            # ssh_server.cmd 记账、soft_close 时 delete_ip/delete_route 恢复。
             result.add(
                 "manual_ip_cleanup",
-                "test_env 变更触发机 IP(ip addr add/del)——框架对 add 自动记账(不去重)并在"
-                "下一 case 开头 delete 恢复:自行 del 或跨 case 重复 add 都会让恢复失败,"
-                "**崩整份文件或以 RTNETLINK 残留污染后续 case 的回显(成批假 fail)**。"
-                "删掉这个步骤——触发机网络状态由框架管理;轮转类测试按请求轮转,无需多源 IP,"
-                "直接用拓扑既有触发机发请求。",
+                "变更测试环境主机 IP/路由(ip addr / ip route 的 add/del)——框架对 add "
+                "自动记账(不去重)并在下一 case 开头 delete 恢复:自行 del 或跨 case 重复 "
+                "add 都会让恢复失败,**崩整份文件或以 RTNETLINK 残留污染后续 case 的回显"
+                "(成批假 fail)**。删掉这个步骤——主机网络状态由框架管理;要多源就用"
+                "拓扑既有的多台触发机,要新路径先查拓扑既有可达性。",
+                i,
+            )
+
+
+def _check_dispatch_targets(steps: list, result: StructuralResult) -> None:
+    """E/F 必须在框架分发闭集内(闭集从 mirror 源码解析,见 _valid_es/_valid_fs_by_e)。
+
+    两种失败模式,都机械可判:
+    - E 不在 devices 表 → 框架静默跳过整步(无异常无日志)——步骤蒸发,后续断言拿错缓冲;
+    - F 不在该对象方法闭集 → getattr AttributeError → 崩整份文件。
+    E=test_env 的 F 先做 emit 同款小写归一再判(大小写是可修形态,emit 会归一,不误杀)。
+    """
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        e = str(s.get("E", "")).strip()
+        f = str(s.get("F", "")).strip()
+        if not e:
+            continue   # 缺 E 由 emit 入口拒,不重复报
+        _es = _valid_es()
+        if _es and e not in _es:
+            result.add(
+                "unknown_dispatch_target",
+                f"E={e!r} 不在框架 devices 表(合法: {', '.join(sorted(_es))})——"
+                "框架对未知 E **静默跳过整步**(不执行、无日志异常),后续断言拿错缓冲跑。"
+                "对照 EXCEL_FUNCTIONS.md 的 E 表改对。",
+                i,
+            )
+            continue
+        allowed = _valid_fs_by_e().get(e)
+        if allowed is None:
+            continue   # APV*/Seg* 方法集未全量取证,不设白名单
+        f_norm = f.lower() if e == "test_env" else f
+        if f_norm not in allowed:
+            result.add(
+                "unknown_dispatch_method",
+                f"F={f!r} 不是 E={e} 对象的合法方法(合法: {', '.join(sorted(allowed))})——"
+                "框架 getattr 无默认值,方法名拼错 **AttributeError 崩整份文件**。"
+                "对照 EXCEL_FUNCTIONS.md 该 E 的 F 说明改对。",
                 i,
             )
 
@@ -354,8 +508,10 @@ def _check_command_payload_sanity(steps: list, result: StructuralResult) -> None
         if not isinstance(s, dict):
             continue
         e = str(s.get("E", "")).strip()
-        if e not in ("APV_0", "test_env"):
-            continue   # 只查会发给设备/触发机的命令步;check_point 的 G 是断言表达式
+        # 会把 G 当命令发出去的步全查:APV_0/1/2、test_env 转发、主机直连槽。
+        # (旧版漏 APV_1/直连槽——2026-07-05 框架取证后对齐;check_point 的 G 是断言表达式不查。)
+        if not (e.startswith("APV") or e == "test_env" or e in _host_slot_es()):
+            continue
         g_raw = s.get("G")
         g = str(g_raw) if g_raw is not None else ""
         # 精确对齐框架行为:G 为**空串**时 cmds_config 对 splitlines() 零循环、什么也不发
@@ -389,6 +545,9 @@ def check_crash_gates_mandatory(steps: list) -> StructuralResult:
       跳过而漏网 → 第三轮上机 1 pass + 33 unknown)。
     - test_env 自行 ip addr del:与框架自动恢复双重清理,崩下一 case(_check_no_manual_ip_cleanup;
       实证 dongkl_final 22 unknown 级联)。
+    - 载荷完整性:G 为 None/字面 \\n → 设备必 ^ 拒(_check_command_payload_sanity)。
+    - 分发白名单:E 不在 devices 表=整步静默蒸发、F 不在方法闭集=getattr AttributeError
+      崩整卷(_check_dispatch_targets;2026-07-05 框架源码取证,白名单全为源码闭集)。
     教训同源:必崩类检查躲在 opt-in 开关后面就等于没有——draft agent 会漏传参数。启发式/
     allowlist 类门仍留 strict_structural(可能误杀,须可选);必崩类一律进本门。
     """
@@ -398,6 +557,7 @@ def check_crash_gates_mandatory(steps: list) -> StructuralResult:
         _check_dangling_assertions(steps, result)
         _check_no_manual_ip_cleanup(steps, result)
         _check_command_payload_sanity(steps, result)
+        _check_dispatch_targets(steps, result)
     return result
 
 
@@ -427,8 +587,16 @@ def steps_from_xlsx(xlsx_path) -> tuple[str, list[dict]]:
     ws = wb.active
     autoid = ""
     steps: list[dict] = []
+    # 对齐框架执行语义(test_xlsx.py `case_begin`):A 列="自动化ID" 表头行**之后**的行
+    # 才是步骤;之前是模板说明区/字典区(框架不执行,反解也不该当步骤收——旧版全扫
+    # 恰好没炸,分发白名单门一严说明行就现形误报)。
+    begun = False
     for row in ws.iter_rows(min_row=2):
         a = str(row[0].value or "").strip()
+        if not begun:
+            if a == "自动化ID":
+                begun = True
+            continue
         e = str(row[4].value or "").strip()
         if a and _AUTOID_RE.match(a) is None and a.startswith("203"):
             # 位数异常的 autoid 也要带出去让上层报——用原文记录
@@ -496,8 +664,12 @@ def _check_short_mode_assertions(steps: list, result: StructuralResult) -> None:
 
 
 def _check_capture_refs_defined(steps: list, result: StructuralResult) -> None:
-    """check_point 引用 H 寄存器(H 列或 I 列)时,该寄存器必须被之前某步捕获过——
-    未定义引用在框架 locals().get() 得 None,断言语义随之失真。"""
+    """H/I 变量引用必须先捕获(框架源码 test_xlsx.py:293-336):
+    - check_point 的 H/I 引用未捕获变量 → locals().get() 得 None → 断言失真或 TypeError;
+    - **非 check_point 步的 I** 引用未捕获变量 → 框架 ``raise NameError``(:319-324)**崩整卷**;
+    - 非 check_point 步带 I 但 G 无 ``{}`` 占位 → format 无操作,注入静默不发生(值没用上,
+      断言表面跑通实际验错东西)。反向(G 有 {} 无 I)不判:shell 命令里 {} 有合法用法(awk 等)。
+    """
     defined: set[str] = set()
     for i, s in enumerate(steps):
         if not isinstance(s, dict):
@@ -514,8 +686,67 @@ def _check_capture_refs_defined(steps: list, result: StructuralResult) -> None:
                         "框架取到 None,断言失真。补捕获步或改引用名。",
                         i,
                     )
-        elif h:
-            defined.add(h)
+        else:
+            if i_col:
+                # I 支持 obj.attr(框架 :315-318);obj 可为已捕获变量或 devices 对象
+                base = i_col.split(".", 1)[0]
+                if base not in defined and base not in _valid_es():
+                    result.add(
+                        "undefined_capture_ref",
+                        f"步骤 I={i_col!r} 引用的变量没有被之前任何步骤用 H 捕获过——"
+                        "框架对非断言步的未定义 I **raise NameError,崩整份文件**。"
+                        "先用 H 捕获,或改引用名。",
+                        i,
+                    )
+                g = str(s.get("G", "") or "")
+                if "{}" not in g:
+                    result.add(
+                        "injection_without_placeholder",
+                        f"步骤带 I={i_col!r} 但 G 里没有 {{}} 占位符——框架把变量 format 进"
+                        " G 的 {},没有占位注入就静默不发生,这一步跑的还是原文。"
+                        "在 G 里要用变量值的位置写 {}。",
+                        i,
+                    )
+            if h:
+                defined.add(h)
+
+
+# 框架 get_parameter 的切分正则(test_xlsx.py:57,原样复刻):单行 G 按**引号外**逗号切段
+_PARAM_SPLIT_RE = re.compile(r'((?:(?:"(?:\\.|[^\\"])*"|\'(?:\\.|[^\\\'])*\'|[^,])+))')
+_KWARG_SEG_RE = re.compile(r"^\s*(timeout|prompt)\s*=")
+
+
+def _check_parameter_splitting(steps: list, result: StructuralResult) -> None:
+    """test_env/直连槽步的 G 含引号外英文逗号 → 框架 get_parameter 把 G 切成多个位置
+    参数(test_xlsx.py:48-80),第二段起会错位传给主机方法的 prompt/timeout 形参——
+    read_until 等一个不存在的提示符,恒等满 timeout、输出可能截断,**静默失真不报错**。
+    G 含真实换行时框架整段单参(不切),安全;``timeout=``/``prompt=`` 形态的段是框架
+    支持的具名参数惯用法,放行。APV 的 cmd_config 有单行拼接特判、check_point 不走
+    get_parameter,均不受影响。
+    """
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        e = str(s.get("E", "")).strip()
+        if not (e == "test_env" or e in _host_slot_es()):
+            continue
+        f = str(s.get("F", "")).strip()
+        if f == "execute":
+            continue   # execute 的 G 整段传动作函数,中文逗号是其参数语法,不切英文段判定
+        g = str(s.get("G", "") or "")
+        if "\n" in g or "," not in g:
+            continue
+        segs = [p.strip() for p in _PARAM_SPLIT_RE.findall(g) if p.strip()]
+        stray = [p for p in segs[1:] if not _KWARG_SEG_RE.match(p)]
+        if stray:
+            result.add(
+                "comma_splits_parameters",
+                f"G 含引号外英文逗号,框架会把它切成 {len(segs)} 个参数——"
+                f"{stray[0]!r} 会错位传给主机方法的 prompt/timeout 形参,该步恒等满超时、"
+                "输出失真。逗号是命令一部分时给该段加引号,或改写命令避开逗号;"
+                "要传超时用 timeout=N 形态(框架具名参数)。",
+                i,
+            )
 
 
 _DOMAIN_TOKEN_RE = re.compile(r"\b([A-Za-z0-9][A-Za-z0-9.-]{10,}\.(?:com|net|org|cn|test))\b")
@@ -553,7 +784,8 @@ def lint_xlsx_case(xlsx_path) -> StructuralResult:
     - check_crash_gates_mandatory 全集(悬空断言/found_times/手动 ip del/载荷);
     - 断言正则可编译;
     - +short 观测 与 status 类断言互斥;
-    - 寄存器引用必先捕获。
+    - 寄存器引用必先捕获;
+    - G 逗号切参 / autoid 行 E 列非空(框架 ifrun:E 空整 case 静默不跑)。
     """
     result = StructuralResult()
     try:
@@ -575,4 +807,32 @@ def lint_xlsx_case(xlsx_path) -> StructuralResult:
     _check_short_mode_assertions(steps, result)
     _check_capture_refs_defined(steps, result)
     _check_dns_label_limit(steps, result)
+    _check_parameter_splitting(steps, result)
+    _check_autoid_rows_runnable(xlsx_path, result)
     return result
+
+
+def _check_autoid_rows_runnable(xlsx_path, result: StructuralResult) -> None:
+    """autoid 行(每 case 首行)的 E 列必须非空——框架 ifrun(test_xlsx.py:88-90)对
+    E 为 None 的 autoid 行直接 return False,**整个 case 静默不跑**(无日志无 fail,
+    执行统计里凭空少一个 case)。emit 把 autoid 与第一步同行写入天然满足;人工卷/直改
+    卷常把 autoid 写成独占行,即触发。卷面级检查(steps 反解已丢行绑定信息)。
+    """
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(xlsx_path)
+        ws = wb.active
+    except Exception:  # noqa: BLE001 — 卷面不可读已由上游报
+        return
+    begun = False
+    for row in ws.iter_rows(min_row=2):
+        a = str(row[0].value or "").strip()
+        if not begun:
+            begun = a == "自动化ID"
+            continue
+        if a.startswith("203") and not str(row[4].value or "").strip():
+            result.add(
+                "autoid_row_not_runnable",
+                f"autoid 行({a})的 E 列为空——框架 ifrun 对此整 case **静默跳过**"
+                "(不执行、不计 fail、无日志)。autoid 必须与第一个步骤同行(E 列非空)。",
+            )

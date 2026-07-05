@@ -162,6 +162,9 @@ def submit_verdict(autoid: str, verdict: str, root_cause: str = "",
             return ("error: 该卷面(内容未变)已有 PASS 凭证,推翻它需要行级新证据——"
                     "在 caveats 或 report_md 里写明具体行号(如 r42/row 42/第42行)和该行"
                     "的缺陷;没有行级证据的重审翻案不被接受(意见漂移不是新信息)。")
+    # CUT 连击计数(跨重编累计,PASS 清零):778041 实证三连 CUT 循环被人工才停;
+    # 942 对时点配对实证 grade CUT 重做零增益——连击是"意见循环"信号,不是质量信号。
+    cut_streak = int(cred.get("cut_streak") or 0) + 1 if v == "CUT" else 0
     cred.update({
         "autoid": autoid,
         "xlsx": str(xp),
@@ -170,6 +173,7 @@ def submit_verdict(autoid: str, verdict: str, root_cause: str = "",
         "source": "grade",
         "root_cause": rc or None,
         "caveats": caveats,
+        "cut_streak": cut_streak,
         "verdict_ts": _time.time(),
     })
     try:
@@ -181,7 +185,13 @@ def submit_verdict(autoid: str, verdict: str, root_cause: str = "",
             (xp.parent / "grade_report.md").write_text(report_md, encoding="utf-8")
         except Exception:  # noqa: BLE001
             pass
-    return (f"已提交判定并落盘凭证: {cred_path}\n"
-            f"autoid={autoid} verdict={v}"
-            + (f" root_cause={rc}" if rc else "")
-            + (f" caveats={len(caveats)}条" if caveats else ""))
+    out = (f"已提交判定并落盘凭证: {cred_path}\n"
+           f"autoid={autoid} verdict={v}"
+           + (f" root_cause={rc}" if rc else "")
+           + (f" caveats={len(caveats)}条" if caveats else ""))
+    if cut_streak >= 2:
+        out += (f"\n⚠ 该 autoid 已连续 {cut_streak} 次 CUT(跨重编累计)。942 对配对实证:"
+                "grade 判 PASS→上机 56%、判 CUT→53%,CUT 重做零增益——继续 CUT-重编循环"
+                "只烧 token 不产信息。上机才能回答的疑虑(回显格式/计数器行为/轮转起点)"
+                "写 caveats 落 PASS 交上机 oracle 终判;只有带行级引用的结构/事实错误才值得再 CUT。")
+    return out

@@ -15,42 +15,9 @@ when_to_use: |
 
 # 上机验证：串行上机 + 四层归因 + 回流交接
 
-## Quick Start
+把**已编译好的** excel 串行上机一遍，采集框架真实裁决，回填 `<RUNTIME>`，对每个 fail 四层归因、按层 reflow 交给 `ist-compile` 重编，真 PASS 双写回。**只验一遍 + 交接修复**——不自己改 case（改归 `ist-compile`），也不自己套"验到全过"的迭代循环（迭代由上层：用户 / goal 循环驱动；本 skill 跑一遍即返回）。流程即下方 Steps 1-8;各工具的参数与返回形态以工具自身说明为准,不在此复述。
 
-对一份编译好的 `case.xlsx` 上机跑一遍最小调用：
-
-```python
-# 1. 首跑：整份 xlsx 单跑一次，拿逐 case 归因摘要 + 全量明细落 last_run.json
-dev_run_batch_digest(
-    xlsx_path="workspace/outputs/<脑图名>/case.xlsx",
-    autoids_json='["121100001","121100002"]',
-    # 进程内消化大结果：返**精简摘要**(计数 + 逐 case 归因层 + found_times 崩溃点名元凶 case)，
-    # 全量明细(device_context/causality/traceback)落 workspace/outputs/<脑图名>/last_run.json——
-    # fs_read 分页 / fs_grep <autoid> / run_python json.load 都能读它去深挖某个 fail。
-    # build/module 不传 → get_config() dataclass 默认兜底(module=sdns + 当前版本 build)，别问。
-)
-# 2. 若有 <RUNTIME> 待填：看槽位 → 从首跑设备真实输出抽值回填 → 复验
-compile_runtime_slots("workspace/outputs/<脑图名>/case.xlsx")
-compile_runtime_fill(xlsx_path=..., fills_json=..., run_meta=...)
-dev_run_batch_digest(xlsx_path=..., autoids_json='[...]')  # 复验(build/module 同走默认)
-# 3. 仍 fail 的 → 四层归因(基于 last_run.json 里该 case 的 device_context)；真 PASS 的 → 写回 footprint
-```
-
-整份 xlsx 单跑一次（deliver+run 合并），超时 `clamp(max(floor, N×45s), 600, 2400)`。**只验一遍即返回**，不自套"验到全过"循环。
-
-## Quick Reference
-
-| 阶段 | 工具 / 动作 | 关键约束 |
-|---|---|---|
-| 定位 | 确定 xlsx 路径 + autoids + provenance 路径（build/module 走默认、不必确定） | provenance 缺失 → 归因退化、不写回 |
-| 首跑 | `dev_run_batch_digest(xlsx_path, autoids_json)` → 精简摘要 + 明细落 `last_run.json` | 含 `<RUNTIME>` 的 case 必 fail，属预期待填，先别归因；found_times 崩溃=编译缺陷(摘要已点名元凶 case) |
-| 回填 RUNTIME | `compile_runtime_slots` → `compile_runtime_fill` → 复验 `dev_run_batch_digest` | 值只来自设备真实输出；填完即锁、不反复改；抽不出留空 |
-| 四层归因 | `compile_attribute(verdict_detail, failing_assertion_layer)` | 必基于 `device_context`/`framework_traceback`；瞬态单列不回流 |
-| 归因落盘 | 每个有结论的 fail 调 `submit_attribution(xlsx_path, autoid, layer, disposition, evidence, fix_direction)` | evidence 必须是 device_context/causality **原文子串**（复制勿转述）；不落盘则下一轮「瞬态复现=误归」「冻结同法」护栏读不到你的结论 |
-| 回流交接 | `invoke_skill(skill="ist-compile", brief=...)` 一次 | 修 case 唯一正路；绝不手调 `compile_*` 内部步、绝不 `fs_edit` xlsx |
-| 写回 footprint | provenance 取真 PASS 的 G 段文法回写（`on_device_passed=True`） | 只写 G 段命令文法；V/E/运行时值不写 |
-
-把**已编译好的** excel 串行上机一遍，采集框架真实裁决，回填 `<RUNTIME>`，对每个 fail 四层归因、按层 reflow 交给 `ist-compile` 重编。**只验一遍 + 交接修复**——不自己改 case（改归 `ist-compile`），也不自己套"验到全过"的迭代循环（迭代由上层：用户 / goal 循环驱动；本 skill 跑一遍即返回）。
+归因落盘纪律贯穿全程:每个有结论的 fail 调 `submit_attribution`,evidence 必须是 device_context/causality **原文子串**(复制勿转述)——不落盘则下一轮「瞬态复现=误归」「冻结同法」护栏读不到你的结论。
 
 ## Inputs
 
@@ -62,9 +29,9 @@ dev_run_batch_digest(xlsx_path=..., autoids_json='[...]')  # 复验(build/module
 
 - **裁决以框架逐 check_point 真实明细为准，不信 verdict 字符串**——字符串可能把环境失败写成 fail、掩盖真因。
 - **失败必看 `device_context`**：`dev_run_batch` 对非 pass case 返回它——含 ① 框架逐步执行 + 断言明细 + case 内异常 ② 设备配置会话原文（每条命令 + 设备真实响应，含 `^` 语法错 / `Failed to execute X because Y` → 哪条命令被拒/为什么）③ 触发端 RouterA/RouterB/clientc dig 真实输出（ANSWER SECTION / 实际解析 IP）。`unknown` 的 case 还附 `framework_traceback`（**文件级崩溃**真因：某 case 把整份 pytest 搞崩、后续全不跑 → 先修 traceback 指的那一个，别误判后续 case 本身错）。**改配置 / 填值 / 写 reflow brief 都基于它，不靠猜。**
-- **拿不准框架断言行为就读框架源码**（只读，沙箱已放行这两个文件）：`knowledge/framework/mirror/lib/check_point.py`（`found`=`re.compile` 当**正则**；`abs_found`=`re.escape` 当**字面**；`found_times` 需 3 参）+ `lib/test_xlsx.py`（check_point 分派只传 2 参 → `found_times` 必崩；带 H 的步只存寄存器不更新 `result`；`getattr(env,F)` 不转小写）。断言为何匹配/不匹配/崩，**以源码为准**。
+- **拿不准框架断言行为就读框架源码**（mirror 在盘上,只读）：断言语义在 `knowledge/framework/mirror/lib/check_point.py`、行分发/变量机制在 `lib/test_xlsx.py`——断言为何匹配/不匹配/崩，**以源码为准**（列语义速查在 `knowledge/data/compile_ref/EXCEL_FUNCTIONS.md`）。
 - **归因如实，不救场**：不把环境失败粉饰成通过，也不把断言失败甩锅给环境。
-- **诊断「给事实、不给结论」**：把设备真实证据交给你判断，别用现成结论替换事实——① **主料是原始事实**：`last_run.json` 里该 case 的 `device_context`（设备会话原文 / `^`语法错 / dig ANSWER SECTION），据它下判断；② **机械预判只认协议级事实**：digest/`compile_attribute` 只在设备 `^` 语法拒绝时给 G（可直接采信，先修它——同 case 后续失败多为下游后果），其余标 undetermined **不猜**——E/V/瞬态/产品缺陷由你读原文归因；③ **只有来源比你更可靠的成品结论才直接采信**——如 `found_times` 文件级崩溃（框架必崩的确定性事实，digest 已点名元凶 case）可直接判「编译缺陷、重编」，`^` 拒绝同理；语义类判断永远是你的。
+- **诊断「给事实、不给结论」**：主料是 `last_run.json` 里的 `device_context` 原文,据它下判断;机械预判只认协议级事实(G(^) 语法拒/文件级崩溃签名——来源比你可靠,直接采信),其余 undetermined 由你读原文归因,语义类判断永远是你的（操作细则见步 5 Rules）。
 - **三层边界（这错归谁、怎么修）**：**机械崩溃**（`found_times` 必崩、`found(None)` 崩）= emit 结构门管，出现即**编译缺陷**、走重编，**不是**框架 bug；**可证伪性**（某断言对该算法类能不能被证伪，如「命中恰好 N 次」对 rr/wrr 随机起点不可验）用 `compile_check_verifiability` 工具判、欠定就改预期（重定向到命中归属 / 分布区间）；**语义充分性**（断言是否真覆盖脑图关心的行为）是你的判断。别把这三层混着一刀切。
 - **单环境内串行**：框架对**一套设备床**有全局锁，同一环境同一时刻只能跑一份 `dev_run_batch`（撞了回 `device_busy`）。
 - **多份 excel 跨环境并行**（启用环境池 `IST_ENV_POOL_ENABLED=1` 时）：一轮**并行发多个 `dev_run_batch`**（每个一份 excel），池会把它们**自动分到不同的空闲环境**（各自独立设备床，互不撞锁）→ N 机 N 路并行，总时长≈最慢一份而非求和。并发数超过就绪环境数时多出来的自动排队等空闲，绝不撞同一设备。**池未启用（单环境）时仍串行**：一份接一份，别并发（会 `device_busy`）。
@@ -106,7 +73,7 @@ dev_run_batch_digest(xlsx_path=..., autoids_json='[...]')  # 复验(build/module
 
 回填后再 `dev_run_batch_digest` 一次。回填的断言现应转 **pass**（设备值＝设备值）；仍 fail 的才是**真实断言失败**，进归因。仍留空的 `<RUNTIME>` 不算失败、不归因。
 
-**复验跑子集，交付跑整卷**：修复轮的复验只合并 fail 的 case（`compile_emit_merged(autoids=fail列表, out_name="<批名>_fails")`）再上机——整卷重跑会让已 pass 的 case 白跑一遍（34 卷闭环实测：修 5-8 个 fail 整卷重跑 7 轮，约 200 次多余 case 执行，每轮多等 5-9 分钟；框架每 case 前清空设备配置、case 间独立，子集跑与整卷跑单 case 行为一致）。digest 摘要在 fail 占少数时给出带确切 autoid 列表的节流提示，照做即可。全部转正后**整卷跑一次**作为交付确认。
+**复验跑子集，交付跑整卷**：修复轮只合并 fail 的 case 再上机（框架每 case 前清空设备配置、case 间独立,子集与整卷单 case 行为一致——digest 摘要在 fail 占少数时给出带确切 autoid 列表的节流提示,照做）。全部转正后**整卷跑一次**作为交付确认。
 
 **Success criteria**: 区分出 真 PASS / 真实 fail / 待补值
 **Artifacts**: rerun_results
@@ -125,9 +92,7 @@ dev_run_batch_digest(xlsx_path=..., autoids_json='[...]')  # 复验(build/module
 
 **Execution**: Direct（委派 fork）
 
-多个 fail case 要重编时，**一次并发 fan-out、别逐个串行**：给每个 fail case 建一条 brief（autoid + target_layer + 该 case 的 `device_context` 原文 + 应改方向 + 「定向重做：针对问题改、保留正确部分」），聚成 JSON 数组，调**一次**
-`compile_fanout(skill="ist-compile-draft", briefs_json='[{"key":"<autoid>","brief":"<...含device_context+应改方向...>"}, ...]')`
-——N 个 case 的 draft worker **真并发**跑（各自独立 fork 上下文，互不污染、不占 main 上下文），一次返回逐 case 产物。比"逐个 invoke_skill 串行"或"main 自己把 N 个 case 分析完再批量 emit"都快（并行掉最贵的分析+检索）。fan-out 返回后各 case 的新 `case.xlsx` 已在 `outputs/<autoid>/`，回步骤 2 用 `dev_run_batch_digest` 再验（上机才是真门）。
+多个 fail case 要重编时，**一次并发 fan-out、别逐个串行**：给每个 fail case 建一条 brief（autoid + target_layer + 应改方向 + 「定向重做：针对问题改、保留正确部分」；device_context 用 `evidence_from_xlsx` 参数让工具自动注入原文,别手抄转述），调**一次** `compile_fanout(skill="ist-compile-draft", briefs_json=[原生数组])`——N 个 draft worker 真并发,一次返回逐 case 产物。fan-out 返回后各 case 的新 `case.xlsx` 已在 `outputs/<autoid>/`，回步骤 2 再验（上机才是真门）。
 
 **何时改用 `invoke_skill(ist-compile)`**：需要 grade 质量再审批（断言形态可疑、非单纯 IP/命令订正）时——它内部跑完整 `compile_pipeline`（prep→draft→grade→merge）带收敛环。fan-out draft **跳过 grade**、靠上机复验兜底，适合归因明确的定向订正（G(^) 命令订正、E 层换真实 IP、V 层按设备语义改期望）。
 

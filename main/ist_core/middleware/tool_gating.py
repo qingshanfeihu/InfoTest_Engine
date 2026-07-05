@@ -47,6 +47,8 @@ _GATED_PREFIX_GROUPS: dict[str, str] = {
 # (多给只是 schema 重量,少给才可能断工作流)。未列出的 skill 视为未知 → 全量放行。
 _SKILL_GROUPS: dict[str, set[str]] = {
     "ist-compile": {"compile", "device"},
+    "ist-compile-engine": {"compile", "device"},
+    "compile-attributor": {"compile", "device"},
     "compile-worker": {"compile", "device"},
     "ist-compile-draft": {"compile", "device"},
     "ist-compile-grade": {"compile", "device"},

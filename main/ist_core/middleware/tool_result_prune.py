@@ -115,6 +115,12 @@ def prune_messages(messages: list) -> list:
         stub = (f"{head}\n…[工具结果已剪枝以释放上下文:原 {len(text)} 字符。"
                 "头部保留了指针/结论;需要完整原文时重新调用该工具,"
                 "或 fs_read 其落盘文件(路径通常在头部)。]")
+        # 标签平衡(2026-07-05 中间件交互修复):ToolEnvelope 已在头部放 <tool_result>
+        # 开标签,剪掉尾部会带走 </tool_result> 闭标签 → LLM 见不平衡 XML。头部有未闭合
+        # 的 <tool_result> 就补回闭标签,信封仍完整。
+        import re as _re
+        if _re.match(r"\s*<tool_result\b", head) and "</tool_result>" not in stub:
+            stub += "\n</tool_result>"
         try:
             m2 = m.model_copy(update={"content": stub})
         except Exception:  # noqa: BLE001 — 非 pydantic 消息对象,跳过该条

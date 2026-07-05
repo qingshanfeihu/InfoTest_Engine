@@ -79,6 +79,18 @@ def test_deterministic(monkeypatch):
     assert [m.content for m in a] == [m.content for m in b]
 
 
+def test_pruned_envelope_stays_balanced(monkeypatch):
+    # 中间件交互(2026-07-05):ToolEnvelope 包的 <tool_result> 被剪枝后,闭标签必须补回。
+    monkeypatch.setenv("IST_PRUNE_PROTECT_CHARS", "5000")
+    from main.ist_core.middleware.tool_envelope import envelope_text
+    big = envelope_text("dev_run_batch", "指针:workspace/x/last_run.json\n" + "日志\n" * 10000)
+    msgs = _history(_tm("dev_run_batch", big, "t1"))
+    out = trp.prune_messages(msgs)
+    pruned = out[2].content
+    assert pruned.count("<tool_result") == 1 and pruned.count("</tool_result>") == 1
+    assert pruned.startswith("<tool_result") and pruned.rstrip().endswith("</tool_result>")
+
+
 def test_disabled_by_env(monkeypatch):
     monkeypatch.setenv("IST_PRUNE_TOOL_OUTPUTS", "0")
     monkeypatch.setenv("IST_PRUNE_PROTECT_CHARS", "5000")

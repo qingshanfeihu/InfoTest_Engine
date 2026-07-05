@@ -96,7 +96,9 @@ main/ist_core/tools/
 | Skill | 类型 | 用途 |
 |-------|------|------|
 | `test-list-review` | user-invocable | 测试用例/策略评审（主入口） |
-| `ist-compile` | inline | 脑图 → case.xlsx 编译编排（v5 main-orchestrated；`compile_pipeline` 为 fallback） |
+| `ist-compile-engine` | user-invocable | **V6 编译主入口**:一句话跑整条闭环(StateGraph 引擎,断点续跑) |
+| `compile-attributor` | fork | V6 归因孔③:上机 fail 读原文判层,submit_attribution 落盘 |
+| `ist-compile` | inline | v5 main-orchestrated 编排（引擎关闭时 fallback;`compile_pipeline` 为二级 fallback） |
 | `compile-worker` | fork | 编译子流程：单 case 自由理解编写（main-orchestrated 主路 worker） |
 | `ist-compile-draft` | fork | 编译子流程：先例检索 + emit 草稿（pipeline fallback 路径） |
 | `ist-compile-grade` | fork | 编译子流程：断言质量审批 |
@@ -124,6 +126,7 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
   - **输出形态/格式**的示例（断言长什么样、provenance JSON 的结构骨架）——官方鼓励，帮 LLM 看清形态，可给。
   - **领域判断答案**的具体例子（「算法类应改成 `show statistics`」）——禁。LLM 会当通用规则一刀切套用、误伤异类。实证：grade 重做意见写死「算法类补 `show statistics`」→ GA 本该 `dig` 验命中、却被迫套出 `Hit:\d+` 恒真断言 → 3 个 GA case 连续 CUT 回归。
 - **术语一致 + 假设 LLM 已聪明**：同一概念自始至终用同一个词（别一会儿「成员 IP」一会儿「落点」——术语漂移会让 LLM 误判同/异）；不解释 LLM 已知的基础（RR 是什么、dig 是什么），把 token 留给真正的踩坑点。
+- **参考文档只写机制，数据按引用**：框架动作注册表/命令清单/主机方法表是**数据**（随框架版本增长，抄进文档必漂移）；文档写分发机制、语法契约、静默失败模式 + **源码路径**，让 LLM 编写时现查（mirror 在盘上 fs_read 直读）。别把清单内联进 md 替模型思考——违背「LLM 走控制面、数据按引用流」构造（实证 2026-07-05：execute 27 动作分组清单+用途点评被用户拦下）。机械门同理：闭集判定从 mirror 源码解析，不硬编码。
 - **改 prompt 前先有 eval（官方 eval-first）**：把要防的回归固化成可机读断言（如「产出 excel 不含写死的 `Hit:\s+1` / 命中 IP」），改完跑 eval + baseline 对比，别只靠肉眼看一次产物就下结论。
 
 ## main 子包结构
@@ -146,7 +149,13 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 
 ## 用例编译（`main/case_compiler/` + 编译链 skill）
 
-把人工测试用例（脑图）编译成断言真覆盖目标行为的 `case.xlsx`。**走平台正路**：用户在 TUI 让 main agent 编译，main agent 作为编排器派发子流程。**编译入口为 `ist-compile`（v5 起 main-orchestrated）**：main agent 自己当 orchestrator——`compile_prep` 解析脑图→manifest → 逐 case 派 `compile-worker` fork 编写（可批内并发；emit 过全部机械门即落结构凭证）→ 机械探针+抽查核验（`compile_grade_extract`；**不逐 case 派 grade**，见下方「交付门槛」换源条）→ `compile_emit_merged` 合并打包。`compile_pipeline` 保留作 fallback（单条是 N=1 特例）。**编译与上机验证解耦**：编译只产出 excel；上机走 `ist-verify`（唯一语义 oracle）。
+把人工测试用例（脑图）编译成断言真覆盖目标行为的 `case.xlsx`。
+
+**V6 引擎主路（2026-07-06 起,`main/ist_core/compile_engine/`）**：编译闭环 = 一张 LangGraph StateGraph（8 节点三类:[mech] 直调工具 .func / [llm] 孔经 execute_fork_skill / [user] 孔经官方 interrupt+Command(resume)），main agent 只调薄工具 `compile_engine_run(mindmap, version)` 一次——编写→欠定问用户（interrupt 挂起+checkpoint,先问后落代码强制）→合并（凭证门+pass 卷面锁）→上机→归因（known_defects 短路/机械预判/LLM 只填 undetermined）→只重编 fail 子集（ledger 迁移合法性表:`passed→重编` 在数据层非法）→循环到不动点→真 PASS 双写回（先例+footprint 经 device_verified 第二权威源）→engine_report.json。断点续跑:同参数重调即从 checkpoint 继续,已跑设备轮不重烧（run_marker 幂等）。回退 `IST_COMPILE_ENGINE=0` 走 v5。资产包 `skills/ist-compile-engine/SKILL.md`（engine frontmatter:graph 指针/phases/holes）,拓扑门断言图↔SKILL↔NODE_TYPES 三方一致;Studio 可视化经 langgraph.json 第三张图。
+
+**三层栈数据形态判定表（架构红线,新资产落地前先过此表）**：人定义的→md（frontmatter=YAML 元数据+XML 分节正文）;确定性流程→py（LangGraph 图,节点=纯函数）;机器间传的→JSON（盘上台账,按引用流,整份不进 LLM 上下文）;进 LLM 上下文的→XML 信封;会因场景而异的语义判断→skill（fork）;只有一条正确做法的→tool（py,引擎直调 .func）;**LLM 永远不当胶水**——胶水是图的条件边。机械闭集从 mirror 源码解析不手抄。
+
+**v5 fallback（引擎关闭时,`ist-compile` skill 内文)**：main agent 自己当 orchestrator——`compile_prep` 解析脑图→manifest → 逐 case 派 `compile-worker` fork 编写（可批内并发；emit 过全部机械门即落结构凭证）→ 机械探针+抽查核验（`compile_grade_extract`；**不逐 case 派 grade**，见下方「交付门槛」换源条）→ `compile_emit_merged` 合并打包。`compile_pipeline` 保留作 fallback（单条是 N=1 特例）。**编译与上机验证解耦**：编译只产出 excel；上机走 `ist-verify`（唯一语义 oracle）。
 
 - **grade 凭证机械门**（2026-07-03，A 层强制）：`compile_emit_merged(autoids=…)` 校验每个 autoid 在**当前** case.xlsx 上实跑过 grade——`submit_verdict`/`compile_score` 落盘 `outputs/<autoid>/.grade_credential.json`（校验内容 `xlsx_mtime` 精确签名，LLM 手写文件冒充不了），缺失、过期（重编后未重新 grade）、或判定是 CUT 都拒绝合并。起因：34-case 实跑中 main agent 长上下文下把 grade 从 plan 里遗忘、零审批直接合并交付——prompt 约束再硬也只是 C 层，必派类事实要代码强制。
 - **接口结构化（2026-07-03，取证驱动）**：两轮全量运行取证结论——事故全部出在「过程事实只存在于散文里」，据此把**信封/凭证/台账/载荷**结构化、**判断/评审理由/修法方向**保持自由文本。落地：① emit 步骤载荷三通道（`steps` 原生数组首选 / `steps_path` workspace 文件 / `steps_json` 字符串兼容——字符串通道经供应商序列化实证单轮 73% 拖尾解析失败）；`IST_TOOLS_STRICT=1` 可全局开 function-calling strict。② 批量工具入参双收原生数组（`autoids_json`/`briefs_json`/`fills_json`），`dev_run_batch*` 对 autoid 做 xlsx 全集校验（治手抄截断 id 静默误匹配）。③ grade 交付走 `submit_verdict` 工具（verdict/root_cause 枚举 + caveats 落盘供 verify 消费 + report_md 自由文本）；worker 返回末两行机读尾块（`状态：/产物：`），orchestrator 以落盘文件为 produced 事实源。④ 归因结论走 `submit_attribution` 落盘 last_run.json（layer×disposition + evidence 必须原文子串），瞬态跨轮护栏读它；last_run.json 按 autoid merge + `_round`/`_fail_signatures`（不再整文件覆盖）。⑤ 欠定台账 `needs_decision.json`（含 `ordering_sensitive`）+ 用户决策 `user_decision.json`——emit 出口机械核对断言形态与顺序锚（577976 选分布产关系、593516 有序语义静默降级两类跑偏变必崩门）。⑥ 冻结闸门：digest 跨轮同签名 fail 落 `outputs/<autoid>/.frozen.json`，重编必须传 `override_frozen_reason`；`compile_fanout(evidence_from_xlsx=…)` 自动注入 device_context 原文防转述失真。

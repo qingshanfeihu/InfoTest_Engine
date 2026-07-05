@@ -248,6 +248,8 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
     Returns:
         JSON 数组字符串。每项 {"key": ..., "ok": bool, "output": "<子agent输出或错误>"}，
         顺序与输入一致。某个 fork 失败不影响其它（该项 ok=false），你据此决定重做哪些。
+        编写类派发（worker/draft,key=autoid）每项另带 "produced": bool——工具直接探
+        outputs/<autoid>/case.xlsx 是否在盘上,「产没产出」以它为准,不用读散文猜。
         单项 output 超内联上限时全文自动落 workspace（该项多出 "output_path"），内联只保留
         **末尾**片段——fork 的机读尾块(状态:/产物:/判定:)在末尾,机读路径不受影响；
         深挖全文 fs_read 该 output_path。
@@ -402,6 +404,14 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
     ordered = [results.get(it["key"], {"key": it["key"], "ok": False,
                                        "output": "ERROR: 无结果"}) for it in norm]
     ordered += skipped
+    # 「产没产出」以落盘为准,工具直接探(编写类派发 key=autoid):worker 说产出了但盘上
+    # 没有、或返回是调试残句但盘上有——散文与事实曾张冠李戴,produced 字段是机读事实源。
+    if "worker" in (skill or "").lower() or "draft" in (skill or "").lower():
+        _root = _project_root()
+        for r in ordered:
+            aid = str(r.get("key", "")).strip()
+            if len(aid) == 18 and aid.isdigit():
+                r["produced"] = (_root / "workspace" / "outputs" / aid / "case.xlsx").is_file()
     _offload_large_outputs(ordered, skill)
     return json.dumps(ordered, ensure_ascii=False)
 
@@ -686,6 +696,57 @@ def _fail_signatures(text: str) -> set[str]:
             for m in re.finditer(r"fail to find:?\s*([^\r\n]{1,80})", text or "")}
 
 
+def _xlsx_apv_lines(xlsx_path) -> dict[str, list[str]]:
+    """从(合并)卷机械抽取每个 autoid 的 APV 命令列表(E∈{APV_0,APV_1} 行的 G 列,
+    cmds_config 多行逐条拆)。verified_runs 台账的 apv_cmds 字段来源——device_verified
+    权威源用它交叉校验"写回的命令真实出现在 PASS 卷面上"。"""
+    import openpyxl
+    out: dict[str, list[str]] = {}
+    wb = openpyxl.load_workbook(str(xlsx_path), read_only=True, data_only=True)
+    try:
+        for ws in wb.worksheets:
+            begun = False
+            cur = ""
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                a = str(row[0] or "").strip() if row else ""
+                if not begun:
+                    begun = a == "自动化ID"
+                    continue
+                if a.startswith("203"):
+                    cur = a
+                    out.setdefault(cur, [])
+                if not cur or len(row) < 7:
+                    continue
+                e = str(row[4] or "").strip()
+                if e in ("APV_0", "APV_1"):
+                    for line in str(row[6] or "").splitlines():
+                        line = line.strip()
+                        if line:
+                            out[cur].append(line)
+    finally:
+        wb.close()
+    return out
+
+
+def _append_verified_runs(xlsx_path, results: list, cur_round: int, run_ts: float) -> None:
+    """运行台账(V6 支柱2a):逐 case 追加 runtime/logs/verified_runs.jsonl。"""
+    apv = _xlsx_apv_lines(xlsx_path)
+    ledger = _project_root() / "runtime" / "logs" / "verified_runs.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    xstat = Path(str(xlsx_path)).stat()
+    with ledger.open("a", encoding="utf-8") as f:
+        for rec in results:
+            if not isinstance(rec, dict) or not rec.get("autoid"):
+                continue
+            aid = str(rec["autoid"])
+            f.write(json.dumps({
+                "autoid": aid, "verdict": str(rec.get("verdict", "")),
+                "run_ts": run_ts, "round": cur_round,
+                "xlsx": str(xlsx_path), "xlsx_mtime": xstat.st_mtime,
+                "apv_cmds": apv.get(aid, []),
+            }, ensure_ascii=False) + "\n")
+
+
 @tool(parse_docstring=True)
 def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: str = "",
                          build: str = "", max_s_each: int = _RUN_DEFAULT_MAX_S,
@@ -842,8 +903,20 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
                 rec["_fail_signatures"] = sorted(_fail_signatures(
                     (rec.get("causality") or "") + (rec.get("device_context") or "")))
             merged_map[str(rec["autoid"])] = rec
-        out_file.write_text(json.dumps(list(merged_map.values()), ensure_ascii=False, indent=2),
-                            encoding="utf-8")
+        # 原子写(2026-07-05 竞态类加固):last_run.json 是跨轮对照/归因/写回的事实源,
+        # 与意图索引同病类——非原子 write_text 被杀进程/并发进程截断成拼接损坏后,
+        # 整链(冻结判定/翻案证据/写回门)全部失灵。tmp+os.replace 根治。
+        _tmp = out_file.with_suffix(".json.tmp")
+        _tmp.write_text(json.dumps(list(merged_map.values()), ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+        os.replace(_tmp, out_file)
+        # 运行台账(V6 支柱2a):每 case 一条 {autoid, verdict, run_ts, apv_cmds…} 追加
+        # runtime/logs/verified_runs.jsonl——footprint 写回的 device_verified 第二权威源。
+        # runtime/ 在 agent 文件沙箱黑名单,工具进程写、agent 伪造不了;追加失败不阻断 run。
+        try:
+            _append_verified_runs(xlsx_path, results, cur_round, now_ts)
+        except Exception:  # noqa: BLE001
+            logger.debug("verified_runs 台账追加失败(忽略)", exc_info=True)
         try:
             detail_disp = str(out_file.relative_to(_WORKSPACE_ROOT.parent))
         except Exception:  # noqa: BLE001
@@ -916,6 +989,8 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
     lines.append("归因说明: G(^)=设备语法拒绝(协议级确定事实,先修它——同 case 后续解析/断言失败多为下游后果); "
                  "待归因=未做机械预判,读 last_run.json 里该 case 的 device_context 原文自行判 "
                  "E(可达性/环境)/V(断言期望值)/瞬态(换时间重跑即消失;连续两轮同签名 fail 不是瞬态)/疑似产品缺陷。")
+    lines.append("归因第一步: 先对照 knowledge/data/auto_env/env_capabilities.json 的 known_defects——"
+                 "命中已知缺陷(DC-*)的 fail 是环境/产品边界,标注即可,别当编译问题重编。")
     # 子集复测节流:迭代期整卷重跑,pass 的 case 每轮白跑一遍(dongkl 闭环实测:修 5-8 个
     # fail 反复整卷 34 跑了 7 轮,≈200 次多余 case 执行,每轮多等 5-9 分钟)。fail 占少数时,
     # 修复轮只跑 fail 子集卷;last_run.json 是按 autoid merge 的,子集结果回填不覆盖 pass

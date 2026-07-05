@@ -693,54 +693,25 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
     #    消除 P7 屏障——不再"全部 draft 完才开 grade"；case A 在 grade 时 case B 还能 draft。
     #    并发**自适应**(AIMD)：端点健康缓升、丢连接/限流骤降——替代手动调 IST_FANOUT_CONCURRENCY。
     import time as _time
-    from main.ist_core.skills.loader import execute_fork_skill
     from main.ist_core.tools.device.batch_tools import _resolve_concurrency
-    from main.ist_core.resilience import AdaptiveLimiter, is_transient_error
+    from main.ist_core.resilience import AdaptiveLimiter, ForkExecutor
 
     ceiling = _resolve_concurrency(0, n_items=len(cases))   # env 可设上限；默认 auto
     limiter = AdaptiveLimiter(start=max(2, ceiling // 2), min_limit=1, max_limit=ceiling)
-
-    def _fork_call_bounded(skill: str, brief: str, tag: str,
-                           summary_sink: dict | None) -> str:
-        """Fix A：把单次 fork 跑在看门狗线程，墙钟超 _FORK_WALLCLOCK_S 即放弃等待。
-
-        copy_context() 把当前 context（含 _current_run_token）带进 worker，保证 dev_probe
-        single-flight 仍命中本 run。超时返回 `[fork-wallclock]` 标记——**故意不被 is_transient_error
-        命中** → 不触发 transient 重试放大，由 _compile_one_case 的 wallclock 分支立即 escalate。
-        """
-        ctx = _ctxvars.copy_context()
-        fut = _FORK_WATCHDOG.submit(
-            ctx.run, execute_fork_skill, skill, brief, tag=tag, summary_sink=summary_sink)
-        try:
-            return fut.result(timeout=_FORK_WALLCLOCK_S)
-        except _cf_mod.TimeoutError:
-            if summary_sink is not None:
-                summary_sink.clear()   # 超墙钟 fork 无可信 summary，清空防污染调用方
-            return (f"ERROR: [fork-wallclock] fork skill {skill!r} 超 "
-                    f"{int(_FORK_WALLCLOCK_S)}s 墙钟未完成 → 放弃(escalate)")
+    # fork 执行机件(限流+看门狗+transient 重试)已抽取为 ForkExecutor(V6 步骤1),
+    # 本流水线与 compile_engine 图的 [llm] 孔共用;常量语义与原闭包逐条一致。
+    _executor = ForkExecutor(
+        limiter,
+        wallclock_s=_FORK_WALLCLOCK_S,
+        transient_retries=_TRANSIENT_RETRIES,
+        transient_base_sleep=_TRANSIENT_BASE_SLEEP,
+        transient_wallclock_s=_FORK_TRANSIENT_WALLCLOCK_S,
+        watchdog=_FORK_WATCHDOG,
+    )
 
     def _fork_call(skill: str, brief: str, tag: str = "",
                    summary_sink: dict | None = None) -> str:
-        """调 fork：遇 transient 端点错误(丢连接/限流/流中断)→降并发+退避重试，非真失败。
-        tag 传给 fork runner,让其内部工具调用实时发到主 bus(TUI 看到 draft/grade 运行过程)。
-        summary_sink：可观测性回传桶（最后一次 attempt 的 fork summary，供 obs 聚合）。
-        Fix A：每次 attempt 走看门狗封顶单 fork 墙钟。
-        Fix B：整个 _fork_call（含所有 transient 重试）总墙钟封顶 _FORK_TRANSIENT_WALLCLOCK_S。"""
-        last = ""
-        deadline = _time.monotonic() + _FORK_TRANSIENT_WALLCLOCK_S
-        for attempt in range(_TRANSIENT_RETRIES + 1):
-            out = _fork_call_bounded(skill, brief, tag, summary_sink)
-            if isinstance(out, str) and out.startswith("ERROR:") and is_transient_error(out):
-                limiter.record_overload()
-                last = out
-                # Fix B：重试次数未满 **且** 总墙钟未超才退避重试；否则停退（不再 4×810s）。
-                if attempt < _TRANSIENT_RETRIES and _time.monotonic() < deadline:
-                    _time.sleep(_TRANSIENT_BASE_SLEEP * (2 ** attempt))
-                    continue
-                return out
-            limiter.record_success()
-            return out if out is not None else ""
-        return last
+        return _executor.call(skill, brief, tag=tag, summary_sink=summary_sink)
 
     def _draft_once(case: dict, aid: str, feedback: str, rnd: int,
                     precedent_text: str = "", footprint_text: str = "",

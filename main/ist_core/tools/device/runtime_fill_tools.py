@@ -110,11 +110,51 @@ def compile_runtime_fill(xlsx_path: str, fills_json: list | str = "", run_meta: 
                 + ", ".join(_no_ev) + "。值必须溯源设备真实输出;抽不出就留空,绝不猜。")
 
     try:
-        from main.case_compiler.runtime_fill import apply_fills
+        from main.case_compiler.runtime_fill import apply_fills, list_runtime_slots
         root = Path(__file__).resolve().parents[4]
+        _slots_before = {s.slot_id: s for s in list_runtime_slots(p)}
         res = apply_fills(p, fills, project_root=root, run_meta=run_meta)
     except Exception as e:  # noqa: BLE001
         return f"error: 回填失败: {e}"
+
+    # sidecar 记账(2026-07-05 生命周期洞修复):回填只写给定卷(通常是合并卷),
+    # per-case 卷仍是 <RUNTIME>——之后任何重合并会从 per-case 卷重建,**静默丢掉
+    # 全部已填值**(v12 实跑整卷重合并过两次,恰逢 RUNTIME=0 才没炸)。把成功回填
+    # 记到卷同目录 runtime_fills.json(键=autoid+原 G 全文:内容级、跨卷稳定——
+    # 行号跨卷必漂不可用),compile_emit_merged 合并后按内容匹配自动重放:卷面
+    # 未变必中,变了必不中(安全跳过,不猜)。
+    try:
+        if res.filled:
+            _fill_by_id = {str(f.get("slot_id")): f for f in fills if isinstance(f, dict)}
+            side = Path(p).parent / "runtime_fills.json"
+            records: list[dict] = []
+            if side.is_file():
+                try:
+                    records = [r for r in json.loads(side.read_text(encoding="utf-8"))
+                               if isinstance(r, dict)]
+                except Exception:  # noqa: BLE001
+                    records = []
+            # 内容键含前序观测命令(observe_cmd):整值槽的 G 全是 <RUNTIME> 不独特,
+            # 真正锚定"该填什么值"的是产出该值的那条观测命令。case 重编改了观测→键变→
+            # 不重放(值失效);观测没变→键稳→旧值仍有效可重放。
+            byk = {(r.get("autoid"), r.get("observe_cmd"), r.get("g_original")): r for r in records}
+            for sid in res.filled:
+                s = _slots_before.get(sid)
+                f = _fill_by_id.get(sid)
+                if not s or not f:
+                    continue
+                byk[(s.autoid, s.observe_cmd, s.current_g)] = {
+                    "autoid": s.autoid, "observe_cmd": s.observe_cmd, "g_original": s.current_g,
+                    "runtime_value": str(f.get("runtime_value") or ""),
+                    "evidence": str(f.get("evidence") or "")[:500],
+                }
+            import os as _os
+            _tmp = side.with_suffix(".json.tmp")
+            _tmp.write_text(json.dumps(list(byk.values()), ensure_ascii=False, indent=1),
+                            encoding="utf-8")
+            _os.replace(_tmp, side)
+    except Exception:  # noqa: BLE001
+        logger.debug("runtime_fills sidecar 记账失败(回填本身已完成)", exc_info=True)
 
     lines = [f"=== compile_runtime_fill ===", res.summary(),
              f"filled: {res.filled}", f"left_blank(如实留空,不猜): {res.left_blank}",

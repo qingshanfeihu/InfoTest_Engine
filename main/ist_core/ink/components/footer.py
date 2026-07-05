@@ -87,6 +87,9 @@ class FooterPane:
         self._search_match: str | None = None
         self._toast_text: str | None = None
         self._toast_timer: threading.Timer | None = None
+        # 粘性错误:run_error 的摘要驻留在状态行,直到下一轮开始。此前错误只进
+        # transcript 一行 [error],长输出滚屏后用户看不到"这轮其实失败了"。
+        self._sticky_error: str | None = None
         self._refresh()
 
     @property
@@ -113,6 +116,7 @@ class FooterPane:
             self.status = status
             if status not in ("ready", "error"):
                 self._start_timer()
+                self._sticky_error = None   # 新一轮开始,上一轮的错误驻留解除
             else:
                 self._stop_timer()
         if tokens_used is not None:
@@ -137,6 +141,14 @@ class FooterPane:
             self._output_token_count = output_token_count
         if cache_hit_tokens is not None:
             self._cache_hit_tokens = cache_hit_tokens
+        self._refresh()
+
+    def set_sticky_error(self, text: str) -> None:
+        """把 run_error 摘要驻留到状态行(单行截断);下一轮 run 开始自动清除。"""
+        one_line = " ".join(str(text or "").split())
+        if len(one_line) > 96:
+            one_line = one_line[:93] + "…"
+        self._sticky_error = one_line or None
         self._refresh()
 
     def set_search_state(self, query: str | None, match: str | None) -> None:
@@ -289,6 +301,9 @@ class FooterPane:
                 self._thinking_cb(None)
         
         status_text = self._session_summary()
+        if self._sticky_error and self.status == "error":
+            # 驻留错误占状态行主位(红),session 摘要退到 hint 行之上仍可见
+            status_text = f"\x1b[31m✖ {self._sticky_error}\x1b[0m · {status_text}"
         self._status_line.set_value(status_text)
         self._hint_line.set_value(
             "ctrl+c abort · ctrl+d exit · / commands · ↑↓ history"

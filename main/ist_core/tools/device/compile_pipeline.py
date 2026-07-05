@@ -72,7 +72,7 @@ def _project_root() -> Path:
 
 
 def _grade_extract_facts(xp: Path, prov: Path) -> dict:
-    """缺陷①：grade 前确定性预跑 ist_compile_grade/scripts/grade_extract.py 的 extract(xp, prov)。
+    """缺陷①：grade 前确定性预跑 ist-compile-grade/scripts/grade_extract.py 的 extract(xp, prov)。
 
     脚本在 skills/ 下（非 main 包内可直接 import 的模块），用 importlib 按文件路径加载。
     脚本由并行 agent 新建——若尚未就绪（文件缺失 / import 失败 / extract 抛错），一律吞掉
@@ -81,10 +81,10 @@ def _grade_extract_facts(xp: Path, prov: Path) -> dict:
     try:
         import importlib.util as _ilu
         script = (_project_root() / "main" / "ist_core" / "skills"
-                  / "ist_compile_grade" / "scripts" / "grade_extract.py")
+                  / "ist-compile-grade" / "scripts" / "grade_extract.py")
         if not script.is_file():
             return {}
-        spec = _ilu.spec_from_file_location("ist_compile_grade_extract", script)
+        spec = _ilu.spec_from_file_location("ist-compile-grade_extract", script)
         if spec is None or spec.loader is None:
             return {}
         mod = _ilu.module_from_spec(spec)
@@ -452,7 +452,7 @@ def _build_case_brief(case: dict, *, product_version: str, manual_glob: str,
 **期望值按来源三分诊（决定怎么写，条件于你正在写的这份配置——你配的东西你就知道，不是未知）**：
   ① 配置可推导值（池成员 IP、超时秒数、删除/清除后状态、协议固定响应）——**写常量**，IP 用 \\b…\\b 加词边界 + 转义点（防 1.1.1.1 误匹配 1.1.1.10）。绝不因"运行时才显示"就当不可知。（注：rr/wrr 的**单次**命中是②运行时关系、不是①；**N 次累计命中分布**是 distribution_derived 区间断言、用 `dist` 声明，见 EXCEL_FUNCTIONS.md。）
   ② 跨观测关系（会话保持/亲和性/同-异成员/前后对比）——断言是"两次观测的**关系**"不是"某个值"，**绝不留 <RUNTIME>**（占位只能填一个值，表达不了关系）。用**捕获+比较**：触发步加 H=v1 捕获首次输出（命中啥存啥、**不用预测是哪个池**），后续 check_point 加 H=v1，found=与首次同/not_found=与首次异；dig 用 +short 去时间戳噪声。
-  ③ 设备生成的不透明单值（auto-gen 名/PID/抓包间隔/哈希种子）——能 execute 提取就提取；纯不透明才留 <RUNTIME>（部分模式如 "Hits:\\s*<RUNTIME>"，或整值），标 source.kind=device_runtime（<RUNTIME>⟺device_runtime 自洽，emit 强制），由 ist_verify 上机回填锁死。
+  ③ 设备生成的不透明单值（auto-gen 名/PID/抓包间隔/哈希种子）——能 execute 提取就提取；纯不透明才留 <RUNTIME>（部分模式如 "Hits:\\s*<RUNTIME>"，或整值），标 source.kind=device_runtime（<RUNTIME>⟺device_runtime 自洽，emit 强制），由 ist-verify 上机回填锁死。
 红线：会话保持/同-异 **走②捕获、绝不走 <RUNTIME>**；配置可推导走①常量、不留 <RUNTIME>；只有真·设备不透明单值才 <RUNTIME>。绝不凭空编一个对不上来源的值。
 
 指路（先例已为你预检索，见下方「预检索先例」）：**优先照预检索先例的完整配置基线改写**——
@@ -956,7 +956,7 @@ def compile_pipeline(mindmap_path: str, product_version: str, out_name: str = ""
     不必等全部 draft 完才开 grade) → grade-PASS 合并成一个 excel。命令/断言全由 draft fork
     现场查（零硬编码），自由度在 fork 内不在编排层。
 
-    不上机（上机走 ist_verify 独立环节）。多脑图请逐个调本工具（每脑图一次）。
+    不上机（上机走 ist-verify 独立环节）。多脑图请逐个调本工具（每脑图一次）。
 
     Args:
         mindmap_path: 脑图 txt 路径。
@@ -978,7 +978,7 @@ def compile_pipeline(mindmap_path: str, product_version: str, out_name: str = ""
 
     try:
         result = _run_pipeline(mp, ver, out_name,
-                               draft_skill="ist_compile_draft", grade_skill="ist_compile_grade")
+                               draft_skill="ist-compile-draft", grade_skill="ist-compile-grade")
     except Exception as e:  # noqa: BLE001
         logger.exception("compile_pipeline 失败")
         return f"error: 流水线异常: {e}"

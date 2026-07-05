@@ -12,8 +12,11 @@ main.*，跑不了 main.case_compiler.verifiability。
 from __future__ import annotations
 
 import json
+import logging
 
 from langchain_core.tools import tool
+
+logger = logging.getLogger(__name__)
 
 
 @tool(parse_docstring=True)
@@ -66,4 +69,33 @@ def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools
     if verdict.verifiable:
         note = ("；" + "；".join(verdict.notes)) if verdict.notes else ""
         return f"VERIFIABLE: {verdict.reason}{note}"
+    # 欠定台账落盘(结构化,机读):工具内部本就是结构化 Verdict,压平成文本后经
+    # worker→main→ask_user 两道散文接力会磨掉关键锚点(实证 593516 的有序语义
+    # new_member_last 在 main 并组三题时蒸发,用户从未批准的降级出厂)。台账留一份
+    # 机读原件,ask_user 组织与 user_decision 落地都以它为锚;同 case 多 claim 按
+    # claim_kind 合并。ordering_sensitive 标记有序轨迹类 claim——它们的改法必须
+    # 显式处理顺序语义的去留。
+    try:
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[4]
+        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        outd.mkdir(parents=True, exist_ok=True)
+        nd_path = outd / "needs_decision.json"
+        data: dict = {"autoid": (autoid or "").strip(), "claims": []}
+        if nd_path.is_file():
+            try:
+                loaded = json.loads(nd_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and isinstance(loaded.get("claims"), list):
+                    data = loaded
+            except Exception:  # noqa: BLE001
+                pass
+        entry = verdict.to_dict() if hasattr(verdict, "to_dict") else {
+            "claim_kind": claim_kind, "reason": verdict.reason,
+            "min_requests": verdict.min_requests, "suggested_fix": verdict.suggested_fix}
+        entry["ordering_sensitive"] = claim_kind in ("new_member_last", "absolute_position")
+        data["claims"] = [c for c in data["claims"] if c.get("claim_kind") != claim_kind]
+        data["claims"].append(entry)
+        nd_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        logger.debug("needs_decision.json 落盘失败", exc_info=True)
     return render_needs_user_decision(autoid, verdict)

@@ -1,6 +1,6 @@
 ---
-name: ist_verify
-description: "把已编译好的成品 case.xlsx 上机跑一遍：采集设备真实裁决、回填留空的 RUNTIME 断言、对失败做四层归因（G/E/V/瞬态）并按层交回 ist_compile 重编，真 PASS 的写回 footprint。只验已有 excel、不生成新用例。当用户说上机验证 / 上机复验 / verify 这个 case.xlsx / 上机跑一遍看结果 / 验证用例 / 跑通看看 / 按 G·E·V·瞬态归因 / 上机 PASS 写回 footprint，或想让已编译好的成品 excel 在设备上实跑确认时用本 skill。"
+name: ist-verify
+description: "把已编译好的成品 case.xlsx 上机跑一遍：采集设备真实裁决、回填留空的 RUNTIME 断言、对失败做四层归因（G/E/V/瞬态）并按层交回 ist-compile 重编，真 PASS 的写回 footprint。只验已有 excel、不生成新用例。当用户说上机验证 / 上机复验 / verify 这个 case.xlsx / 上机跑一遍看结果 / 验证用例 / 跑通看看 / 按 G·E·V·瞬态归因 / 上机 PASS 写回 footprint，或想让已编译好的成品 excel 在设备上实跑确认时用本 skill。"
 context: inline
 user-invocable: true
 source: hand
@@ -10,7 +10,7 @@ when_to_use: |
   用户要对已编译好的 excel / case.xlsx 做上机验证、上机复验、跑一遍看结果、确认能不能在设备上跑通；含四层归因 / 上机回填 / 闭环写回。
   例："把这个 excel 上机验证"、"上机复验编译好的用例"、"上机跑一遍看结果"、"验证并按 G/E/V/瞬态归因"、"上机 PASS 的写回 footprint"。
   触发词：上机验证, 上机复验, 上机跑, 验证excel, 验证用例, 跑一遍, 复验, 设备验证, 四层归因, 闭环写回。
-  跳过：要编译/生成新用例走 ist_compile；只查一条 CLI 回显用 dev_probe；评审用例文件质量但不上机走 test-list-review。
+  跳过：要编译/生成新用例走 ist-compile；只查一条 CLI 回显用 dev_probe；评审用例文件质量但不上机走 test-list-review。
 ---
 
 # 上机验证：串行上机 + 四层归因 + 回流交接
@@ -46,10 +46,11 @@ dev_run_batch_digest(xlsx_path=..., autoids_json='[...]')  # 复验(build/module
 | 首跑 | `dev_run_batch_digest(xlsx_path, autoids_json)` → 精简摘要 + 明细落 `last_run.json` | 含 `<RUNTIME>` 的 case 必 fail，属预期待填，先别归因；found_times 崩溃=编译缺陷(摘要已点名元凶 case) |
 | 回填 RUNTIME | `compile_runtime_slots` → `compile_runtime_fill` → 复验 `dev_run_batch_digest` | 值只来自设备真实输出；填完即锁、不反复改；抽不出留空 |
 | 四层归因 | `compile_attribute(verdict_detail, failing_assertion_layer)` | 必基于 `device_context`/`framework_traceback`；瞬态单列不回流 |
-| 回流交接 | `invoke_skill(skill="ist_compile", brief=...)` 一次 | 修 case 唯一正路；绝不手调 `compile_*` 内部步、绝不 `fs_edit` xlsx |
+| 归因落盘 | 每个有结论的 fail 调 `submit_attribution(xlsx_path, autoid, layer, disposition, evidence, fix_direction)` | evidence 必须是 device_context/causality **原文子串**（复制勿转述）；不落盘则下一轮「瞬态复现=误归」「冻结同法」护栏读不到你的结论 |
+| 回流交接 | `invoke_skill(skill="ist-compile", brief=...)` 一次 | 修 case 唯一正路；绝不手调 `compile_*` 内部步、绝不 `fs_edit` xlsx |
 | 写回 footprint | provenance 取真 PASS 的 G 段文法回写（`on_device_passed=True`） | 只写 G 段命令文法；V/E/运行时值不写 |
 
-把**已编译好的** excel 串行上机一遍，采集框架真实裁决，回填 `<RUNTIME>`，对每个 fail 四层归因、按层 reflow 交给 `ist_compile` 重编。**只验一遍 + 交接修复**——不自己改 case（改归 `ist_compile`），也不自己套"验到全过"的迭代循环（迭代由上层：用户 / goal 循环驱动；本 skill 跑一遍即返回）。
+把**已编译好的** excel 串行上机一遍，采集框架真实裁决，回填 `<RUNTIME>`，对每个 fail 四层归因、按层 reflow 交给 `ist-compile` 重编。**只验一遍 + 交接修复**——不自己改 case（改归 `ist-compile`），也不自己套"验到全过"的迭代循环（迭代由上层：用户 / goal 循环驱动；本 skill 跑一遍即返回）。
 
 ## Inputs
 
@@ -105,6 +106,8 @@ dev_run_batch_digest(xlsx_path=..., autoids_json='[...]')  # 复验(build/module
 
 回填后再 `dev_run_batch_digest` 一次。回填的断言现应转 **pass**（设备值＝设备值）；仍 fail 的才是**真实断言失败**，进归因。仍留空的 `<RUNTIME>` 不算失败、不归因。
 
+**复验跑子集，交付跑整卷**：修复轮的复验只合并 fail 的 case（`compile_emit_merged(autoids=fail列表, out_name="<批名>_fails")`）再上机——整卷重跑会让已 pass 的 case 白跑一遍（34 卷闭环实测：修 5-8 个 fail 整卷重跑 7 轮，约 200 次多余 case 执行，每轮多等 5-9 分钟；框架每 case 前清空设备配置、case 间独立，子集跑与整卷跑单 case 行为一致）。digest 摘要在 fail 占少数时给出带确切 autoid 列表的节流提示，照做即可。全部转正后**整卷跑一次**作为交付确认。
+
 **Success criteria**: 区分出 真 PASS / 真实 fail / 待补值
 **Artifacts**: rerun_results
 
@@ -123,31 +126,34 @@ dev_run_batch_digest(xlsx_path=..., autoids_json='[...]')  # 复验(build/module
 **Execution**: Direct（委派 fork）
 
 多个 fail case 要重编时，**一次并发 fan-out、别逐个串行**：给每个 fail case 建一条 brief（autoid + target_layer + 该 case 的 `device_context` 原文 + 应改方向 + 「定向重做：针对问题改、保留正确部分」），聚成 JSON 数组，调**一次**
-`compile_fanout(skill="ist_compile_draft", briefs_json='[{"key":"<autoid>","brief":"<...含device_context+应改方向...>"}, ...]')`
+`compile_fanout(skill="ist-compile-draft", briefs_json='[{"key":"<autoid>","brief":"<...含device_context+应改方向...>"}, ...]')`
 ——N 个 case 的 draft worker **真并发**跑（各自独立 fork 上下文，互不污染、不占 main 上下文），一次返回逐 case 产物。比"逐个 invoke_skill 串行"或"main 自己把 N 个 case 分析完再批量 emit"都快（并行掉最贵的分析+检索）。fan-out 返回后各 case 的新 `case.xlsx` 已在 `outputs/<autoid>/`，回步骤 2 用 `dev_run_batch_digest` 再验（上机才是真门）。
 
-**何时改用 `invoke_skill(ist_compile)`**：需要 grade 质量再审批（断言形态可疑、非单纯 IP/命令订正）时——它内部跑完整 `compile_pipeline`（prep→draft→grade→merge）带收敛环。fan-out draft **跳过 grade**、靠上机复验兜底，适合归因明确的定向订正（G(^) 命令订正、E 层换真实 IP、V 层按设备语义改期望）。
+**何时改用 `invoke_skill(ist-compile)`**：需要 grade 质量再审批（断言形态可疑、非单纯 IP/命令订正）时——它内部跑完整 `compile_pipeline`（prep→draft→grade→merge）带收敛环。fan-out draft **跳过 grade**、靠上机复验兜底，适合归因明确的定向订正（G(^) 命令订正、E 层换真实 IP、V 层按设备语义改期望）。
 
 **Rules**:
-- **两条 sanctioned 重编路径**：① `compile_fanout(ist_compile_draft, briefs)`（多 case 并发定向重编，快，跳 grade 靠复验）；② `invoke_skill(ist_compile)`（要 grade 再审时，带收敛环）。**除这两个外绝不**自己 ad-hoc 逐个手调 `compile_emit`/`compile_score`/`compile_precedent`/`compile_prep` 去 churn——单步 ad-hoc 循环不收敛、会把单轮 tool_call 撞 recursion 上限（300）整轮崩（实测反例：churn 4 轮 excel 零改动）。`compile_fanout` 是**批量派发器**（不是被 churn 的单步），用它一次派完、不循环。
+- **两条 sanctioned 重编路径**：① `compile_fanout(ist-compile-draft, briefs)`（多 case 并发定向重编，快，跳 grade 靠复验）；② `invoke_skill(ist-compile)`（要 grade 再审时，带收敛环）。**除这两个外绝不**自己 ad-hoc 逐个手调 `compile_emit`/`compile_score`/`compile_precedent`/`compile_prep` 去 churn——单步 ad-hoc 循环不收敛、会把单轮 tool_call 撞 recursion 上限（300）整轮崩（实测反例：churn 4 轮 excel 零改动）。`compile_fanout` 是**批量派发器**（不是被 churn 的单步），用它一次派完、不循环。
 - **绝不 `fs_edit` case.xlsx**——二进制，文本编辑改不动；改 case 一律走上面两条 reflow 路径。
 - **瞬态不回流**——标注"环境排查 / 换时间重跑"，它和编译质量无关。
 - **收敛止损（digest 的跨轮对照信号是硬事实）**：摘要点名「连续两轮同签名 fail」的 case → 上轮修法已被证伪，**这些 case 不进本轮 reflow brief**（第三轮同法大概率再 fail、白烧钱——实测同签名 case 连续两轮重编零转正）。改为：①先核实环境事实（dev_probe/dev_ssh 查该 IP/配置在设备上的真实状态——topology 写的和设备实况可能不符）；②环境确认正常仍复现 → 疑似**产品缺陷**：`kb_bug_search` 比对缺陷库，已知则关联、未知则在最终报告「疑似产品缺陷」区记缺陷候选（复现步骤=case 步骤、期望+文档出处、实际=device_context 证据、版本号）。摘要点名「上轮归瞬态本轮复现」→ 那不是瞬态，按同法重新归因。**无论哪种，流程都跑到终点出完整报告（真 PASS 清单 + 阻塞清单带证据），不中途停摆等人。**
 - 非交互（`infotest -p`）：直接输出归因 + reflow brief，reflow 作为独立步骤由调用方发起。
 - **本 skill 到此即返回**：是否拿重编后的 excel 再 verify 一遍，由**上层**（用户 / goal 循环）决定——verify **不自己套循环**。
 
-**Success criteria**: 待重编的 G/E/V 错经**一次** `compile_fanout` 并发派完（或需 grade 再审时 invoke 一次 ist_compile）；连续两轮同签名 fail 的不进重编（走环境核实/产品缺陷出口）；瞬态单列
-**Artifacts**: reflow_brief（fan-out briefs_json）
+**Success criteria**: 待重编的 G/E/V 错经**一次** `compile_fanout` 并发派完（或需 grade 再审时 invoke 一次 ist-compile）；连续两轮同签名 fail 的不进重编（走环境核实/产品缺陷出口）；瞬态单列
+**Artifacts**: reflow_brief（fan-out briefs;>6 个 case 先把 briefs 数组落 workspace 文件、传 `briefs_path`——内联大数组会被序列化截断）
 
-### 7. 闭环写回 footprint
+### 7. 闭环写回先例库
 
 **Execution**: Direct
 
-对每个**真 PASS**（框架 pass 且断言真覆盖目标行为）的 case，调 `compile_footprint_writeback(autoid=..., provenance_path=".../case.provenance.json", on_device_passed=True)` 把 **G 段文法**写回 footprint（工具内 evidence 门防幻觉、只写 G 段）。footprint 越饱，下次同类 draft 越少啃手册。
+对每个**真 PASS** 的 case，做两个互补写回（各有工具、各有机械门，别手动拼文件）：
 
-**Rules**: 靠工具写回、别手动拼 footprint JSON；工具只写回 G 段命令文法，**V 段断言、E 段具体 IP、回填的 `device_verified` 运行时值不写回**（环境态，进 footprint 会污染）。provenance 缺失则跳过写回（归因已退化）。
-**Success criteria**: 真 PASS 的 G 段已写回，报告写回条数
-**Artifacts**: footprint_writeback
+1. `compile_writeback(autoid=..., last_run_path="<本次上机的 last_run.json>")` — 整卷写回**先例库**(mirror + 意图索引)。工具内两道机械门:last_run 里该 autoid 必须 verdict=pass(上机 oracle,不信转述)、卷面凭证必须新鲜(写回的就是上机跑过的那份)。写回后同 run 内的 `compile_precedent` 立即能检索到它:先例库越饱,后续同类编写越少从头推导。
+2. `compile_footprint_writeback(autoid=..., provenance_path="<该 case 的 case.provenance.json>", on_device_passed=True)` — 真 PASS 的 **G 段命令文法**写回 footprint 知识树(工具内 evidence 门拒无出处事实;只写 G 段,V 断言/E 具体 IP/运行时值不写)。provenance 自 emit 必传门后每卷都有;个别旧卷缺失时工具自动跳过、不报错。
+
+**Rules**: 靠工具写回,别手动拷文件/改索引/手动拼 footprint JSON;fail/unknown 的卷两个写回都绝不做(污染知识资产)。
+**Success criteria**: 真 PASS 逐个双写回,报告先例写回条数 + footprint 写入/跳过条数
+**Artifacts**: precedent_writeback + footprint G 段
 
 ### 8. 输出报告
 

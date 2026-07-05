@@ -35,13 +35,13 @@ def test_trace_fork_writes_line(tmp_path, monkeypatch):
     import main.ist_core.skills.loader as L
     importlib.reload(L)
     L._trace_fork(
-        "ist_compile_draft",
+        "ist-compile-draft",
         "Case X: 配置 zone forward\n第二行被截断",
         42.5,
         {"ai_rounds": 12, "tool_results": 11, "tool_calls": {"fs_grep": 8, "compile_precedent": 2}},
     )
     content = (tmp_path / "fork_trace.log").read_text(encoding="utf-8")
-    assert "fork=ist_compile_draft" in content
+    assert "fork=ist-compile-draft" in content
     assert "elapsed=42.5s" in content
     assert "ai_rounds=12" in content
     assert "fs_grep=8" in content
@@ -58,7 +58,7 @@ def test_trace_fork_never_raises(tmp_path, monkeypatch):
     import main.ist_core.skills.loader as L
     importlib.reload(L)
     # 不抛异常即通过
-    L._trace_fork("ist_compile_grade", "brief", 1.0, {"ai_rounds": 1, "tool_results": 0, "tool_calls": {}})
+    L._trace_fork("ist-compile-grade", "brief", 1.0, {"ai_rounds": 1, "tool_results": 0, "tool_calls": {}})
 
 
 def test_execute_fork_skill_populates_summary_sink(monkeypatch):
@@ -81,7 +81,7 @@ def test_execute_fork_skill_populates_summary_sink(monkeypatch):
     monkeypatch.setattr(L, "_invoke_fork_streamed", lambda *a, **k: canned)
 
     sink: dict = {}
-    out = L.execute_fork_skill("ist_compile_draft", "some brief", summary_sink=sink)
+    out = L.execute_fork_skill("ist-compile-draft", "some brief", summary_sink=sink)
     assert "case.xlsx" in out
     assert sink.get("ai_rounds") == 2                      # 2 个 AIMessage
     assert sink.get("tool_calls") == {"dev_probe": 1, "kb_footprint": 1}
@@ -98,7 +98,7 @@ def test_execute_fork_skill_summary_sink_cleared_on_error(monkeypatch):
 
     monkeypatch.setattr(L, "_invoke_fork_streamed", _boom)
     sink: dict = {"stale": "data"}
-    out = L.execute_fork_skill("ist_compile_draft", "brief", summary_sink=sink)
+    out = L.execute_fork_skill("ist-compile-draft", "brief", summary_sink=sink)
     assert out.startswith("ERROR:")
     assert sink == {}                                      # 清空防污染
 
@@ -120,7 +120,7 @@ def test_execute_fork_skill_marks_recursion_limit(monkeypatch):
     traced: dict = {}
     monkeypatch.setattr(L, "_trace_fork",
                         lambda skill, brief, el, summ, error="": traced.update({"error": error}))
-    out = L.execute_fork_skill("ist_compile_draft", "brief")
+    out = L.execute_fork_skill("ist-compile-draft", "brief")
     assert out.startswith("ERROR:")
     assert "[recursion-limit]" in out                      # 上层据此分流
     assert "[recursion-limit]" in traced.get("error", "")   # trace 也带标记

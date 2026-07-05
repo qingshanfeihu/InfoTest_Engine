@@ -158,3 +158,108 @@ def compile_attribute(verdict_detail: str, failing_assertion_layer: str = "",
         "target_layer": r.target_layer, "render": r.render(),
     }, ensure_ascii=False)
 
+
+
+@tool(parse_docstring=True)
+def submit_attribution(xlsx_path: str, autoid: str, layer: str,
+                       disposition: str, evidence: str,
+                       fix_direction: str = "",
+                       defect_candidate: dict | None = None) -> str:
+    """把你对某个 fail case 的归因**结论**落盘进 last_run.json(归因判断本身仍由你读原文做)。
+
+    为什么要落盘:结论只留在会话文本里会断链——下一轮 digest 的「上轮归瞬态本轮复现=误归」
+    护栏读的是落盘字段(不落盘该护栏是 dead code);「冻结同法重编」的"同法"判定也需要
+    上一轮的修法记录;缺陷候选不落盘则多轮验证后无法汇总成缺陷清单。
+
+    Args:
+        xlsx_path: 本轮上机那份 case.xlsx 路径(工具据此定位同目录 last_run.json)。
+        autoid: 被归因 case 的完整 autoid(须在 last_run.json 中)。
+        layer: 归因层,五选一——G(设备语法拒绝)、E(环境/IP)、V(断言与行为不符)、
+            transient(瞬态,不可复现的偶发)、product_defect(疑似产品缺陷)。
+            拿不准就别调本工具(undetermined 是默认态,不用提交)。
+        disposition: 处置,五选一——reflow(带反馈重编)、frozen(冻结同法换方向)、
+            env_blocked(环境阻塞跑完为先)、defect_candidate(走缺陷候选单)、fixed(已修复待复跑)。
+        evidence: 支撑该结论的 device_context/causality **原文子串**(直接复制,勿转述)——
+            工具校验它确在该 case 的落盘原文里,防转述失真(曾实证独行 ^ 被转述丢失致误归)。
+        fix_direction: 修法方向(自由文本;reflow/frozen 时写清应改什么,下一轮判"同法"靠它)。
+        defect_candidate: disposition=defect_candidate 时的结构化候选单,含 repro(复现步骤)、
+            expected_with_source(期望+手册出处)、actual(实际+设备证据)、version,可含 ticket_id。
+
+    Returns:
+        确认(写入路径+字段回显);autoid 不在 last_run/evidence 对不上原文时 error。
+    """
+    from pathlib import Path
+
+    _LAYERS = ("G", "E", "V", "transient", "product_defect")
+    _DISPS = ("reflow", "frozen", "env_blocked", "defect_candidate", "fixed")
+    layer = (layer or "").strip()
+    disposition = (disposition or "").strip()
+    if layer not in _LAYERS:
+        return f"error: layer 必须是 {'/'.join(_LAYERS)},收到 {layer!r}"
+    if disposition not in _DISPS:
+        return f"error: disposition 必须是 {'/'.join(_DISPS)},收到 {disposition!r}"
+    ev = (evidence or "").strip()
+    if not ev:
+        return "error: evidence 必填——从 device_context/causality 原文直接复制支撑片段"
+
+    try:
+        from main.ist_core.tools.deepagent.file_tools import _resolve_inside_root
+        xp = _resolve_inside_root(xlsx_path, must_exist=True)
+    except Exception:  # noqa: BLE001
+        xp = None
+    p = Path(xp) if xp else Path(xlsx_path)
+    lr = p.parent / "last_run.json"
+    if not lr.is_file():
+        return f"error: last_run.json 不存在: {lr}(先跑 dev_run_batch_digest)"
+    try:
+        records = json.loads(lr.read_text(encoding="utf-8"))
+        assert isinstance(records, list)
+    except Exception as e:  # noqa: BLE001
+        return f"error: last_run.json 读取失败: {e}"
+
+    aid = (autoid or "").strip()
+    rec = next((r for r in records if isinstance(r, dict) and str(r.get("autoid")) == aid), None)
+    if rec is None:
+        have = [str(r.get("autoid")) for r in records if isinstance(r, dict)][:8]
+        return f"error: autoid {aid} 不在 last_run.json(有: {', '.join(have)}…)"
+
+    corpus = "\n".join(str(rec.get(k) or "") for k in
+                       ("device_context", "causality", "detail_tail", "framework_traceback"))
+
+    # 归一化比对(2026-07-05 v12 实证):evidence 经 tool-arg 通道传输,控制字符必失真
+    # ——设备原文含真实 \r\n,LLM 复制到参数里成了字面 "\\r\\n" 转义(连拒 4 次同一形态)。
+    # 门的目的在防**编造/转述**,不在字节级保真:两侧都做「字面转义还原 + 空白折叠」后
+    # 再查子串,防伪性不变(编的内容归一化后照样对不上),序列化失真不再误拒。
+    def _norm(s: str) -> str:
+        s = s.replace("\\r", " ").replace("\\n", " ").replace("\\t", " ")
+        s = s.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+        return " ".join(s.split())
+
+    if ev not in corpus and _norm(ev) not in _norm(corpus):
+        return ("error: evidence 不是该 case 落盘原文的子串——从 last_run.json 里该 autoid 的 "
+                "device_context/causality 原文**直接复制**,不要转述/改写(转述曾丢失独行 ^ 致误归)。"
+                "多行片段容易被参数转义搞失真:改抄**单行内**的关键片段即可(已做空白归一化,"
+                "跨行不必逐字节对齐)。")
+
+    import time as _time
+    entry = {
+        "layer": layer,
+        "disposition": disposition,
+        "evidence": ev[:2000],
+        "fix_direction": (fix_direction or "").strip(),
+        "ts": _time.time(),
+        "round": rec.get("_round"),
+    }
+    if disposition == "defect_candidate":
+        dc = defect_candidate if isinstance(defect_candidate, dict) else {}
+        missing = [k for k in ("repro", "expected_with_source", "actual") if not str(dc.get(k, "")).strip()]
+        if missing:
+            return f"error: defect_candidate 缺必填字段: {', '.join(missing)}"
+        entry["defect_candidate"] = dc
+    rec["_attribution"] = entry
+    try:
+        lr.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        return f"error: 写盘失败: {e}"
+    return (f"归因已落盘 {lr}\nautoid={aid} layer={layer} disposition={disposition}"
+            + (f" fix_direction={entry['fix_direction'][:60]}" if entry["fix_direction"] else ""))

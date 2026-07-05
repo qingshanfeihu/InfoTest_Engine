@@ -134,7 +134,7 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "intent": "write",
     },
 
-    # 批量编译工具(ist_compile 编译链/compile_pipeline)
+    # 批量编译工具(ist-compile 编译链/compile_pipeline)
     "compile_prep": {
         # 解析脑图→manifest 落盘:写本地 manifest.json(非设备态),read_only=False。
         "read_only": False,
@@ -210,7 +210,7 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": None,
         "intent": "exec",
     },
-    # 上机回填 runtime 槽位（ist_verify 用）
+    # 上机回填 runtime 槽位（ist-verify 用）
     "compile_runtime_slots": {
         "read_only": True,
         "concurrency_safe": True,

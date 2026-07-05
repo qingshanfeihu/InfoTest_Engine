@@ -49,7 +49,7 @@ _VALID_SOURCE_KINDS = (
                           # 不是"落点不可知只能占位"。
     "skeleton",       # G：族骨架（步骤3 族首产出，族内复用）
     "device_runtime", # V：期望值离线不可知（落点依赖探活/哈希/会话/脚本运行时），值填 <RUNTIME> 占位
-    "device_verified",# V：device_runtime 槽位已由 ist_verify 上机回填真实值并锁死（不再含 <RUNTIME>）
+    "device_verified",# V：device_runtime 槽位已由 ist-verify 上机回填真实值并锁死（不再含 <RUNTIME>）
     "unknown",        # 兜底：draft 没标来源（应尽量避免）
 )
 

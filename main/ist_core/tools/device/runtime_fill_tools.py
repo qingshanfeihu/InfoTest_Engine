@@ -69,7 +69,7 @@ def compile_runtime_slots(xlsx_path: str) -> str:
 
 
 @tool(parse_docstring=True)
-def compile_runtime_fill(xlsx_path: str, fills_json: str, run_meta: str = "") -> str:
+def compile_runtime_fill(xlsx_path: str, fills_json: list | str = "", run_meta: str = "") -> str:
     """把设备真实值**锁死回填**进 case.xlsx 的 <RUNTIME> 槽位（不反复改的硬保证在此）。
 
     只动仍含 <RUNTIME> 的格子；填上后该格子不再含占位符 → 后续任何回填都定位不到它，
@@ -85,7 +85,8 @@ def compile_runtime_fill(xlsx_path: str, fills_json: str, run_meta: str = "") ->
 
     Args:
         xlsx_path: case.xlsx 路径。
-        fills_json: 上述格式的 JSON 数组字符串（每项含 slot_id / 真实值 / 可选 evidence）。
+        fills_json: **首选原生数组**(JSON 数组字符串兼容)。每项含 slot_id、真实值与
+            必填的 evidence——取值依据的设备输出片段;值只能来自设备真实输出,缺依据即拒。
         run_meta: 可选运行标识（如 build / task 串），写入 provenance 溯源。
 
     Returns:
@@ -97,9 +98,16 @@ def compile_runtime_fill(xlsx_path: str, fills_json: str, run_meta: str = "") ->
     try:
         fills = json.loads(fills_json) if isinstance(fills_json, str) else fills_json
         if not isinstance(fills, list):
-            return "error: fills_json 必须是 JSON 数组"
+            return "error: fills_json 必须是数组(首选原生数组)"
     except Exception as e:  # noqa: BLE001
-        return f"error: fills_json 解析失败: {e}"
+        return f"error: fills_json 解析失败: {e}(建议直接传原生数组)"
+    # evidence 必填(A 层):值必须来自设备真实输出——无依据的回填与"绝不猜一个"红线冲突。
+    _no_ev = [str(f.get("slot_id", "?")) for f in fills
+              if isinstance(f, dict) and str(f.get("runtime_value", "") or "").strip()
+              and not str(f.get("evidence", "") or "").strip()]
+    if _no_ev:
+        return ("error: 以下槽位填了值但没给 evidence(取值依据的设备输出片段): "
+                + ", ".join(_no_ev) + "。值必须溯源设备真实输出;抽不出就留空,绝不猜。")
 
     try:
         from main.case_compiler.runtime_fill import apply_fills

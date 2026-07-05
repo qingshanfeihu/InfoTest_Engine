@@ -3,6 +3,10 @@ name: escalate-when-stuck
 description: "当你已摆事实、查手册、探设备、试过把动态行为转成可断言的 show 输出等所有办法,仍无法产出一个框架真执行 check_point、非空真的 case.xlsx 时,调本 skill 走诚实上报出口,避免硬憋弱断言或假通过产物。触发场景—卡住、表达不了、做不出、只能弱断言、stuck。"
 context: inline
 user-invocable: true
+when_to_use: |
+  Use when 已穷尽正路(手册/先例/探设备/形态转换)仍产不出框架真执行且非空真的 case.xlsx,需要诚实上报而非硬憋弱断言。
+  Trigger keywords: 卡住, 表达不了, 做不出, 只能弱断言, stuck。
+  SKIP when: 还有未试过的正路手段;或只是单次工具报错(先按报错指引重试/换通道)。
 effort: medium
 ---
 

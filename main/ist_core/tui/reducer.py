@@ -252,6 +252,15 @@ class MessageReducer:
         self._llm_phase = "input"
         self._output_token_count = 0
 
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """粗估 token 数:CJK ≈1 字/token,其余 ≈4 字符/token。
+
+        纯 len//4 对中文思考流低估 ~4 倍(2026-07-03 实证 footer ↓ 显示 153 实为 ~600)。
+        """
+        cjk = sum(1 for ch in text if ord(ch) >= 0x2E80)
+        return max(1, cjk + (len(text) - cjk) // 4)
+
     def _on_token(self, event: IstCoreEvent) -> None:
         payload = event.get("payload") or {}
         reasoning = payload.get("reasoning")
@@ -259,13 +268,13 @@ class MessageReducer:
         # 此刻 mimo 真在深度思考 → 置 thinking 相位，驱动 footer 显示真实 think 状态。
         if isinstance(reasoning, str) and reasoning:
             self._llm_phase = "thinking"
-            self._output_token_count += max(1, len(reasoning) // 4)
+            self._output_token_count += self._estimate_tokens(reasoning)
             return
         content = payload.get("content") or ""
         if not isinstance(content, str) or not content:
             return
         self._llm_phase = "output"
-        self._output_token_count += max(1, len(content) // 4)
+        self._output_token_count += self._estimate_tokens(content)
         if self._streaming_text is None:
             self._streaming_text = content
         else:
@@ -277,12 +286,14 @@ class MessageReducer:
         payload = event.get("payload") or {}
         name = payload.get("name") or ""
         usage = event.get("usage")
-        # fork 子 agent 的 usage 不合入主 reducer 累计——fork token 由
-        # loader._accumulate_fork_tokens 单独跟踪、footer 通过
-        # fork_input/fork_output 叠加显示。合入会导致双重计数。
+        # usage 权威源=graph.py callback 发的 usage_only 事件(每次主 agent LLM 调用
+        # 恰一条)。astream_events 的 on_chat_model_end 映射条会携带同一份 usage
+        # (qa_node async 化后该路径重新可见),不按来源收口会双计——2026-07-02 实证
+        # footer 显示恰为真实消耗的 2 倍。fork 的 usage 由 loader._FORK_TOKENS 单独
+        # 跟踪、footer 经 fork_input/fork_output 叠加,不在此累计。
         tags = event.get("tags") or {}
         is_fork = bool(tags.get("parent_subagent"))
-        if isinstance(usage, dict) and not is_fork:
+        if isinstance(usage, dict) and not is_fork and name == "usage_only":
             self._merge_usage(usage)
 
         

@@ -209,6 +209,14 @@ def _get_chat_openai_with_reasoning():
         ``delta.reasoning_content`` 拷到 ``message.additional_kwargs``。
         参考 langchain-ai/langchain issue #33672。
 
+        工具绑定：override ``bind_tools`` 支持 ``IST_TOOLS_STRICT=1`` 时统一开
+        function-calling strict 模式——schema 强约束治供应商把数组参数
+        stringify/在长字符串参数后拖尾（emit steps_json 实证单轮 73% 解析失败；
+        footprint extractor 的 strict 先例见 memory/footprint/extractor.py）。
+        strict 只支持 JSON schema 子集（additionalProperties:false、全字段
+        required、可选字段 ["type","null"]），对所有工具 schema 生效，故默认关、
+        A/B 验证供应商兼容性后再考虑默认开。
+
         出方向（请求）：override ``_get_request_payload`` 把上一轮 AIMessage
         的 ``additional_kwargs["reasoning_content"]`` 注入回 assistant payload
         dict 的同名 sibling 字段——DeepSeek thinking 模式下 multi-turn
@@ -225,6 +233,12 @@ def _get_chat_openai_with_reasoning():
         # ——与 mimo/deepseek 对齐后，TUI 思考渲染/回传链路原样复用。
         # 流式用实例级状态机（think 段跨多个 chunk）；标签本身跨 chunk 切割的场景极罕见
         # （<think> 通常是模板特殊 token 整块到达），不做部分标签缓冲。
+        def bind_tools(self, tools, **kwargs):
+            # IST_TOOLS_STRICT=1 → 统一 strict 绑定(见类 docstring;默认关)。
+            if os.environ.get("IST_TOOLS_STRICT", "0") == "1":
+                kwargs.setdefault("strict", True)
+            return super().bind_tools(tools, **kwargs)
+
         def _split_think_inline(self, text: str) -> tuple[str, str]:
             """按 <think>/</think> 状态机切分 (正文, 思考)；状态存 self._mm_in_think。"""
             if not text:
@@ -392,11 +406,51 @@ def _get_chat_openai_with_reasoning():
                     return await super()._agenerate(*args, **kwargs)
                 raise
 
+        @staticmethod
+        def _chunk_has_substance(ch) -> bool:
+            """chunk 是否携带实质进度:正文/思考增量、tool_call 增量、或 usage 收尾帧。
+            网关的 keep-alive 空 chunk 全不带这些——它骗得过 httpx 读超时(每 chunk 重置),
+            骗不过这里。"""
+            try:
+                m = ch.message
+            except Exception:  # noqa: BLE001
+                return True   # 结构不明就当有进度,守卫绝不误杀正常流
+            if getattr(m, "content", None):
+                return True
+            if getattr(m, "tool_call_chunks", None):
+                return True
+            if getattr(m, "usage_metadata", None):
+                return True
+            ak = getattr(m, "additional_kwargs", None) or {}
+            return bool(ak.get("reasoning_content") or ak.get("tool_calls"))
+
+        def _stall_deadline_s(self) -> float:
+            """连续零实质内容的容忍秒数;0=关守卫。挂流实证(2026-07-04 V轮):思考/输出
+            增量冻结 15-45 分钟,期间仅 keep-alive 空 chunk,httpx 读超时被逐个重置永不触发。
+            正常深度思考期间 reasoning_content 持续有增量,不会命中。"""
+            try:
+                return float(os.environ.get("IST_LLM_STALL_TIMEOUT") or 180.0)
+            except (TypeError, ValueError):
+                return 180.0
+
         def _stream(self, *args, **kwargs):
+            import time as _time
             yielded = False
+            substantive = False
+            stall_s = self._stall_deadline_s()
+            last_progress = _time.monotonic()
             try:
                 for ch in super()._stream(*args, **kwargs):
                     yielded = True
+                    if self._chunk_has_substance(ch):
+                        substantive = True
+                        last_progress = _time.monotonic()
+                    elif stall_s > 0 and _time.monotonic() - last_progress > stall_s:
+                        logger.warning(
+                            "LLM 流实质内容停滞 >%ss(仅 keep-alive 空 chunk),主动断流"
+                            "(substantive=%s)", stall_s, substantive)
+                        raise TimeoutError(
+                            f"stream stalled: 连续 {stall_s}s 无实质内容(空 chunk 保活)")
                     yield ch
             except Exception as exc:  # noqa: BLE001
                 # 参数拒绝发生在建流前(首 chunk 前 4xx);已吐过 chunk 说明不是参数问题,不重试防重复内容
@@ -404,18 +458,40 @@ def _get_chat_openai_with_reasoning():
                         and self._drop_thinking_param(exc)):
                     for ch in super()._stream(*args, **kwargs):
                         yield ch
+                # 停滞发生在任何实质内容之前 → 上游没消费到任何东西,从头重发一次是安全的
+                elif isinstance(exc, TimeoutError) and not substantive:
+                    logger.warning("LLM 流零内容停滞,安全重发一次")
+                    for ch in super()._stream(*args, **kwargs):
+                        yield ch
                 else:
                     raise
 
         async def _astream(self, *args, **kwargs):
+            import time as _time
             yielded = False
+            substantive = False
+            stall_s = self._stall_deadline_s()
+            last_progress = _time.monotonic()
             try:
                 async for ch in super()._astream(*args, **kwargs):
                     yielded = True
+                    if self._chunk_has_substance(ch):
+                        substantive = True
+                        last_progress = _time.monotonic()
+                    elif stall_s > 0 and _time.monotonic() - last_progress > stall_s:
+                        logger.warning(
+                            "LLM 流实质内容停滞 >%ss(仅 keep-alive 空 chunk),主动断流"
+                            "(substantive=%s)", stall_s, substantive)
+                        raise TimeoutError(
+                            f"stream stalled: 连续 {stall_s}s 无实质内容(空 chunk 保活)")
                     yield ch
             except Exception as exc:  # noqa: BLE001
                 if (not yielded and _is_thinking_param_rejection(exc)
                         and self._drop_thinking_param(exc)):
+                    async for ch in super()._astream(*args, **kwargs):
+                        yield ch
+                elif isinstance(exc, TimeoutError) and not substantive:
+                    logger.warning("LLM 流零内容停滞,安全重发一次")
                     async for ch in super()._astream(*args, **kwargs):
                         yield ch
                 else:

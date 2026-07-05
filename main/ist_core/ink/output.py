@@ -170,6 +170,22 @@ class Output:
                             col += 1
                             continue
                     w = _char_width(ch)
+                    # 行末宽字符防溢出:最后一列放不下 2 列宽的字符——物理终端会把它
+                    # wrap 到下一行开头(污染下一行第 0-1 列)或渲染半字,而网格只记了
+                    # 头 cell → 模型与终端永久失同步、增量 diff 修不回(V轮乱码实证:
+                    # 输入行开头被上一行行尾的字符/数字污染)。改为:头 cell 位置留空格、
+                    # 字符落到下一行,网格与物理逐格一致。
+                    if w == 2 and col + 1 >= self._width:
+                        self._screen.set_cell(col, row_y, 0, current_style)
+                        col = wrap_col
+                        row_y += 1
+                        if row_y >= self._height:
+                            break
+                        if op.clip_rect:
+                            cx, cy, cw, ch_h = op.clip_rect
+                            if not (cx <= col < cx + cw and cy <= row_y < cy + ch_h):
+                                col += w
+                                continue
                     char_id = self._char_pool.intern(ch)
                     self._screen.set_cell(col, row_y, char_id, current_style)
                     if w == 2 and col + 1 < self._width:
@@ -192,21 +208,8 @@ class Output:
                     self._screen.set_cell(col, row_y, 0, none)
 
 
-def _char_width(ch: str) -> int:
-    """Quick character width (1 or 2). CJK and some emoji are width 2."""
-    code = ord(ch)
-    if code < 0x1100:
-        return 1
-    if (
-        (0x1100 <= code <= 0x115F)
-        or (0x2E80 <= code <= 0x9FFF)
-        or (0xAC00 <= code <= 0xD7AF)
-        or (0xF900 <= code <= 0xFAFF)
-        or (0xFE10 <= code <= 0xFE6F)
-        or (0xFF01 <= code <= 0xFF60)
-        or (0xFFE0 <= code <= 0xFFE6)
-        or (0x1F300 <= code <= 0x1F9FF)
-        or (0x20000 <= code <= 0x2FA1F)
-    ):
-        return 2
-    return 1
+# 宽度判定统一走 string_width.char_width——此前这里维护了一份缺 east_asian_width
+# W/F 兜底(且少 0x3400-0x4DBF 等段)的副本,与 wrapped_row_count(布局算行数)对部分
+# 宽字符判宽不一致:布局认 2 列、写格认 1 列(或反之)即列错位,diff 增量渲染下错位
+# 永不自愈(V轮乱码取证的成因之一)。单一事实源。
+from .string_width import char_width as _char_width  # noqa: E402

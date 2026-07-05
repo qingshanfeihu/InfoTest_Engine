@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""通用配置自动化生成器测试脚本"""
+"""config-automation 手工冒烟脚本(非 pytest,无断言,靠人读输出判断)。
+
+运行: python main/ist_core/skills/config-automation/scripts/smoke_config_generator.py
+依赖 knowledge/data/auto_env/network_topology_rag.md;输出落
+workspace/outputs/config_automation_test/。原先放在 skill 包内 tests/ 目录但
+pytest 从不收集(死测试假象)——按 skill 标准包布局迁到 scripts/。
+"""
 
 import subprocess
 import sys

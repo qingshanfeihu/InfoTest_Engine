@@ -47,7 +47,11 @@ def invoke_skill(skill: str, brief: str = "") -> str:
     if not skill or "/" in skill or ".." in skill or skill.startswith("-"):
         return f"ERROR: invalid skill name {skill!r}; expected a single skill identifier (e.g. 'test-case-review')"
 
-    skill_path = _SKILLS_DIR / skill / "SKILL.md"
+    # 下划线/连字符互通(B1 别名兼容)+ 动态 agent skill(agent_define 产物)兜底
+    from main.ist_core.skills.loader import resolve_skill_dirname, skill_md_path
+    skill = resolve_skill_dirname(skill)
+
+    skill_path = skill_md_path(skill)
     if not skill_path.exists():
         available = sorted(p.name for p in _SKILLS_DIR.iterdir() if p.is_dir() and (p / "SKILL.md").exists())
         return (
@@ -81,16 +85,23 @@ def invoke_skill(skill: str, brief: str = "") -> str:
         return execute_fork_skill(skill, brief)
 
     
+    # 交互面 XML 分节(2026-07-05):skill 正文是「行为指令」,引用清单是「可按需取的
+    # 资源指针」——标签区分角色,LLM 不再从混排文本里猜哪段是指令哪段是数据。
+    # (机读面不受影响:本返回只有 LLM 消费。)
     content = skill_path.read_text(encoding="utf-8")
-    header = (
-        f"# Skill loaded: {skill}\n"
-        f"# Path: main/ist_core/skills/{skill}/SKILL.md\n"
-        f"# Reference files (read on demand with fs_read):\n"
-    )
+    refs = []
     ref_dir = _SKILLS_DIR / skill / "reference"
     if ref_dir.exists():
         for ref_file in sorted(ref_dir.iterdir()):
             if ref_file.is_file():
-                rel = f"main/ist_core/skills/{skill}/reference/{ref_file.name}"
-                header += f"#   - {rel}\n"
-    return header + "\n" + content
+                refs.append(f"  - main/ist_core/skills/{skill}/reference/{ref_file.name}")
+    parts = [
+        f'<skill_content name="{skill}">',
+        f"# Skill loaded: {skill}",
+        "",
+        content.rstrip(),
+        "</skill_content>",
+    ]
+    if refs:
+        parts += ["<skill_references note=\"按需 fs_read,不必全读\">", *refs, "</skill_references>"]
+    return "\n".join(parts)

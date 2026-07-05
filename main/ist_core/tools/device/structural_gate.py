@@ -400,3 +400,179 @@ def check_crash_gates_mandatory(steps: list) -> StructuralResult:
         _check_command_payload_sanity(steps, result)
     return result
 
+
+# ---------------------------------------------------------------------------
+# xlsx 级 lint —— 把必崩门挂到"成品卷"本身,堵死绕过 emit 的编辑路径
+# ---------------------------------------------------------------------------
+# 起因(dongkl 34-case 闭环实证,2026-07-04):orchestrator 用 run_python 直改
+# case.xlsx 修断言,不经 compile_emit → check_crash_gates_mandatory 完全失效;
+# 直改版带"dig(H=x)后直接断言"形态,上机 result=None 抛 TypeError,整份 pytest
+# 39 秒崩掉、34 case 只跑 1 个,连续两轮。门放在编辑入口挡不住绕行,放在
+# **凭证/合并的必经之路**才是不变量:任何来源的卷面(emit 产 / 直改 / 手工)
+# 要拿 grade 凭证、要进合并终卷,都必须过同一套 lint。
+
+_AUTOID_RE = re.compile(r"^\d{18}$")
+# +short 模式 dig 的输出只有记录值(无 header/status/ANSWER 段)——对这些文本断言必 fail
+_SHORT_INCOMPATIBLE_RE = re.compile(r"status:|->>HEADER<<-|ANSWER SECTION|QUESTION SECTION")
+
+
+def steps_from_xlsx(xlsx_path) -> tuple[str, list[dict]]:
+    """反解单 case 卷(框架模板 xlsx)为 (autoid, steps dict 列表)。
+
+    列序与 emit 写入一致:A=autoid B=priority C=步号 D=desc E=对象 F=方法 G=参数
+    H=save_as I=引用寄存器。只取首个 autoid 的连续步骤区(单卷=一个 case)。
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(xlsx_path)
+    ws = wb.active
+    autoid = ""
+    steps: list[dict] = []
+    for row in ws.iter_rows(min_row=2):
+        a = str(row[0].value or "").strip()
+        e = str(row[4].value or "").strip()
+        if a and _AUTOID_RE.match(a) is None and a.startswith("203"):
+            # 位数异常的 autoid 也要带出去让上层报——用原文记录
+            autoid = autoid or a
+        elif a.startswith("203"):
+            autoid = autoid or a
+        if not e:
+            continue
+        steps.append({
+            "D": str(row[3].value or ""),
+            "E": e,
+            "F": str(row[5].value or ""),
+            "G": str(row[6].value or ""),
+            "H": str(row[7].value or ""),
+            "I": str(row[8].value or "") if len(row) > 8 else "",
+        })
+    return autoid, steps
+
+
+def _check_assertion_regex_compiles(steps: list, result: StructuralResult) -> None:
+    """check_point 的 G 列按 Python 正则编译——编译失败(如未闭合 `[^`)则框架
+    re.compile 处抛异常崩整份文件。实证:593545 一轮直改版带 `[^` 进卷被 grade 抓到,
+    若漏网上机即崩。abs_found 语义是字面匹配(框架 escape),不判。"""
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict) or str(s.get("E", "")).strip() != "check_point":
+            continue
+        f = str(s.get("F", "")).strip()
+        g = str(s.get("G", "") or "")
+        if f not in ("found", "not_found") or not g:
+            continue
+        try:
+            re.compile(g)
+        except re.error as exc:
+            result.add(
+                "assertion_regex_invalid",
+                f"断言正则无法编译({exc}): {g[:80]!r} —— 框架 re.compile 处抛异常,"
+                "整份文件崩溃。修正正则语法(常见:未闭合的字符类 [^ 应写 [^\\n])。",
+                i,
+            )
+
+
+def _check_short_mode_assertions(steps: list, result: StructuralResult) -> None:
+    """dig +short 的输出只有记录值——紧随其后的断言若匹配 status:/HEADER/SECTION
+    类文本必 fail(不崩但恒假)。实证:211027 两轮 fail 的直接根因。"""
+    last_obs_short = False
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        e = str(s.get("E", "")).strip()
+        if e == "check_point":
+            g = str(s.get("G", "") or "")
+            if last_obs_short and _SHORT_INCOMPATIBLE_RE.search(g):
+                result.add(
+                    "short_mode_status_assertion",
+                    "断言要匹配 dig 的 status/HEADER/SECTION 文本,但它消费的观测步用了 "
+                    "+short(输出只有记录值,无这些段)——恒 fail。去掉该 dig 的 +short,"
+                    "或改断言为记录值形态。",
+                    i,
+                )
+            continue
+        h = str(s.get("H", "") or "").strip()
+        if not h:
+            g = str(s.get("G", "") or "")
+            last_obs_short = ("dig" in g and "+short" in g)
+
+
+def _check_capture_refs_defined(steps: list, result: StructuralResult) -> None:
+    """check_point 引用 H 寄存器(H 列或 I 列)时,该寄存器必须被之前某步捕获过——
+    未定义引用在框架 locals().get() 得 None,断言语义随之失真。"""
+    defined: set[str] = set()
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        e = str(s.get("E", "")).strip()
+        h = str(s.get("H", "") or "").strip()
+        i_col = str(s.get("I", "") or "").strip()
+        if e == "check_point":
+            for ref in (h, i_col):
+                if ref and ref not in defined:
+                    result.add(
+                        "undefined_capture_ref",
+                        f"断言引用寄存器 {ref!r},但之前没有任何步骤用 H={ref} 捕获过——"
+                        "框架取到 None,断言失真。补捕获步或改引用名。",
+                        i,
+                    )
+        elif h:
+            defined.add(h)
+
+
+_DOMAIN_TOKEN_RE = re.compile(r"\b([A-Za-z0-9][A-Za-z0-9.-]{10,}\.(?:com|net|org|cn|test))\b")
+
+
+def _check_dns_label_limit(steps: list, result: StructuralResult) -> None:
+    """DNS 单标签最长 63 字符(RFC 1035)——超限域名 dig 直接报 'not a legal IDNA2008
+    name'、查询永远发不出去,该 case 必 fail。实证:994838 的"128字符域名"需求被写成
+    单标签 120 字符,三轮上机 fail 后才定位到协议物理约束。长域名需求的合法形态是
+    多标签拼总长(每段 ≤63)。"""
+    seen: set[str] = set()
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        g = str(s.get("G", "") or "")
+        for dom in _DOMAIN_TOKEN_RE.findall(g):
+            if dom in seen:
+                continue
+            seen.add(dom)
+            too_long = [lab for lab in dom.split(".") if len(lab) > 63]
+            if too_long:
+                result.add(
+                    "dns_label_over_63",
+                    f"域名 {dom[:60]}… 含超过 63 字符的标签(长 {len(too_long[0])})——"
+                    "违反 DNS 单标签上限,dig 侧 IDNA 直接拒绝、查询永远失败。"
+                    "长域名需求用多标签拼总长(每段≤63,如 www.<61字符>.<58字符>.com)。",
+                    i,
+                )
+
+
+def lint_xlsx_case(xlsx_path) -> StructuralResult:
+    """成品卷必崩/必假 lint:凭证(submit_verdict/compile_score)与合并(emit_merged)
+    的**必经门**。规则全部与意图无关、机械可判:
+    - autoid 18 位(截断 id 曾混入终卷成 35 case);
+    - check_crash_gates_mandatory 全集(悬空断言/found_times/手动 ip del/载荷);
+    - 断言正则可编译;
+    - +short 观测 与 status 类断言互斥;
+    - 寄存器引用必先捕获。
+    """
+    result = StructuralResult()
+    try:
+        autoid, steps = steps_from_xlsx(xlsx_path)
+    except Exception as exc:  # noqa: BLE001
+        result.add("xlsx_unreadable", f"卷面无法读取: {exc}")
+        return result
+    if autoid and not _AUTOID_RE.match(autoid):
+        result.add(
+            "autoid_malformed",
+            f"卷面 autoid {autoid!r} 不是 18 位数字——手抄截断 id 会静默生成垃圾目录并"
+            "混入终卷(实证曾致终卷 35 case)。以 last_run.json/manifest 的机读全名为准。",
+        )
+    mand = check_crash_gates_mandatory(steps)
+    if not mand.ok:
+        result.ok = False
+        result.violations.extend(mand.violations)
+    _check_assertion_regex_compiles(steps, result)
+    _check_short_mode_assertions(steps, result)
+    _check_capture_refs_defined(steps, result)
+    _check_dns_label_limit(steps, result)
+    return result

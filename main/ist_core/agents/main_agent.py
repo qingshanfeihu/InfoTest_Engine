@@ -23,8 +23,11 @@ from main.ist_core.tools.device import (
     dev_run_batch,
     dev_run_batch_digest,  # 整份上机 + 逐 case 四层归因 + 明细落 workspace，回精简摘要(不 offload)
     compile_attribute,
+    submit_attribution,
     compile_emit,  # main-orchestrated 兜底单 case；worker 主路也用
-    compile_prep,  # main-orchestrated：解析脑图→manifest（main 自己拆 case 清单）
+    compile_prep,  # main-orchestrated：解析脑图→manifest（含意图族聚类,族摊销路由）
+    compile_skeleton,  # 族摊销:取族首成品的配置骨架,族内 brief 复用
+    compile_writeback,  # 闭环:上机真PASS写回先例库(ρ_k增长)
     compile_emit_merged,  # main-orchestrated：合并各 case 单 xlsx 打包
     compile_fanout,  # main-orchestrated 真并发：N 个 case 一次 fan-out 独立 worker（reflow/批量重编，替代逐个 invoke_skill 串行）
     compile_grade_extract,  # main-orchestrated：合并前确定性自查 suspect（grade 之外的第二道闸）
@@ -34,8 +37,10 @@ from main.ist_core.tools.device import (
 )
 from main.ist_core.tools.knowledge.kb_bug_search import kb_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
+from main.ist_core.tools.knowledge.memory_search import kb_memory_search
 from main.ist_core.tools.knowledge.footprint_writeback import compile_footprint_writeback
 from main.ist_core.tools.skills import invoke_skill
+from main.ist_core.tools.skills.agent_define import agent_define
 from main.ist_core.tools.skills.file_server import qa_file_server
 from main.ist_core.tools.skills.download_case import download_agile_case
 from main.ist_core.tools.ask_user import ask_user
@@ -64,13 +69,16 @@ def _default_generic_tools() -> list[Any]:
 
         # 编译/上机：主 agent 只编排不手搓——编译机器（compile_prep/fanout/emit/
         # emit_merged/precedent/score）下放到 compile_pipeline 内部 + draft/grade fork，
-        # 主 agent 仅调 compile_pipeline 一次；ist_verify 上机验证链用下面这组。
+        # 主 agent 仅调 compile_pipeline 一次；ist-verify 上机验证链用下面这组。
         dev_run_batch,
         dev_run_batch_digest,   # 整份上机 + 逐 case 归因 + 明细落 workspace，回精简分类摘要（推荐：大结果不 offload、可直接看分类）
         compile_attribute,   # 上机 fail 四层归因（单 case；digest 已内置批量归因）
+        submit_attribution,  # 归因结论落盘 last_run.json（瞬态/冻结跨轮护栏与缺陷候选汇总靠它）
         compile_pipeline,  # 确定性编译流水线（保留当 fallback）
         compile_emit,  # main-orchestrated 兜底单 case
-        compile_prep,  # main-orchestrated：解析脑图→manifest（main 自己拆 case 清单）
+        compile_prep,  # main-orchestrated：解析脑图→manifest（含意图族聚类,族摊销路由）
+    compile_skeleton,  # 族摊销:取族首成品的配置骨架,族内 brief 复用
+    compile_writeback,  # 闭环:上机真PASS写回先例库(ρ_k增长)
         compile_emit_merged,  # main-orchestrated：合并各 case 单 xlsx 打包
         compile_fanout,  # main-orchestrated 真并发：一次派发 N 个独立 worker（批量重编/reflow，替代逐个 invoke_skill 串行）
         compile_grade_extract,  # main-orchestrated：合并前确定性自查（grade 之外第二道闸，防放水）
@@ -81,9 +89,11 @@ def _default_generic_tools() -> list[Any]:
         kb_bug_search,
 
         kb_footprint,
+        kb_memory_search,  # 长期记忆拉式检索(BM25;推注入之外的主动回忆通道)
 
 
         invoke_skill,
+        agent_define,  # D:按 B2 骨架自主生成临时子 agent(现有 skill 不覆盖的子流程)
 
         # 独立工具：从 Agile 平台拉脑图 JSON 落盘；env 必填 AGILE_AUTH_TOKEN/AGILE_COOKIES
         download_agile_case,
@@ -126,14 +136,12 @@ def build_main_agent(**kwargs: Any):
         logger.warning("deepagents 未安装，回退到 create_react_agent: %s", exc)
         return _build_fallback_react_agent(model=model, tools=tools, system_prompt=system_prompt)
 
-    try:
-        from deepagents.middleware import summarization_middleware  # type: ignore[import-not-found]
-
-        middleware = kwargs.pop("middleware", None)
-        if middleware is None:
-            middleware = [summarization_middleware(max_tokens=28000)]
-    except ImportError:
-        middleware = kwargs.pop("middleware", None) or []
+    # 上下文压缩由 create_deep_agent **无条件自动挂载**的 create_summarization_middleware
+    # 提供(fraction 阈值 + 撤出历史落 runtime 的 /conversation_history/<thread>.md 可回读
+    # + 溢出兜底)。勿再往 middleware 里传自建摘要实例——会与默认双摘要。
+    # (2026-07-05 修正:旧代码 import summarization_middleware(max_tokens=28000),该名在
+    # deepagents 0.5.9 不存在,静默走 except——28k 配置从未生效过,属死代码,已删。)
+    middleware = kwargs.pop("middleware", None) or []
 
     backend_kwarg: dict[str, Any] = {}
     try:
@@ -194,6 +202,25 @@ def build_main_agent(**kwargs: Any):
             middleware.append(LoopGuardMiddleware())
         except Exception as exc:  # noqa: BLE001
             logger.info("LoopGuardMiddleware 不可用: %s", exc)
+
+        # 工具渐进披露(C2):按会话激活域过滤 request.tools,基础组常驻、
+                # compile/device 组按激活给。默认开(对照轮验收后翻,IST_TOOL_GATING_ENABLED=0 关)。
+        try:
+            from main.ist_core.middleware.tool_gating import ToolGatingMiddleware
+
+            middleware.append(ToolGatingMiddleware())
+        except Exception as exc:  # noqa: BLE001
+            logger.info("ToolGatingMiddleware 不可用: %s", exc)
+
+        # 工具结果剪枝(MiMo-Code prune 移植):摘要之前的零成本上下文释放——
+        # 旧工具结果保头 160 字符+剪枝标记,最近 2 轮/invoke_skill/ask_user 受保护。
+        # IST_PRUNE_TOOL_OUTPUTS=0 关;预算 IST_PRUNE_PROTECT_CHARS(默认 15 万字符)。
+        try:
+            from main.ist_core.middleware.tool_result_prune import ToolResultPruneMiddleware
+
+            middleware.append(ToolResultPruneMiddleware())
+        except Exception as exc:  # noqa: BLE001
+            logger.info("ToolResultPruneMiddleware 不可用: %s", exc)
 
         
         

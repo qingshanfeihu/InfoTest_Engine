@@ -1,3 +1,40 @@
+# 首选:blocks 组合子(比手写五列表更省心)
+
+`compile_emit(blocks=…)` 是首选通道——你只做语义决策(测什么行为、用什么命令观测、选哪种断言形态、期望什么),寄存器分配/捕获比较三步式/E-F-H 列由工具展开。悬空断言、字面反斜杠 n、未定义寄存器在组合子语言下**写不出来**。传原生数组,不要序列化成字符串。
+
+五种组合子(按要验证的事选):
+
+```
+{"kind":"CONFIG", "cmds":["命令1","命令2",…], "desc":"…"}
+    设备配置。每条命令一个数组元素(换行工具拼,不要自己拼 \n)。单条→cmd_config,多条→cmds_config。
+
+{"kind":"OBSERVE_ASSERT", "host":"routera|APV_0|…", "cmd":"dig/show 命令", "desc":"…",
+ "asserts":[{"op":"found|not_found|abs_found", "pattern":"要在回显里找的文本/正则", "desc":"…"}]}
+    观测一次 + 对该回显断言 1..n 条。验「输出里有/没有某内容」用这个。
+    op: found=正则匹配(DOTALL) / not_found=不匹配 / abs_found=字面匹配(自动 escape)。
+
+{"kind":"CAPTURE_COMPARE", "host":"routera|…", "capture_cmd":"第一次观测命令",
+ "cmd":"第二次观测命令(省略=同capture_cmd)", "relation":"same|differs", "desc":"…"}
+    捕获比较:第一次存寄存器、第二次产 result、断言两次 same(相同/会话保持)或 differs(不同/切换)。
+    寄存器工具自动分配,你不用管。验「两次观测的关系」用这个(rr 轮转、会话亲和性)。
+
+{"kind":"OBSERVE_ONLY", "host":"…", "cmd":"…", "desc":"…"}
+    只发流量不断言(rr 轮转填充、发压力流量)。
+
+{"kind":"SLEEP", "seconds":N}
+    等配置生效。
+```
+
+host 语义:`APV_0`=被测设备(show 类观测走它);其余=网络事实源里的测试机主机名(dig 类触发)。
+
+**provenance 按组合子粒度一对一**(steps 数与 blocks 数相等,一个组合子一条 {layer:G/E/V, source:{kind,ref}},展开工具同步)。
+
+**rr/wrr 累计命中计数期望** 调 `compile_expected_hits(algorithm, n_requests, n_pools, uninterrupted, ...)` 算,不要手算——它带设备回放实证的适用域判定(连续查询段内精确/被 show 分段轮转态漂移只能按段/wrr 配比与权重不符只给参与性)。它返回数字段,你接在真实计数字段前缀后组成断言(前缀从先例/手册核实)。
+
+组合子表达不了的边角形态,才退回下面的 steps 五列表手写。
+
+---
+
 # case.xlsx 步骤函数说明（写 steps_json 前先读这份）
 
 一个测试用例是一张表，由若干「步骤行」组成。你用 `compile_emit` 的 `steps_json` 提交这些行——每行是一个 dict，核心是四个格：`E`（对谁）、`F`（做什么）、`G`（数据）、`H`（可选，存一次输出、之后拿来比）。这份文件把每个格能填什么、各是什么意思讲清楚。读懂它，你就能为任何行为设计出结构正确的断言。

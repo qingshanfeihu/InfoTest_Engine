@@ -115,6 +115,18 @@ def get_default_store():
     return _build_default_store()
 
 
+def offload_artifacts_dir() -> str:
+    """Offload 落盘根（``large_tool_results`` / ``conversation_history`` 的父目录）。
+
+    **读写同源**：写侧 ``build_memory_backend`` 的 FilesystemBackend ``root_dir`` 与
+    读侧 ``file_tools._resolve_inside_root`` 的 offload 只读通道**共用此函数**，确保
+    两端指向同一落点、不漂移。纯路径计算——不建目录（建目录 + chmod 只在写侧做）。
+    默认本地 ``/tmp/ist_core_artifacts``（非云盘，避免云盘 I/O 卡死），
+    ``IST_ARTIFACTS_DIR`` env 覆盖。
+    """
+    return (os.environ.get("IST_ARTIFACTS_DIR") or "/tmp/ist_core_artifacts").strip()
+
+
 def build_memory_backend(*, store=None):
     """构造主 agent 与 fork agent 共享的 CompositeBackend。
 
@@ -123,14 +135,38 @@ def build_memory_backend(*, store=None):
     - /memories/  → StoreBackend（跨 thread，namespace 隔离）
     - 其他路径    → StateBackend（deepagents 内置 todos / scratch 等）
 
-    artifacts_root="/tmp"：让 deepagents FilesystemMiddleware 把 large_tool_results
-    与 conversation_history 落到 tmp/ 下而不是项目根（避免污染仓库目录树；
-    tmp/ 已在 .gitignore）。FilesystemMiddleware 默认 artifacts_root="/"
-    会把这两个目录写到项目根，触发 git status 噪声。
+    大结果 / 会话历史的 offload 路由到 **FilesystemBackend（真实本地磁盘）**，而非落到
+    default StateBackend（虚拟 state）。原因：dev_run_batch 等大结果 offload 到虚拟后端后，
+    main **读不回完整内容**（run_python 也 open 不了虚拟路径），拿不到整份上机结果+过程
+    日志去诊断失败。
+
+    ⚠ 关键坑：main_agent 把本 backend 以**工厂(callable)**形式交给 FilesystemMiddleware，
+    middleware 的 ``isinstance(self.backend, CompositeBackend)`` 对工厂为 **False** →
+    它算出的 ``artifacts_root`` 退化为 ``"/"``，故 offload 前缀就是 ``/large_tool_results``
+    与 ``/conversation_history``（**不是** ``/artifacts/...``）。所以必须路由这**两个真实
+    前缀**到磁盘 backend——写入时 middleware 用运行时解析出的本 CompositeBackend、命中这两
+    条路由 → 落真实磁盘。``virtual_mode=True`` 把访问限定在各自 root_dir 内（挡 ``..``/绝对
+    路径外逃）。落点默认本地 ``/tmp/ist_core_artifacts``（非云盘，避免云盘 I/O 卡死），
+    可用 ``IST_ARTIFACTS_DIR`` env 覆盖。
     """
-    from deepagents.backends import CompositeBackend, StateBackend, StoreBackend
+    from deepagents.backends import (
+        CompositeBackend,
+        FilesystemBackend,
+        StateBackend,
+        StoreBackend,
+    )
 
     resolved_store = store or _build_default_store()
+    artifacts_dir = offload_artifacts_dir()   # 读写同源，见 offload_artifacts_dir()
+    ltr_dir = os.path.join(artifacts_dir, "large_tool_results")
+    conv_dir = os.path.join(artifacts_dir, "conversation_history")
+    # 私有权限落点（安全评审低危项：防 /tmp 固定路径被预置/软链劫持）。
+    for _d in (artifacts_dir, ltr_dir, conv_dir):
+        os.makedirs(_d, exist_ok=True)
+        try:
+            os.chmod(_d, 0o700)
+        except OSError:
+            pass
     return CompositeBackend(
         default=StateBackend(),
         routes={
@@ -139,8 +175,15 @@ def build_memory_backend(*, store=None):
                 store=resolved_store,
                 namespace=_user_namespace,
             ),
+            # offload 真实前缀 → 真实磁盘（main 可经 read_file 读回完整内容+全过程日志）。
+            "/large_tool_results/": FilesystemBackend(
+                root_dir=ltr_dir, virtual_mode=True, max_file_size_mb=100,
+            ),
+            "/conversation_history/": FilesystemBackend(
+                root_dir=conv_dir, virtual_mode=True, max_file_size_mb=100,
+            ),
         },
-        artifacts_root="/tmp",
+        artifacts_root="/",
     )
 
 

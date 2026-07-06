@@ -170,7 +170,7 @@ class MessageReducer:
             self._messages.clear()
             self._streaming_text = None
             self._status = "idle"
-            self._usage.clear()
+            # _usage 不清——跨 run 累计，footer 显示会话级 token / 费用
             self._llm_phase = ""
             self._output_token_count = 0
             self._inflight_tool_use_ids.clear()
@@ -218,7 +218,7 @@ class MessageReducer:
         elif kind == "llm_end":
             self._on_llm_end(event)
         elif kind == "llm_start":
-            self._on_llm_start()
+            self._on_llm_start(event)
         elif kind in ("tool_call", "tool_start"):
             self._on_tool_call(event)
         elif kind in ("tool_result", "tool_end"):
@@ -243,17 +243,38 @@ class MessageReducer:
 
     
 
-    def _on_llm_start(self) -> None:
-        """模型调用开始：footer 显示 input 阶段（尚无流式输出 token）。"""
+    def _on_llm_start(self, event: IstCoreEvent | None = None) -> None:
+        """模型调用开始：footer 显示 input 阶段（尚无流式输出 token）。
+
+        fork 子 agent 的 llm_start 也走这里——只更新 _llm_phase 让 footer
+        显示"接收/处理中"，**不**累加 usage（累加归 _FORK_TOKENS / callback handler）。
+        """
         self._llm_phase = "input"
         self._output_token_count = 0
 
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """粗估 token 数:CJK ≈1 字/token,其余 ≈4 字符/token。
+
+        纯 len//4 对中文思考流低估 ~4 倍(2026-07-03 实证 footer ↓ 显示 153 实为 ~600)。
+        """
+        cjk = sum(1 for ch in text if ord(ch) >= 0x2E80)
+        return max(1, cjk + (len(text) - cjk) // 4)
+
     def _on_token(self, event: IstCoreEvent) -> None:
-        content = (event.get("payload") or {}).get("content") or ""
+        payload = event.get("payload") or {}
+        reasoning = payload.get("reasoning")
+        # 思考增量（mimo 深度思考期以 reasoning_content 逐步返回，content 为空）：
+        # 此刻 mimo 真在深度思考 → 置 thinking 相位，驱动 footer 显示真实 think 状态。
+        if isinstance(reasoning, str) and reasoning:
+            self._llm_phase = "thinking"
+            self._output_token_count += self._estimate_tokens(reasoning)
+            return
+        content = payload.get("content") or ""
         if not isinstance(content, str) or not content:
             return
         self._llm_phase = "output"
-        self._output_token_count += max(1, len(content) // 4)
+        self._output_token_count += self._estimate_tokens(content)
         if self._streaming_text is None:
             self._streaming_text = content
         else:
@@ -265,7 +286,14 @@ class MessageReducer:
         payload = event.get("payload") or {}
         name = payload.get("name") or ""
         usage = event.get("usage")
-        if isinstance(usage, dict):
+        # usage 权威源=graph.py callback 发的 usage_only 事件(每次主 agent LLM 调用
+        # 恰一条)。astream_events 的 on_chat_model_end 映射条会携带同一份 usage
+        # (qa_node async 化后该路径重新可见),不按来源收口会双计——2026-07-02 实证
+        # footer 显示恰为真实消耗的 2 倍。fork 的 usage 由 loader._FORK_TOKENS 单独
+        # 跟踪、footer 经 fork_input/fork_output 叠加,不在此累计。
+        tags = event.get("tags") or {}
+        is_fork = bool(tags.get("parent_subagent"))
+        if isinstance(usage, dict) and not is_fork and name == "usage_only":
             self._merge_usage(usage)
 
         

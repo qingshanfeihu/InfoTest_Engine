@@ -26,15 +26,30 @@ _VALID_LAYERS = ("G", "E", "V")
 # source.kind 取值：来源类型，供 writeback/verify 按类型路由。
 _VALID_SOURCE_KINDS = (
     "footprint",      # G：footprint 节点（feature_id）
+    "emit_auto",      # 机械骨架：emit 在 worker 漏传 provenance 时按步骤结构自动生成——
+                      # 无离线溯源 ref；其 G 命令=真实入卷命令，写回凭「上机 PASS」设备实证
+                      # + merger 命令签名兜底校验（比滞后手册更硬的证据,见 CNAME 文法实证）。
     "precedent",      # G/V：先例 xlsx
     "env_facts",      # E：拓扑事实源
     "manual",         # V：手册行
     "intent",         # V：作者意图（脑图原文）
-    "config_derived", # V_K：期望值是作者写的 config 的确定后果（池IP/超时/删后状态/rr按序命中）→ 编译期常量
+    "config_derived", # V_K：期望值是作者写的 config 的确定后果（池IP/超时/删后状态/协议固定响应）→ 编译期常量
     "captured_relation", # V_R：跨观测关系断言（会话保持/同-异），check_point 用 H 寄存器引用前序捕获做 found/not_found，无 <RUNTIME>
+    "distribution_derived", # V_dist：分布类算法（rr/wrr）发 N 次后各后端**累计命中分布**的统计区间，
+                            # 期望由算法语义+次数+权重离线推导（rr≈N/k、wrr≈N×w_i/Σw）、守恒 Σ==N 可验，
+                            # 经 distribution_assertion 展开成区间正则 found（非恒真、非 <RUNTIME>）。
+                            # ⚠ 单次命中哪个成员是运行时落点（captured_relation 或 device_runtime），不归此类。
+    "membership_derived", # V_mem：命中归属锚点——"这次输出是否落在某 pool 的成员 IP 集合里"，
+                          # 期望值（成员集合）是该 pool 配置的静态确定后果（sdns pool service 写死了
+                          # 哪些成员），不是运行时不可知；经 membership_assertion 展开成 found/not_found
+                          # (成员1|成员2|...)。用于 pool 内多成员场景的命中判定、new_member_last 的
+                          # 有序轨迹（新增 pool 的成员集合前段 not_found、覆盖原 pool 一轮后 found）。
+                          # ⚠ 与 captured_relation 的区别：这里期望值是**配置已知的常量**（成员集合），
+                          # 不是"运行时首次捕获的值"；与 device_runtime 的区别：命中归属可离线判定，
+                          # 不是"落点不可知只能占位"。
     "skeleton",       # G：族骨架（步骤3 族首产出，族内复用）
     "device_runtime", # V：期望值离线不可知（落点依赖探活/哈希/会话/脚本运行时），值填 <RUNTIME> 占位
-    "device_verified",# V：device_runtime 槽位已由 ist_verify 上机回填真实值并锁死（不再含 <RUNTIME>）
+    "device_verified",# V：device_runtime 槽位已由 ist-verify 上机回填真实值并锁死（不再含 <RUNTIME>）
     "unknown",        # 兜底：draft 没标来源（应尽量避免）
 )
 
@@ -132,6 +147,19 @@ def steps_match(provenance: CaseProvenance, steps: list[dict]) -> bool:
     for ps, st in zip(provenance.steps, steps):
         if ps.E != str(st.get("E", "")) or ps.F != str(st.get("F", "")) or ps.G != str(st.get("G", "")):
             return False
+    return True
+
+
+def backfill_efg(provenance: CaseProvenance, steps: list[dict]) -> bool:
+    """按位置把 emit steps 的 E/F/G 回填进 provenance——draft 只标 layer/source、不必手抄 E/F/G。
+    （手抄一长串 E/F/G 极易错位，一错位 steps_match 就失败、旁挂跳过、draft 就重 emit 空转。）
+    步骤数一致即逐位回填并返回 True；数目对不上才返回 False（旁挂跳过）。"""
+    if len(provenance.steps) != len(steps):
+        return False
+    for ps, st in zip(provenance.steps, steps):
+        ps.E = str(st.get("E", ""))
+        ps.F = str(st.get("F", ""))
+        ps.G = str(st.get("G", ""))
     return True
 
 

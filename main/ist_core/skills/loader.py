@@ -173,14 +173,29 @@ _MODEL_MAP = {
     "opus": "opus",
     "sonnet": "sonnet",
     "haiku": "haiku",
+    "flash": "flash",   # 两档收敛后的新词;旧三词经 tier 解析归并(opus/sonnet→主档,haiku→flash)
+    "pro": "opus",
 }
 
 _TOOL_REGISTRY: dict[str, Any] = {}
+_TOOL_REGISTRY_LOCK = threading.Lock()
 _SUBAGENT_RUNNABLE_CACHE: dict[str, Any] = {}
 
 
 def _get_tool_registry() -> dict[str, Any]:
-    """延迟加载工具注册表——包含所有可能被 fork skill 使用的工具。"""
+    """延迟加载工具注册表——包含所有可能被 fork skill 使用的工具。
+
+    必须整体加锁:并发 fork 首调时,无锁版会让后到线程拿到"正在逐段填充"的
+    半满 registry(晚注册的 compile_precedent/compile_score 缺失),该线程装配的
+    缺工具 runnable 又被 _SUBAGENT_RUNNABLE_CACHE 永久缓存——2026-07-02 实证:
+    首轮 34-case 编译 worker 全程调不到 compile_precedent(ToolNode not-a-valid-tool
+    ×4,退化 glob 瞎找先例),单线程离线不可复现。
+    """
+    with _TOOL_REGISTRY_LOCK:
+        return _build_tool_registry_locked()
+
+
+def _build_tool_registry_locked() -> dict[str, Any]:
     if not _TOOL_REGISTRY:
         from main.ist_core.tools.deepagent import (
             fs_glob,
@@ -197,22 +212,22 @@ def _get_tool_registry() -> dict[str, Any]:
             "fs_write": fs_write,
         })
         try:
-            from main.ist_core.tools.deepagent import run_shell, run_python
+            from main.ist_core.tools.deepagent.exec_tools import run_shell, run_python
             _TOOL_REGISTRY["run_shell"] = run_shell
             _TOOL_REGISTRY["run_python"] = run_python
         except ImportError:
-            pass
+            logger.debug("工具 run_shell/run_python 未可用，跳过注册")
         try:
             from main.ist_core.tools.device import dev_rest, dev_ssh
             _TOOL_REGISTRY["dev_ssh"] = dev_ssh
             _TOOL_REGISTRY["dev_rest"] = dev_rest
         except ImportError:
-            pass
+            logger.debug("工具 dev_ssh/dev_rest 未可用，跳过注册")
         try:
             from main.ist_core.tools.knowledge.kb_bug_search import kb_bug_search
             _TOOL_REGISTRY["kb_bug_search"] = kb_bug_search
         except ImportError:
-            pass
+            logger.debug("工具 kb_bug_search 未可用，跳过注册")
         try:
             from main.ist_core.tools.knowledge.footprint_lookup import (
                 kb_footprint,
@@ -220,21 +235,27 @@ def _get_tool_registry() -> dict[str, Any]:
 
             _TOOL_REGISTRY["kb_footprint"] = kb_footprint
         except ImportError:
-            pass
+            logger.debug("工具 kb_footprint 未可用，跳过注册")
         # 单 case 编译/上机 tools（draft/grade 子 agent 用）
         try:
             from main.ist_core.tools.device import (
                 compile_emit,
+                compile_check_verifiability,
+                compile_grade_extract,
+                submit_verdict,
                 dev_probe,
                 dev_run_case,
                 dev_init_device,
             )
             _TOOL_REGISTRY["compile_emit"] = compile_emit
+            _TOOL_REGISTRY["compile_check_verifiability"] = compile_check_verifiability
+            _TOOL_REGISTRY["compile_grade_extract"] = compile_grade_extract
+            _TOOL_REGISTRY["submit_verdict"] = submit_verdict
             _TOOL_REGISTRY["dev_run_case"] = dev_run_case
             _TOOL_REGISTRY["dev_probe"] = dev_probe
             _TOOL_REGISTRY["dev_init_device"] = dev_init_device
         except ImportError:
-            pass
+            logger.debug("工具 compile_emit/dev_probe/dev_run_case 未可用，跳过注册")
         # 批量编译 tools（ist_compile 编译链用）：解析清单 + 合并打包 + fan-out + 串行上机
         try:
             from main.ist_core.tools.device import (
@@ -248,17 +269,72 @@ def _get_tool_registry() -> dict[str, Any]:
             _TOOL_REGISTRY["compile_fanout"] = compile_fanout
             _TOOL_REGISTRY["dev_run_batch"] = dev_run_batch
         except ImportError:
-            pass
+            logger.debug("工具 compile_prep/compile_emit_merged/compile_fanout/dev_run_batch 未可用，跳过注册")
         try:
             from main.ist_core.tools.device.precedent_tools import (
                 compile_score,
                 compile_precedent,
+                compile_writeback,
             )
             _TOOL_REGISTRY["compile_precedent"] = compile_precedent
             _TOOL_REGISTRY["compile_score"] = compile_score
+            _TOOL_REGISTRY["compile_writeback"] = compile_writeback
+            from main.ist_core.tools.device.checker_tool import compile_expected_hits
+            _TOOL_REGISTRY["compile_expected_hits"] = compile_expected_hits
+            # 归因孔(compile-attributor,V6)专用
+            from main.ist_core.tools.device import compile_attribute, submit_attribution
+            from main.ist_core.tools.device.runtime_fill_tools import (
+                compile_runtime_slots, compile_runtime_fill,
+            )
+            from main.ist_core.tools.knowledge.behavior_tool import submit_behavior_fact
+            _TOOL_REGISTRY["compile_attribute"] = compile_attribute
+            _TOOL_REGISTRY["submit_attribution"] = submit_attribution
+            _TOOL_REGISTRY["compile_runtime_slots"] = compile_runtime_slots
+            _TOOL_REGISTRY["compile_runtime_fill"] = compile_runtime_fill
+            _TOOL_REGISTRY["submit_behavior_fact"] = submit_behavior_fact
         except ImportError:
-            pass
+            logger.debug("工具 compile_precedent/compile_score 未可用，跳过注册")
+        try:
+            from main.ist_core.tools.knowledge.command_builder import build_command
+            _TOOL_REGISTRY["build_command"] = build_command
+        except ImportError:
+            logger.debug("工具 build_command 未可用，跳过注册")
     return _TOOL_REGISTRY
+
+
+def resolve_skill_dirname(name: str) -> str:
+    """skill 名 → 实际目录名(下划线/连字符互通)。
+
+    B1(2026-07-05):skill 名按官方字符集连字符化(ist_compile→ist-compile 等)。
+    旧下划线名仍会出现在历史对话/长会话续聊/旧脚本里——目录级别名兜底,与 TUI
+    slash 的互通语义一致。两种拼法都不存在时原样返回,调用方照常报 not found。
+    """
+    n = (name or "").strip()
+    if not n or (_SKILLS_DIR / n / "SKILL.md").exists():
+        return n
+    for cand in (n.replace("_", "-"), n.replace("-", "_")):
+        if cand != n and (_SKILLS_DIR / cand / "SKILL.md").exists():
+            logger.info("skill 名别名解析: %r → %r(规范名为连字符,调用方可更新)", n, cand)
+            return cand
+    return n
+
+
+# 动态 agent(D 阶段,2026-07-05):main 经 agent_define 工具按 B2 骨架自主生成的
+# fork agent/skill 落这里。在 runtime/ 下=文件工具沙箱黑名单内——LLM 只能走
+# agent_define 的校验闸创建,不能 fs_write 手搓(门挂凭证路)。
+_DYN_SKILLS_DIR = Path(__file__).resolve().parents[3] / "runtime" / "dyn_skills"
+_DYN_AGENTS_DIR = Path(__file__).resolve().parents[3] / "runtime" / "dyn_agents"
+
+
+def skill_md_path(name: str) -> Path:
+    """skill 名 → SKILL.md 路径(静态目录优先,动态目录兜底;都不存在返回静态路径供报错)。"""
+    static = _SKILLS_DIR / name / "SKILL.md"
+    if static.exists():
+        return static
+    dyn = _DYN_SKILLS_DIR / name / "SKILL.md"
+    if dyn.exists():
+        return dyn
+    return static
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -352,6 +428,8 @@ def load_subagent(name: str) -> dict[str, Any] | None:
     """
     md_path = _AGENTS_DIR / f"{name}.md"
     if not md_path.exists():
+        md_path = _DYN_AGENTS_DIR / f"{name}.md"   # 动态生成 agent(agent_define 产物)
+    if not md_path.exists():
         return None
 
     parsed = _parse_skill_md(md_path)
@@ -375,7 +453,31 @@ def load_subagent(name: str) -> dict[str, Any] | None:
         "system_prompt": body,
         "tools_spec": fm.get("tools") or fm.get("allowed-tools") or [],
         "model": fm.get("model", "opus"),
+        "effort": str(fm.get("effort", "") or ""),   # 思考深度 high|max(空=全局默认)
     }
+
+
+def _build_fork_middleware() -> list:
+    """fork 子 agent 的中间件栈——与主 agent 对齐(2026-07-05 坑2 修复)。
+
+    曾只挂 LoopGuard:fork worker 单个可跑 900s、堆几十个工具返回,剪枝/信封全漏,
+    上下文裸堆积。现对齐三件:LoopGuard(死循环护栏,2026-07-02 实证 emit 连败打转
+    25 次)/ ToolResultPrune(旧结果剪枝)/ ToolEnvelope(<tool_result> 统一信封)。
+    不挂 ToolGating:fork 工具白名单已由 agents/*.md frontmatter 显式声明。
+    """
+    out: list = []
+    import importlib as _il
+    for _mw_name, _mw_import in (
+        ("LoopGuardMiddleware", "main.ist_core.middleware.loop_guard"),
+        ("MessageSanitizeMiddleware", "main.ist_core.middleware.message_sanitize"),
+        ("ToolResultPruneMiddleware", "main.ist_core.middleware.tool_result_prune"),
+        ("ToolEnvelopeMiddleware", "main.ist_core.middleware.tool_envelope"),
+    ):
+        try:
+            out.append(getattr(_il.import_module(_mw_import), _mw_name)())
+        except Exception:  # noqa: BLE001
+            logger.info("fork %s 不可用,跳过", _mw_name)
+    return out
 
 
 def get_subagent_runnable(name: str) -> Any | None:
@@ -397,15 +499,23 @@ def get_subagent_runnable(name: str) -> Any | None:
 
         model_name = spec["model"]
         model_tier = _MODEL_MAP.get(model_name, model_name)
-        model = build_agent_chat_model(model=ist_core_tier_model(model_tier))
+        # fork LLM 强制非流式：fork 子流程不进 TUI 流式渲染,而流式遇不稳定网关会周期发空 chunk
+        # → httpx 每 chunk 重置读超时 → 整体响应永不完成(0% CPU 死挂、draft 卡满墙钟)。非流式是
+        # 单次请求 + 干净 request_timeout,遇 stall 按时超时重试,不无限挂。主 TUI 流式不受影响。
+        model = build_agent_chat_model(
+            model=ist_core_tier_model(model_tier), streaming=False, stream_usage=False,
+            effort=spec.get("effort") or "")
 
         tools = _resolve_tools(spec["tools_spec"])
+
+        fork_middleware = _build_fork_middleware()
 
         runnable = create_agent(
             model,
             system_prompt=spec["system_prompt"],
             tools=tools,
             name=spec["name"],
+            middleware=fork_middleware,
         ).with_config({"recursion_limit": int(os.environ.get("IST_FORK_RECURSION_LIMIT") or 120)})
 
         _SUBAGENT_RUNNABLE_CACHE[spec["name"]] = runnable
@@ -454,7 +564,8 @@ def _evidence_log_path() -> str:
     p = os.environ.get("IST_EVIDENCE_LOG")
     if p:
         return p
-    return str(Path(__file__).resolve().parents[3] / "runtime" / "logs" / "compile_evidence.live.log")
+    # 默认按 pid 分文件:多个 infotest 实例并存时各写各的、互不串台/互不清空(显式给 IST_EVIDENCE_LOG 则共用该路径)。
+    return str(Path(__file__).resolve().parents[3] / "runtime" / "logs" / f"compile_evidence.{os.getpid()}.live.log")
 
 
 def reset_evidence_log() -> None:
@@ -471,6 +582,12 @@ def reset_evidence_log() -> None:
             path = Path(_evidence_log_path())
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("", encoding="utf-8")
+            # 清理同目录早已过时的旧 pid evidence 文件(>6h 未写=对应 infotest 进程多半已退)，避免按 pid 分文件后累积。
+            import time as _t
+            _cut = _t.time() - 6 * 3600
+            for _old in path.parent.glob("compile_evidence.*.live.log"):
+                if _old != path and _old.stat().st_mtime < _cut:
+                    _old.unlink()
     except Exception:
         pass
 
@@ -494,33 +611,71 @@ def _fork_emit(text: str) -> None:
 
 # fork token 用量累计:compile 期主 agent 阻塞在 compile_pipeline、footer token 冻结,
 # 实际烧的是 draft/grade fork 的 LLM 调用。这里累加,供 TUI footer 单独显示真实成本。
-_FORK_TOKENS = [0, 0]  # [input, output]
+_FORK_TOKENS = [0, 0, 0]  # [input, output, cache_hit]
 _FORK_TOKENS_LOCK = threading.Lock()
 
 
-def _accumulate_fork_tokens(msg: Any) -> None:
-    try:
-        um = getattr(msg, "usage_metadata", None) or {}
-        it = um.get("input_tokens", 0) or 0
-        ot = um.get("output_tokens", 0) or 0
-        if it or ot:
-            with _FORK_TOKENS_LOCK:
-                _FORK_TOKENS[0] += it
-                _FORK_TOKENS[1] += ot
-    except Exception:
-        pass
-
-
-def get_fork_tokens() -> tuple[int, int]:
-    """返回 (input, output) fork token 累计(供 TUI 显示)。"""
+def get_fork_tokens() -> tuple[int, int, int]:
+    """返回 (input, output, cache_hit) fork token 累计(供 TUI 显示+成本计算)。"""
     with _FORK_TOKENS_LOCK:
-        return (_FORK_TOKENS[0], _FORK_TOKENS[1])
+        return (_FORK_TOKENS[0], _FORK_TOKENS[1], _FORK_TOKENS[2])
 
 
 def reset_fork_tokens() -> None:
     with _FORK_TOKENS_LOCK:
         _FORK_TOKENS[0] = 0
         _FORK_TOKENS[1] = 0
+        _FORK_TOKENS[2] = 0
+
+
+
+
+class _ForkUsageTally:
+    """挂在 fork invoke config 上的轻量 usage 回调——fork 每次 LLM 调用即时计量。
+
+    曾用「末态 messages 的 usage_metadata 累加」直计:fork 内摘要压缩把早期轮次
+    AIMessage 撤出末态(整轮丢计)、transient 重试第一次烧的、看门狗杀掉的 fork
+    全不进账——系统性偏小,与供应商官方(按每请求真实计量)对不上。显式挂载不依赖
+    callback contextvar 传播(线程池/引擎路径断传播),每条 on_llm_end 都到。
+    """
+    raise_error = False
+    ignore_llm = False
+    ignore_chain = True
+    ignore_agent = True
+    ignore_retriever = True
+    ignore_chat_model = False
+    run_inline = True
+
+    def on_llm_end(self, response, **kwargs) -> None:  # noqa: ANN001
+        from main.ist_core.graph import extract_llm_usage
+        u = extract_llm_usage(response)
+        if u:
+            accumulate_fork_tokens_from_usage(u)
+
+    def __getattr__(self, name):  # 其余回调一律 no-op(鸭型 BaseCallbackHandler)
+        if name.startswith("on_"):
+            return lambda *a, **k: None
+        raise AttributeError(name)
+
+
+def accumulate_fork_tokens_from_usage(usage: dict) -> None:
+    """从 callback 的 usage dict 累加 fork token(由 graph.py handler 的 fork 分支调用)。
+
+    这是 _FORK_TOKENS 的唯一写入口。曾有从 AIMessage.usage_metadata 累加的
+    _accumulate_fork_tokens(loader 流式循环里调)与本函数并存——AIMessage 实际
+    带 usage_metadata,两路同时活着即 fork 双计(2026-07-02 实证),已删旧路。
+    """
+    try:
+        it = int(usage.get("input_tokens") or 0)
+        ot = int(usage.get("output_tokens") or 0)
+        hit = int(usage.get("prompt_cache_hit_tokens") or 0)
+        if it or ot:
+            with _FORK_TOKENS_LOCK:
+                _FORK_TOKENS[0] += it
+                _FORK_TOKENS[1] += ot
+                _FORK_TOKENS[2] += hit
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # 路径类参数:只展示尾部(basename/末两段)——项目绝对路径前缀对所有调用都一样、无信息量。
@@ -555,6 +710,37 @@ def _short_fork_args(args: Any, limit: int = 48) -> str:
     return ""
 
 
+# compile_score 等工具返回 indent=2 的 pretty JSON(首行只有 `{`)——_short_fork_result 旧逻辑取
+# 首行只会显示 `{`,评分详情(overall/decision)全丢。下面把 JSON 压成单行关键字段预览,跳过
+# tool/note/how_to_use 等噪声键(非领域命令),让 TUI 看到 `overall=0.0 decision=CUT… checkpoints[5]`。
+_JSON_NOISE_KEYS = {"tool", "note", "hint", "how_to_use", "arm"}
+
+
+def _json_one_line_preview(s: str, limit: int) -> str:
+    """JSON 工具返回压成单行关键字段预览;非合法 JSON(如 run_python 的 py repr)回退纯压平兜底。"""
+    import json
+    try:
+        obj = json.loads(s)
+    except Exception:  # noqa: BLE001 — 非合法 JSON → 压平兜底(顺带优雅处理 py repr)
+        flat = " ".join(s.split())
+        return flat[:limit] + ("…" if len(flat) > limit else "")
+    if isinstance(obj, dict):
+        parts = []
+        for k, v in obj.items():
+            if k in _JSON_NOISE_KEYS:
+                continue
+            if isinstance(v, (bool, int, float, str)):
+                parts.append(f"{k}={v}")
+            elif isinstance(v, list):
+                parts.append(f"{k}[{len(v)}]")
+            elif isinstance(v, dict):
+                parts.append(f"{k}{{…}}")
+        out = " ".join(parts) if parts else " ".join(s.split())
+    else:   # 顶层数组
+        out = f"[{len(obj)}项] " + " ".join(s.split())
+    return out[:limit] + ("…" if len(out) > limit else "")
+
+
 def _short_fork_result(content: Any, limit: int = 140) -> str:
     """把工具结果压成单行简洁预览,带上**实质内容**而不只是节点标识。
 
@@ -574,6 +760,8 @@ def _short_fork_result(content: Any, limit: int = 140) -> str:
     s = str(content or "").strip()
     if not s:
         return ""
+    if s[:1] in ("{", "["):          # JSON 工具返回(compile_score 等 pretty JSON)→ 关键字段单行预览
+        return _json_one_line_preview(s, limit)
     # 跳过工具自带的头部横幅/分隔线 + 元数据标签行,抓第一行**真内容**(如 dev_probe 的设备回显)。
     # dev_probe 格式:`=== dev_probe ===` / `command: {cmd}` / `--- 设备回显 ---` / `{真实输出}`
     # —— 不跳 `command:` 就只会显示命令回显而非设备响应(用户要看的是"查到什么")。
@@ -652,14 +840,15 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str) -> dict
     ``IST_FORK_STEP_EMIT=0`` 可关实时步骤(只留编排层的轮次标记)。"""
     from langchain_core.messages import HumanMessage
     inp = {"messages": [HumanMessage(content=rendered_body)]}
+    cfg = {"callbacks": [_ForkUsageTally()]}   # fork usage 唯一采集点(每次 LLM 调用即时计)
     stream = getattr(runnable, "stream", None)
     if not callable(stream) or not _fork_step_emit_enabled():
         # runnable 不支持流式 或 关了步骤显示(IST_FORK_STEP_EMIT=0)→ 退回阻塞 invoke,
         # 行为与旧版完全一致(只是看不到实时步骤)。
-        return runnable.invoke(inp)
+        return runnable.invoke(inp, cfg)
     final_state: dict = {}
     seen = 0
-    for state in stream(inp, stream_mode="values"):
+    for state in stream(inp, cfg, stream_mode="values"):
         if not isinstance(state, dict):
             continue
         final_state = state
@@ -667,12 +856,12 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str) -> dict
         for m in msgs[seen:]:
             for line in _fork_step_lines(label, m):
                 _fork_emit(line)
-            _accumulate_fork_tokens(m)
         seen = len(msgs)
     return final_state
 
 
-def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "") -> str:
+def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
+                       summary_sink: dict | None = None) -> str:
     """执行 fork skill 的定义逻辑。
 
     流程：
@@ -684,8 +873,14 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "") -> st
     5. 返回 subagent 最终 AIMessage text
 
     关键：subagent 的 system_prompt 来自 agents/<agent>.md，SKILL.md body 是任务。
+
+    summary_sink（可选）：传入一个 dict，fork 成功完成后原地写入 _summarize_fork_messages
+    的结果（{ai_rounds, tool_results, tool_calls, search_queries}），供调用方聚合可观测
+    指标——compile_pipeline 用它统计每 case draft 的 dev_probe/kb_footprint 调用次数与
+    LLM 往返轮数（验证预检索是否真减少 LLM 调用/查找）。fork 异常/早退时清空，不污染调用方。
     """
-    skill_file = _SKILLS_DIR / skill_name / "SKILL.md"
+    skill_name = resolve_skill_dirname(skill_name)
+    skill_file = skill_md_path(skill_name)
     if not skill_file.exists():
         return f"ERROR: fork skill {skill_name!r} not found."
 
@@ -719,26 +914,34 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "") -> st
     try:
         result = _invoke_fork_streamed(runnable, rendered_body, _label)
     except Exception as exc:
-        # 递归上限是「已处理」的预期情况(compile_pipeline 会捕获 → CUT 重做),
-        # 只记简讯不打 traceback;其它异常才打完整栈。日志已统一进文件(TUI 不糊屏)。
+        # 递归上限是「已处理」的预期情况——compile_pipeline 会捕获后**立即 escalate**(不再做
+        # 3 轮等价重做:同 brief 必然同样递归 spin)。回带确定性标记 `[recursion-limit]` 让上层
+        # 据此分流;只记简讯不打 traceback,其它异常才打完整栈。日志已统一进文件(TUI 不糊屏)。
         if exc.__class__.__name__ == "GraphRecursionError":
-            logger.warning("Fork skill %s 触发递归上限(已处理:将 CUT 重做)", skill_name)
-        else:
-            logger.exception("Fork skill %s execution failed", skill_name)
-        _elapsed = time.monotonic() - _t0
-        _trace_fork(skill_name, brief, _elapsed, {}, error=str(exc)[:120])
-        _record_fork_status(skill_name, agent_name, _elapsed, {}, ok=False,
-                            error=str(exc)[:300])
-        if is_transient_error(exc):
+            logger.warning("Fork skill %s 触发递归上限(立即 escalate,不做等价重做)", skill_name)
+            _err = f"[recursion-limit] {str(exc)[:120]}"
+        elif is_transient_error(exc):
             logger.debug("Fork skill %s 瞬态错误(已抑制): %s", skill_name, exc)
+            _err = str(exc)[:120]
         else:
             logger.exception("Fork skill %s execution failed", skill_name)
-        return f"ERROR: fork skill {skill_name!r} execution failed: {exc}"
+            _err = str(exc)[:120]
+        _elapsed = time.monotonic() - _t0
+        _trace_fork(skill_name, brief, _elapsed, {}, error=_err)
+        _record_fork_status(skill_name, agent_name, _elapsed, {}, ok=False,
+                            error=_err[:300])
+        if summary_sink is not None:
+            summary_sink.clear()   # 异常 fork 无可观测 tool_calls，清空防污染调用方
+        return f"ERROR: fork skill {skill_name!r} execution failed: {_err}"
 
     messages = result.get("messages", [])
     _elapsed = time.monotonic() - _t0
     _summary = _summarize_fork_messages(messages)
-    # 可观测性：落 fork 内部工具调用分布/轮数/耗时到 fork_trace.log
+    # 可观测性①：把 summary 回传给调用方（pipeline 聚合 per-case LLM 往返/工具调用次数）
+    if summary_sink is not None:
+        summary_sink.clear()
+        summary_sink.update(_summary)
+    # 可观测性②：落 fork 内部工具调用分布/轮数/耗时到 fork_trace.log
     _trace_fork(skill_name, brief, _elapsed, _summary)
     _dump_full_trace(skill_name, messages)  # IST_FORK_TRACE_FULL=1 时落完整思考
 
@@ -775,10 +978,14 @@ def _render_skill_body(body: str, brief: str) -> str:
     Fork skill 的 body 用 $ARGUMENTS 引用调用者传入的参数。
     如果 body 不含 $ARGUMENTS，则在末尾追加 brief（兼容性兜底）。
     """
+    # 交互面 XML 分节(2026-07-05):brief 是「调用方数据」,SKILL 正文是「行为指令」
+    # ——<brief_from_caller> 标签让 fork 一眼分清边界(worker md 的 <rules> 收尾
+    # 紧邻此块,指令/数据相邻但不混排)。空 brief 不产空标签。
+    tagged = f"<brief_from_caller>\n{brief}\n</brief_from_caller>" if brief else ""
     if "$ARGUMENTS" in body or "${ARGUMENTS}" in body:
-        return body.replace("${ARGUMENTS}", brief).replace("$ARGUMENTS", brief)
+        return body.replace("${ARGUMENTS}", tagged).replace("$ARGUMENTS", tagged)
     if brief:
-        return body.rstrip() + "\n\n## Brief from caller\n\n" + brief
+        return body.rstrip() + "\n\n" + tagged
     return body
 
 

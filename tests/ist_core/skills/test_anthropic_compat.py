@@ -109,7 +109,7 @@ Process the request above.
         def with_config(self, *a, **kw):
             return self
 
-        def invoke(self, payload):
+        def invoke(self, payload, config=None):
             captured.extend(payload["messages"])
             return {"messages": [AIMessage(content="done")]}
 

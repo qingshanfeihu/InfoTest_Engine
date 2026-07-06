@@ -109,14 +109,8 @@ def _safe_env() -> dict[str, str]:
 
     keep_keys = {
         "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE",
-        "OPENAI_API_KEY", "OPENAI_BASE_URL", "MINERU_TOKEN",
         "NO_PROGRESS",
         "TERM",
-        # 设备连接 / 烟雾测试
-        "APV_USERNAME", "APV_PASSWORD", "APV_ENABLE_PASSWORD",
-        "APV_RESTAPI_USERNAME", "APV_RESTAPI_PASSWORD",
-        "LINUX_TEST_HOST", "LINUX_SSH_USERNAME", "LINUX_SSH_PASSWORD",
-        "SMOKE_BUILD",
     }
     env = {k: v for k, v in os.environ.items() if k in keep_keys}
     env["IST_AGENT_ROOT"] = str(_ft._AGENT_ROOT)
@@ -314,7 +308,7 @@ def run_python(code: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
     try:
         completed = subprocess.run(
             [sys.executable, "-c", code],
-            cwd=str(_default_cwd()),
+            cwd=str(_PROJECT_ROOT),  # 锚项目根:agent 写 workspace/ 与 fs_write 一致、不落进 knowledge/data/workspace/
             env=_safe_env(),
             capture_output=True,
             text=True,
@@ -430,7 +424,7 @@ def run_shell(command: str, timeout: int = _DEFAULT_TIMEOUT) -> str:
                 
                 expanded_parts.append(token)
 
-    cwd_path = _default_cwd()
+    cwd_path = _PROJECT_ROOT  # 锚项目根:与 run_python/fs_write 一致，agent 相对路径统一锚项目根
 
     started = time.time()
     try:

@@ -1,5 +1,7 @@
 # 用例编译子系统设计文档
 
+> **演进备注(2026-07-06)**:本文覆盖至 v3/v4 时代的编译子系统;编排层已被 **V6 StateGraph 引擎**取代(主路 `compile_engine_run`,见 [DESIGN_v6_engine.md](DESIGN_v6_engine.md))。本文保留作模块级设计与演进记录。
+
 > 2026-06-22 生成(多 agent 读真实代码 + plan 文档装配)。覆盖 plan1→现在的演进 + 每模块每函数。
 > 配套:`docs/PLAN_footprint_v2_compile.md`(理论)、`docs/PLAN_v3_closed_loop_compile.md`、`docs/batch_compile_architecture.md`。
 

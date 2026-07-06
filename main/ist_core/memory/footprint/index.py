@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import re
@@ -230,7 +231,35 @@ class FootprintIndex:
                 if hits > 0:
                     scores[fid] = hits
 
-        ranked = sorted(scores.items(), key=lambda x: -x[1])[:top_k]
+        # 同分 tie-break：token 不命中（如全称 datacenter vs 节点简写 dc）会退化成一片同分
+        # （308 个 sdns 节点全 +5）。dc 是 datacenter 的**子序列**（d…c，缩写本质：每字符都在、
+        # 顺序一致），listener 不是（l 不在 datacenter）——子序列判定干净识别缩写；纯字符相似度
+        # （difflib）会被 listener 的巧合共享字符骗（实测 listener 0.714 > dc 0.636）。
+        # 子序列候选（缩写）优先、内部短者（更接近纯缩写）排前；非子序列用 difflib 兜底。
+        q_low = query.lower()
+        q_compact = q_low.replace(" ", "")
+
+        def _subseq_depth(node_compact: str) -> int:
+            """node_compact 作为 q_compact 子序列时覆盖到 query 的最后位置（越深=覆盖 query 越全）；
+            非子序列返回 -1。如 `sdns dc` 覆盖到 datacenter 的 c，胜过只覆盖 sdns 前缀的 sdns 根。"""
+            it = iter(enumerate(q_compact))
+            depth = -1
+            for c in node_compact:
+                for i, qc in it:
+                    if qc == c:
+                        depth = i
+                        break
+                else:
+                    return -1
+            return depth
+
+        def _tiebreak(fid: str) -> tuple:
+            node = fid.replace(".", " ").lower()
+            depth = _subseq_depth(node.replace(" ", ""))
+            if depth >= 0:                       # 子序列(缩写候选)优先；覆盖越深越前，同深短者前
+                return (1, depth, -len(node))
+            return (0, difflib.SequenceMatcher(None, q_low, node).ratio(), 0)   # 非子序列：difflib 兜底
+        ranked = sorted(scores.items(), key=lambda kv: (kv[1], _tiebreak(kv[0])), reverse=True)[:top_k]
         return [(fid, _format_footprint(self._nodes[fid])) for fid, _ in ranked]
 
     def stats(self) -> dict:

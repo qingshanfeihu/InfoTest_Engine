@@ -74,7 +74,8 @@ def dev_run_case(
     try:
         from main.ist_core.tools.deepagent.file_tools import _resolve_inside_root
         p = _resolve_inside_root(xlsx_path, must_exist=True)
-    except Exception:
+    except Exception:  # noqa: BLE001
+        logger.debug("xlsx 路径解析失败(将回退兜底): %s", xlsx_path, exc_info=True)
         p = None
     if p is None or not Path(p).is_file():
         # 兜底:裸路径 + 常见重定向根都试一遍
@@ -179,24 +180,164 @@ def dev_run_case(
     )
 
 
-# 共享 probe 缓存:并发 draft 反复探**同一条 show 命令**是"真慢"主因——各 draft 是
-# 孤立 fork、互不知道别人探过了,于是 N 个 draft 把同样的 show 各探一遍 + 都砸向设备锁。
-# compile 期设备**只读**,**静态配置回显**在一次 run 内稳定 → 进程级缓存安全(免重复 SSH +
-# 免设备锁竞争)。但**动态查询**(statistics / session / 命中计数等运行时值)每次可能不同 →
-# 必须绕过缓存始终现探,否则返回 stale 值会让 draft 误读设备真实行为(只缓静态见 _probe_cacheable)。
-_PROBE_CACHE: dict[str, str] = {}
-_PROBE_CACHE_LOCK = threading.Lock()
+# ── probe 缓存:run 作用域 single-flight(对抗评审定稿,替掉原关键字黑名单) ──────────
+# 为什么不判命令"静/动":volatility 在**回显字段层**不在命令名层(`show sdns host status` 命令长得像
+# 配置 show、回显却是探活实时态),黑名单漏判 novel 动态命令→喂 stale、白名单又会把这类收进来;
+# 且 footprint 节点无 volatility 字段可派生——"判命令静动"本仓没可靠数据源,押不赢。
+# 改用**结构性保证**:compile 期设备只读(dev_probe 硬白名单仅 show/get、无写命令),故**一次 run 内
+# 同一条 show、N 个并发 draft 只真探一次、其余等结果**(single-flight),精准解"N draft 各探一遍同
+# show + 都砸设备锁"的真慢主因。**run 结束即弃、不跨 run**(跨 run 设备态会变、不 sound;真静态事实
+# 由 footprint _FP_CACHE 缓)。动态命令一次 run 内的微小漂移对 draft 合法行为无害——断言期望值禁止
+# observe-then-assert(红线),draft 要的是回显结构/语法,不是此刻精确计数。soundness 来自"作用域内
+# 只探一次"(可证),不靠"分类准不准"(易错)。
+import contextvars
 
-# 动态查询关键字:命令含这些运行时计数/状态/会话词 → 不缓存(每次现探)。绕过是**安全侧**:
-# 误判静态为动态只少缓一条(重探、无害);漏判动态会返回 stale(错),故宁可多绕。
-_PROBE_DYNAMIC_MARKERS = (
-    "statistic", "session", "connection", "counter", "traffic", "health",
-)
+_current_run_token: "contextvars.ContextVar[str | None]" = contextvars.ContextVar(
+    "probe_run_token", default=None)
+_PROBE_WAIT_TIMEOUT_S = 180.0       # 等待者等首探者的上限,超时自己裸探(防永久阻塞)
 
 
-def _probe_cacheable(cmd_lower: str) -> bool:
-    """该 show/get 回显在一次 compile run 内是否稳定可缓存(静态配置=可,动态计数/状态=否)。"""
-    return not any(m in cmd_lower for m in _PROBE_DYNAMIC_MARKERS)
+class _ProbeEntry:
+    """single-flight 槽:首探者填 result 后 set(event);等待者 wait() 返回后读 result(happens-before)。"""
+    __slots__ = ("event", "result")
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.result: str | None = None
+
+
+_PROBE_RUN_CACHE: dict[str, dict[str, _ProbeEntry]] = {}   # {run_token: {cmd_key: _ProbeEntry}}
+_PROBE_RUN_LOCK = threading.Lock()
+_run_token_counter = 0
+
+
+def _new_run_token() -> str:
+    """每次 _run_pipeline 生成唯一 run_token(进程内单调,不依赖随机)。"""
+    global _run_token_counter
+    with _PROBE_RUN_LOCK:
+        _run_token_counter += 1
+        return f"run-{_run_token_counter}"
+
+
+def _clear_run_cache(run_token: str) -> None:
+    """run 结束清掉该 run 的 single-flight 桶(跨 run 不复用)。"""
+    with _PROBE_RUN_LOCK:
+        _PROBE_RUN_CACHE.pop(run_token, None)
+
+
+def _probe_uncacheable(result: str) -> bool:
+    """该探针结果是否不该进 single-flight 缓存(失败/锁竞争/空)——移除槽留待重探,不喂坏值。
+
+    **关键区分(切 FastMCP 后)**：`status: error` 有两种来源——
+      - CLI 语法错误(无效命令)：FastMCP 回 `status: error` + `--- output ---`(对齐 ^)。这是
+        **确定性结果**(命令就是无效,重探也一样)→ **必须缓存**,否则无效命令被反复真探(churn 根因,
+        43dcabe5 实测无效命令真探 21 次)。
+      - 传输/连接/认证/锁失败：`error: SSH ... failed` / `--- error ---` / `another run in progress`
+        → 瞬态,不缓存,留待重探。
+    """
+    r = result or ""
+    rl = r.lower()
+    if not r.strip():
+        return True
+    # 瞬态/传输/锁失败 → 不缓存
+    if any(m in rl for m in (
+            "another run in progress", "lock held",
+            "--- error ---",                       # FastMCP restapi 传输失败段
+            "connection refused", "authentication failed", "timed out",
+            "probe failed", "设备探针异常", "加载 frameworkmcpclient")):
+        return True
+    # 裸 'error:' 行(老 _do_probe 加载/异常返回 / apv_ssh 'error: SSH ... failed' 传输失败)
+    for line in r.splitlines():
+        if line.strip().lower().startswith("error:"):
+            return True
+    # status:error 仅当带 '--- output ---'(确定性 CLI 回显/语法错误)才可缓存;
+    # 无 '--- output ---' 的 status:error 是错误消息(如老 probe_show 错误分支)→ 不缓存
+    if "status: error" in rl and "--- output ---" not in rl:
+        return True
+    return False
+
+
+def _annotate_if_empty_probe(text: str) -> str:
+    """探针回显**实质为空**（剥标头/命令行/裸提示符后无内容）时附时机语义提示。
+
+    实证（OBS-15）：worker 编译期探统计类命令拿到裸提示符就困惑重试/转 grep 文档。
+    根因是 probe 的时机语义——每个 case 跑完框架清配置，编译期设备是干净态，
+    统计/会话/状态类数据只在 case 执行中存在，此时探必空。这不是探针故障。
+    """
+    body = []
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if not s or s.startswith(("===", "---", "command:", "status:")):
+            continue
+        # 裸提示符行（如 `XXX#` / `XXX>`）不算实质内容
+        if len(s) <= 40 and (s.endswith("#") or s.endswith(">")) and " " not in s:
+            continue
+        if s == "(无输出)":
+            continue
+        body.append(s)
+    if body:
+        return text
+    return (f"{text}\n"
+            "（提示：回显为空不代表探针故障——编译期设备是**干净态**（每个 case 跑完框架即清配置），"
+            "统计/会话/状态类数据只在 case 执行中存在，编译期探它们恒空。本探针的有效域：命令语法验证"
+            "（无效命令有 ^ 报错）、持久配置查看。输出**格式**请查产品手册/规格文档或先例，别再重试探空。）")
+
+
+def _do_probe(cmd: str) -> str:
+    """真探一次设备。**永不抛**——失败返回 'error:'/包装文本。
+
+    优先走新版 FastMCP ``apv_ssh_execute``（自带 status + 完整回显 + 对齐 ^，治老 probe_show
+    剥命令回显行→无效命令只剩裸 ^ 的困惑）；FastMCP 不可达 / 解析不出设备 IP 时回退老 stdio
+    ``probe_show``。两路都经跳转机，本地直连 APV 不通。
+    """
+    # build 决定 conf 设备段(单一事实源:compiler config)
+    try:
+        from main.case_compiler.config import get_config
+        _build = get_config().build
+    except Exception:  # noqa: BLE001
+        logger.debug("读取 compiler config 失败，build 使用空串", exc_info=True)
+        _build = ""
+    # 1) 新版 FastMCP apv_ssh_execute —— status + 对齐 ^，不剥回显
+    try:
+        from main.case_compiler.device_mcp_client import probe_via_fastmcp, _redact
+        fr = probe_via_fastmcp(cmd, build=_build)
+    except Exception:  # noqa: BLE001
+        logger.debug("FastMCP 探针失败(将回退 stdio): cmd=%s", cmd, exc_info=True)
+        fr = None
+    if isinstance(fr, dict) and fr.get("text"):
+        text = fr["text"]
+        try:
+            text = _redact(str(text))
+        except Exception:  # noqa: BLE001
+            logger.debug("脱敏处理失败，使用原始文本", exc_info=True)
+        # apv_ssh_execute 文本已自带 command/status/回显+对齐 ^，原样回灌(仅打 dev_probe 来源标)
+        return _annotate_if_empty_probe(f"=== dev_probe (fastmcp apv_ssh) ===\n{text}")
+    # 2) 回退：老 stdio probe_show（剥回显，无效命令只剩裸 ^）
+    try:
+        from main.case_compiler.device_mcp_client import FrameworkMCPClient
+    except Exception as exc:  # noqa: BLE001
+        return f"error: 加载 FrameworkMCPClient 失败(paramiko?): {exc}"
+    try:
+        with FrameworkMCPClient() as client:
+            res = client.probe_show(cmd, build=_build)
+    except RuntimeError as exc:
+        return f"error: {exc}"
+    except Exception as exc:  # noqa: BLE001
+        return f"error: 设备探针异常: {exc}"
+    if isinstance(res, dict) and res.get("error"):
+        return f"=== dev_probe ===\ncommand: {cmd}\nstatus: error\n{res.get('error')}"
+    output = res.get("output") if isinstance(res, dict) else res
+    # 设备回显回灌 agent 前脱敏:show running-config 等可能含口令/community(守红线「日志不打凭据」)
+    try:
+        from main.case_compiler.device_mcp_client import _redact
+        output = _redact(str(output)) if output else output
+    except Exception:  # noqa: BLE001
+        logger.debug("脱敏处理失败，使用原始输出", exc_info=True)
+    return _annotate_if_empty_probe(
+        f"=== dev_probe ===\n"
+        f"command: {cmd}\n"
+        f"--- 设备回显(经跳转机)---\n"
+        f"{output if output else '(无输出)'}")
 
 
 @tool(parse_docstring=True)
@@ -220,9 +361,13 @@ def dev_probe(command: str) -> str:
     降成"xlsx 能表达的文本查找"。
 
     典型用法:
-    - 确认配置生效:``command="show sdns host all"``
+    - 确认配置生效:``command="show sdns host status"``
     - 看计数器分布:``command="show statistics sdns pool"``
     - 核对命令语法返回:``command="show sdns listener"``
+
+    **设备语法错误**:被测 APV 对无法识别的命令/参数,在出错 token 下方回 `^` 标记。
+    框架 server 已把这种回显包装成清晰的 ``% Invalid input ...`` 文字说明(含命令回显行
+    与对齐)——遇到即说明该命令语法/参数无效,**换命令或修正语法,不要据此写断言**。
 
     Args:
         command: 单条只读命令,首词必须 show 或 get(在被测 APV 上执行)。
@@ -236,58 +381,39 @@ def dev_probe(command: str) -> str:
         return "error: empty command"
     first = cmd.split()[0].lower() if cmd.split() else ""
     if first not in ("show", "get"):
-        return f"error: probe 只允许 show/get 开头的只读命令,收到 {first!r}。改配置请用 dev_run_case 整 case 上机。"
+        return (f"error: probe 只允许 show/get 开头的只读命令,收到 {first!r}。"
+                "probe 是编译期理解行为格式用的,不做配置动作;配置/触发/断言写进 case 步骤,"
+                "行为效果由编译后独立的 ist-verify 上机流程验证。")
 
-    # 共享缓存:仅**静态配置**回显可缓存(动态计数/状态走 _probe_cacheable 绕过、始终现探)。
-    # 命中即返回:并发 draft 别人/本 draft 已探过这条静态 show → 免 SSH + 免锁竞争。
+    # run 作用域 single-flight:同一 run 内同命令只真探一次,其余等结果(见上方设计注释)。
     key = " ".join(cmd.lower().split())
-    cacheable = _probe_cacheable(key)
-    if cacheable:
-        with _PROBE_CACHE_LOCK:
-            cached = _PROBE_CACHE.get(key)
-        if cached is not None:
-            return cached
+    run_token = _current_run_token.get()
+    if run_token is None:
+        return _do_probe(cmd)        # 无 compile run 上下文(main agent 手动探)→ 裸探、不缓、不串
 
-    try:
-        from main.case_compiler.device_mcp_client import FrameworkMCPClient
-    except Exception as exc:  # noqa: BLE001
-        return f"error: 加载 FrameworkMCPClient 失败(paramiko?): {exc}"
+    with _PROBE_RUN_LOCK:
+        bucket = _PROBE_RUN_CACHE.setdefault(run_token, {})
+        entry = bucket.get(key)
+        first = entry is None
+        if first:
+            entry = _ProbeEntry()
+            bucket[key] = entry
 
-    try:
-        with FrameworkMCPClient() as client:
-            # build 决定 conf 设备段(单一事实源:compiler config)
-            try:
-                from main.case_compiler.config import get_config
-                _build = get_config().build
-            except Exception:
-                _build = ""
-            res = client.probe_show(cmd, build=_build)
-    except RuntimeError as exc:
-        return f"error: {exc}"
-    except Exception as exc:  # noqa: BLE001
-        return f"error: 设备探针异常: {exc}"
+    if first:                        # 首探者:真探 → 填结果 → 唤醒等待者
+        try:
+            result = _do_probe(cmd)
+            if _probe_uncacheable(result):
+                with _PROBE_RUN_LOCK:   # 失败/锁竞争:移槽让后续重探(已在等的拿到本结果)
+                    _PROBE_RUN_CACHE.get(run_token, {}).pop(key, None)
+            entry.result = result       # 先写结果,再 set(event)——happens-before,等待者 wait 后读安全
+        finally:
+            entry.event.set()           # BaseException 也 set,防等待者卡满 _PROBE_WAIT_TIMEOUT_S
+        return result
 
-    if isinstance(res, dict) and res.get("error"):
-        return f"=== dev_probe ===\ncommand: {cmd}\nstatus: error\n{res.get('error')}"
-    output = res.get("output") if isinstance(res, dict) else res
-    # 设备回显回灌 agent 前脱敏:show running-config 等可能含口令/community(守红线「日志不打凭据」)
-    try:
-        from main.case_compiler.device_mcp_client import _redact
-        output = _redact(str(output)) if output else output
-    except Exception:  # noqa: BLE001
-        pass
-    result = (
-        f"=== dev_probe ===\n"
-        f"command: {cmd}\n"
-        f"--- 设备回显(经跳转机)---\n"
-        f"{output if output else '(无输出)'}"
-    )
-    # 只缓存**静态**成功回显;动态查询(cacheable=False)/锁竞争/空输出不缓存,留待现探或重试
-    out_s = str(output or "")
-    if cacheable and out_s and "another run in progress" not in out_s and "lock held" not in out_s:
-        with _PROBE_CACHE_LOCK:
-            _PROBE_CACHE[key] = result
-    return result
+    # 等待者:等首探者出结果;超时则自己裸探(防永久阻塞,不污染缓存)
+    if not entry.event.wait(timeout=_PROBE_WAIT_TIMEOUT_S):
+        return _do_probe(cmd)
+    return entry.result if entry.result is not None else _do_probe(cmd)
 
 
 @tool(parse_docstring=True)

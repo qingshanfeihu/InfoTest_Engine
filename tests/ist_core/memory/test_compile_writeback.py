@@ -12,7 +12,7 @@ import pytest
 
 from main.case_compiler.provenance_ir import CaseProvenance, StepIR, StepSource
 from main.ist_core.memory.compile_writeback import (
-    writeback_verified_case, _g_step_to_rawfact, WritebackResult,
+    writeback_verified_case, _g_step_to_rawfacts, WritebackResult,
 )
 
 
@@ -21,8 +21,9 @@ def _g_step(cmd, kind="footprint", ref="sdns.listener"):
 
 
 def test_g_step_to_rawfact_basic():
-    rf = _g_step_to_rawfact(_g_step("sdns listener 1.1.1.1"), "a1", "10.5_cli__part1.md")
-    assert rf is not None
+    rfs = _g_step_to_rawfacts(_g_step("sdns listener 1.1.1.1"), "a1", "10.5_cli__part1.md")
+    assert len(rfs) == 1
+    rf = rfs[0]
     assert rf.fact_kind == "cli_command"
     assert rf.fact_key == "sdns listener 1.1.1.1"
     assert rf.feature_path == ["sdns", "listener"]
@@ -33,20 +34,34 @@ def test_g_step_to_rawfact_basic():
 def test_v_layer_step_not_converted():
     # V 段断言绝不写回
     s = StepIR("check_point", "found", "1.1.1.1", "V", StepSource("manual", "x:1"))
-    assert _g_step_to_rawfact(s, "a1", "") is None
+    assert _g_step_to_rawfacts(s, "a1", "") == []
 
 
 def test_e_layer_and_nonconfig_skipped():
     # E 层 + 非配置步骤不转
-    assert _g_step_to_rawfact(StepIR("test_env", "routera", "x", "E"), "a1", "") is None
-    assert _g_step_to_rawfact(StepIR("check_point", "found", "x", "G"), "a1", "") is None
-    assert _g_step_to_rawfact(_g_step(""), "a1", "") is None
+    assert _g_step_to_rawfacts(StepIR("test_env", "routera", "x", "E"), "a1", "") == []
+    assert _g_step_to_rawfacts(StepIR("check_point", "found", "x", "G"), "a1", "") == []
+    assert _g_step_to_rawfacts(_g_step(""), "a1", "") == []
+
+
+def test_cmds_config_split_lines():
+    # V6 支柱2a:cmds_config 多行逐条拆(旧版整段一条,手册永远命不中)
+    s = StepIR("APV_0", "cmds_config", "sdns on\nsdns listener 1.1.1.1", "G",
+               StepSource("footprint", "sdns"))
+    rfs = _g_step_to_rawfacts(s, "a1", "m.md")
+    assert [r.fact_key for r in rfs] == ["sdns on", "sdns listener 1.1.1.1"]
+
+
+def test_apv1_steps_included():
+    # 双机槽 APV_1 的命令步同样进写回候选
+    s = StepIR("APV_1", "cmd_config", "sdns on", "G", StepSource("footprint", "sdns"))
+    assert len(_g_step_to_rawfacts(s, "a1", "m.md")) == 1
 
 
 def test_manual_ref_extracts_evidence_file():
-    rf = _g_step_to_rawfact(_g_step("show sdns listener", kind="manual", ref="10.5_cli:1234"),
-                            "a1", "fallback.md")
-    assert rf.evidence_file == "10.5_cli"
+    rfs = _g_step_to_rawfacts(_g_step("show sdns listener", kind="manual", ref="10.5_cli:1234"),
+                              "a1", "fallback.md")
+    assert rfs[0].evidence_file == "10.5_cli"
 
 
 def test_writeback_only_processes_g_layer(tmp_path):

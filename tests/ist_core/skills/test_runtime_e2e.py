@@ -116,7 +116,7 @@ def test_review_verification_fork_runs_end_to_end(monkeypatch):
         def with_config(self, *a, **kw):
             return self
 
-        def invoke(self, payload):
+        def invoke(self, payload, config=None):
             captured_input_messages.extend(payload.get("messages", []))
             stub_model = _StubChatModel()
             ai_msg = stub_model.invoke([])

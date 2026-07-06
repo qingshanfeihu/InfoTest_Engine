@@ -90,7 +90,8 @@ class CheckpointRepo:
             try:
                 from langgraph.checkpoint.memory import InMemorySaver
                 return InMemorySaver()
-            except Exception:
+            except Exception:  # noqa: BLE001
+                logger.warning("InMemorySaver 创建也失败，无可用 checkpointer", exc_info=True)
                 return None
 
     @property
@@ -144,7 +145,8 @@ class CheckpointRepo:
         try:
             checkpoint = getattr(tup, "checkpoint", None) or {}
             return dict(checkpoint.get("channel_values") or {})
-        except Exception:
+        except Exception:  # noqa: BLE001
+            logger.debug("checkpoint channel_values 解析失败 tid=%s", thread_id, exc_info=True)
             return None
 
     def most_recent_thread_id(self) -> Optional[str]:
@@ -174,7 +176,7 @@ class CheckpointRepo:
         ts = ""
         try:
             ts = str((getattr(t, "checkpoint", {}) or {}).get("ts") or "")
-        except Exception:
+        except Exception:  # noqa: BLE001
             ts = ""
         return ThreadEntry(thread_id=tid, last_step=step, preview=preview, timestamp=ts)
 

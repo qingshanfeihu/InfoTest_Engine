@@ -156,7 +156,8 @@ def _cmd_exit(args: str, app: "IstApp") -> SlashCommandResult:
 
 
 def _cmd_version(args: str, app: "IstApp") -> SlashCommandResult:
-    return InfoResult(text="infotest 1.0.4 (IST-Core)")
+    from main.common.version import app_version
+    return InfoResult(text=f"infotest {app_version()} (IST-Core)")
 
 
 def _cmd_threads(args: str, app: "IstApp") -> SlashCommandResult:
@@ -398,7 +399,7 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {cmd.name: cmd for cmd in BUILTIN_CO
 # ── user-invocable skill 作为 slash 命令 ───────────────────────────────────
 # /<skill> <自然语言> 强制触发某 user-invocable skill(绕过主 agent"自己先探"的不确定性):
 # 渲染成 InjectResult(立即 invoke_skill + 任务),由 ist_app 直接 _submit。通用——任何
-# frontmatter `user-invocable: true` 的 skill(ist_compile / ist_verify / device-verify…)
+# frontmatter `user-invocable: true` 的 skill(ist-compile / ist-verify / device-verify…)
 # 都能 /<name> 触发;fork 子流程(user-invocable: false)不暴露。
 
 

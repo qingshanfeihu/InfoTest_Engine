@@ -40,6 +40,25 @@ def _evt(kind: str, seq: int, **kw):
     return base
 
 
+def test_reasoning_token_sets_thinking_phase():
+    """reasoning delta（content 空、reasoning 非空）→ llm_phase='thinking'（footer 真实状态源），
+    且不混入回答文本；随后 content delta → output。"""
+    r = MessageReducer()
+    snaps = []
+    r.subscribe(snaps.append)
+
+    r.dispatch(_evt("llm_token", 1, payload={"reasoning": "让我逐步推理"}))
+    assert snaps[-1].llm_phase == "thinking"
+    assert snaps[-1].streaming_text is None   # 思考不混入回答文本
+
+    r.dispatch(_evt("llm_token", 2, payload={"reasoning": "继续想"}))
+    assert snaps[-1].llm_phase == "thinking"
+
+    r.dispatch(_evt("llm_token", 3, payload={"content": "答案是42"}))
+    assert snaps[-1].llm_phase == "output"
+    assert snaps[-1].streaming_text == "答案是42"
+
+
 def test_token_streaming_then_final_clears_streaming_text():
     """`llm_token` 累加到 streaming_text；`llm_end name=final_thought` 清空 + push 终态。"""
     r = MessageReducer()

@@ -12,6 +12,9 @@
     /kms qa update                       xlsx → openpyxl，doc/pdf → mineru → markdown/qa/
     /kms qa rebuild [stem]               phase 2
     /kms qa delete <stem>                phase 2
+    /kms footprint status                footprint 知识树状态（节点/命令/覆盖章节）
+    /kms footprint update                手册 → footprint 增量补全（复用 existing，仅追加新事实）
+    /kms footprint rebuild               备份现有 nodes 后全量重建（从空树重抽）
 
 兼容性：
 - 旧的 ``/kms update`` / ``/kms rebuild`` 等单层命令显式报错。
@@ -19,6 +22,8 @@
 边界：
 - ``defects/`` 与 ``baselines/`` 不属于任何 namespace，``/kms`` 不会动它们。
 - KMS 简化管线：分桶 + markdown 直出备份。
+- ``/kms footprint`` 把 ``knowledge/data/markdown/product/manual_10.5/`` 的 CLI 手册抽成
+  ``knowledge/footprints/nodes/`` 已验证事实树（走 footprint_backfill，evidence 门防编造）。
 """
 
 from __future__ import annotations
@@ -134,17 +139,21 @@ def _tail_log_lines(path: Path, n: int = 8) -> list[str]:
     return lines[-n:] if lines else []
 
 
-def _run_mineru_subprocess(
+def _run_module_subprocess(
     project_root: Path,
     venv_python: Path,
     env: dict[str, str],
     *,
+    module_args: list[str],
     log_path: Path,
     timeout_sec: int,
     app: KmsApp | None = None,
     progress_tag: str = "[/kms]",
 ) -> tuple[int, list[str]]:
-    """跑 mineru_batch_export；日志写 log_path，轮询 tail 到 TUI，返回 (rc, 日志尾部)。"""
+    """跑 `python -u -m <module_args>` 子进程；日志写 log_path，轮询 tail 到 TUI，返回 (rc, 日志尾部)。
+
+    通用 module runner：product/qa 跑 mineru_batch_export，footprint 跑 footprint_backfill。
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     run_env = dict(env)
     run_env["PYTHONUNBUFFERED"] = "1"
@@ -156,7 +165,7 @@ def _run_mineru_subprocess(
         log_f.write("--- kms mineru subprocess started ---\n")
         log_f.flush()
         proc = subprocess.Popen(
-            [str(venv_python), "-u", "-m", "main.mineru_batch_export"],
+            [str(venv_python), "-u", *module_args],
             cwd=str(project_root),
             env=run_env,
             stdout=log_f,
@@ -360,10 +369,11 @@ def _kick_product_update(app: KmsApp, *, product_files: str) -> None:
             app,
             f"[/kms product update] starting mineru_batch_export (log: {rel_log})",
         )
-        rc, tail = _run_mineru_subprocess(
+        rc, tail = _run_module_subprocess(
             project_root,
             venv_python,
             env,
+            module_args=["-m", "main.mineru_batch_export"],
             log_path=log_path,
             timeout_sec=timeout_sec,
             app=app,
@@ -445,10 +455,11 @@ def _kick_qa_update(
                 f"[/kms qa update] starting mineru_batch_export "
                 f"({len(mineru_files)} files, log: {rel_log})",
             )
-            rc, tail = _run_mineru_subprocess(
+            rc, tail = _run_module_subprocess(
                 project_root,
                 venv_python,
                 env,
+                module_args=["-m", "main.mineru_batch_export"],
                 log_path=log_path,
                 timeout_sec=timeout_sec,
                 app=app,
@@ -565,6 +576,125 @@ def _dispatch_qa(action: str, rest: str, app: KmsApp):  # noqa: ANN201
     ))
 
 
+def _format_footprint_status() -> str:
+    """footprint 知识树状态：节点数 / level 分布 / 命令数 / 覆盖手册章节。"""
+    import json as _json
+    from main import knowledge_paths as kp
+
+    rel = _project_root()
+    nodes_dir = kp.KNOWLEDGE_FOOTPRINTS_NODES
+    n_nodes = _count(nodes_dir, "*.json")
+
+    n_cmds = 0
+    levels = {"leaf": 0, "trunk": 0, "branch": 0}
+    chapters: set[str] = set()
+    if nodes_dir.exists():
+        for f in nodes_dir.glob("*.json"):
+            try:
+                d = _json.loads(f.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001 — 坏节点不该挡住 status
+                continue
+            lv = d.get("level", "")
+            if lv in levels:
+                levels[lv] += 1
+            for cmd in d.get("cli", {}).get("commands", []):
+                n_cmds += 1
+                sf = cmd.get("evidence", {}).get("source_file", "")
+                if sf:
+                    chapters.add(Path(sf).name)
+
+    manual_dir = kp.KNOWLEDGE_MARKDOWN_PRODUCT / "manual_10.5"
+    n_manual = _count(manual_dir, "cli_10.5_*.md")
+
+    lines = ["Footprint knowledge tree (/kms footprint):", ""]
+    lines.append(f"  nodes (已验证 CLI 事实树)     {n_nodes:>4}  {nodes_dir.relative_to(rel)}")
+    lines.append(f"    leaf / trunk / branch       {levels['leaf']} / {levels['trunk']} / {levels['branch']}")
+    lines.append(f"  cli commands                  {n_cmds:>4}")
+    lines.append(f"  覆盖手册章节                  {len(chapters):>4} / {n_manual}  (manual_10.5/cli_10.5_*.md)")
+    lines.append("")
+    lines.append("Actions:")
+    lines.append("  /kms footprint update     — 手册 → footprint 增量补全(复用 existing,仅追加新事实)")
+    lines.append("  /kms footprint rebuild    — 备份现有 nodes 后全量重建(从空树重抽)")
+    lines.append("")
+    lines.append("知识源: knowledge/data/markdown/product/manual_10.5/  (adoc→md, 表1-1 粗体命令约定)")
+    return "\n".join(lines)
+
+
+def _kick_footprint_update(app: KmsApp, *, rebuild: bool = False) -> None:
+    """启 subprocess 跑 footprint_backfill：手册 → footprint 树(增量 / 全量重建)。"""
+    from main import knowledge_paths as kp
+
+    project_root = _project_root()
+    venv_python = project_root / ".venv" / "bin" / "python"
+    if not venv_python.exists():
+        venv_python = Path(sys.executable)
+
+    log_path = kp.KNOWLEDGE_INTERMEDIATE / ".kms_footprint_update.log"
+    timeout_sec = _kms_update_timeout_sec()
+    rel_log = log_path.relative_to(project_root)
+    tag = "[/kms footprint rebuild]" if rebuild else "[/kms footprint update]"
+    module_args = ["-m", "scripts.maintenance.footprint_backfill"]
+    if rebuild:
+        module_args.append("--rebuild")
+
+    def _run() -> None:
+        _post_kms_status(app, f"{tag} starting footprint_backfill (log: {rel_log})")
+        rc, tail = _run_module_subprocess(
+            project_root,
+            venv_python,
+            dict(os.environ),
+            module_args=module_args,
+            log_path=log_path,
+            timeout_sec=timeout_sec,
+            app=app,
+            progress_tag=tag,
+        )
+        if rc == -1:
+            _post_kms_status(app, f"{tag} TIMEOUT (>{timeout_sec}s). See {rel_log}")
+            return
+        summary = " | ".join(tail) or "(see log)"
+        if rc != 0:
+            _post_kms_status(app, f"{tag} FAILED rc={rc} | {summary}")
+            return
+        _post_kms_status(app, f"{tag} done | {summary}")
+        _post_kms_status(app, f"{tag} footprint tree ready in knowledge/footprints/nodes/")
+
+    threading.Thread(target=_run, daemon=True, name="kms-footprint-update").start()
+
+
+def _dispatch_footprint(action: str, rest: str, app: KmsApp):  # noqa: ANN201
+    from main.ist_core.tui.slash_commands import (
+        ErrorResult, InfoResult, TextResult,
+    )
+    from main import knowledge_paths as kp
+
+    if action in ("", "status"):
+        return TextResult(text=_format_footprint_status())
+
+    if action in ("update", "rebuild"):
+        from main.ist_core.agents._llm import resolve_llm_api_key
+        if not resolve_llm_api_key():
+            return ErrorResult(text=(
+                "/kms footprint update 需要 LLM API key (OPENAI_API_KEY 或兼容端点 key) 在 environment 文件"
+            ))
+        rebuild = action == "rebuild"
+        _kick_footprint_update(app, rebuild=rebuild)
+        rel_log = (kp.KNOWLEDGE_INTERMEDIATE / ".kms_footprint_update.log").relative_to(_project_root())
+        mode = "全量重建(备份+清空+重抽)" if rebuild else "增量补全(复用 existing,仅追加新事实)"
+        return InfoResult(text=(
+            f"[/kms footprint {action}] kicked off in background "
+            f"(手册 manual_10.5 → footprint 树, {mode}). "
+            f"进度见 transcript 与输入框上方状态行；完整日志: {rel_log}"
+        ))
+
+    if action == "delete":
+        return InfoResult(text="/kms footprint delete: not implemented yet")
+
+    return ErrorResult(text=(
+        f"unknown /kms footprint subcommand: {action!r}. Try: status | update | rebuild."
+    ))
+
+
 _FLAT_ACTIONS = {"update", "rebuild", "delete", "ingest"}
 
 
@@ -600,7 +730,12 @@ def cmd_kms(args: str, app: KmsApp):  # noqa: ANN201
         rest = parts[2] if len(parts) > 2 else ""
         return _dispatch_qa(action, rest, app)
 
+    if head == "footprint":
+        action = (parts[1].lower() if len(parts) > 1 else "")
+        rest = parts[2] if len(parts) > 2 else ""
+        return _dispatch_footprint(action, rest, app)
+
     return ErrorResult(text=(
         f"unknown /kms namespace: {head!r}. "
-        f"Try: /kms status | /kms product <action> | /kms qa <action>."
+        f"Try: /kms status | /kms product <action> | /kms qa <action> | /kms footprint <action>."
     ))

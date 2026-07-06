@@ -33,6 +33,7 @@ class WritebackResult:
     provisional: bool = True
     g_facts_written: int = 0
     g_facts_skipped: int = 0
+    g_facts_device_verified: int = 0   # 经 device_verified 第二权威源写入的条数(⊆ written)
     precedent_appended: bool = False
     details: list[str] = field(default_factory=list)
 
@@ -42,42 +43,49 @@ class WritebackResult:
                 f"跳{self.g_facts_skipped}, 先例追加={'是' if self.precedent_appended else '否'}")
 
 
-def _g_step_to_rawfact(step, autoid: str, manual_glob: str) -> RawFact | None:
-    """把一个 G 层 provenance step 转成 cli_command RawFact（供 merge_fact 写回）。
+def _g_step_to_rawfacts(step, autoid: str, manual_glob: str) -> list[RawFact]:
+    """把一个 G 层 provenance step 转成 cli_command RawFact 列表（供 merge_fact 写回）。
 
-    只处理 source.kind in (footprint, manual, skeleton) 且 G 是配置命令的步骤。
-    evidence_file/quote 取 source.ref——merge_fact 会校验 quote 在 file 真实命中，
-    对不上则 skip（这是防幻觉的关键，不在这里自己判）。
+    收 E∈{APV_0, APV_1}(双机原生槽)且 F∈{cmd_config, cmds_config} 的命令步;
+    **cmds_config 多行逐条拆**——旧版整段多行文本当一条 fact_key,手册永远命不中、
+    也和 footprint 单命令节点对不上(V6 支柱2a 取证:写回候选缺失的一半)。
+    footprint/skeleton/emit_auto:命令原文作 quote,evidence_file 取 manual_glob;
+    manual:ref 形如 "cli_10.5_Chapter11:1234",取文件名部分。evidence 对不上则
+    merge skip(防幻觉,不在这里自己判)。
     """
     if step.layer != "G":
-        return None
-    if step.E not in ("APV_0",) or step.F not in ("cmd_config", "cmds_config"):
-        return None
-    cmd = (step.G or "").strip()
-    if not cmd:
-        return None
-    # feature_path：取命令头 token 作为特征路径（与 footprint 节点命名一致）
-    head = cmd.split()
-    feature_path = head[:2] if len(head) >= 2 else head[:1]
-    if not feature_path:
-        return None
+        return []
+    if step.E not in ("APV_0", "APV_1") or step.F not in ("cmd_config", "cmds_config"):
+        return []
     ref = step.source.ref or ""
-    # evidence：footprint/skeleton 类用命令原文作 quote（merge 会在手册里找）；
-    # manual 类 ref 形如 "10.5_cli:1234"，evidence_file 取文件名部分。
     evidence_file = ""
     if step.source.kind == "manual" and ":" in ref:
         evidence_file = ref.split(":", 1)[0]
     elif manual_glob:
         evidence_file = manual_glob
-    return RawFact(
-        fact_kind="cli_command",
-        feature_path=list(feature_path),
-        fact_key=cmd,
-        cli_syntax=cmd,
-        evidence_file=evidence_file,
-        evidence_quote=cmd,
-        source_thread=f"compile_writeback:{autoid}",
-    )
+    out: list[RawFact] = []
+    for cmd in (step.G or "").splitlines():
+        cmd = cmd.strip()
+        if not cmd:
+            continue
+        # feature_path 与 footprint 命名约定对齐:剥操作前缀(no/show/clear)再取
+        # 命令主体 token——否则 show 类观测命令落 show.* 节点,与配置命令的
+        # statistics.*/sdns.* 树分裂,行为知识和文法散在两处(2026-07-06 实证)。
+        toks = [w for w in cmd.split() if w.lower() not in ("no", "show", "clear")]
+        head = toks or cmd.split()
+        feature_path = head[:2] if len(head) >= 2 else head[:1]
+        if not feature_path:
+            continue
+        out.append(RawFact(
+            fact_kind="cli_command",
+            feature_path=list(feature_path),
+            fact_key=cmd,
+            cli_syntax=cmd,
+            evidence_file=evidence_file,
+            evidence_quote=cmd,
+            source_thread=f"compile_writeback:{autoid}",
+        ))
+    return out
 
 
 def writeback_verified_case(
@@ -87,6 +95,7 @@ def writeback_verified_case(
     manual_glob: str = "",
     on_device_passed: bool = False,
     append_precedent=None,
+    device_run_ref: dict | None = None,
 ) -> WritebackResult:
     """把已验证 case 的 G 段事实写回 footprint（+ 可选先例追加）。
 
@@ -109,9 +118,10 @@ def writeback_verified_case(
 
     rawfacts = []
     for step in provenance.layer_steps("G"):
-        rf = _g_step_to_rawfact(step, provenance.autoid, manual_glob)
-        if rf is not None:
-            rawfacts.append(rf)
+        rawfacts.extend(_g_step_to_rawfacts(step, provenance.autoid, manual_glob))
+    # 去重(拆行后同命令可能重复出现;fact_key=命令原文)
+    _seen: set[str] = set()
+    rawfacts = [rf for rf in rawfacts if not (rf.fact_key in _seen or _seen.add(rf.fact_key))]
 
     if rawfacts:
         try:
@@ -122,6 +132,15 @@ def writeback_verified_case(
         for routed in routed_list:
             try:
                 mres = merge_fact(routed, fdir)
+                if (mres.action == "skip" and on_device_passed and device_run_ref
+                        and "evidence" in str(mres.detail)):
+                    # 第二权威源降级重试(V6 支柱2a):手册 evidence 不中(运行时命令
+                    # 不在 CLI 手册——v12 实证 28/28 skip 的根因),而该 case 上机真
+                    # PASS——用 device_verified 台账重试一次,门在 merger 侧三重校验。
+                    routed.fact.device_evidence = dict(device_run_ref)
+                    mres = merge_fact(routed, fdir)
+                    if mres.action != "skip":
+                        result.g_facts_device_verified += 1
                 if mres.action == "skip":
                     result.g_facts_skipped += 1
                     result.details.append(f"✗ {routed.fact.fact_key[:40]} skip: {mres.detail}")

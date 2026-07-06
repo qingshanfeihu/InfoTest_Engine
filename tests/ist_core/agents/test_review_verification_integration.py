@@ -149,7 +149,7 @@ def test_execute_fork_skill_renders_arguments(monkeypatch):
         def with_config(self, *args, **kwargs):
             return self
 
-        def invoke(self, payload):
+        def invoke(self, payload, config=None):
             captured_messages.extend(payload.get("messages", []))
             return {
                 "messages": [

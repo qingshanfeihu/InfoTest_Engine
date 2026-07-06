@@ -5,7 +5,8 @@
 
 覆盖算法的每条分支：
   A. 精确命中叶子（有命令）         → 直接展开该节点
-  B. 精确命中 branch（自己也有命令）→ 展开 + 附子命令清单
+  B. 精确命中 branch（自己也有命令）→ 展开自身 + **深展开**子树后代命令文法（不只列名）
+  B2. 深展开超字符上限              → 部分展开 + 剩余后代回退列名提示
   C. 命中空壳 branch（命令在子节点）→ 递归展开子树带命令的后代
   D. 命中空壳 trunk（命令在孙节点） → 递归下潜到孙节点（单层展开会漏）
   E. branch 整棵子树都无命令        → 如实说明，不做全树模糊（不返回无关节点）
@@ -61,16 +62,36 @@ def test_A_exact_leaf_hit(tmp_path, monkeypatch):
     assert "父节点" not in r and "模糊" not in r
 
 
-# B. 精确命中 branch，branch 自己也有命令 → 展开自身命令 + 附子命令清单
+# B. 精确命中 branch，branch 自己也有命令 → 展开自身命令 + **深展开**子树后代命令文法。
+# 治：旧行为只列子命令 ID 名，draft 拿到 `demo svc` 还得逐个再单查 method/name 拿文法
+# （自顶向下走树、5.3 轮/fork 的制造机）。新行为一次把后代文法答全。
 def test_B_branch_with_own_commands(tmp_path, monkeypatch):
     _make_index(tmp_path, monkeypatch, [
-        _node("demo.svc", ["demo svc <x>"], children=["demo.svc.method"]),
+        _node("demo.svc", ["demo svc <x>"],
+              children=["demo.svc.method", "demo.svc.name"]),
         _node("demo.svc.method", ["demo svc method <a>"]),
+        _node("demo.svc.name", ["demo svc name <n>"]),
     ])
     r = _lookup("demo svc")
-    assert "demo svc <x>" in r        # 自己的命令
-    assert "demo.svc.method" in r      # 子命令清单（ID）
-    assert "子命令" in r
+    assert "demo svc <x>" in r            # 自己的命令
+    assert "demo svc method <a>" in r     # 后代**文法**已内联（不只 ID）
+    assert "demo svc name <n>" in r       # 多个后代都展开文法
+    assert "子命令文法" in r              # 走深展开分支
+
+
+# B2. 深展开超 _KB_EXPAND_MAX_CHARS → 部分展开 + 剩余后代回退列名（护病态宽节点不爆上下文）
+def test_B2_deep_expand_respects_char_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(fl, "_KB_EXPAND_MAX_CHARS", 1)  # 极小上限：仅首个后代展开
+    _make_index(tmp_path, monkeypatch, [
+        _node("demo.svc", ["demo svc <x>"],
+              children=["demo.svc.method", "demo.svc.name"]),
+        _node("demo.svc.method", ["demo svc method <a>"]),
+        _node("demo.svc.name", ["demo svc name <n>"]),
+    ])
+    r = _lookup("demo svc")
+    assert "demo svc method <a>" in r          # 首个后代仍展开（防全截没）
+    assert "其余子命令未展开" in r              # 剩余回退列名提示
+    assert "demo.svc.name" in r                # 未展开者以 ID 列出供再查
 
 
 # C. 命中空壳 branch，命令在直接子节点 → 递归展开子节点命令

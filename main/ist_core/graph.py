@@ -71,6 +71,43 @@ def _extract_latest_user_text(messages: list[Any]) -> str:
 
 
 
+
+def extract_llm_usage(response) -> dict:
+    """从 LLMResult 提取 usage(usage_metadata + llm_output 的 cache 字段合并)。
+
+    usage_metadata 有 input/output/total 但缺 cache;response.llm_output.token_usage
+    有 DeepSeek 顶层 prompt_cache_hit/miss_tokens 或 OpenAI prompt_tokens_details.cached_tokens。
+    这是主 agent(IstCallback)与 fork(loader._ForkUsageTally)共用的唯一口径——
+    每次 LLM 调用即时取 API 返回的真实计量,与供应商官方统计同源。
+    """
+    usage: dict = {}
+    try:
+        gens = getattr(response, "generations", None) or []
+        if gens and gens[0]:
+            msg = getattr(gens[0][0], "message", None)
+            um = getattr(msg, "usage_metadata", None)
+            if isinstance(um, dict):
+                usage = dict(um)
+        llm_out = getattr(response, "llm_output", None) or {}
+        raw = llm_out.get("token_usage") or llm_out.get("usage") or {}
+        if isinstance(raw, dict) and raw:
+            if not usage:
+                usage = dict(raw)
+            for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
+                if k in raw and k not in usage:
+                    usage[k] = raw[k]
+            if "prompt_cache_hit_tokens" not in usage:
+                ptd = raw.get("prompt_tokens_details") or {}
+                cached = ptd.get("cached_tokens")
+                if isinstance(cached, int) and cached > 0:
+                    usage["prompt_cache_hit_tokens"] = cached
+                    prompt_total = usage.get("input_tokens") or raw.get("prompt_tokens") or 0
+                    usage["prompt_cache_miss_tokens"] = max(prompt_total - cached, 0)
+    except Exception:  # noqa: BLE001
+        pass
+    return usage
+
+
 class _MainAgentProgressHandler(BaseCallbackHandler):
     """把 main_agent 的 LLM 输出 / 工具调用转发到全局 EventBus。
 
@@ -85,6 +122,11 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         self._tool_idx = 0
         self._tool_name_stack: list[str] = []
         self._seen_tool_run_ids: set[str] = set()
+        # run_id → fork agent 名。LangChain 只在 *_start 回调传 metadata,end/error 不传,
+        # 所以 fork 判定必须在 on_chat_model_start 记账、on_llm_end 查账——直接在 end 里
+        # 调 _subagent_tags 恒判不出 fork(2026-07-02 实证:fork usage 因此全量误发
+        # usage_only 进主计数,footer 显示恰为真实消耗的 2 倍)。
+        self._fork_llm_runs: dict[str, str] = {}
         import time as _t
 
         self._t0 = _t.monotonic()
@@ -124,6 +166,21 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
     
     def on_chat_model_start(self, *args, **kwargs) -> None:  # noqa: D401, ANN002
         self._chat_idx += 1
+        # fork 子 agent 的 LLM 开始 → 向 EventBus 发 phase 事件，
+        # 驱动 footer busy 行显示"接收/处理中"(实时状态、非累加)。
+        # 不发 usage_only(累加归 _FORK_TOKENS、避开双重计数)。
+        try:
+            sub_tags = self._subagent_tags(kwargs)
+            if sub_tags.get("parent_subagent"):
+                rid = str(kwargs.get("run_id") or "")
+                if rid:
+                    self._fork_llm_runs[rid] = sub_tags["parent_subagent"]
+                self._emit_to_bus(
+                    "llm_start",
+                    tags=sub_tags or None,
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
     def on_llm_end(self, response, **kwargs) -> None:  # noqa: D401, ANN001
         """LangChain 唯一的 LLM 结束 callback（chat + completion 都走这条）.
@@ -180,38 +237,53 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
                         if isinstance(rc, str) and rc.strip():
                             thinking_text = rc
                     
-                    um = getattr(msg, "usage_metadata", None) or {}
-                    if isinstance(um, dict):
-                        usage = um
                 if not text:
                     text = getattr(first, "text", "") or ""
-            
-            if not usage:
-                llm_out = getattr(response, "llm_output", None) or {}
-                tu = llm_out.get("token_usage") or llm_out.get("usage") or {}
-                if isinstance(tu, dict):
-                    usage = tu
+
+            usage = extract_llm_usage(response)
         except Exception:  # noqa: BLE001
             text = ""
         text = (text or "").strip()
-        
-        sub_tags = self._subagent_tags(kwargs)
 
-        
+        sub_tags = self._subagent_tags(kwargs)
+        # end 回调的 kwargs 不带 metadata → 上面判不出 fork;用 start 时记的账本补全。
+        rid = str(kwargs.get("run_id") or "")
+        if not sub_tags.get("parent_subagent"):
+            fork_name = self._fork_llm_runs.pop(rid, "")
+            if fork_name:
+                sub_tags["parent_subagent"] = fork_name
+                if getattr(self, "_current_task_tool_use_id", ""):
+                    sub_tags.setdefault("parent_tool_use_id", self._current_task_tool_use_id)
+        else:
+            self._fork_llm_runs.pop(rid, None)
+
+        # fork 子 agent 的 usage 不发 EventBus（reducer 会跳过），直接写 _FORK_TOKENS。
+        # 主 agent 的 usage 正常发 EventBus——usage_only 是主 agent usage 的唯一权威源;
+        # astream_events 的 on_chat_model_end 也可能带同一份 usage(qa_node async 化后
+        # 该路径重新可见),reducer 端只认 usage_only,防双计。
         if usage:
-            self._emit_to_bus(
-                "llm_end",
-                payload={"name": "usage_only"},
-                tags=sub_tags or None,
-                usage=usage,
-            )
+            if sub_tags.get("parent_subagent"):
+                # fork 的 usage 由 loader._ForkUsageTally(fork invoke 显式挂载)统一收集
+                # ——此处不再累计(contextvar 传播使本回调也能看到 fork 调用,双计过)。
+                # 本分支只负责「不发 usage_only」,防 fork 用量灌进主计数。
+                pass
+            else:
+                self._emit_to_bus(
+                    "llm_end",
+                    payload={"name": "usage_only"},
+                    tags=sub_tags or None,
+                    usage=usage,
+                )
         
         if thinking_text:
-            self._emit_to_bus(
-                "info",
-                payload={"name": "thinking_block", "thinking": thinking_text},
-                tags=sub_tags or None,
-            )
+            # fork 的 thinking 块不向 EventBus 发 info(避免与主 transcript 混淆，
+            # 实际 fork thinking 由 fastlog/evidence 行承载)。
+            if not sub_tags.get("parent_subagent"):
+                self._emit_to_bus(
+                    "info",
+                    payload={"name": "thinking_block", "thinking": thinking_text},
+                    tags=sub_tags or None,
+                )
         
         
         
@@ -219,21 +291,39 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         
         
         if has_tool_calls:
-            content = text if text else "[Calling tools]"
-            self._emit_to_bus(
-                "llm_end",
-                payload={"name": "thought", "content": content},
-                tags=sub_tags or None,
-            )
+            if sub_tags.get("parent_subagent"):
+                # fork 的 tool_call thought 不入主 transcript;仅发空 llm_end 清 phase
+                self._emit_to_bus(
+                    "llm_end",
+                    payload={"name": "fork_done"},
+                    tags=sub_tags or None,
+                )
+            else:
+                content = text if text else "[Calling tools]"
+                self._emit_to_bus(
+                    "llm_end",
+                    payload={"name": "thought", "content": content},
+                    tags=sub_tags or None,
+                )
         elif text:
-            
-            
-            
-            self._emit_to_bus(
-                "llm_end",
-                payload={"name": "final_thought", "content": text},
-                tags=sub_tags or None,
-            )
+            if sub_tags.get("parent_subagent"):
+                # fork 的最终 thought 不入主 transcript(由 fastlog 承载);
+                # 仅发空 llm_end 让 reducer 清 phase，避免 footer 永远卡 thinking。
+                self._emit_to_bus(
+                    "llm_end",
+                    payload={"name": "fork_done"},
+                    tags=sub_tags or None,
+                )
+            else:
+                self._emit_to_bus(
+                    "llm_end",
+                    payload={"name": "final_thought", "content": text},
+                    tags=sub_tags or None,
+                )
+
+    def on_llm_error(self, error, **kwargs) -> None:  # noqa: D401, ANN001
+        # 失败的调用没有 on_llm_end,清掉账本条目防泄漏。
+        self._fork_llm_runs.pop(str(kwargs.get("run_id") or ""), None)
 
     def on_tool_start(self, serialized, input_str, **kwargs) -> None:  # noqa: D401, ANN001
         self._tool_idx += 1
@@ -424,6 +514,18 @@ def qa_node(state: IstCoreState, config: RunnableConfig | None = None) -> dict[s
 
 
 
+async def _qa_node_async(state: IstCoreState, config: RunnableConfig | None = None) -> dict[str, Any]:
+    """qa_node 的 async 包装——TUI 的 astream_events(async)走这条。
+
+    把同步阻塞的 qa_node 用 to_thread 挪到工作线程、让出 event loop。否则 langgraph 1.2.6
+    把同步 node 内联占死 loop 线程(RunnableCallable.ainvoke 无 afunc 时直接同步跑),
+    AsyncSqliteSaver.put_writes 的 run_coroutine_threadsafe(...).result() 就会同步等一个
+    被自己占死的 loop -> main-orchestrated 长 turn 死锁。
+    runner.py 的 sync graph.invoke 仍走同步 qa_node(RunnableCallable 按 sync/async 自动分派)。
+    """
+    return await asyncio.to_thread(qa_node, state, config)
+
+
 def finalize(state: IstCoreState) -> dict[str, Any]:
     """Finalize 节点：写最终 final_answer.
 
@@ -566,7 +668,11 @@ def build_ist_core_graph(
 
     g = StateGraph(IstCoreState)
     g.add_node("normalize_input", normalize_input)
-    g.add_node("qa_node", qa_node)
+    from langgraph.utils.runnable import RunnableCallable
+    # RunnableCallable(同步 qa_node, 异步 _qa_node_async)：runner.py 的 sync graph.invoke
+    # 走同步版；TUI 的 astream_events(async) 走异步版(to_thread 让出 loop,避免 async
+    # AsyncSqliteSaver 死锁)。否则纯 async node 会让 sync invoke 抛 "No synchronous function"。
+    g.add_node("qa_node", RunnableCallable(qa_node, _qa_node_async))
     g.add_node("review_gate", review_gate)
     g.add_node("goal_gate", goal_gate)
     g.add_node("finalize", finalize)

@@ -38,6 +38,11 @@ _SYSTEM_PROMPT = """\
     相同、代码会自动归到同一节点。
 - **decision_rule**：`condition`（触发条件）+ `decision`（结论/默认值/限制）**两者都必填**。原文没有明确
   "条件 → 结论"两段时，**改用 behavior**。
+  - **多分支条件行为必须逐条抽全**：同一命令/特性在**不同条件下有不同结论**时（按请求类型 / 查询类型 /
+    模式 / 参数取值 / 命中与否 / 启用与否等分支），**每个分支各抽一条独立 decision_rule**，各带自己的
+    condition 与 evidence_quote。**绝不要只抽其中一条、只抽概括句、或把多个并列分支合并成一句**——
+    漏抽分支会让下游只看到片面行为、据此写错断言（例：手册"收到 CNAME 类请求→返回 CNAME 记录；
+    收到 A/AAAA 类请求→用 CNAME 再解析返回 IP"是**两条** decision_rule，不是一条概括的"会重新查询"）。
 - **behavior**：填 `content`（一句话功能行为）。**必须是某条 CLI 命令的行为说明**。架构概念 / 设计术语 /
   项目代号不是命令也不是命令行为，**不要提取**——知识树只收 CLI 命令及其相关事实，不收名词解释。
 - **known_issue**：填 `issue_id`（BUG 编号）+ `issue_title`（**照抄 BUG title 原文，一字不改、不概括、不留空**）。
@@ -91,80 +96,86 @@ _SYSTEM_PROMPT = """\
 
 
 # emit_facts 工具：facts[] 的完整 JSON Schema —— **结构的唯一真相源**。
-# 经 function calling 作硬约束传给模型（schema 强制字段/类型/枚举），比 json_object + prompt
-# 描述更可靠。各字段的"哪个 kind 必填"语义写在 description 里，prompt 只讲语义判断。
+def _nstr(desc: str) -> dict:
+    """strict 模式可空字符串字段：不适用该 fact_kind 时填 null。"""
+    return {"type": ["string", "null"], "description": desc}
+
+
+# 经 function calling 作硬约束传给模型（schema 强制字段/类型/枚举）。
+# **必须开 `strict: true`**：MiMo 等端点在非 strict 下不严格遵守 schema，会把 `facts` 数组
+# **双重编码成 JSON 字符串**（且转义不一致）→ `_parse_llm_response` 整片静默丢弃，是 backfill
+# 单遍漏命令的真根因（MiMo 官方文档 tools.function.strict）。strict 仅支持 JSON schema 子集：
+# 所有对象须 `additionalProperties:false`、所有属性进 `required`、可选字段用 `["type","null"]` 表达。
+# 各字段"哪个 kind 必填"的语义写在 description 里，不适用时模型填 null。
+_PARAM_ITEM: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "name": {"type": "string", "description": "参数名。"},
+        "required": {"type": ["boolean", "null"], "description": "是否必选。"},
+        "type": _nstr("参数类型（string/integer/IP 地址…）。"),
+        "default": _nstr("默认值。"),
+        "value_range": _nstr("取值范围/约束。"),
+        "desc": _nstr("参数说明（原文）。"),
+    },
+    "required": ["name", "required", "type", "default", "value_range", "desc"],
+}
+
+_FACT_ITEM: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "fact_kind": {
+            "type": "string",
+            "enum": ["cli_command", "decision_rule", "behavior", "known_issue"],
+            "description": "事实类型，决定哪些字段填值（其余填 null）。",
+        },
+        "feature_path": {
+            "type": "array", "items": {"type": "string"},
+            "description": "命令主体 token 序列（剥 no/show/clear 前缀，不含参数值）。",
+        },
+        "fact_key": {
+            "type": "string",
+            "description": "同一 feature_path 下该 fact 的唯一短标识，snake_case；语义等同则复用已有 key。",
+        },
+        "cli_syntax": _nstr("fact_kind=cli_command 时填：完整命令调用签名（含全部参数记法），否则 null。"),
+        "parameters": {
+            "type": ["array", "null"], "items": _PARAM_ITEM,
+            "description": "cli_command 的命名参数表（纯枚举开关填 []）；非 cli_command 填 null。",
+        },
+        "condition": _nstr("fact_kind=decision_rule 时填：触发条件，否则 null。"),
+        "decision": _nstr("fact_kind=decision_rule 时填：结论/默认值/限制，否则 null。"),
+        "content": _nstr("fact_kind=behavior 时填：一句话功能行为，否则 null。"),
+        "issue_id": _nstr("fact_kind=known_issue 时填：BUG 编号，否则 null。"),
+        "issue_title": _nstr("fact_kind=known_issue 时填：照抄 BUG title 原文一字不改，否则 null。"),
+        "affected_versions": {
+            "type": ["array", "null"], "items": {"type": "string"},
+            "description": "known_issue 可选：受影响版本号列表，否则 null。",
+        },
+        "evidence_file": _nstr("cli/rule/behavior 必填：证据所在文档路径。"),
+        "evidence_quote": _nstr("cli/rule/behavior 必填：evidence_file 中的原文片段，未经改写。"),
+    },
+    "required": [
+        "fact_kind", "feature_path", "fact_key", "cli_syntax", "parameters",
+        "condition", "decision", "content", "issue_id", "issue_title",
+        "affected_versions", "evidence_file", "evidence_quote",
+    ],
+}
+
 EXTRACTION_TOOL: dict = {
     "type": "function",
     "function": {
         "name": "emit_facts",
+        "strict": True,
         "description": "提交从给定文本中提取的、有原文证据支撑的结构化产品事实列表。无可提取时传空数组。",
         "parameters": {
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "facts": {
                     "type": "array",
                     "description": "提取到的产品事实数组；无可提取事实时为空数组 []。",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "fact_kind": {
-                                "type": "string",
-                                "enum": ["cli_command", "decision_rule", "behavior",
-                                         "known_issue"],
-                                "description": "事实类型，决定哪些字段必填。",
-                            },
-                            "feature_path": {
-                                "type": "array", "items": {"type": "string"},
-                                "description": "命令主体 token 序列（剥 no/show/clear 前缀，不含参数值）。",
-                            },
-                            "fact_key": {
-                                "type": "string",
-                                "description": "同一 feature_path 下该 fact 的唯一短标识，snake_case；"
-                                               "语义等同则复用已有 key。",
-                            },
-                            "cli_syntax": {
-                                "type": "string",
-                                "description": "fact_kind=cli_command 时填：完整命令调用签名（含全部参数记法）。",
-                            },
-                            "parameters": {
-                                "type": "array", "items": {"type": "object"},
-                                "description": "cli_command 的命名参数表，每项至少含 name；纯枚举开关留空。",
-                            },
-                            "condition": {
-                                "type": "string",
-                                "description": "fact_kind=decision_rule 时填：触发条件。",
-                            },
-                            "decision": {
-                                "type": "string",
-                                "description": "fact_kind=decision_rule 时填：结论/默认值/限制。",
-                            },
-                            "content": {
-                                "type": "string",
-                                "description": "fact_kind=behavior 时填：一句话功能行为。",
-                            },
-                            "issue_id": {
-                                "type": "string",
-                                "description": "fact_kind=known_issue 时填：BUG 编号。",
-                            },
-                            "issue_title": {
-                                "type": "string",
-                                "description": "fact_kind=known_issue 时填：照抄 BUG title 原文，一字不改。",
-                            },
-                            "affected_versions": {
-                                "type": "array", "items": {"type": "string"},
-                                "description": "known_issue 可选：受影响版本号列表。",
-                            },
-                            "evidence_file": {
-                                "type": "string",
-                                "description": "cli/rule/behavior 必填：证据所在文档路径。",
-                            },
-                            "evidence_quote": {
-                                "type": "string",
-                                "description": "cli/rule/behavior 必填：evidence_file 中的原文片段，未经改写。",
-                            },
-                        },
-                        "required": ["fact_kind", "feature_path", "fact_key"],
-                    },
+                    "items": _FACT_ITEM,
                 }
             },
             "required": ["facts"],
@@ -189,8 +200,12 @@ _MD_ESCAPE_RE = re.compile(r"\\([_*~])")
 
 
 def _clean_token(tok: str) -> str:
-    """去掉单个 token 的 markdown 转义噪声。"""
-    return _MD_ESCAPE_RE.sub(r"\1", tok)
+    """去掉单个 token 的 markdown 噪声：转义 `\\_` + 首尾裸斜体标记 `_`/`*`。
+
+    LLM 偶尔把命令主体连斜体标记一起回（`_ip_`/`*addr*`），不剥会产出 `_ip.address_`
+    这类污染 feature_id 的影子节点。内部 `_`（如 host_name）只剥首尾不动。
+    """
+    return _MD_ESCAPE_RE.sub(r"\1", tok).strip("_*")
 
 
 def _feature_path_from_syntax(cli_syntax: str) -> list[str]:
@@ -219,7 +234,9 @@ def _feature_path_from_syntax(cli_syntax: str) -> list[str]:
         tok = _clean_token(raw).strip()
         if not tok:
             continue
-        if _NOTATION_PARAM_RE.match(tok) or "|" in tok:  # 兜底
+        # 跳过参数记法、含枚举竖线、以及嵌套记法剥不净残留的纯标点 token（如 `}`/`]`，
+        # 否则混进 feature_id 生成 `health.check.}.json` 这类污染节点。
+        if _NOTATION_PARAM_RE.match(tok) or "|" in tok or not re.search(r"[a-zA-Z0-9]", tok):
             continue
         out.append(tok.lower())
     return out
@@ -246,7 +263,9 @@ def _coerce_parameters(v: Any) -> list[dict]:
     for item in v:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name", "")).strip()
+        # null 兜底：strict schema 下 name 字段 required，模型对"无参/纯枚举开关"会填 JSON null；
+        # item.get("name","") 因 key 存在返回 None → str(None)="None" 假参数。`or ""` 兜掉。
+        name = str(item.get("name") or "").strip()
         if not name:
             continue
         entry: dict = {"name": name}
@@ -270,6 +289,42 @@ def _coerce_parameters(v: Any) -> list[dict]:
     return out
 
 
+# 裸内层引号：两侧都是"内容字符"(非 JSON 结构 :,{}[]"、非空白、非反斜杠)的 `"`。
+# 排除反斜杠 → 已转义的 `\"` 不会被再次转义(这是早期版本的 bug)。
+_BARE_INNER_QUOTE_RE = re.compile(r'(?<=[^\s:,{}\[\]"\\])"(?=[^\s:,{}\[\]"])')
+
+
+def _loads_facts_str(s: str) -> list:
+    """解析被 stringify 的 facts 数组。
+
+    ``EXTRACTION_TOOL`` 的 ``strict:true`` 已让端点**多数**把 facts 返回为真数组,但 MiMo 仍
+    残留少量(~6%)把数组 stringify,且 stringify 时把描述里的全角引号转成 ASCII `"` 又漏转义
+    (如 `保留字"default"`)→ json.loads 报 'Expecting , delimiter'。转义"两侧均为内容字符且
+    未被转义"的裸引号后重解,可还原**完整** fact(含参数)；已转义的 `\"` 不动。修复失败才丢弃。
+    """
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    try:
+        return json.loads(_BARE_INNER_QUOTE_RE.sub(r'\\"', s))
+    except json.JSONDecodeError:
+        pass
+    # 第三层兜底:json_repair 鲁棒修复。content/desc 里**密集裸引号 + 特殊字符**(如 `"||"`、`">"`、
+    # `"$"`、`%c, %s` 列举)时,上面的边界正则覆盖不全——实测会丢 `sdns {on|off}` 总开关、
+    # `sdns config write scp`、`sdns log query custom` 等关键命令。json_repair 对**合法 JSON 幂等**
+    # (零破坏,已验证),且仅在前两层都失败时启用 → 只把原本要丢弃的救回,**不改变已能解析的路径**。
+    try:
+        import json_repair
+        r = json_repair.loads(s)
+        if isinstance(r, list) and r:
+            return r
+    except Exception:  # noqa: BLE001 — json_repair 缺失/异常 → 回退到原「丢弃」行为(零回归)
+        pass
+    logger.warning("footprint LLM facts 字符串修复后仍无法解析，丢弃: %s", s[:200])
+    return []
+
+
 def _parse_llm_response(raw: Any, thread_id: str) -> list[RawFact]:
     if isinstance(raw, str):
         try:
@@ -282,21 +337,30 @@ def _parse_llm_response(raw: Any, thread_id: str) -> list[RawFact]:
         return []
 
     facts_raw = raw.get("facts", [])
+    # 正常情况 facts 是数组(EXTRACTION_TOOL 开了 strict)。仅个别非 strict 端点会把它 stringify,
+    # 防御性解一层(见 _loads_facts_str)。
+    if isinstance(facts_raw, str):
+        facts_raw = _loads_facts_str(facts_raw)
     if not isinstance(facts_raw, list):
         return []
 
     valid_kinds = {"cli_command", "decision_rule", "behavior", "known_issue"}
     results: list[RawFact] = []
 
+    # strict schema 下模型对不适用字段填 JSON null → item.get 取到 None；统一 `or ""` 兜底
+    # （否则 str(None) 会污染成字符串 "None"）。
+    def _s(key: str) -> str:
+        return str(item.get(key) or "").strip()
+
     for item in facts_raw:
         if not isinstance(item, dict):
             continue
-        kind = str(item.get("fact_kind", "")).strip()
+        kind = _s("fact_kind")
         if kind not in valid_kinds:
             continue
 
-        
-        cli_syntax = str(item.get("cli_syntax", "")).strip()
+
+        cli_syntax = _s("cli_syntax")
         if kind == "cli_command" and not cli_syntax:
             continue
         if kind == "decision_rule":
@@ -317,7 +381,8 @@ def _parse_llm_response(raw: Any, thread_id: str) -> list[RawFact]:
             # 非命令 fact(behavior/rule/issue)用 LLM 给的 feature_path,但要与 cli_command
             # 路径对齐剥前导操作动词 no/show/clear:LLM 常把它们写进 path(如"clear config all
             # 的行为"→ ["clear","config","all"]),不剥就生成 clear.config.all 这类动词影子节点,
-            # 与规范裸节点 config.all 分裂、且每次 dream 再生。剥后为空(整条都是动词)则保留原样不丢 fact。
+            # 与规范裸节点 config.all 分裂、且每次 dream 再生。剥后为空(整条都是动词)则保留原样不丢 fact
+            # (刻意设计,见 test_extract_noncommand_all_verb_path_preserved:宁留动词节点也不丢 fact)。
             raw_path = [p.lower() for p in _coerce_str_list(item.get("feature_path")) if p]
             j = 0
             while j < len(raw_path) and raw_path[j] in _OP_PREFIXES:
@@ -326,7 +391,7 @@ def _parse_llm_response(raw: Any, thread_id: str) -> list[RawFact]:
         if not path:
             continue
 
-        fact_key = str(item.get("fact_key", "")).strip()
+        fact_key = _s("fact_key")
         if not fact_key:
             continue
 
@@ -334,16 +399,16 @@ def _parse_llm_response(raw: Any, thread_id: str) -> list[RawFact]:
             fact_kind=kind,  # type: ignore[arg-type]
             feature_path=path,
             fact_key=fact_key,
-            cli_syntax=str(item.get("cli_syntax", "")).strip(),
+            cli_syntax=cli_syntax,
             parameters=_coerce_parameters(item.get("parameters")),
-            condition=str(item.get("condition", "")).strip(),
-            decision=str(item.get("decision", "")).strip(),
-            content=str(item.get("content", "")).strip(),
-            issue_id=str(item.get("issue_id", "")).strip(),
-            issue_title=str(item.get("issue_title", "")).strip(),
+            condition=_s("condition"),
+            decision=_s("decision"),
+            content=_s("content"),
+            issue_id=_s("issue_id"),
+            issue_title=_s("issue_title"),
             affected_versions=_coerce_str_list(item.get("affected_versions")),
-            evidence_file=str(item.get("evidence_file", "")).strip(),
-            evidence_quote=str(item.get("evidence_quote", "")).strip()[:300],
+            evidence_file=_s("evidence_file"),
+            evidence_quote=_s("evidence_quote")[:300],
             source_thread=thread_id,
         ))
 

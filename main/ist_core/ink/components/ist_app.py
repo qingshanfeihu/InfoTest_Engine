@@ -11,14 +11,18 @@ Replaces the Textual-based IstApp. Uses Python Ink renderer for:
 
 from __future__ import annotations
 
+import logging
 import os
+import time as _time
 import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+logger = logging.getLogger(__name__)
+
 from main.ist_core.ink.app import InkApp
-from main.ist_core.ink.components.footer import FooterPane
+from main.ist_core.ink.components.footer import FooterPane, _format_elapsed, _format_token_count
 from main.ist_core.ink.components.plan_panel import PlanPanel
 from main.ist_core.ink.components.prompt_input import PromptInput
 from main.ist_core.ink.components.transcript import Transcript
@@ -104,7 +108,19 @@ def _tool_display_arg(name: str, args: dict) -> str:
         return (cmd[:60] + "…") if len(cmd) > 60 else cmd
     if name == "invoke_skill":
         skill = args.get("skill") or _extract_from_raw(args, "skill") or ""
-        return str(skill)[:40]
+        # 批派可观察性:brief 信封/正文里的 autoid 一并带出(否则并发派 8 个 worker
+        # 全是裸「⏺ Skill」行,分不清派的哪个 case——2026-07-03 实证)。
+        import re as _re2
+        blob = str(args.get("brief") or "") + str(args.get("raw") or "")
+        m = _re2.search(r"20303175\d{8,10}", blob)
+        aid = f"…{m.group(0)[-6:]}" if m else ""
+        if skill and aid:
+            return f"{skill} · {aid}"
+        if skill:
+            return str(skill)[:40]
+        # skill 名都抽不到时给 raw 首段,别渲染成裸工具名
+        raw = str(args.get("raw") or "")
+        return (raw[:40] + "…") if raw else ""
     first_val = next(iter(args.values()), "")
     if isinstance(first_val, str) and len(first_val) > 60:
         return first_val[:60] + "…"
@@ -112,6 +128,23 @@ def _tool_display_arg(name: str, args: dict) -> str:
 
 
 def _is_transient_tool_error(output: str) -> bool:
+    """只把「真·错误结果」判为瞬态连接错误。
+
+    is_transient_error 是给「异常文本 / fork 吞成的 'ERROR: ...' 串」用的；但 TUI 这里
+    把它用在所有 tool_result.output 上——正常 tool 输出(如 fs_read 读到的文件内容,满屏
+    数字/HTTP 词)会被它的子串匹配误中(实测 autoid 里的 "4291" 撞过裸 "429")。先门控:
+    output 得「看起来是错误」(短、且带明确错误信号)才去判瞬态,正常长输出直接放过。
+    """
+    if not output:
+        return False
+    low = output.lower()
+    looks_like_error = (
+        len(output) < 2000
+        and ("error" in low or "exception" in low or "traceback" in low
+             or "failed" in low or "refused" in low or "timed out" in low)
+    )
+    if not looks_like_error:
+        return False
     from main.ist_core.resilience import is_transient_error
     return is_transient_error(output)
 
@@ -216,6 +249,8 @@ class IstInkApp:
         self._thinking_expanded: bool = False
         self._last_thinking_text: str = ""
         self._tool_output_blocks: list[dict] = []
+        self._subagent_thinking_lines: list[dict] = []  # fork ⎿ ∴ Thinking 行 {idx, full},供 ctrl+t 就地展开全文
+        self._main_thinking_lines: list[dict] = []  # 主 agent 每条 ∴ thinking 行 {idx, full},供 ctrl+t 全部就地折叠/展开(不只最后一条)
         self._load_tui_config()
         # ask_user 交互式问答的活跃会话（None=非问答模式）
         self._ask_user: Any = None
@@ -340,24 +375,27 @@ class IstInkApp:
                                 chunk = f.read()
                                 offset = f.tell()
                             new_lines = [ln.strip() for ln in chunk.split("\n") if ln.strip()]
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001
+                    logger.debug("编译日志读取失败", exc_info=True)
                 try:
                     ft = get_fork_tokens()
                     if not new_lines and ft == last_ft:
                         continue
                     last_ft = ft
                     with self._app.lock:
-                        self._footer.update(fork_input=ft[0], fork_output=ft[1])
+                        self._footer.update(fork_input=ft[0], fork_output=ft[1],
+                                            fork_cache_hit=ft[2])
                         if new_lines:
+                            # 供 footer 判「worker 静默多久」（无相位时 busy 行标注在等 worker）
+                            self._footer.fork_last_event_ts = _time.time()
                             self._transcript.append_messages(
                                 [f"   {D}· {ln}{X}" for ln in new_lines]
                             )
                         # 只在用户跟看(底部 sticky)时渲染;往上滚则不渲染,放行用户滚动
                         if new_lines and self._transcript.node.sticky_scroll:
                             self._app.render()
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001
+                    logger.debug("编译日志 UI 更新失败", exc_info=True)
 
         threading.Thread(target=_poll, daemon=True).start()
 
@@ -376,7 +414,8 @@ class IstInkApp:
 
         
         self._transcript.append_message("")
-        self._transcript.append_message(f"  \x1b[1mInfoTest Engine v1.0.4\x1b[0m")
+        from main.common.version import app_version
+        self._transcript.append_message(f"  \x1b[1mInfoTest Engine v{app_version()}\x1b[0m")
         self._transcript.append_message(f"  \x1b[2m{model} · {os.getcwd()}\x1b[0m")
         self._transcript.append_message("")
         self._transcript.append_message(f"  \x1b[2m输入自然语言描述测试分析需求，自动调用工具查阅知识库。\x1b[0m")
@@ -859,15 +898,19 @@ class IstInkApp:
                 self._transcript.append_message(f"  \x1b[2m{preprocess_status}\x1b[0m")
                 expanded = processed_text
 
-        
-        for line in expanded.split("\n"):
-            self._transcript.append_message(f"  {line}")
+        # 问答分隔线（已有历史消息时显示，首轮不显示）
+        if self._transcript.message_count() > 0:
+            _w = max(40, self._transcript.node.rect.width or 80)
+            self._transcript.append_message(f"\x1b[2m{'─' * _w}\x1b[0m")
+
+        # 用户输入回显:前空一行与上文隔开 + 每行加 > 箭头(dim)标识是输入 + 后空一行
         self._transcript.append_message("")
-        
+        for line in expanded.split("\n"):
+            self._transcript.append_message(f" \x1b[2m>\x1b[0m {line}")
         self._transcript.append_message("")
         self._footer.update(status="esc to interrupt")
         self._is_loading = True
-        self._run_start_time = __import__('time').time()
+        self._run_start_time = _time.time()
         # 快照 outputs 基线，回合结束时 diff 出 agent 新生成的可下载文件
         self._outputs_snapshot = self._snapshot_outputs()
         self._app.render()
@@ -927,6 +970,8 @@ class IstInkApp:
         self._last_thinking_idx = -1
         self._suppress_thinking_until_done = False
         self._subagent_inner_summaries = {}
+        self._subagent_thinking_lines = []
+        self._main_thinking_lines = []
         # B2：新 run 清空 tool_use 行号映射，避免旧行号污染本轮插入定位
         self._tool_use_row = {}
         self._transcript.append_message("")
@@ -955,10 +1000,31 @@ class IstInkApp:
         prev = getattr(self, '_prev_snapshot', None)
         self._prev_snapshot = snapshot
 
-        
+        # 思考期（reasoning delta 到达、还没 content）：streaming_text 仍为 None，下面的 streaming
+        # 分支不执行 → footer 相位更新被跳过，显示不出「深度思考中」。这里补一步：把 thinking
+        # 相位喂给 footer，让尾字段随 mimo 真实思考期显示真实状态（reducer 已按 reasoning delta
+        # 置 _llm_phase="thinking"）。不 return——本轮无新消息，继续走后续渲染无害。
+        if snapshot.streaming_text is None and snapshot.llm_phase == "thinking":
+            self._footer.update(
+                llm_phase="thinking",
+                output_token_count=snapshot.output_token_count,
+            )
+            self._app.render()
+
+
         if snapshot.streaming_text is not None:
             self._flush_pending_tools()
             rendered = self._render_markdown(snapshot.streaming_text)
+            # 正文尚空(minimax <think> 剥离后 content 为空 / 首个 chunk 是纯思考)时**不建 ⏺ 行**——
+            # 否则每段纯思考响应留一个空 ⏺ 项目符号(实测 minimax 满屏空 ⏺)。思考走 footer/BLOCK_THINKING
+            # 通道显示,不占正文项目符号。等真正有正文再建行。
+            if self._ai_stream_idx < 0 and not rendered.strip():
+                self._footer.update(
+                    llm_phase=snapshot.llm_phase or "thinking",
+                    output_token_count=snapshot.output_token_count,
+                )
+                self._app.render()
+                return
             if self._ai_stream_idx < 0:
                 self._stream_commit_idx = -1  # 新流开始,放弃上一段未匹配的提交占位
                 self._ai_stream_idx = self._transcript.message_count()
@@ -1008,9 +1074,33 @@ class IstInkApp:
         
         if snapshot.status == "done" and (not prev or prev.status != "done"):
             self._flush_pending_tools()
+            # 移除末尾孤立的 fork ⎿ ∴ Thinking 占位(fastlog 异步追加的收尾残留,常落在 main 最终回复后)
+            self._strip_trailing_subagent_thinking()
             self._is_loading = False
             self._ai_stream_idx = -1
             self._stream_commit_idx = -1  # 回合收尾,清掉未匹配的流式占位,防跨回合误更新
+
+            # 回合耗时 + 本轮 token 用量
+            if getattr(self, "_run_start_time", 0.0):
+                _elapsed = _time.time() - self._run_start_time
+                _f = self._footer
+                _run_in = max(0, _f.input_tokens + _f.fork_input - _f._run_start_input)
+                _run_out = max(0, _f.output_tokens + _f.fork_output - _f._run_start_output)
+                _fmt = _format_token_count
+                self._transcript.append_message(
+                    f"  \x1b[2m✻ Cooked for {_format_elapsed(_elapsed)}"
+                    f" · ↑ {_fmt(_run_in)} · ↓ {_fmt(_run_out)} tokens\x1b[0m"
+                )
+                # 零产出哨兵(症状级防御):turn "正常结束"却零输入零输出 = 模型层被静默吞错
+                # (实证 tokensec 余额尽时 402 未冒泡,TUI 呈现 0.8s 空转,用户无从知晓)。
+                # 不论异常在哪层被转成空响应,零产出这个症状机械可判——显式告警。
+                if _run_in == 0 and _run_out == 0 and _elapsed < 30:
+                    self._transcript.append_message(
+                        "  \x1b[31m⚠ 本轮模型零响应(0 token)——大概率 API 异常被静默吞掉:"
+                        "请检查供应商余额/网关状态(如 402 Insufficient Balance)、"
+                        "或查看 runtime/logs 最新 run-*.jsonl。\x1b[0m"
+                    )
+                self._run_start_time = 0.0
 
             if self._plan_panel.is_visible:
                 self._plan_panel.mark_all_done()
@@ -1026,6 +1116,20 @@ class IstInkApp:
             self._ai_stream_idx = -1
             self._stream_commit_idx = -1  # 同上,错误收尾也清掉流式占位
 
+            # 回合耗时（错误也显示）+ 本轮 token 用量
+            if getattr(self, "_run_start_time", 0.0):
+                _elapsed = _time.time() - self._run_start_time
+                _f = self._footer
+                _run_in = max(0, _f.input_tokens + _f.fork_input - _f._run_start_input)
+                _run_out = max(0, _f.output_tokens + _f.fork_output - _f._run_start_output)
+                _fmt = _format_token_count
+                self._transcript.append_message(
+                    f"  \x1b[2m✻ Cooked for {_format_elapsed(_elapsed)}"
+                    f" · ↑ {_fmt(_run_in)} · ↓ {_fmt(_run_out)} tokens\x1b[0m"
+                )
+                self._run_start_time = 0.0
+
+            _err_text = ""
             if snapshot.messages:
                 last = snapshot.messages[-1]
                 for b in last.content:
@@ -1033,8 +1137,12 @@ class IstInkApp:
                         self._transcript.append_message(
                             f" \x1b[31m[error]\x1b[0m {b.text}"
                         )
+                        _err_text = b.text
                         break
             self._footer.update(status="error", llm_phase="", output_token_count=0)
+            # 粘性错误条:transcript 的 [error] 行会被后续输出滚出屏,把摘要驻留在
+            # footer 状态行直到下一轮 run 开始(实证:批量编译长会话里错误无感知)。
+            self._footer.set_sticky_error(_err_text or "run error(详见上方 [error] 行)")
 
         self._app.render()
 
@@ -1150,9 +1258,11 @@ class IstInkApp:
                 self._transcript.append_message(
                     f" {D}\x1b[3m∴ Thinking{X} {D}(ctrl+t to expand){X}"
                 )
-            # 记录最后一条 thinking 的行号 + 全文，供 ctrl+t 展开/折叠切换
-            self._last_thinking_idx = self._transcript.message_count() - 1
+            # 记录每条 thinking 的行号 + 全文，供 ctrl+t 就地折叠/展开（全部，不只最后一条）
+            _t_idx = self._transcript.message_count() - 1
+            self._last_thinking_idx = _t_idx
             self._last_thinking_text = block.thinking.strip()
+            self._main_thinking_lines.append({"idx": _t_idx, "full": block.thinking.strip()})
 
         elif block.type == BLOCK_TOOL_USE:
             self._ai_stream_idx = -1
@@ -1340,8 +1450,13 @@ class IstInkApp:
         X = self._RESET
 
         line = ""
+        fork_full = ""  # fork text/thinking 全文,供 ctrl+t 就地展开/折叠
         if block.type in (BLOCK_TEXT, BLOCK_THINKING):
-            line = f"   {D}⎿ ∴ Thinking{X}"
+            fork_full = (getattr(block, "thinking", "") or getattr(block, "text", "") or "").strip()
+            if getattr(self, "_thinking_expanded", False) and fork_full:
+                line = f"   {D}\x1b[3m⎿ ∴ {fork_full}{X}"
+            else:
+                line = f"   {D}⎿ ∴ Thinking{X}"
         elif block.type == BLOCK_TOOL_USE:
             raw_name = block.name or "tool"
             if raw_name == "write_todos":
@@ -1355,10 +1470,15 @@ class IstInkApp:
 
         if not hasattr(self, "_subagent_inner_summaries"):
             self._subagent_inner_summaries = {}
+        if not hasattr(self, "_subagent_thinking_lines"):
+            self._subagent_thinking_lines = []
         count = self._subagent_inner_summaries.get(parent_id, 0)
         expanded = getattr(self, "_tool_outputs_expanded", False)
         if expanded or count < self._SUBAGENT_INNER_MAX_LINES:
             self._transcript.append_message(line)
+            if fork_full:  # 记录 fork thinking 行,供 ctrl+t 就地展开全文
+                self._subagent_thinking_lines.append(
+                    {"idx": self._transcript.message_count() - 1, "full": fork_full})
         elif count == self._SUBAGENT_INNER_MAX_LINES:
             self._transcript.append_message(
                 f"   {D}… (more subagent activity; ctrl+o to expand){X}"
@@ -1376,6 +1496,27 @@ class IstInkApp:
     _DIM = "\x1b[2m"
     _RESET = "\x1b[0m"
     _SUBAGENT_INNER_MAX_LINES = 3
+
+    def _strip_trailing_subagent_thinking(self) -> None:
+        """回合结束时移除 transcript 末尾孤立的 fork 子 agent ``⎿ ∴ Thinking`` 占位行。
+
+        fastlog 异步把 fork 步骤追加到主 transcript,fork 的收尾 thinking 占位常落在
+        main 最终回复**之后**残留(现象:main 回复完仍多一行 ⎿ ∴ Thinking)。从末尾往上剥
+        连续的占位行(及其间空行),遇到第一条实际内容(main 回复 / 工具行)即停,不误删正文。
+        """
+        msgs = getattr(self._transcript, "_messages", None)
+        if msgs is None:  # 极简 stub Transcript(无 _messages 属性)时安全跳过
+            return
+        cut = len(msgs)
+        while cut > 0 and ("⎿" in msgs[cut - 1] and "∴ Thinking" in msgs[cut - 1]):
+            cut -= 1
+            while cut > 0 and msgs[cut - 1].strip() == "":
+                cut -= 1
+        if cut < len(msgs):
+            self._transcript.replace_range(cut, len(msgs) - cut, [])
+            # 同步移除被删 fork thinking 行的记录(idx 落在被剥区间)
+            self._subagent_thinking_lines = [
+                r for r in getattr(self, "_subagent_thinking_lines", []) if r["idx"] < cut]
 
     def _flush_pending_tools(self) -> None:
         """Mark all pending tool dots as green (completed)."""
@@ -1499,36 +1640,41 @@ class IstInkApp:
         self._app.render()
 
     def _toggle_expand(self) -> None:
-        """Toggle expand/collapse all tool output blocks (Ctrl+O)."""
+        """Ctrl+O:展开/折叠所有工具输出(主路径 + fork 子 agent 行)。
+
+        fork 行交织(多 worker 并发)+ 折叠改行数,无法就地增量改,从最新 snapshot 全量重渲染——
+        reducer._messages 只增长(整个 run 期间不清理),fork inner block 的 parent_tool_use_id
+        随 message 一起保留在 snapshot.messages 里,故重渲染时 _render_subagent_inner_block 能
+        在 _tool_outputs_expanded=True 时把每个 parent 的全部 inner block 都渲染出来(该函数本
+        身按 expanded 决定是否跳过截断,不依赖任何"记住哪些行被省略"的额外状态)。
+        """
         self._tool_outputs_expanded = not self._tool_outputs_expanded
-        
         self._persist_verbose()
-        if not self._tool_output_blocks:
+        self._replay_snapshot()
+
+    def _replay_snapshot(self) -> None:
+        """从最新 snapshot 全量重渲染 transcript(按当前 _tool_outputs_expanded / _thinking_expanded)。
+
+        见 tests/tui/test_ist_app_replay_snapshot.py:用真实 parent_tool_use_id 消息构造 snapshot,
+        断言 expanded 模式下 fork 行数 == 实际 inner block 数(不被 3 行截断丢弃)。
+        """
+        snap = getattr(self, "_prev_snapshot", None)
+        if snap is None or not getattr(snap, "messages", None):
             return
-        for i, block in enumerate(self._tool_output_blocks):
-            start_idx = block["start_idx"]
-            full_lines = block["full_lines"]
-            old_count = block["display_count"]
-            tool_name = block.get("tool_name", "")
-            if self._tool_outputs_expanded:
-                new_lines = [f"   \x1b[2m⎿\x1b[0m {l[:100]}" for l in full_lines]
-            else:
-                summary = _tool_result_summary(tool_name, "\n".join(full_lines))
-                if summary is not None:
-                    new_lines = [f"   \x1b[2m⎿\x1b[0m {l}" for l in summary]
-                elif len(full_lines) <= 3:
-                    new_lines = [f"   \x1b[2m⎿\x1b[0m {l[:100]}" for l in full_lines]
-                else:
-                    new_lines = [f"   \x1b[2m⎿\x1b[0m {l[:100]}" for l in full_lines[:3]]
-                    new_lines.append(f"   \x1b[2m… +{len(full_lines) - 3} lines (ctrl+o to expand)\x1b[0m")
-            self._transcript.replace_range(start_idx, old_count, new_lines)
-            new_count = len(new_lines)
-            delta = new_count - old_count
-            block["display_count"] = new_count
-            
-            if delta != 0:
-                for j in range(i + 1, len(self._tool_output_blocks)):
-                    self._tool_output_blocks[j]["start_idx"] += delta
+        # 清空 + 重置所有增量渲染累积状态(与 run 开始 reset 对齐),再全量重走渲染逻辑
+        self._transcript.clear()
+        self._subagent_inner_summaries = {}
+        self._subagent_thinking_lines = []
+        self._main_thinking_lines = []
+        self._tool_output_blocks = []
+        self._tool_use_row = {}
+        self._ai_stream_idx = -1
+        self._stream_commit_idx = -1
+        self._last_thinking_idx = -1
+        self._last_thinking_text = ""
+        for msg in snap.messages:
+            for block in getattr(msg, "content", None) or []:
+                self._render_content_block(block, msg)
         self._app.render()
 
     def _load_tui_config(self) -> None:
@@ -1560,20 +1706,25 @@ class IstInkApp:
             pass
 
     def _toggle_thinking(self) -> None:
-        """Toggle expand/collapse the last thinking block (Ctrl+T)."""
+        """Toggle thinking blocks (Ctrl+T):主 agent 的**所有** thinking 行 + fork 子 agent 的 ⎿ ∴ Thinking 行。"""
         D = self._DIM
         X = self._RESET
         self._thinking_expanded = not self._thinking_expanded
         self._persist_verbose()
-        idx = getattr(self, '_last_thinking_idx', -1)
-        text = getattr(self, '_last_thinking_text', "")
-        if idx < 0 or not text:
-            return
-        if self._thinking_expanded:
-            new_line = f" {D}\x1b[3m∴ {text}{X}"
-        else:
-            new_line = f" {D}\x1b[3m∴ Thinking{X} {D}(ctrl+t to expand){X}"
-        self._transcript.update_message_at(idx, new_line)
+        # 主 agent 的**所有** thinking 行（不只最后一条）——就地折叠/展开
+        for rec in getattr(self, "_main_thinking_lines", []):
+            if self._thinking_expanded:
+                new_line = f" {D}\x1b[3m∴ {rec['full']}{X}"
+            else:
+                new_line = f" {D}\x1b[3m∴ Thinking{X} {D}(ctrl+t to expand){X}"
+            self._transcript.update_message_at(rec["idx"], new_line)
+        # fork 子 agent 的 ⎿ ∴ Thinking 行:就地展开全文 / 折回占位(不改行数,故 idx 稳定)
+        for rec in getattr(self, "_subagent_thinking_lines", []):
+            if self._thinking_expanded:
+                nl = f"   {D}\x1b[3m⎿ ∴ {rec['full']}{X}"
+            else:
+                nl = f"   {D}⎿ ∴ Thinking{X}"
+            self._transcript.update_message_at(rec["idx"], nl)
         self._app.render()
 
     def _history_up(self) -> None:

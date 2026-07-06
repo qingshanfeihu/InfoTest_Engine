@@ -21,6 +21,7 @@ import re
 import requests
 from langchain_core.tools import tool
 
+from main.ist_core.tools.device.device_errors import has_cli_error
 from main.ist_core.tools.device.ssh import (
     _DENIED_METACHARS,
     _HIGH_RISK_COMMANDS,
@@ -152,8 +153,10 @@ def dev_rest(
     port = max(1, min(int(port or _DEFAULT_RESTAPI_PORT), 65535))
 
     # 5. Resolve credentials
-    resolved_user = username or os.environ.get("APV_RESTAPI_USERNAME", "admin")
-    resolved_pass = password or os.environ.get("APV_RESTAPI_PASSWORD", "admin")
+    resolved_user = username or os.environ.get("APV_RESTAPI_USERNAME", "")
+    resolved_pass = password or os.environ.get("APV_RESTAPI_PASSWORD", "")
+    if not resolved_user or not resolved_pass:
+        return "error: REST API credentials not configured (set APV_RESTAPI_USERNAME and APV_RESTAPI_PASSWORD)"
 
     # 6. Build URL and body
     url = f"https://{host}:{port}/rest/{device_type}/cli_extend"
@@ -192,21 +195,8 @@ def dev_rest(
 
     contents = data.get("contents", "")
 
-    # Detect CLI errors in response
-    has_error = False
-    if contents.strip():
-        lower = contents.lower()
-        if any(kw in lower for kw in (
-            "% invalid", "% error", "% unknown", "% unrecognized",
-            "syntax error", "invalid input", "command not found",
-        )):
-            has_error = True
-        # Check for caret on its own line
-        for line in contents.splitlines():
-            s = line.strip()
-            if s == "^" or (len(s) <= 3 and "^" in s):
-                has_error = True
-                break
+    # Detect CLI errors in response（收口到共享 device_errors）
+    has_error = has_cli_error(contents)
 
     status = "error" if has_error else "success"
 

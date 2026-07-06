@@ -6,47 +6,54 @@ user-invocable: true
 when_to_use: |
   Use when the user's request requires APV CLI commands —
   configuration generation, command explanation, parameter lookup, or config translation.
-  Trigger keywords: 怎么配置, CLI命令, 生成命令, 翻译成APV, 会话保持, 健康检查
+  Trigger keywords: 怎么配置, CLI命令, 生成命令, 翻译成APV
 allowed-tools:
   - fs_read
-  - fs_write
   - invoke_skill
 effort: medium
 ---
 
 # Config Answer
 
-编排 APV CLI 命令的生成和验证。不自己 grep 手册、不自己写命令——生成委托给 fork draft agent，验证委托给 fork verify agent。
+CLI 配置专家。一切以 CLI 文档为准，不准凭记忆写命令。**先 grep 手册，再写命令。**
 
-## 硬约束
+## Principles
 
-**不准凭记忆写命令。** 命令必须由 fork draft agent 从手册 grep 生成、经 fork verify agent 独立验证后输出。
+- **写前 grep**：每条命令先 `fs_grep` 手册找语法，再写。不准先写后补 grep
+- **收敛不空转**：换 2-3 个关键词仍无 → 标注 `[未在文档直接命中]`
 
 ## Steps
 
 ### 1. 确定场景
 
-生成新配置 → 提供需求描述。翻译第三方配置 → 提供源文件路径和数据提取说明。
+- **生成/解释/验证**（用户问"怎么配置"、"命令对不对"）→ Step 2-3（inline 快速路径）
+- **翻译**（用户要求"翻译成 APV"、转换第三方配置）→ Step 4（fork 精细化路径）
 
-### 2. 生成（fork draft）
+---
 
-```
-invoke_skill(skill="config-answer-draft", brief="<用户需求 / 源文件路径 + 翻译指示>")
-```
+### 生成场景（fork draft，4s 内完成）
 
-fork agent 会 grep 手册、提取数据、生成命令、保存 evidence 和 candidate。
-
-### 3. 验证（fork verify）
+### 2. 生成
 
 ```
-invoke_skill(skill="config-answer-verify", brief="<candidate_path>\n<evidence_dir>\n<用户需求>")
+invoke_skill(skill="config-answer-draft", brief="<用户需求>")
 ```
 
-fork agent 独立 grep 手册做对抗校验，返回 `判定：PASS` 或 `判定：CUT`（含具体违规）。
+draft fork 用 `build_command` 生成——命令结构由手册文法保证，无需二次验证。直接输出。
 
-- PASS → 进入 Step 4
-- CUT → 反馈给 draft agent 修复 → 重验（最多 1 次），二次 CUT → 标注 `[??]` 进入输出
+PASS → 直接输出到对话中，**不保存文件**（除非用户明确要求"输出到文件"）。CUT → 修复（最多 1 次），二次 CUT → 标注 `[??]` 进入输出。
 
-### 4. 输出
+---
 
-三段结构：文档依据 → 配置命令 → 验证说明。每条命令标注手册出处。输出时禁止再调工具。
+### 翻译场景（fork 精细化路径）
+
+复杂第三方配置翻译，结果较长，默认保存文件。
+
+### 4. 生成 + 验证 + 输出
+
+```
+invoke_skill(skill="config-answer-draft", brief="<翻译指示 + 源文件路径>")
+invoke_skill(skill="config-answer-verify", brief="<candidate_path + evidence_dir>")
+```
+
+PASS → 输出到文件。CUT → 修复（最多 1 次），二次 CUT → 标注 `[??]` 进入输出。

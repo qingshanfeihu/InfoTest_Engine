@@ -1,177 +1,145 @@
-# IST-Core
+# InfoTest Engine
 
-通用测试分析 Agent —— 基于 LangGraph + Textual TUI。
+**IST-Core** — 面向网络设备测试的对话式 Agent 平台：把产品文档与人工用例编译成**断言真覆盖目标行为、可上机自动执行**的测试卷,并用真实设备执行结果驱动知识闭环。基于 LangGraph + deepagents + Textual TUI。
+
+> 当前版本:**1.0.5-beta.1**(V6 循环驱动编译引擎首个 beta,见 [CHANGELOG](CHANGELOG.md))
+
+## 它做什么
+
+```
+产品文档/人工用例(PDF·docx·xlsx 脑图)
+        │  KMS 管线(LLM 分桶 + MinerU/openpyxl → markdown 直出)
+        ▼
+只读知识库(knowledge/data/markdown/ + footprint 已验证事实树)
+        │
+        ├── 测试评审(test-list-review):证据纪律 + 缺陷库检索
+        │
+        └── 用例编译(V6 引擎):脑图 → case.xlsx
+              编写(fork worker)→ 欠定问人(interrupt)→ 机械门 → 合并
+              → 上机(SSH/pytest 框架)→ 归因 → 只重编 fail 子集 → 不动点
+              → 真 PASS 写回先例与 footprint(知识闭环)
+```
+
+判据:除「脑图与设备实际结构有争议需人工拍板」与「产品缺陷」外,其余用例全部一遍上机通过。三域对照轮:dongkl 21/34(重灾域)、yzg 25/26、zhaiyq 51/53,编排事故 0。
 
 ## 快速开始
 
 ```bash
-# 安装
 pip install -e .
 
-# 配置（复制 environment.example 并填入 API Key）
+# 配置:复制模板并填 OpenAI 兼容端点的 key(任何 OpenAI 协议端点皆可)
 cp environment.example environment
-# 编辑 environment 填入 DASHSCOPE_API_KEY 或 DEEPSEEK_API_KEY，并选用对应 provider
+#   OPENAI_BASE_URL=…  OPENAI_API_KEY=sk-…  IST_MODEL=…
 
-# 启动 TUI（Textual 终端）
-infotest
-
-# 启动 Web Terminal（浏览器，默认 http://localhost:8080）
-infotest --server
-
-# 单次查询（print 模式）
-infotest -p "项目里有哪些测试用例？"
-
-# 清除对话历史和临时文件
-infotest reset           # 默认交互确认；加 --yes 跳过；--all 含长期记忆
+infotest              # Textual 终端 TUI(默认入口)
+infotest --server     # Web Terminal(浏览器,默认 :8080)
+infotest -p "…"       # 单次查询(print 模式)
+langgraph dev --no-browser --port 2024   # 可选:Studio 可视化三张图
 ```
 
-## 功能
+## 核心架构:三层栈
 
-- Textual 终端 UI，支持多轮对话
-- 通用原子工具：ls / rg-backed glob / rg-backed grep / range read_file / write_file / edit_file / python_exec / bash_exec
-- 大仓库文件搜索：优先使用 ripgrep，支持按文件列表 / 命中内容 / 计数搜索，支持结果分页和大文件按行范围读取；ripgrep 不可用时自动回退到 Python 只读实现
-- 3 tier 模型分级（opus / sonnet / haiku）按任务复杂度自动选模型
-- Thinking block 渲染（思考输出折叠展开，ctrl+t 切换）
-- 16 个 slash 命令
+| 层 | 载体 | 内容 |
+|---|---|---|
+| 定义层 | **md**(YAML frontmatter + XML 分节正文) | skill / agent / 引擎资产包——人写人审,可 diff |
+| 回合层 | **deepagents / create_agent** | LLM 自由度孔:qa 主 agent 与每个 fork 都是一张小图 |
+| 运行时层 | **LangGraph StateGraph** | 会话图(qa_agent)、编译引擎图、fork 图共用同一地基 |
 
-## 文件搜索能力
+数据形态判定表(架构红线,详见 [CLAUDE.md](CLAUDE.md)):人定义的→md;确定性流程→py(图,节点=纯函数);机器间传的→JSON(盘上台账,按引用流);进 LLM 上下文的→XML 信封;语义判断→skill(fork);单一正确做法→tool;**LLM 永远不当胶水**——胶水是图的条件边。
 
-Core 的 `fs_glob` / `fs_grep` / `fs_read` 是只读工具，`fs_write` / `fs_edit` 是写入工具。所有工具限制在 agent 沙箱内（`knowledge/data/` + `workspace/`），并拒绝访问 `.git`、虚拟环境、平台代码和运行日志等目录。
+## V6 编译引擎(`main/ist_core/compile_engine/`)
 
-- `fs_glob` 优先使用 `rg --files --glob` 定位候选文件，支持 `max_results` 和 `offset`。
-- `fs_grep` 优先使用 ripgrep regex 搜索，支持 `output_mode="files_with_matches" | "content" | "count"`、`head_limit`、`offset`、`type` 和 `context`。
-- `fs_read` 对文本文件使用行范围读取；小文件走快路径，大文件流式扫描并只保留请求的行段。
-- `fs_write` 原子写入文件到 `workspace/outputs/`（唯一可写目录），支持 overwrite 控制。
-- `fs_edit` 对 `workspace/outputs/` 内已有文件执行精确字符串替换。
-- 搜索超时或输出过大时会返回可用的部分结果和提示；没有部分结果时会明确报错，不把超时误报为无匹配。
+编译闭环 = 一张 8 节点 StateGraph,main agent 只调薄工具 `compile_engine_run(mindmap, version)` 一次:
 
-## 工具元数据
+```
+prep ─► worker_fanout ─►(欠定)─► ask_decision(interrupt 问人)─► worker_fanout
+          │(全过)
+          ▼
+        merge(pass 卷面锁复核)─► run_digest(上机)─►(fail)─► attribute(归因)
+          ▲                        │(子集全过)                  │(reflow ⊆ fail 集)
+          └────── 终验整卷 ◄───────┘            worker_fanout ◄─┘
+                    │(全 pass)
+                    ▼
+        writeback(先例+footprint 双写回)─► report(engine_report.json)
+```
 
-[main/ist_core/tools/_shared/metadata.py](main/ist_core/tools/_shared/metadata.py) 注册当前 runtime 默认挂载的 8 个工具：
+- 节点三类:[mech] 直调工具 `.func` / [llm] 孔经 `execute_fork_skill` / [user] 孔经官方 `interrupt`+`Command(resume)`
+- **断点续跑**:SqliteSaver 分库 checkpoint,同参数重调即从断点继续;`run_marker` 幂等防重烧设备轮
+- **EngineLedger 迁移合法性表**:`passed→重编` 在数据层非法;pass 即锁卷面 mtime;重派集 ⊆ fail 集(代码断言)
+- **质量门**:emit 必崩门(恒真/恒假断言族、崩卷形态——全部从测试框架 mirror 源码语义推导)+ 成品卷 lint 挂凭证/合并双卡点;语义终判 = 上机 oracle
+- 回退:`IST_COMPILE_ENGINE=0` 走 v5 main-orchestrated 编排
 
-- `fs_ls`
-- `fs_glob`
-- `fs_grep`
-- `fs_read`
-- `fs_write`
-- `fs_edit`
-- `run_python`
-- `run_shell`
+设计全文:[docs/DESIGN_v6_engine.md](docs/DESIGN_v6_engine.md)
 
-旧版 `qa_search_*`、`defect_*`、`qa_invoke_reviewer*` 等业务工具名不再属于当前 runtime metadata；TUI 对历史事件的渲染兼容与 runtime 工具注册分开维护。
+## Skills(`main/ist_core/skills/`)
 
-## 💡 核心技术文档（全新增补）
+| Skill | 类型 | 用途 |
+|-------|------|------|
+| `test-list-review` | user-invocable | 测试用例/策略评审(主入口) |
+| `ist-compile-engine` | user-invocable | **V6 编译主入口**:一句话跑整条闭环 |
+| `ist-verify` | user-invocable | 成品 excel 上机验证 + 归因 |
+| `device-verify` | user-invocable | 设备 SSH 只读/配置验证 |
+| `compile-worker` / `compile-attributor` | fork | 编译编写孔 / 归因孔 |
+| `ist-compile` / `ist-compile-draft` / `ist-compile-grade` | inline/fork | v5 fallback 编排与子流程 |
+| `config-automation` / `config-answer` | inline | 环境 IP 替换 / 配置问答 |
+| `review-verification` / `escalate-when-stuck` | fork/inline | 评审验证 / 连续失败上报 |
 
-为了帮助新开发者快速理解 InfoTest Engine / IST-Core 的软核物理边界与高位认知特性，请查阅以下位于 [docs/](docs) 的 4 篇技术实录：
-
-- **记忆层级与 Dream 归纳**：[docs/memory_system.md](docs/memory_system.md) (详细阐释三层记忆、庄周梦蝶四阶段以及足迹 Footprint 知识树机制)
-- **多根白名单防护沙箱**：[docs/file_sandbox.md](docs/file_sandbox.md) (剖析文件系统的零信任防护、三闸/四闸拦截防御纵深)
-- **KMS 管线与直出 Markdown**：[docs/kms_pipeline.md](docs/kms_pipeline.md) (解答“为何去向量化 RAG”，并记录元指纹缓存与高保真 Excel 离线 Markdown 解析)
-- **控制台 TUI 与 Web 墨水渲染**：[docs/tui_architecture.md](docs/tui_architecture.md) (详解 EventBus 广播流、打字光标延迟平滑渲染以及长日志限额折叠机制)
+user-invocable skill 同时注册为 TUI slash 命令。资产标准(名称/frontmatter/XML 骨架/工具白名单)见 [docs/skill_authoring_standard.md](docs/skill_authoring_standard.md);机器门 `tests/ist_core/skills/test_skill_package_standard.py`。
 
 ## 目录结构
 
 ```
 project_root/
-├── knowledge/data/        ← 纯只读知识库（agent 可读不可写）
-│   ├── orgin/             ← 源文档（APV/NSAE 产品文档）
-│   └── markdown/          ← KMS 管线产出
-│       ├── product/       ← 产品文档 markdown
-│       └── qa/            ← 测试策略/历史用例 markdown
+├── knowledge/
+│   ├── data/              ← 纯只读知识库(agent 可读不可写)
+│   │   ├── orgin/         ← 源文档
+│   │   ├── markdown/      ← KMS 管线产出(product/ + qa/)
+│   │   └── auto_env/      ← 自动化拓扑(network_topology.json 唯一事实源)
+│   ├── footprints/        ← 已验证 CLI 事实树(设备行为知识)
+│   └── framework/mirror/  ← 测试框架源码镜像(机械门闭集的解析源)
 ├── workspace/             ← agent 工作区
-│   ├── inputs/            ← 用户上传的待评审文件（TUI/web 写入，agent 只读）
-│   ├── outputs/           ← agent 生成的报告/标注（agent 可写）
-│   └── defects/           ← 缺陷缓存（ingest 管线写入，agent 只读）
-├── runtime/               ← 运行时产物（agent 不可见）
-│   ├── logs/              ← LangGraph 运行日志
-│   ├── conversation_history/
-│   ├── large_tool_results/
-│   └── users/
-├── memory/                ← 记忆系统（agent 不可见）
-├── main/                  ← 平台代码
-├── tests/                 ← 测试
-├── scripts/               ← 脚本
+│   ├── inputs/            ← 用户上传(agent 只读)
+│   └── outputs/           ← agent 产出(唯一可写区)
+├── runtime/               ← 运行时产物(agent 沙箱黑名单)
+├── memory/                ← 三层记忆(L1 工作/L2 长期/L3 项目指令)
+├── main/                  ← 平台代码(main.ist_core / main.case_compiler / …)
+└── tests/                 ← 回归(全量 stub-LLM e2e + prompt 结构门 + skill 标准门)
 ```
 
-## Slash 命令
-
-| 命令 | 说明 |
-|------|------|
-| `/help` | 显示帮助 |
-| `/clear` | 清屏 |
-| `/model` | 列出 / 切换模型 |
-| `/threads` | 列出历史会话 |
-| `/resume` | 恢复历史会话 |
-| `/continue` | 继续上次对话 |
-| `/cost` | 显示 token 用量 |
-| `/compact` | 压缩上下文 |
-| `/plan` | 切换 plan 模式 |
-| `/init` | 初始化项目分析 |
-| `/reset` | 清除对话历史 + 临时文件（`--all` 含长期记忆） |
-| `/memory` | 查看 / 清理记忆系统 |
-| `/remember` | 显式追加偏好 / 反馈到长期记忆 |
-| `/footprint` | 查询 CLI footprint 知识树 |
-| `/version` | 显示版本 |
-| `/exit` | 退出 |
-
-## 快捷键
-
-| 键 | 功能 |
-|----|------|
-| `Ctrl+O` | 展开/折叠所有工具输出 + thinking |
-| `Ctrl+L` | 重绘屏幕 |
-| `Ctrl+G` | 用 $EDITOR 编辑长 prompt |
-| `Shift+Tab` | 切换 plan / normal 模式 |
-| `Ctrl+R` | 搜索历史 |
-| `Ctrl+C` | 中断 / 退出 |
-| `Ctrl+D` | 直接退出 |
+文件沙箱:`fs_*` 工具经多根白名单 + 路径穿越三闸(读)/四闸(写)强制,详见 [docs/file_sandbox.md](docs/file_sandbox.md)。
 
 ## 模型配置
 
-统一走 OpenAI 兼容端点（任何 OpenAI 协议端点皆可：小米 MiMo / DeepSeek 原生口 / DashScope 兼容口 / 自建网关）。换厂商只改 `OPENAI_BASE_URL` + key + 模型名。
+统一 OpenAI 兼容端点(小米 MiMo / DeepSeek / minimax / 自建网关),换厂商只改三行:
 
 ```bash
-# environment 文件（详见 environment.example）
-OPENAI_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1   # 留空走默认 MiMo CN 集群
-OPENAI_API_KEY=sk-...
-IST_MODEL=mimo-v2.5-pro
-IST_ALLOWED_MODELS=mimo-v2.5-pro,mimo-v2.5
-
-# 3 tier 分级
-IST_OPUS_MODEL=mimo-v2.5-pro     # 高复杂度
-IST_SONNET_MODEL=mimo-v2.5-pro   # 中等
-IST_HAIKU_MODEL=mimo-v2.5        # 简单（footprint 提取 / KMS 分类）
+OPENAI_BASE_URL=…
+OPENAI_API_KEY=sk-…
+IST_MODEL=deepseek-v4-pro     # 主档:全局默认,深度思考默认开(effort 默认 max)
+IST_FLASH=deepseek-v4-flash   # 省钱档:检索/提取/蒸馏类轻任务,同样思考+max,只为降单价
+# IST_EFFORT=high             # 思考深度全局档(high|max);fork 可按点覆盖(agents md 的 effort:)
 ```
 
-## 架构
+## 常用 TUI 命令
 
-```
-TUI (Textual App)
- ↕ Bridge (async query → graph.invoke)
- ↕ EventBus (进度事件流)
- ↕ LangGraph StateGraph (normalize → qa_node → review_gate → finalize)
- ↕ main_agent (deepagents ReAct loop) + subagents (explore / review-verification)
- ↕ Tools (file_tools + exec_tools + skills + ask_user)
-```
-
-## Skills 系统
-
-IST-Core 支持 skill 扩展机制。已有 skill：
-
-- **test-case-review**：测试用例评审，含独立 verifier subagent + review_gate 硬闸 + 桶隔离 + finalize 工程兜底
-
-新 skill 编写参考：
-- `docs/skill_authoring_standard.md`：完整模板与编写规范
-- `docs/framework_design_notes.md`：当前框架设计说明
+`/kms`(知识管线) · `/footprint`(事实树) · `/memory` `/remember`(记忆) · `/model` `/cost` `/resume` `/plan` · user-invocable skill 均为 `/<skill-name>`。快捷键:`Ctrl+O` 折叠工具输出、`Ctrl+T` 折叠 thinking、`Ctrl+R` 历史搜索、`Ctrl+G` $EDITOR 编辑长 prompt。
 
 ## 文档
 
-- `WHATS_NEW.md`：版本变更记录
-- `ARCHITECTURE.md`：详细架构说明
-- `CLAUDE.md`：项目级 agent 指令（agent 启动时加载）
-- `todolist.md`：开发待办与历史决策
-- `docs/skill_authoring_standard.md`：Skill 编写标准
-- `docs/framework_design_notes.md`：框架设计说明
+- [CHANGELOG.md](CHANGELOG.md) — 版本变更
+- [CLAUDE.md](CLAUDE.md) — 项目级 agent 指令与架构决策全景(单一事实源)
+- [docs/DESIGN_v6_engine.md](docs/DESIGN_v6_engine.md) — V6 编译引擎设计
+- [docs/memory_system.md](docs/memory_system.md) — 三层记忆 + Dream + Footprint
+- [docs/file_sandbox.md](docs/file_sandbox.md) — 多根白名单沙箱
+- [docs/kms_pipeline.md](docs/kms_pipeline.md) — KMS 管线与 markdown 直出
+- [docs/tui_architecture.md](docs/tui_architecture.md) — TUI/Web 渲染架构
+- [docs/skill_authoring_standard.md](docs/skill_authoring_standard.md) — Skill 编写标准
+
+## 安全
+
+- API key 只经项目根 `environment` 文件注入(已 .gitignore),禁止在代码/注释/日志打印 Token
+- agent 文件访问经多根沙箱强制;`runtime/`(含验证台账)在黑名单内,工具进程写、agent 伪造不了
+- 修改沙箱常量/凭据处理需过安全评审(`security-reviewer` agent)
 
 ## License
 

@@ -1,6 +1,7 @@
 ---
 name: test-list-review
-description: 评审测试用例文件（xlsx / markdown / Test List），独立交叉验证给出评审结论。
+description: 评审测试用例 / 测试策略，独立交叉验证后给出评审结论（VERDICT / P 级别 / 改进建议）。当用户要「评审」「review」一份 Test List、测试用例或测试策略文件（xlsx / markdown / 用例清单），或提到针对某个缺陷（如 BUG-121100 等缺陷单号）做用例评审、看用例覆盖够不够、按以往评审要求复核时使用。触发短语：评审、review、测试用例评审、Test List、用例审查、用例覆盖评审、缺陷用例评审。泛指任何审查 / 评估 / 复核现有测试用例或测试策略质量的请求，都从这里入口。
+context: inline
 when_to_use: |
   Use when the user wants to review test cases (评审 / Test List / 用例评审).
   Examples: "评审 BUG-121100 的测试用例", "review test cases for cookie encryption",

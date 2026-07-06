@@ -66,16 +66,43 @@ def _split_inline_cell(content: str) -> tuple[str, str]:
     return content.strip(), None  # No | found -- not an inline cell
 
 
+# 命令签名行：行首单星命令主体 *cmd*（adoc 把命令主体标成 *bold*，参数标成 _italic_）。
+# body 首字符限非空白非星 → 排除 `* 列表项`（body 以空格起）与已加粗 `**...**`。
+_CMD_SIG_RE = re.compile(r"^(\s*)\*([^*\s][^*]*)\*(.*)$")
+
+
+def _bold_leading_command(s: str) -> str:
+    """行首命令签名 ``*cmd*[...]`` → ``**cmd**[...]``（通用，幂等）。
+
+    手册里每条命令签名独占一行、行首即命令主体；参数走 ``_斜体_`` 不受影响。
+    已是 ``**粗体**`` / 列表项 ``* item`` / 无闭合星的行一律不动。
+    """
+    if s.lstrip().startswith("**"):
+        return s
+    m = _CMD_SIG_RE.match(s)
+    if m:
+        indent, body, rest = m.groups()
+        return f"{indent}**{body}**{rest}"
+    return s
+
+
 def _bold(s: str) -> str:
-    """Convert adoc *bold* to markdown **bold**."""
-    s = re.sub(r"\*(sdns\s+\S[\s\S]*?)\*", r"**\1**", s)
-    s = re.sub(r"\*(show\s+sdns[\s\S]*?)\*", r"**\1**", s)
-    s = re.sub(r"\*(clear\s+sdns[\s\S]*?)\*", r"**\1**", s)
-    s = re.sub(r"\*(no\s+sdns[\s\S]*?)\*", r"**\1**", s)
-    s = re.sub(r"\*(config\s+\S[\s\S]*?)\*", r"**\1**", s)
-    s = re.sub(r"\*(slb\s+\S[\s\S]*?)\*", r"**\1**", s)
-    s = re.sub(r"\*(ha\s+\S[\s\S]*?)\*", r"**\1**", s)
-    s = re.sub(r"\*(on/off)\*", r"**\1**", s)
+    """Convert adoc *bold* to markdown **bold**.
+
+    两类：(1) 行首命令签名 → 通用加粗（覆盖全部命令，不再 sdns 偏置）；
+    (2) 正文里的行内命令引用 → 保留原 sdns/config/slb/ha 白名单加粗（lookaround 防双重加粗）。
+    """
+    s = _bold_leading_command(s)
+    if s.lstrip().startswith("**"):
+        return s  # 行首命令签名已加粗，不再做行内处理
+    s = re.sub(r"(?<!\*)\*(sdns\s+\S[\s\S]*?)\*(?!\*)", r"**\1**", s)
+    s = re.sub(r"(?<!\*)\*(show\s+sdns[\s\S]*?)\*(?!\*)", r"**\1**", s)
+    s = re.sub(r"(?<!\*)\*(clear\s+sdns[\s\S]*?)\*(?!\*)", r"**\1**", s)
+    s = re.sub(r"(?<!\*)\*(no\s+sdns[\s\S]*?)\*(?!\*)", r"**\1**", s)
+    s = re.sub(r"(?<!\*)\*(config\s+\S[\s\S]*?)\*(?!\*)", r"**\1**", s)
+    s = re.sub(r"(?<!\*)\*(slb\s+\S[\s\S]*?)\*(?!\*)", r"**\1**", s)
+    s = re.sub(r"(?<!\*)\*(ha\s+\S[\s\S]*?)\*(?!\*)", r"**\1**", s)
+    s = re.sub(r"(?<!\*)\*(on/off)\*(?!\*)", r"**\1**", s)
     return s
 
 
@@ -259,6 +286,9 @@ def convert_adoc_to_md(src_path: Path, dst_path: Path) -> int:
 
     content = "\n".join(out)
     content = content.replace("***", "**")
+    # 清 adoc 转义残留：`\{` `\}` `\[` `\]` 是 adoc 防属性替换的转义，markdown 里应还原为
+    # 裸括号(否则命令签名 `**waf log audit \{on|off}**` 的 `\` 污染命令主体解析)。
+    content = re.sub(r"\\([{}\[\]])", r"\1", content)
     content = re.sub(r"\n{4,}", "\n\n\n", content)
 
     with open(dst_path, "w", encoding="utf-8") as f:

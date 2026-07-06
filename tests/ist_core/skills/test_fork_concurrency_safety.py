@@ -38,7 +38,7 @@ class _FakeRunnable:
         self._active = 0
         self._lock = threading.Lock()
 
-    def invoke(self, state: dict) -> dict:
+    def invoke(self, state: dict, config=None) -> dict:
         with self._lock:
             self.invoke_count += 1
             self._active += 1
@@ -69,8 +69,8 @@ def test_concurrent_fork_invocations_do_not_cross_talk(monkeypatch):
     fake = _FakeRunnable()
     _seed_fake_subagent(monkeypatch, fake)
 
-    # 用真实存在的 fork skill（ist_compile_draft 是 context: fork）
-    skill = "ist_compile_draft"
+    # 用真实存在的 fork skill（ist-compile-draft 是 context: fork）
+    skill = "ist-compile-draft"
     briefs = [f"BRIEF-{i}-autoid-{1000 + i}" for i in range(12)]
 
     with cf.ThreadPoolExecutor(max_workers=6) as ex:
@@ -94,12 +94,15 @@ def test_concurrent_fork_invocations_do_not_cross_talk(monkeypatch):
 
 
 def test_render_skill_body_is_pure():
-    """_render_skill_body 是纯函数：同 body 不同 brief 互不影响。"""
+    """_render_skill_body 是纯函数:同 body 不同 brief 互不影响。
+
+    2026-07-05 起 brief 以 <brief_from_caller> 标签包裹(交互面 XML 分节:
+    调用方数据与 skill 指令不混排),断言按标签契约。"""
     body = "do the thing with $ARGUMENTS now"
     out_a = loader._render_skill_body(body, "AAA")
     out_b = loader._render_skill_body(body, "BBB")
-    assert out_a == "do the thing with AAA now"
-    assert out_b == "do the thing with BBB now"
+    assert out_a == "do the thing with <brief_from_caller>\nAAA\n</brief_from_caller> now"
+    assert out_b == "do the thing with <brief_from_caller>\nBBB\n</brief_from_caller> now"
     # 原 body 未被污染
     assert "$ARGUMENTS" in body
 
@@ -113,4 +116,5 @@ def test_concurrent_render_isolation():
         outs = list(ex.map(lambda b: loader._render_skill_body(body, b), briefs))
 
     for brief, out in zip(briefs, outs):
-        assert out == f"compile {brief}"
+        assert out == f"compile <brief_from_caller>\n{brief}\n</brief_from_caller>"
+        assert brief in out

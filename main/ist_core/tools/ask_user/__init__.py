@@ -22,10 +22,13 @@ Plan-mode note：在 plan mode 下，本工具用于"在 ExitPlanMode 之前"澄
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from typing import Any
 
 from langchain_core.tools import tool
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -178,10 +181,36 @@ def ask_user(questions: list[dict[str, Any]]) -> str:
     if not answers:
         return "User cancelled the question (no answer)."
 
+    # 机读问答台账(2026-07-05):每次真实问答落 runtime/ask_user_answers.jsonl——
+    # compile_user_decision 的「先问后落」门靠它校验用户真的批过(orchestrator 曾
+    # 在 ask_user 之前替用户拍板 8 个欠定 case,含放弃顺序语义;prompt 红线拦不住,
+    # 落盘凭证才是 A 层)。追加失败不影响问答本身。
+    try:
+        import json as _json
+        import time as _time
+        from pathlib import Path as _Path
+        _log = _Path(__file__).resolve().parents[4] / "runtime" / "ask_user_answers.jsonl"
+        _log.parent.mkdir(parents=True, exist_ok=True)
+        _rec = {"ts": _time.time(),
+                "questions": [str(q.get("question", ""))[:500] for q in questions],
+                "answers": {str(k)[:500]: (", ".join(map(str, v)) if isinstance(v, list) else str(v))[:500]
+                            for k, v in answers.items()}}
+        with _log.open("a", encoding="utf-8") as _f:
+            _f.write(_json.dumps(_rec, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001
+        logger.debug("ask_user 台账落盘失败(不影响问答)", exc_info=True)
+
     
+    # 回传键 = header(短键,优先)/题干截短——旧版回显题干全文,多题时 transcript
+    # 单行渲染必截断、后续题目被挤掉(2026-07-03 实证);agent 刚问过全部题目,短键
+    # 足以映射,答案本身完整保留。
+    header_by_q = {str(q.get("question", "")): str(q.get("header", "") or "")
+                   for q in questions}
     parts = []
     for q_text, a in answers.items():
         if isinstance(a, list):
             a = ", ".join(str(x) for x in a)
-        parts.append(f'"{q_text}"="{a}"')
+        h = header_by_q.get(str(q_text), "")
+        key = h if h else (str(q_text)[:40] + ("…" if len(str(q_text)) > 40 else ""))
+        parts.append(f'"{key}"="{a}"')
     return "User has answered your questions: " + ". ".join(parts)

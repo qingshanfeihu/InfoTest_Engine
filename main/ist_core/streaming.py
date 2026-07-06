@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from typing import Any, Callable, Iterable
 
@@ -51,6 +52,15 @@ def _to_event_payload(lc_event: dict[str, Any]) -> dict[str, Any]:
             content = chunk.get("content")
         if isinstance(content, str):
             payload["content"] = content
+        # reasoning_content（思考增量）：mimo 深度思考期以此逐步返回，content 为空。
+        # 抽出来让 reducer 识别「思考相位」（footer 显示真实 think 状态）+ 逐字渲染。
+        ak = getattr(chunk, "additional_kwargs", None)
+        if ak is None and isinstance(chunk, dict):
+            ak = chunk.get("additional_kwargs")
+        if isinstance(ak, dict):
+            rc = ak.get("reasoning_content")
+            if isinstance(rc, str) and rc:
+                payload["reasoning"] = rc
     if "input" in data:
         payload["input"] = _safe_str(data["input"])[:500]
     if "output" in data:
@@ -87,13 +97,32 @@ async def astream_to_bus(
 
     final_state: dict[str, Any] = {}
     try:
-        async for ev in graph.astream_events(initial_state, config=config, version="v2"):
+        _agen = graph.astream_events(initial_state, config=config, version="v2")
+        # 死挂 / 内容静默兜底交给 langchain-openai 内置的底层 stream_chunk_timeout(默认 120s,
+        # env LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S):它在 SSE parsed-chunk 层计时,SDK 内部消费
+        # keepalive 注释、不当 chunk,因此能正确区分 keepalive 与真内容静默,触发时抛
+        # StreamChunkTimeoutError(asyncio.TimeoutError 子类)由下方 except Exception 接住、不致永久挂。
+        # 不再手搓上层"事件间隔"idle 守卫:它基于 astream_events 上层事件计时,而 mimo 深度思考期端点
+        # 在底层周期性吐空 delta chunk(<120s),这些 chunk 在 _convert_chunk_to_generation_chunk 因
+        # delta 为空被丢成 None、不上抛 on_chat_model_stream 事件 → 上层"零事件"被误判 stall
+        # (实测精确 300s 误杀长思考,亦会误伤 ist-verify 上机长跑等单步长耗时)。职责收口到官方底层 timer。
+        while True:
+            try:
+                ev = await _agen.__anext__()
+            except StopAsyncIteration:
+                break
             lc_kind = ev.get("event") or ""
             mapped = _KIND_MAP.get(lc_kind, "info")
             tags = {"lc_event": lc_kind, "name": ev.get("name") or ""}
             metadata = ev.get("metadata") or {}
             if "langgraph_node" in metadata:
                 tags["node"] = metadata["langgraph_node"]
+            # fork 子 agent 标识：callback handler 通过 _subagent_tags 设置，
+            # astream_events 通过 metadata.lc_agent_name 传递。reducer 据此
+            # 跳过 fork usage（避免与 _FORK_TOKENS 双重计数）。
+            lc_agent = metadata.get("lc_agent_name") or ""
+            if lc_agent and lc_agent not in ("main_agent", ""):
+                tags["parent_subagent"] = lc_agent
             usage = None
             data = ev.get("data") or {}
             if "output" in data and hasattr(data["output"], "usage_metadata"):
@@ -106,9 +135,18 @@ async def astream_to_bus(
                 if isinstance(raw, dict):
                     if usage is None:
                         usage = {}
+                    # DeepSeek: 顶层 prompt_cache_hit_tokens / prompt_cache_miss_tokens
                     for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
                         if k in raw and k not in usage:
                             usage[k] = raw[k]
+                    # MiMo / OpenAI 标准: prompt_tokens_details.cached_tokens
+                    if "prompt_cache_hit_tokens" not in usage:
+                        ptd = raw.get("prompt_tokens_details") or {}
+                        cached = ptd.get("cached_tokens")
+                        if isinstance(cached, int) and cached > 0:
+                            usage["prompt_cache_hit_tokens"] = cached
+                            prompt_total = usage.get("input_tokens") or raw.get("prompt_tokens") or 0
+                            usage["prompt_cache_miss_tokens"] = max(prompt_total - cached, 0)
                 if usage == {}:
                     usage = None
             payload = _to_event_payload(ev)

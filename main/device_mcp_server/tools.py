@@ -10,11 +10,14 @@ CWD 硬约束：所有 pytest/import 框架库都在 cwd=APV_SRC 下跑。
 """
 
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import time
+
+logger = logging.getLogger(__name__)
 
 APV_SRC = os.environ.get("IST_APV_SRC", "/home/test/apv_src")
 PY38 = os.environ.get("IST_JUMPHOST_PY38", APV_SRC + "/.python3.8/bin/python")
@@ -35,8 +38,8 @@ def _ensure_dirs():
     for d in (TASK_DIR, os.path.dirname(LOCK_FILE)):
         try:
             os.makedirs(d, exist_ok=True)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            logger.debug("创建目录失败: %s", d, exc_info=True)
 
 
 def _conf_name():
@@ -147,7 +150,7 @@ def _read_lock():
         parts = old.split(":")
         pid = int(parts[-1])      # pid 是最后一段（task_id 内含下划线但无冒号）
         return (":".join(parts[:-1]), pid)
-    except Exception:
+    except (FileNotFoundError, ValueError, OSError):
         return None
 
 
@@ -260,7 +263,7 @@ def _pid_alive(pid):
     try:
         os.kill(pid, 0)
         return True
-    except Exception:
+    except (ProcessLookupError, PermissionError, OSError):
         return False
 
 
@@ -270,8 +273,8 @@ def _write_status(path, task_id, state, **kw):
     try:
         with open(path, "w") as f:
             json.dump(payload, f)
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001
+        logger.warning("写入 task 状态失败: path=%s task_id=%s", path, task_id, exc_info=True)
 
 
 def run_cases_status(task_id, build=None, case_ids=None):
@@ -282,8 +285,8 @@ def run_cases_status(task_id, build=None, case_ids=None):
         try:
             with open(status_path) as f:
                 status = json.load(f)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            logger.debug("读取 task 状态文件失败: %s", status_path, exc_info=True)
     build = build or status.get("build")
     results = {}
     mysql_err = None
@@ -301,8 +304,8 @@ def run_cases_status(task_id, build=None, case_ids=None):
         try:
             with open(log_path, "r", errors="replace") as f:
                 tail = "".join(f.readlines()[-25:])
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            logger.debug("读取 task 日志尾失败: %s", log_path, exc_info=True)
     return {"status": status, "results": results, "mysql_error": mysql_err, "log_tail": tail}
 
 
@@ -652,7 +655,14 @@ def probe_show(command, build=""):
 
         _read_until("#", timeout=5)
         chan.send("enable\n")
-        _read_until("#", timeout=5)
+        # enable 后设备提示输 Enable 密码（手册：**缺省为空**）。必须补发（空）密码才能从用户级
+        # `APV>` 进特权级 `APV#`；否则停在 `APV>`，show sdns 等特权命令全报 `^` 语法错误、被下方
+        # 包装成 "Invalid input" 误判为"设备无此命令"（实测根因：show version 用户级可用故 probe
+        # 伪装成功，show sdns 用户级无效）。对齐框架 ssh_apv.py enter_enable_mode 的密码处理。
+        _eo = _read_until("#", timeout=5)
+        if "assword" in _eo.lower() or not re.search(r"#\s*$", _eo.rstrip()):
+            chan.send("\n")   # 空 Enable 密码
+            _read_until("#", timeout=5)
         # 关闭分页避免 --More-- 卡死（show 命令前置）
         chan.send("terminal length 0\n")
         _read_until("#", timeout=3)
@@ -660,7 +670,22 @@ def probe_show(command, build=""):
         out = _read_until("#", timeout=10)
         ssh.close()
         # 去掉回显的命令行与结尾 prompt
-        lines = [ln for ln in out.splitlines() if ln.strip() not in (cmd, "")]
+        raw = out.splitlines()
+        lines = [ln for ln in raw if ln.strip() not in (cmd, "")]
+        # APV 语法错误:设备对无法识别的命令/参数,在出错 token 下方标 `^`(本固件不输出
+        # `% Invalid input` 文字)。去噪后剥末尾提示符/空行,实质仅为 caret → 命令语法/参数无效。
+        # 包装成清晰文字 + 找回命令回显行让 `^` 对齐有意义,免上层(LLM)把孤立 `^` 误读为有效输出。
+        _tail = list(lines)
+        while _tail and (not _tail[-1].strip() or re.match(r"^\S*[#>]$", _tail[-1].strip())):
+            _tail.pop()
+        _core = "\n".join(_tail).strip()
+        if _core and re.match(r"^\^+$", _core):
+            _echo = next((l for l in raw if l.strip() == cmd), cmd)
+            _caret = next((l for l in _tail if l.strip().startswith("^")), "^")
+            _out = ("%% Invalid input: command %r is invalid on this device "
+                    "(syntax/parameter error; '^' marks the offending token)\n"
+                    "%s\n%s") % (cmd, _echo.rstrip(), _caret.rstrip())
+            return {"command": cmd, "output": _out, "device_ip": ip, "syntax_error": True}
         return {"command": cmd, "output": "\n".join(lines), "device_ip": ip}
     except Exception as e:
         return {"error": "probe failed: %s" % e}
@@ -681,11 +706,14 @@ def init_device(device_count=0, device_index=-1):
 
     device_count: 要初始化的设备数（1/2/3）。0=自动从 conf ssh_ips 推断。
     device_index: 指定初始化哪台（0/1/2）。优先级高于 device_count。
+
+    **单跑锁**（IST 编译入口固化初始化新增）：校验通过后、动设备前抢 run.lock，与 probe_show /
+    run_cases 互斥——防编译期 init_device 清掉正在 verify 的设备；撞锁返回
+    ``error: another run in progress``，由上层（compile_pipeline._init_device_for_compile）告警续跑。
     """
     import configparser as _cp
-    import time as _t
 
-    # ── 读 conf ──
+    # ── 读 conf（仅校验，不动设备，无需持锁）──
     try:
         text = _read_conf_text()
     except Exception as e:
@@ -704,7 +732,7 @@ def init_device(device_count=0, device_index=-1):
     # hostname / 账号（取第一个设备段）
     hostname = "APV"
     user = "admin"
-    passwd = "admin"
+    passwd = os.environ.get("IST_DEVICE_DEFAULT_PASS", "")
     for sec in cp.sections():
         if sec == "comm":
             continue
@@ -738,20 +766,38 @@ def init_device(device_count=0, device_index=-1):
             return {"error": "device_count=%d exceeds max 3" % n}
         indices = list(range(n))
 
-    results = []
-    for idx in indices:
-        ssh_ip = ssh_ips[idx]
-        r = _init_one_device(idx, ssh_ip, hostname, user, passwd, port1, port2, port3)
-        results.append(r)
+    # ── 单跑锁：动设备前抢锁，与 probe_show/run_cases 互斥 ──
+    _ensure_dirs()
+    task_id = "init_%d" % int(time.time())
+    lock_fd = _acquire_lock(task_id)
+    if lock_fd is None:
+        held = _read_lock()
+        return {"error": "another run in progress (lock held by %s)" % (held[0] if held else "?")}
+    try:
+        os.write(lock_fd, ("%s:%d" % (task_id, os.getpid())).encode())
+    finally:
+        os.close(lock_fd)
 
-    ok = [r for r in results if r.get("status") == "ok"]
-    fail = [r for r in results if r.get("status") != "ok"]
-    return {
-        "initialized": len(ok),
-        "failed": len(fail),
-        "total": len(results),
-        "details": results,
-    }
+    try:
+        results = []
+        for idx in indices:
+            ssh_ip = ssh_ips[idx]
+            r = _init_one_device(idx, ssh_ip, hostname, user, passwd, port1, port2, port3)
+            results.append(r)
+
+        ok = [r for r in results if r.get("status") == "ok"]
+        fail = [r for r in results if r.get("status") != "ok"]
+        return {
+            "initialized": len(ok),
+            "failed": len(fail),
+            "total": len(results),
+            "details": results,
+        }
+    finally:
+        try:
+            os.unlink(LOCK_FILE)
+        except Exception:
+            pass
 
 
 def _init_one_device(idx, ssh_ip, hostname, user, passwd, port1, port2, port3):
@@ -772,8 +818,12 @@ def _init_one_device(idx, ssh_ip, hostname, user, passwd, port1, port2, port3):
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    _localhost_pass = os.environ.get("IST_LOCALHOST_SSH_PASS", "")
+    if not _localhost_pass:
+        return {"device": idx, "ssh_ip": ssh_ip, "status": "error",
+                "error": "IST_LOCALHOST_SSH_PASS not set"}
     try:
-        ssh.connect(hostname="127.0.0.1", port=22, username="test", password="click1", timeout=10)
+        ssh.connect(hostname="127.0.0.1", port=22, username="test", password=_localhost_pass, timeout=10)
     except Exception as e:
         return {"device": idx, "ssh_ip": ssh_ip, "status": "error",
                 "error": "cannot SSH to localhost: %s" % e}

@@ -4,14 +4,15 @@ from __future__ import annotations
 
 
 PRICING_RMB: dict[str, dict[str, float]] = {
-    # MiMo-V2.5 系列
-    "mimo-v2.5": {"input_miss": 1.0, "input_hit": 0.02, "output": 2.0},
+    # MiMo-V2.5 系列（小米 API 按量计费，元/百万 tokens）
+    "mimo-v2.5":     {"input_miss": 1.0, "input_hit": 0.02,  "output": 2.0},
     "mimo-v2.5-pro": {"input_miss": 3.0, "input_hit": 0.025, "output": 6.0},
-    # DeepSeek
-    "deepseek-v4-flash": {"input_miss": 1.0, "input_hit": 0.02, "output": 2.0},
-    "deepseek-v4-pro": {"input_miss": 3.0, "input_hit": 0.025, "output": 6.0},
-    "deepseek-chat": {"input_miss": 1.0, "input_hit": 0.02, "output": 2.0},
-    "deepseek-reasoner": {"input_miss": 1.0, "input_hit": 0.02, "output": 2.0},
+    # DeepSeek V4 系列（2026-05-27 生效，统一费率）
+    "deepseek-v4-flash": {"input_miss": 1.0, "input_hit": 0.02,  "output": 2.0},
+    "deepseek-v4-pro":   {"input_miss": 3.0, "input_hit": 0.025, "output": 6.0},
+    # DeepSeek 旧版（向后兼容）
+    "deepseek-chat":     {"input_miss": 2.0, "input_hit": 0.5,  "output": 8.0},
+    "deepseek-reasoner": {"input_miss": 4.0, "input_hit": 1.0,  "output": 16.0},
 }
 
 
@@ -22,8 +23,12 @@ def compute_cost_rmb(
     input_hit: int,
     output: int,
 ) -> float | None:
-    """按模型单价计算成本（元）。未知模型返回 None。"""
-    price = PRICING_RMB.get(model)
+    """按模型单价计算成本（元）。未知模型返回 None。
+
+    三方聚合网关的模型名常带 provider 前缀（如 ``deepseek/deepseek-v4-pro``），
+    价格表按裸模型名收录——精确命中优先，miss 时取最后一段再查。
+    """
+    price = PRICING_RMB.get(model) or PRICING_RMB.get(model.rpartition("/")[-1])
     if not price:
         return None
     return (

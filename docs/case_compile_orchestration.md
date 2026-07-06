@@ -1,5 +1,7 @@
 # 人工用例编译流程：编排架构（编译 + 独立上机验证）
 
+> **演进备注(2026-07-06)**:本文的 draft/grade 编排为 v4 pipeline 时代设计;交付门槛已换源(机械 lint + 上机 oracle,grade 退居非主路),编排主路为 **V6 引擎**(见 [DESIGN_v6_engine.md](DESIGN_v6_engine.md))。
+
 > 设计与实现记录。代码中只保留必要的"做什么"注释；设计理念、演进背景、踩过的坑沉淀于此。
 >
 > 本文档讲**编译子流程（draft/grade）+ 独立上机验证（ist_verify）的编排设计**。编译入口已统一为 `ist_compile_batch`（2026-06-15 合并：原 `ist_compile_orchestrate` 单条编排器已删除，单条用例是 N=1 特例、走同一批量流程）。批量层（解析 manifest → 分阶段并行调度 → 合并打包）见 [`batch_compile_architecture.md`](batch_compile_architecture.md)。**2026-06-16 编译与上机验证解耦**：编译链只产 excel（不上机），上机验证独立成 `ist_verify`——详见下文架构表。

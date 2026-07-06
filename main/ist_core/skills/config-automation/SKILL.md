@@ -1,6 +1,7 @@
 ---
 name: config-automation
 description: IP替换工具。把LLM已生成的网络配置里的示例IP(10.x/192.168.x)替换为自动化环境真实IP并生成验证脚本。
+context: inline
 when_to_use: |
   Use when LLM 已给出含示例IP的配置、用户要求替换为环境真实IP。
   Trigger phrases: 替换IP, 真实IP, 自动化环境, 10.x/192.168.x 配置

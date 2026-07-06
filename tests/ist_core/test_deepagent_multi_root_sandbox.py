@@ -302,9 +302,113 @@ def test_bare_uploaded_filename_resolves_into_inputs(tmp_path, monkeypatch):
     
     resolved = file_tools._resolve_inside_root("cookie_cases.xlsx", must_exist=True)
     assert resolved == target.resolve()
-    
+
     explicit = file_tools._resolve_inside_root(
         "workspace/inputs/cookie_cases.xlsx", must_exist=True
     )
     assert explicit == target.resolve()
+
+
+# ── 大结果 offload 只读通道 ────────────────────────────────────────────────
+# FilesystemMiddleware 把超大 tool result 落到真实磁盘 artifacts_dir/large_tool_results/，
+# 只给 agent 虚拟路径 /large_tool_results/<id>。原生 read_file 被屏蔽，fs_read 走本沙箱 →
+# 必须在 _resolve_inside_root 里把该虚拟前缀映射到真实落点，agent 才能读回整份上机结果。
+# 这些测试固化「读通 + 只读 + 不逃逸」三点，防回归（改前 main 读不到 offload 被迫小批 workaround）。
+
+def _setup_offload(tmp_path, monkeypatch):
+    """建 artifacts_dir/large_tool_results/<id>，把 IST_ARTIFACTS_DIR 指过去。"""
+    artifacts = tmp_path / "artifacts"
+    ltr = artifacts / "large_tool_results"
+    ltr.mkdir(parents=True)
+    call = ltr / "call_deadbeef"
+    call.write_text('[{"autoid": "203031", "verdict": "pass"}]')
+    monkeypatch.setenv("IST_ARTIFACTS_DIR", str(artifacts))
+    # 沙箱根设成与 artifacts 无关的目录，证明放行来自 offload 通道、不是碰巧落进某读根
+    agent_root = tmp_path / "knowledge" / "data"
+    agent_root.mkdir(parents=True)
+    monkeypatch.setattr(file_tools, "_PROJECT_ROOT", tmp_path / "proj_nonexist")
+    monkeypatch.setattr(file_tools, "_AGENT_ROOT", agent_root)
+    monkeypatch.setattr(file_tools, "_WORKSPACE_ROOT", tmp_path / "workspace_nonexist")
+    monkeypatch.delenv("IST_SESSION_DIR", raising=False)
+    monkeypatch.delenv("IST_USER_DIR", raising=False)
+    return call.resolve()
+
+
+def test_offload_virtual_prefix_maps_to_real_artifacts(tmp_path, monkeypatch):
+    """/large_tool_results/<id> → 真实 artifacts 落点（读通）。"""
+    real = _setup_offload(tmp_path, monkeypatch)
+    resolved = file_tools._resolve_inside_root(
+        "/large_tool_results/call_deadbeef", must_exist=True
+    )
+    assert resolved == real
+
+
+def test_offload_relative_form_also_maps(tmp_path, monkeypatch):
+    """不带前导斜杠的 large_tool_results/<id> 同样放行（agent 两种写法都可能用）。"""
+    real = _setup_offload(tmp_path, monkeypatch)
+    resolved = file_tools._resolve_inside_root(
+        "large_tool_results/call_deadbeef", must_exist=True
+    )
+    assert resolved == real
+
+
+def test_offload_missing_id_raises_not_found(tmp_path, monkeypatch):
+    """不存在的 offload id + must_exist → FileNotFoundError（而非沉默返回坏路径）。"""
+    _setup_offload(tmp_path, monkeypatch)
+    with pytest.raises(FileNotFoundError):
+        file_tools._resolve_inside_root(
+            "/large_tool_results/call_nope", must_exist=True
+        )
+
+
+def test_offload_traversal_still_blocked(tmp_path, monkeypatch):
+    """offload 前缀内塞 .. 逃逸仍被 traversal 闸拦（映射前先挡）。"""
+    _setup_offload(tmp_path, monkeypatch)
+    with pytest.raises(PermissionError):
+        file_tools._resolve_inside_root(
+            "/large_tool_results/../../environment"
+        )
+
+
+def test_offload_channel_is_read_only(tmp_path, monkeypatch):
+    """写路径不含此映射——offload 区永远不可写（agent 仍只能写 workspace/outputs）。"""
+    _setup_offload(tmp_path, monkeypatch)
+    with pytest.raises(PermissionError):
+        file_tools._resolve_writable_path("/large_tool_results/call_deadbeef")
+
+
+def test_offload_symlink_escape_blocked(tmp_path, monkeypatch):
+    """offload 根内的 symlink 指向根外（如 /etc/passwd / 项目 environment 明文口令）
+    读不出去：resolve() 规范化 symlink 目标后 relative_to 越界即拒。
+
+    该安全性**依赖 resolve()-先于-relative_to 的顺序**——此测试锁住它，防日后有人
+    "简化"成对 _mapped 去掉 .resolve()、或把越界判定换成字符串 startswith，导致
+    symlink 防护静默失效且无测试兜住（安全评审加固建议）。
+    """
+    real = _setup_offload(tmp_path, monkeypatch)   # 建 artifacts/large_tool_results/
+    ltr = real.parent
+    secret = tmp_path / "secret_outside.txt"
+    secret.write_text("PLAINTEXT-CREDENTIAL")
+    (ltr / "evil_link").symlink_to(secret)
+    with pytest.raises(PermissionError):
+        file_tools._resolve_inside_root(
+            "/large_tool_results/evil_link", must_exist=True
+        )
+
+
+def test_offload_read_write_same_source(monkeypatch):
+    """读侧 offload 通道与写侧 backend 共用 offload_artifacts_dir()——同源、不漂移。"""
+    from main.ist_core.memory.backend import offload_artifacts_dir
+    monkeypatch.setenv("IST_ARTIFACTS_DIR", "/tmp/some_probe_dir")
+    assert offload_artifacts_dir() == "/tmp/some_probe_dir"
+    monkeypatch.delenv("IST_ARTIFACTS_DIR", raising=False)
+    assert offload_artifacts_dir() == "/tmp/ist_core_artifacts"
+
+
+def test_offload_prefix_requires_exact_segment(tmp_path, monkeypatch):
+    """只拦 large_tool_results 段本身（== 或 后接 /）；'large_tool_results_notes.md'
+    这类相似名不被 offload 通道劫持，仍走普通沙箱解析（落 agent_root，非 artifacts）。"""
+    _setup_offload(tmp_path, monkeypatch)
+    resolved = file_tools._resolve_inside_root("large_tool_results_notes.md")
+    assert "artifacts" not in resolved.parts
 

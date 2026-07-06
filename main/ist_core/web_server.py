@@ -375,7 +375,7 @@ async def index():
     return FileResponse(_WEB_DIR / "index.html")
 
 
-def serve(host: str = "0.0.0.0", port: int = 8080):
+def serve(host: str = "127.0.0.1", port: int = 8080):
     import uvicorn
     logger.info("IST-Core Web Terminal on %s:%d", host, port)
     uvicorn.run(app, host=host, port=port, log_level="info")
@@ -384,7 +384,7 @@ def serve(host: str = "0.0.0.0", port: int = 8080):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)

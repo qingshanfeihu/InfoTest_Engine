@@ -35,3 +35,7 @@ deepagents MemoryMiddleware 在每次 agent 启动时把本文件内容注入 sy
 配置 SSL 服务时，创建 ssl host 后必须执行 `ssl start <host_name>` 启用；对于 real 类型服务（`slb real https` / `slb real tcps`），还需先执行 `ssl host real <name> <real_service>` 绑定，否则 SSL 不生效。
 - 已确认的失败案例：agent 频繁使用单数目录名（workspace/input/、workspace/output/）导致路径错误，应始终使用复数形式（workspace/inputs/、workspace/outputs/、workspace/defects/）
 - 已确认的失败案例：agent 频繁使用单数目录名（workspace/input/、workspace/output/）导致路径错误，应始终使用复数形式（workspace/inputs/、workspace/outputs/、workspace/defects/）
+- SDNS pool cname 在 Beta.APV-HG-K.10.5.0.585 (build Jun 25 2026) 上必须使用两步语法：`sdns pool cname name <pool_name>` 创建池，再 `sdns pool cname member <pool_name> <cname_target>` 添加成员；手册扁平语法在此 build 上被拒绝。
+- SDNS 测试中，`clear sdns host method` 在 Beta.APV-HG-K.10.5.0.585 上不清除默认 rr 算法配置，只清除 wrr/ga 行。测试断言应避免假设表全空，要么用 `no sdns host method` 逐个删除，要么只断言非默认算法已移除。
+- `show sdns host pool` 在 Beta.APV-HG-K.10.5.0.585 上只显示第一条 host-pool 关联，不要断言显示所有 pool。编写断言时应只检查第一条记录。
+所有测试用例的 init_commands 必须用 \n（换行符）分隔各条命令，不能空格拼接（进卷成 cmds_config 步逐行发送；空格拼接会成一条非法长命令被设备拒）。

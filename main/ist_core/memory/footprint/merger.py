@@ -42,19 +42,30 @@ _MARKDOWN_ROOT = ("knowledge", "data", "markdown")
 
 
 def _resolve_evidence_path(evidence_file: str) -> Path | None:
-    """把 evidence_file 解析为可读的绝对路径。
+    """把 evidence_file 解析为可读的绝对路径——**拒绝落在 agent 可写区(workspace)内的文件**。
 
-    不硬编码具体子目录（product/qa/...），而是在 markdown 树下通用解析：
-    1. 直接当项目相对/绝对路径
-    2. 在 knowledge/data/markdown 下按 basename 递归匹配（兼容 LLM 只给文件名 /
-       未来新增子目录桶的情况）
+    安全（评审中危：幻觉命令注入）：evidence_file 可能含 agent 输入（如 verify 写回的 manual_glob）。
+    evidence 门的信任前提是证据源**只读、非 agent 掌控**；若 evidence_file 指向 agent 自己 fs_write
+    到 `workspace/outputs/` 的文件，门就被架空——agent 把命令写进该文件即 100% 过门、往 footprint
+    注入幻觉命令。故拒绝 workspace 内的证据（agent 唯一可写区，正是攻击面）；md_root / 手册 / 框架
+    mirror 等只读源照常。
+    不硬编码具体子目录（product/qa/...），在 markdown 树下通用解析：
+    1. 当路径解析，但**不得落在 workspace 内**
+    2. 在 knowledge/data/markdown 下按 basename 递归匹配（结果天然在只读手册根内）
     """
     if not evidence_file:
         return None
     root = _project_root()
 
-    direct = root / evidence_file
-    if direct.is_file():
+    def _in_workspace(p: Path) -> bool:
+        try:
+            p.resolve().relative_to((root / "workspace").resolve())
+            return True
+        except ValueError:
+            return False
+
+    direct = (root / evidence_file).resolve()
+    if direct.is_file() and not _in_workspace(direct):
         return direct
 
     md_root = root.joinpath(*_MARKDOWN_ROOT)
@@ -64,19 +75,38 @@ def _resolve_evidence_path(evidence_file: str) -> Path | None:
     name = Path(evidence_file).name
     if not name:
         return None
-    
-    for p in md_root.rglob(name):
+
+    for p in md_root.rglob(name):   # md_root 内,天然非 workspace
         if p.is_file():
             return p
     return None
 
 
+_BR_RE = re.compile(r"<br\s*/?>")
+
+# CJK 字符相邻的空白是排版/硬换行产生的，**不是词边界**（中文词间无空格）。手册把一句话
+# 硬换行成多行（如 "类型的DNS" 换行后接 "解析请求"），" ".join(s.split()) 把换行归一成空格
+# → "DNS 解析"，而 LLM 引的是连续句 "DNS解析" → 失配；长 quote 跨换行点被切成两段、均 <60%
+# 覆盖率 → rule/behavior 被证据门假阴性丢弃。比对前删掉 CJK 相邻空白即可对齐（英文词间空格如
+# "Canonical Name" / "show version" 因两侧非 CJK 而保留，不受影响）。
+# 范围：CJK 标点 U+3000-303F、扩展A U+3400-4DBF、统一表意 U+4E00-9FFF、全角符号 U+FF00-FFEF。
+_CJK_RANGE = "\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef"
+_CJK_SPACE_RE = re.compile(rf"(?<=[{_CJK_RANGE}])\s+|\s+(?=[{_CJK_RANGE}])")
+
+
 def _normalize(s: str) -> str:
-    """归一化引号、行号、空白，便于子串匹配。"""
+    r"""归一化行号、省略号、`<br>`/硬换行、markdown 强调、空白，便于子串匹配。
+
+    手册参数表/注意段用 `<br>` 软换行、正文用硬换行 `\n` 把一句话拆成多段，LLM 引用的是
+    清洗后的连续句 → 原文最长连续逐字命中 <60% → rule/behavior 被证据门假丢弃。比对前把
+    `<br>`/`**` 规整掉、并删除 CJK 相邻空白(中文换行非词边界)，碎句才能与连续 quote 对齐。
+    """
     s = _LINE_PREFIX_RE.sub("", s)
     s = _ELLIPSIS_RE.sub("", s)
-    s = s.replace("　", " ")
-    return " ".join(s.split())
+    s = _BR_RE.sub("", s)          # <br> 软换行直接接上(中文无词间空格,LLM 引的是连续句)
+    s = s.replace("**", "").replace("　", " ")
+    s = " ".join(s.split())        # 多空白(含硬换行 \n)→单空格
+    return _CJK_SPACE_RE.sub("", s)  # 删 CJK 相邻空白(硬换行非词边界;英文词间空格保留)
 
 
 import math
@@ -103,11 +133,52 @@ def _covers_quote(quote: str, haystack: str) -> bool:
     return False
 
 
+_VERIFIED_RUNS_LEDGER = ("runtime", "logs", "verified_runs.jsonl")
+
+
+def _device_evidence_supports(fact) -> bool:
+    """device_verified 权威源(V6 支柱2a):fact.device_evidence={autoid, run_ts} 指向
+    runtime/logs/verified_runs.jsonl 的一条台账(digest 工具进程写;runtime/ 在 agent
+    文件沙箱黑名单内,agent 伪造不了)。三重校验——台账条目存在 ∧ verdict==pass ∧
+    命令真实出现在该 PASS 卷面的 APV 命令列表里。**门没有放松**:幻觉命令(不在卷面)
+    照拒、fail 卷照拒;强度=设备真实接受过这条命令且整 case 上机通过。
+    ``IST_WRITEBACK_DEVICE_AUTHORITY=0`` 关闭本分支(回手册单权威)。
+    """
+    import os as _os
+    if (_os.environ.get("IST_WRITEBACK_DEVICE_AUTHORITY") or "1").strip().lower() in ("0", "false", "no"):
+        return False
+    dev = getattr(fact, "device_evidence", None) or {}
+    aid = str(dev.get("autoid") or "").strip()
+    run_ts = dev.get("run_ts")
+    cmd = (getattr(fact, "cli_syntax", "") or getattr(fact, "content", "") or "").strip()
+    if not aid or run_ts is None or not cmd:
+        return False
+    ledger = _project_root().joinpath(*_VERIFIED_RUNS_LEDGER)
+    if not ledger.is_file():
+        return False
+    try:
+        for line in ledger.read_text(encoding="utf-8", errors="ignore").splitlines():
+            try:
+                rec = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            if (str(rec.get("autoid")) == aid
+                    and abs(float(rec.get("run_ts", -1)) - float(run_ts)) < 1e-6
+                    and str(rec.get("verdict")) == "pass"):
+                cmds = [str(c).strip() for c in (rec.get("apv_cmds") or [])]
+                body = re.split(r"[<\[{]", cmd)[0].strip()
+                return any(c == cmd or (body and c.startswith(body)) for c in cmds)
+    except OSError:
+        return False
+    return False
+
+
 def _evidence_supports(fact) -> bool:
     """验证 evidence_quote 能在 evidence_file 中真实命中。
 
     known_issue 类型有 issue_id 自带凭证，不走这个闸。
     cli/rule/behavior 缺 evidence_quote 或 evidence_file 直接判 false。
+    device_evidence 非空时优先走 _device_evidence_supports(第二权威源,V6 支柱2a)。
 
     判定：
     1. 归一化后整段子串命中 → 通过（LLM 老实引用的常见情形）
@@ -115,6 +186,13 @@ def _evidence_supports(fact) -> bool:
        （容忍 LLM 在首尾轻微改写/补字，但不容忍整体编造）
     覆盖率与语言、quote 绝对长度无关，不再用 `>=N 字符` 这种硬阈值。
     """
+    if getattr(fact, "device_evidence", None):
+        if _device_evidence_supports(fact):
+            return True
+        # 设备证据校验不过时**不回落手册**——传了 device_evidence 表示调用方明知
+        # 该命令不在手册,校验失败即拒(防"传个假 ref 混过手册分支"的绕行)。
+        return False
+
     if not fact.evidence_quote or not fact.evidence_file:
         return False
 
@@ -127,18 +205,22 @@ def _evidence_supports(fact) -> bool:
     except OSError:
         return False
 
-    quote = _normalize(fact.evidence_quote)
-    if not quote:
-        return False
-
     haystack_norm = _normalize(haystack)
 
-    
-    if quote in haystack_norm:
+    quote = _normalize(fact.evidence_quote)
+    if quote and (quote in haystack_norm or _covers_quote(quote, haystack_norm)):
         return True
 
-    
-    return _covers_quote(quote, haystack_norm)
+    # cli_command 兜底：LLM 的 quote 偶尔整体改写不达标,但命令本身是 ground truth——
+    # 命令主体的粗体签名 `**cmd**` 逐字在手册原文里 → 命令真实存在(非编造),放行。
+    # 修掉「命令明明在手册、却因 LLM quote 改写被整条毙掉」的门误拒(单遍漏命令的一个原因)。
+    if getattr(fact, "fact_kind", "") == "cli_command":
+        cmd = (getattr(fact, "cli_syntax", "") or "").strip()
+        body = re.split(r"[<\[{]", cmd)[0].strip()
+        if body and _normalize(f"**{body}**") in haystack_norm:
+            return True
+
+    return False
 
 
 def _now_iso() -> str:
@@ -304,6 +386,14 @@ def merge_fact(routed: RoutedFact, footprint_dir: Path) -> MergeResult:
     """
     fact = routed.fact
     target_path = footprint_dir / routed.target_file
+
+    # 安全：写盘前收敛,挡 target_file(含 feature_id)里的 / .. 穿越到 footprint 根外——
+    # 与 router 的 feature_id 白名单纵深防御(dream/verify 写核共用此闸)。安全评审高危项。
+    try:
+        target_path.resolve().relative_to(Path(footprint_dir).resolve())
+    except ValueError:
+        return MergeResult(action="skip", target_file=routed.target_file,
+                           detail="path escapes footprint dir")
 
     if fact.fact_kind not in LEVEL_KINDS.get(routed.level, set()):
         return MergeResult(action="skip", target_file=routed.target_file, detail="kind not allowed at level")

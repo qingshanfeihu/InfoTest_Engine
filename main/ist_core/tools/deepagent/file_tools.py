@@ -196,13 +196,40 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
             "path traversal not allowed; agent sandbox is rooted at knowledge/data/"
         )
 
+    # ── 大结果 offload 只读通道 ─────────────────────────────────────────────
+    # FilesystemMiddleware 把超大 tool result（如 dev_run_batch 整份上机结果 + 全过程
+    # 日志，可达数百 KB）落到**真实磁盘** artifacts_dir/large_tool_results/，只给 agent 一个
+    # **虚拟**路径 /large_tool_results/<call_id>。本项目屏蔽了原生 read_file（只留 fs_read，
+    # 走本沙箱），若不映射，agent 读不回自己工具产出的完整内容 → 拿不到整份上机结果去诊断失败
+    # （实测：main 被迫退化成小批 dev_run_batch 逐段看预览，慢且烧 token）。这里把该虚拟前缀
+    # 映射到真实落点，读写同源（见 memory.backend.offload_artifacts_dir）。
+    # 安全边界：①上面已挡 traversal（.. / ~）；②**只读**放行——写路径 _resolve_writable_path
+    #   不含此映射，agent 仍只能写 workspace/outputs；③下方 relative_to 复核限定在
+    #   large_tool_results 根内，越界即拒；④conversation_history 暂不开（读回整段历史易致
+    #   上下文膨胀/绕圈，且非当前诊断所需）——只放行 large_tool_results。
+    _norm = text.lstrip("/")
+    if _norm == "large_tool_results" or _norm.startswith("large_tool_results/"):
+        from main.ist_core.memory.backend import offload_artifacts_dir
+        _art = Path(offload_artifacts_dir())
+        _ltr_root = (_art / "large_tool_results").resolve()
+        _mapped = (_art / _norm).resolve()
+        try:
+            _mapped.relative_to(_ltr_root)
+        except ValueError:
+            raise PermissionError(
+                "path escapes large_tool_results offload root"
+            )
+        if must_exist and not _mapped.exists():
+            raise FileNotFoundError(f"offloaded result not found: {raw_path}")
+        return _mapped
+
     path = Path(text)
     if path.is_absolute():
         resolved = path.resolve()
     else:
-        
-        
-        
+
+
+
         resolved = None
         for root in _agent_roots():
             candidate = (root / path).resolve()

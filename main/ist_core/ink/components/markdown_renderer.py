@@ -28,6 +28,50 @@ _BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
 _ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 
+# 模型输出自带的 ANSI 转义(CSI 序列)。LLM 偶尔在报告文本里嵌 \x1b[1m\x1b[40m 之类
+# "终端美化"码(实证 deepseek 报告表格整片黑底块)——模型输出的控制码不可信,渲染前
+# 全剥,样式一律由本渲染器统一加。
+_MODEL_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+# 背景色 SGR 参数剥离。Rich markdown(render_final)给行内代码/代码块加深色背景
+# (code_theme monokai + markdown.code 默认背景)——在终端上呈现为"灰块阴影"(实证
+# 用户两次反馈)。transcript 不应有任何背景填充,剥掉 bg 参数(标准 40-47 / 亮 100-107
+# / 256 色 48;5;N / 真彩 48;2;R;G;B / 默认 49),前景/粗体/斜体等保留。健壮处理组合
+# SGR(如 \x1b[1;36;40m 只去 40)。
+_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
+_BG_SIMPLE = frozenset(
+    ["40", "41", "42", "43", "44", "45", "46", "47", "49",
+     "100", "101", "102", "103", "104", "105", "106", "107"]
+)
+
+
+def _strip_bg_sgr(text: str) -> str:
+    """剥掉所有背景色 SGR 参数(含组合序列内的),保留前景/字型属性。"""
+    def _one(m: "re.Match") -> str:
+        raw = m.group(1)
+        if raw == "":
+            return m.group(0)  # \x1b[m == reset，原样留
+        params = raw.split(";")
+        out: list[str] = []
+        i = 0
+        while i < len(params):
+            p = params[i]
+            if p in _BG_SIMPLE:
+                i += 1
+                continue
+            if p == "48":  # 扩展背景: 48;5;N 或 48;2;R;G;B
+                if i + 1 < len(params) and params[i + 1] == "5":
+                    i += 3
+                elif i + 1 < len(params) and params[i + 1] == "2":
+                    i += 5
+                else:
+                    i += 1
+                continue
+            out.append(p)
+            i += 1
+        return f"\x1b[{';'.join(out)}m" if out else ""
+    return _SGR_RE.sub(_one, text)
+
 
 class MarkdownRenderer:
     def __init__(self, width: int = 80):
@@ -39,6 +83,7 @@ class MarkdownRenderer:
     def render_streaming(self, text: str) -> str:
         if not text:
             return ""
+        text = _MODEL_ANSI_RE.sub("", text)
         lines = text.split("\n")
         result: list[str] = []
         in_code = False
@@ -151,4 +196,6 @@ class MarkdownRenderer:
         console.print(md, end="")
         rendered = buf.getvalue()
         rendered = _NON_SGR_RE.sub("", rendered)
+        # Rich 给 code span/block 加的深色背景 → 剥掉，避免终端上呈现为灰块阴影
+        rendered = _strip_bg_sgr(rendered)
         return rendered.rstrip("\n")

@@ -309,3 +309,127 @@ def test_execute_observation_parsed_from_mirror():
     bad = [{"E": "APV_0", "F": "execute", "G": "等待健康检查up：30"},
            {"E": "check_point", "F": "found", "G": "UP"}]
     assert "dangling_assertion" in _codes(bad)
+
+
+def test_line_anchor_assertions_rejected():
+    # 2026-07-06 588691:框架 found/not_found 无 MULTILINE,^ 锚恒假——必假门
+    steps = [{"E": "APV_0", "F": "cmd_config", "G": "show sdns session persistence x"},
+             {"E": "check_point", "F": "found", "G": "^www\\.zyq\\.com"}]
+    assert "line_anchor_never_matches" in _codes(steps)
+    steps2 = [{"E": "APV_0", "F": "cmd_config", "G": "show x"},
+              {"E": "check_point", "F": "not_found", "G": "^entry"}]
+    assert "line_anchor_never_matches" in _codes(steps2)
+    # \n 前缀锚定与 abs_found 不受影响
+    ok = [{"E": "APV_0", "F": "cmd_config", "G": "show x"},
+          {"E": "check_point", "F": "found", "G": "\\nwww\\.zyq\\.com"},
+          {"E": "check_point", "F": "abs_found", "G": "^literal"}]
+    assert "line_anchor_never_matches" not in _codes(ok)
+
+
+def test_dollar_anchor_assertions_rejected():
+    # $/\Z 结尾锚:窗口末尾是提示符,无 MULTILINE 下结尾锚恒假(2026-07-06)
+    base = [{"E": "test_env", "F": "clientc", "G": "dig @1.1.1.1 a.com A +short"}]
+    assert "line_anchor_never_matches" in _codes(base + [
+        {"E": "check_point", "F": "found", "G": "NOERROR$"}])
+    assert "line_anchor_never_matches" in _codes(base + [
+        {"E": "check_point", "F": "not_found", "G": "entry\\Z"}])
+    # 字面 \$(转义美元)不是锚,放行
+    assert "line_anchor_never_matches" not in _codes(base + [
+        {"E": "check_point", "F": "found", "G": "price \\$"}])
+
+
+def test_assertion_matches_command_echo_rejected():
+    # 模式命中命令原文=恒真/恒fail(窗口含回显;2026-07-06 588691 round1 同族)
+    dig = {"E": "test_env", "F": "clientc", "G": "dig @172.16.34.70 www.a.com A +short"}
+    # found 查询目标 IP → 回显必中,恒真假 PASS
+    assert "assertion_matches_command_echo" in _codes([
+        dig, {"E": "check_point", "F": "found", "G": "\\b172\\.16\\.34\\.70\\b"}])
+    # not_found 命令关键字 → 恒 fail
+    assert "assertion_matches_command_echo" in _codes([
+        dig, {"E": "check_point", "F": "not_found", "G": "www\\.a\\.com"}])
+    # 数据形态断言不误杀
+    assert "assertion_matches_command_echo" not in _codes([
+        dig, {"E": "check_point", "F": "found", "G": "\\b172\\.16\\.35\\.21\\b"}])
+    # I 路径:寄存器捕获步的命令原文同判
+    assert "assertion_matches_command_echo" in _codes([
+        {"E": "test_env", "F": "clientc", "G": "dig @1.2.3.4 b.com", "H": "v1"},
+        dig,
+        {"E": "check_point", "F": "abs_found", "G": "1.2.3.4", "I": "v1"}])
+    # 期望取寄存器(H 非空)是运行时值,不判
+    assert "assertion_matches_command_echo" not in _codes([
+        {"E": "test_env", "F": "clientc", "G": "dig @1.2.3.4 b.com", "H": "v1"},
+        dig, {"E": "check_point", "F": "found", "G": "", "H": "v1"}])
+
+
+def test_zero_assertion_case_rejected():
+    # 零 check_point → close() success==0 → 恒 FAIL(check_point.py:126)
+    assert "no_assertion_in_case" in _codes([
+        {"E": "APV_0", "F": "cmd_config", "G": "show version"}])
+    assert "no_assertion_in_case" not in _codes([
+        {"E": "test_env", "F": "clientc", "G": "dig @1.1.1.1 a.com"},
+        {"E": "check_point", "F": "found", "G": "NOERROR"}])
+
+
+def test_injection_format_crash_rejected():
+    # I 注入时 G 经 str.format(单值):裸大括号/命名占位/多占位全崩(test_xlsx.py:309)
+    cap = {"E": "test_env", "F": "clientc", "G": "dig @1.1.1.1 a.com +short", "H": "v1"}
+    assert "injection_format_crash" in _codes([cap,
+        {"E": "test_env", "F": "clientc", "G": "curl -d '{\"a\":1}' http://x/ {}", "I": "v1"}])
+    assert "injection_format_crash" in _codes([cap,
+        {"E": "test_env", "F": "clientc", "G": "ping {} && ping {}", "I": "v1"}])
+    assert "injection_format_crash" in _codes([cap,
+        {"E": "test_env", "F": "clientc", "G": "ping {ip}", "I": "v1"}])
+    assert "injection_format_crash" not in _codes([cap,
+        {"E": "test_env", "F": "clientc", "G": "ping {}", "I": "v1"}])
+
+
+def test_register_shadows_framework_name_rejected():
+    # H 撞框架执行器名字空间(locals()[H]=值 覆盖框架状态)——闭集 ast 解析 mirror
+    dig = {"E": "test_env", "F": "clientc", "G": "dig @1.1.1.1 a.com +short"}
+    assert "register_shadows_framework_name" in _codes([
+        {**dig, "H": "result"},
+        dig, {"E": "check_point", "F": "found", "G": "NOERROR"}])
+    assert "register_shadows_framework_name" in _codes([
+        {**dig, "H": "value"},
+        dig, {"E": "check_point", "F": "found", "G": "NOERROR"}])
+    assert "register_shadows_framework_name" not in _codes([
+        {**dig, "H": "v1"},
+        dig, {"E": "check_point", "F": "found", "G": "NOERROR"}])
+
+
+def test_cmd_config_multiline_rejected():
+    # cmd_config 的 G 含换行:执行层 replace 删换行→命令无分隔粘连(test_xlsx.py:307)
+    assert "cmd_config_multiline" in _codes([
+        {"E": "APV_0", "F": "cmd_config", "G": "slb real r1\nslb group g1"},
+        {"E": "check_point", "F": "found", "G": "r1"}])
+    # cmds_config 多行合法;cmd_config 尾随换行无害
+    assert "cmd_config_multiline" not in _codes([
+        {"E": "APV_0", "F": "cmds_config", "G": "slb real r1\nslb group g1"},
+        {"E": "APV_0", "F": "cmd_config", "G": "show version\n"},
+        {"E": "check_point", "F": "found", "G": "r1"}])
+
+
+def test_inline_multiline_flag_exempts_anchor_gate():
+    # (?m) 内联 flag 开 MULTILINE 后行锚合法——正确修法不被必崩门误杀(评审建议)
+    base = [{"E": "test_env", "F": "clientc", "G": "dig @1.1.1.1 a.com A"}]
+    assert "line_anchor_never_matches" not in _codes(base + [
+        {"E": "check_point", "F": "found", "G": "(?m)^www\\.a\\.com"}])
+    assert "line_anchor_never_matches" not in _codes(base + [
+        {"E": "check_point", "F": "found", "G": "(?im)entry$"}])
+
+
+def test_repeated_manual_index_format_is_legal():
+    # {0} {0} 重复手动索引对单值 format 合法;{} 与 {0} 混用才崩(评审建议)
+    cap = {"E": "test_env", "F": "clientc", "G": "dig @1.1.1.1 a.com +short", "H": "v1"}
+    assert "injection_format_crash" not in _codes([cap,
+        {"E": "test_env", "F": "clientc", "G": "ping {0} && arp -a | grep {0}", "I": "v1"}])
+    assert "injection_format_crash" in _codes([cap,
+        {"E": "test_env", "F": "clientc", "G": "ping {} && ping {0}", "I": "v1"}])
+
+
+def test_reserved_names_narrowed_to_executor_frame():
+    # 闭集只收执行帧名字:辅助函数局部名(如 get_parameter 的 m)不误杀
+    from main.ist_core.tools.device.structural_gate import _framework_reserved_names
+    ns = _framework_reserved_names()
+    assert "result" in ns and "value" in ns      # 执行函数局部
+    assert "v1" not in ns and "ip1" not in ns    # 常规寄存器名

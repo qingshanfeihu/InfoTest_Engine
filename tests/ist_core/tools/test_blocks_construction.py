@@ -133,6 +133,11 @@ def test_fuzz_expansion_always_passes_crash_gates():
                 blocks.append({"kind": k, "host": rng.choice(hosts), "cmd": f"dig z{trial}"})
             else:
                 blocks.append({"kind": k, "seconds": rng.randint(1, 30)})
+        # 零断言组合不构成用例(框架 success==0 恒 FAIL,no_assertion_in_case 门拒)
+        # ——fuzz 保底一个断言组合子,该门语义另有专测。
+        if not any(b["kind"] in ("OBSERVE_ASSERT", "CAPTURE_COMPARE") for b in blocks):
+            blocks.append({"kind": "OBSERVE_ASSERT", "host": "routera", "cmd": f"show x{trial}",
+                           "asserts": [{"op": "found", "pattern": f"p{rng.randint(1, 9)}"}]})
         steps, _, err = expand_blocks(blocks)
         assert err is None, err
         res = check_crash_gates_mandatory(steps)

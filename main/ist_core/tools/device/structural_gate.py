@@ -524,6 +524,14 @@ def _check_command_payload_sanity(steps: list, result: StructuralResult) -> None
                 " ^ 拒。补上真实命令或删掉该步(纯空串占位步无害,不在此列)。",
                 i,
             )
+        elif str(s.get("F", "")).strip() == "cmd_config" and ("\n" in g.strip() or "\r" in g.strip()):
+            result.add(
+                "cmd_config_multiline",
+                "cmd_config 的 G 含换行——框架对 cmd_config 先 replace 删光换行"
+                "(test_xlsx.py:307 single_line_parameter),多条命令**无分隔直接粘连**成"
+                "一条发送,设备必 ^ 拒。多条命令改用 cmds_config(逐行发送)。",
+                i,
+            )
         elif "\\n" in g:
             result.add(
                 "literal_backslash_n",
@@ -558,6 +566,13 @@ def check_crash_gates_mandatory(steps: list) -> StructuralResult:
         _check_no_manual_ip_cleanup(steps, result)
         _check_command_payload_sanity(steps, result)
         _check_dispatch_targets(steps, result)
+        _check_line_anchor_assertions(steps, result)
+        _check_assertion_matches_command_echo(steps, result)
+        _check_has_assertion(steps, result)
+        # 2026-07-06 从 lint 前移:未定义 I 引用=NameError 崩卷、I 注入 format 结构坏=
+        # ValueError/KeyError/IndexError 崩卷、H 撞框架名字空间=覆盖执行器状态——全部
+        # 必崩/必污染类,按本门收录标准(必崩类不躲后置卡点)进 emit 无条件门。
+        _check_capture_refs_defined(steps, result)
     return result
 
 
@@ -614,6 +629,131 @@ def steps_from_xlsx(xlsx_path) -> tuple[str, list[dict]]:
             "I": str(row[8].value or "") if len(row) > 8 else "",
         })
     return autoid, steps
+
+
+def _check_line_anchor_assertions(steps: list, result: StructuralResult) -> None:
+    """found/not_found 的 ^/\\A 行首锚必假门(2026-07-06 588691 三轮实证)。
+
+    框架 check_point.found/not_found 用 ``re.compile(expect, re.DOTALL)``——**无
+    MULTILINE**,``^`` 只匹配字符串开头,而 result 开头永远是命令回显行:
+    - found ^X  → 永不匹配 → 恒 fail;
+    - not_found ^X → 永不匹配 → **恒真假 PASS**(什么都没验证,比恒 fail 危险)。
+    行级匹配用 ``\\n`` 前缀或直接去锚(DOTALL 下 re.search 全文扫)。
+    """
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        if str(s.get("E", "")).strip() != "check_point":
+            continue
+        f = str(s.get("F", "")).strip()
+        g = str(s.get("G", "") or "")
+        if re.match(r"\(\?[aiLmsux]*m[aiLmsux]*\)", g):
+            continue   # 内联 (?m) 开 MULTILINE,行锚合法生效——恰是知道该语义后的正确修法
+        if f in ("found", "not_found") and (g.endswith("$") and not g.endswith("\\$")
+                                            or g.endswith("\\Z")):
+            result.add(
+                "line_anchor_never_matches",
+                f"断言 {f} 的模式以结尾锚收尾——无 MULTILINE 下 $/\\Z 只匹配字符串末尾,"
+                "而窗口末尾永远是设备提示符(read_until(prompt)),数据行的结尾锚永不匹配:"
+                + ("该断言**恒真**(永远找不到=永远通过),什么都没验证。"
+                   if f == "not_found" else "该断言**恒 fail**。")
+                + "去掉结尾锚,或用 \\n 界定数据行边界。",
+                i,
+            )
+            continue
+        if f in ("found", "not_found") and (g.startswith("^") or g.startswith("\\A")):
+            result.add(
+                "line_anchor_never_matches",
+                f"断言 {f} 的模式以 {g[:2]!r} 开头——框架 found/not_found 是 DOTALL"
+                "、**无 MULTILINE**,行首锚只匹配字符串开头(开头是命令回显行),"
+                + ("该断言**恒真**(永远找不到=永远通过),什么都没验证。"
+                   if f == "not_found" else "该断言**恒 fail**。")
+                + "要匹配数据行,用 \\n 前缀锚定换行后,或去掉锚(全文搜索)。",
+                i,
+            )
+
+
+def _echo_src_cmd(e: str, f: str) -> bool:
+    """该步的 G 是否会以命令原文形式回显在其输出窗口开头(send(cmd)+read_until(prompt),
+    ssh_server.py:cmd / env.py 各主机方法 / APV cmd_config 同一机制)。execute 的 G 是
+    动作调用式非命令原文、cmds_config 无 return(result 被置 None)——都不算。"""
+    if e == "test_env":
+        return True
+    if e in _host_slot_es() and f == "cmd":
+        return True
+    if e.startswith("APV") and f == "cmd_config":
+        return True
+    return False
+
+
+def _check_assertion_matches_command_echo(steps: list, result: StructuralResult) -> None:
+    """断言模式命中「被测窗口来源步的命令原文」必假门(2026-07-06 588691 round1 同族收口)。
+
+    框架窗口 = 命令回显 + 输出 + 提示符(send(cmd)+read_until(prompt))——模式若能在命令
+    原文上匹配,则不论设备输出什么都必中:
+    - found/abs_found → **恒真假 PASS**(什么都没验证,最危险);
+    - not_found → 恒 fail(想验「输出无 X」但 X 就在命令里,如 not_found 查询目标 IP)。
+    典型:dig @<服务IP> 后断言该服务 IP——回显必含 @IP。断言应匹配**数据行**,与命令原文
+    区分开(加词边界仍撞命令时,换能定位数据行的上下文,如 \\n 前缀+相邻字段)。
+    """
+    last_src_g: str | None = None      # 最近更新框架 result 的步:命令原文(可回显)或 None
+    reg_src: dict[str, str] = {}       # 寄存器名 → 捕获步命令原文(仅可回显步)
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        e = str(s.get("E", "")).strip()
+        f = str(s.get("F", "")).strip()
+        g = str(s.get("G", "") or "")
+        h = str(s.get("H", "") or "").strip()
+        i_col = str(s.get("I", "") or "").strip()
+        if e == "check_point":
+            if h or not g.strip() or f not in ("found", "not_found", "abs_found"):
+                continue   # 期望取寄存器(运行时值)/空模式/found_times 另有门
+            src = reg_src.get(i_col) if i_col else last_src_g
+            if not src:
+                continue
+            try:
+                hit = (src.find(g) >= 0 if f == "abs_found"
+                       else re.compile(g, re.DOTALL).search(src) is not None)
+            except re.error:
+                continue   # 编译失败由 regex 门报
+            if hit:
+                result.add(
+                    "assertion_matches_command_echo",
+                    f"断言 {f} 的模式在其被测窗口的**命令原文**上就能匹配({src[:60]!r}…)——"
+                    "窗口开头永远是命令回显,该断言"
+                    + ("**恒 fail**(想验「输出无 X」但 X 在命令里)。"
+                       if f == "not_found" else
+                       "**恒真假 PASS**(不论设备输出什么都通过,什么都没验证)。")
+                    + "改成匹配数据行的形态,与命令原文区分开。",
+                    i,
+                )
+            continue
+        if h:
+            if _echo_src_cmd(e, f):
+                reg_src[h] = g
+            else:
+                reg_src.pop(h, None)
+        else:
+            last_src_g = g if _echo_src_cmd(e, f) else None
+
+
+def _check_has_assertion(steps: list, result: StructuralResult) -> None:
+    """零断言 case 恒 fail 门。框架 per-case 结算(check_point.py:124-128,case 边界
+    test_xlsx.py:253/344 调 close()):fail>0 → FAIL;**success==0 也 FAIL**——一个
+    check_point 都没有的 case 无从产生 success,上机必 FAIL,且日志无任何断言明细可归因。
+    """
+    for s in steps:
+        if isinstance(s, dict) and str(s.get("E", "")).strip() == "check_point":
+            return
+    if steps:
+        result.add(
+            "no_assertion_in_case",
+            "该 case 没有任何 check_point 步——框架结算对 success==0 判 FAIL"
+            "(check_point.py:126),纯配置/纯观测卷上机恒 fail。补至少一条断言;"
+            "只想执行不验证的步不构成测试用例。",
+            0,
+        )
 
 
 def _check_assertion_regex_compiles(steps: list, result: StructuralResult) -> None:
@@ -699,7 +839,33 @@ def _check_capture_refs_defined(steps: list, result: StructuralResult) -> None:
                         i,
                     )
                 g = str(s.get("G", "") or "")
-                if "{}" not in g:
+                # format 结构安全(框架 :309 parameters[0].format(单值)):裸 {/} →
+                # ValueError、命名占位 → KeyError、匿名占位 ≥2 → IndexError,全部崩整卷。
+                from string import Formatter
+                _fmt_err = ""
+                try:
+                    _fields = [fx for _, fx, _, _ in Formatter().parse(g) if fx is not None]
+                    _bad_named = [fx for fx in _fields if fx not in ("", "0")]
+                    if _bad_named:
+                        _fmt_err = (f"G 含命名/多位置占位 {{{_bad_named[0]}}} ——框架只传一个"
+                                    "值,format 抛 KeyError/IndexError")
+                    elif len(set(_fields)) > 1:
+                        # {} 与 {0} 混用 → ValueError(cannot switch numbering)
+                        _fmt_err = "G 混用自动 {} 与手动 {0} 占位——format 抛 ValueError"
+                    elif _fields.count("") > 1:
+                        # 纯 {0} 重复引用合法({0} {0}.format(单值) 不抛);纯 {} 多个才 IndexError
+                        _fmt_err = f"G 含 {len(_fields)} 个自动占位符——框架只传一个值,format 抛 IndexError"
+                except ValueError:
+                    _fmt_err = ("G 含未配对的 {{ 或 }}(JSON 载荷等字面大括号)——I 注入时框架"
+                                " format 抛 ValueError;字面大括号写成 {{{{ }}}}")
+                if _fmt_err:
+                    result.add(
+                        "injection_format_crash",
+                        f"步骤带 I={i_col!r} 时 G 经框架 str.format 注入:{_fmt_err},"
+                        "**崩整份文件**。",
+                        i,
+                    )
+                elif "{}" not in g:
                     result.add(
                         "injection_without_placeholder",
                         f"步骤带 I={i_col!r} 但 G 里没有 {{}} 占位符——框架把变量 format 进"
@@ -708,7 +874,47 @@ def _check_capture_refs_defined(steps: list, result: StructuralResult) -> None:
                         i,
                     )
             if h:
+                if h in _framework_reserved_names():
+                    result.add(
+                        "register_shadows_framework_name",
+                        f"H={h!r} 与框架执行器的名字冲突(test_xlsx.py 执行帧的参数/局部变量"
+                        "或 devices 槽)——同名下后续 locals().get(H) 读回的是**框架对象而非"
+                        "你捕获的回显**(如 result/value/设备槽),断言/I 注入拿错值必错。"
+                        "换一个普通寄存器名(v1/ip1 这类)。",
+                        i,
+                    )
                 defined.add(h)
+
+
+@lru_cache(maxsize=1)
+def _framework_reserved_names() -> frozenset:
+    """框架执行器名字空间闭集——从 mirror lib/test_xlsx.py 用 ast 解析(函数参数+全部
+    Store 上下文的 Name),并集 devices 槽(_valid_es)。不手抄:框架升级重解析即准。"""
+    names: set[str] = set(_valid_es())
+    src = _mirror_src("lib/test_xlsx.py")
+    if src:
+        import ast as _ast
+        try:
+            tree = _ast.parse(src)
+        except SyntaxError:
+            tree = None
+        if tree is not None:
+            # 只收执行帧真实存在的名字:模块级 Store + 执行函数(test_xlsx*)的参数与
+            # 局部 Store——曾 walk 全文件所有函数,把 get_parameter 等辅助函数的局部名
+            # (i/m/key/name 这类常用短名)也收进来,误杀无害寄存器名(评审建议收窄)。
+            for node in tree.body:
+                if isinstance(node, _ast.Assign):
+                    for tgt in node.targets:
+                        for n in _ast.walk(tgt):
+                            if isinstance(n, _ast.Name):
+                                names.add(n.id)
+                elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef))                         and node.name.startswith("test_xlsx"):
+                    for a in list(node.args.args) + list(node.args.kwonlyargs):
+                        names.add(a.arg)
+                    for sub in _ast.walk(node):
+                        if isinstance(sub, _ast.Name) and isinstance(sub.ctx, _ast.Store):
+                            names.add(sub.id)
+    return frozenset(n for n in names if n)
 
 
 # 框架 get_parameter 的切分正则(test_xlsx.py:57,原样复刻):单行 G 按**引号外**逗号切段
@@ -805,7 +1011,6 @@ def lint_xlsx_case(xlsx_path) -> StructuralResult:
         result.violations.extend(mand.violations)
     _check_assertion_regex_compiles(steps, result)
     _check_short_mode_assertions(steps, result)
-    _check_capture_refs_defined(steps, result)
     _check_dns_label_limit(steps, result)
     _check_parameter_splitting(steps, result)
     _check_autoid_rows_runnable(xlsx_path, result)

@@ -874,10 +874,21 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
                         _root = Path(__file__).resolve().parents[4]
                         _cd = _root / "workspace" / "outputs" / str(rec.get("autoid"))
                         _cd.mkdir(parents=True, exist_ok=True)
-                        (_cd / ".frozen.json").write_text(json.dumps({
+                        _fz_file = _cd / ".frozen.json"
+                        # 重写保留 overrides 历史(emit 门记的换法声明)——曾整文件覆盖,
+                        # 换法轨迹跨轮丢失,「换过几次法/各是什么」无据可查。
+                        _prev_ov = []
+                        if _fz_file.is_file():
+                            try:
+                                _prev_ov = (json.loads(_fz_file.read_text(encoding="utf-8"))
+                                            .get("overrides") or [])
+                            except Exception:  # noqa: BLE001
+                                pass
+                        _fz_file.write_text(json.dumps({
                             "reason": "连续两轮同签名 fail(同法已证无效)",
                             "signatures": sorted(sig_now & sig_prev)[:4],
                             "ts": _t0.time(),
+                            **({"overrides": _prev_ov} if _prev_ov else {}),
                         }, ensure_ascii=False, indent=2), encoding="utf-8")
                     except Exception:  # noqa: BLE001
                         logger.debug("frozen 标记落盘失败", exc_info=True)
@@ -902,6 +913,13 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
             if rec.get("verdict") == "fail":
                 rec["_fail_signatures"] = sorted(_fail_signatures(
                     (rec.get("causality") or "") + (rec.get("device_context") or "")))
+                # 归因历史跨轮保留(2026-07-06 588691 收口):新记录整条替换曾把上一轮
+                # _attribution(含 fix_direction)丢掉——归因 fork 看不到「上轮开过什么
+                # 方子」,无从核对修法生效性,方向错的修法(^ 锚)被按同因重复归因。
+                _pv = prev_map.get(str(rec["autoid"])) or {}
+                _pa = _pv.get("_attribution")
+                if isinstance(_pa, dict) and _pa:
+                    rec["_prev_attribution"] = {**_pa, "_round": _pv.get("_round")}
             merged_map[str(rec["autoid"])] = rec
         # 原子写(2026-07-05 竞态类加固):last_run.json 是跨轮对照/归因/写回的事实源,
         # 与意图索引同病类——非原子 write_text 被杀进程/并发进程截断成拼接损坏后,

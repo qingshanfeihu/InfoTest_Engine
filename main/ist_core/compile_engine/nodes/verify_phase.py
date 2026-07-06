@@ -177,6 +177,10 @@ def attribute(state: dict) -> dict:
         if any(toks and all(w in ctx for w in toks) for toks in defect_feats):
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail="known_defect(DC)")
         elif frozen and int(c.get("rounds_used") or 0) >= max_rounds:
+            # frozen≠终态:.frozen.json 是「同法已证无效,重编必须换法」标记——轮次未
+            # 封顶时 fall through 到 reflow,emit 的 override_frozen_reason 门强制换法
+            # 声明(588691 round3 插 dig 正是走这条通道)。曾误改成「frozen 即终态」:
+            # override 换法重编后文件不删,会把刚换法的 case 直接误判终态,机会通道全死。
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail="frozen")
         elif disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)

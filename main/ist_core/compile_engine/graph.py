@@ -70,6 +70,14 @@ def _after_attribute(s: dict) -> str:
         return "worker_fanout"   # 定向重编(派发集⊆fail 由 ledger 审计强制)
     if s.get("n_failed_active", 0) > 0 and int(s.get("round") or 0) < max_rounds:
         return "merge"           # 仅 transient:不重编直接复跑
+    if (s.get("run_scope") == "subset" and s.get("n_passed", 0) > 0
+            and s.get("n_failed_active", 0) == 0):
+        # 收敛于子集轮(剩余全终态)→ 先终验整卷再收口:主交付卷是早前 full merge 的
+        # 旧版,重编修好的 pass 版只存在于单卷/子集卷——不重新 merge,交付物就是旧断言
+        # (zhaiyq 实证:600046 重编版已修对,主卷仍是恒真+恒 fail 旧版,且主卷从未
+        # 整卷上机)。终验 run 后 run_scope=full,本分支不再命中,无环;封顶且仍有
+        # active fail 时不终验(维持如实报告),不会借道绕过轮次上限。
+        return "merge"
     return "writeback"           # 全终态/封顶 → 写回已 pass 的,如实报告其余
 
 

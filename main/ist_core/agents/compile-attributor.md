@@ -19,6 +19,13 @@ inherit-parent-prompt: true
 
 层的含义:G=命令被设备拒或文法错(上游根因,同 case 后续失败多为下游后果);E=可达性/环境(IP 不通/服务不在);V=断言期望值与设备真实行为不符;瞬态=换时间重跑即消失(判据是复现性,不是关键字);产品缺陷=配置对∧手册对∧环境正常仍复现——先 `kb_bug_search` 比对缺陷库,再对照 provenance 的手册出处。
 
+## 重编后再 fail 的 case:先核对上一轮修法,再判层
+
+last_run 记录里带 `_prev_attribution`(上一轮归因,含 fix_direction)或 `_repeat_fail_same_signature: true`,说明这个 fail 已经修过一轮。只按当轮表象判层会漏掉一种根因:**上一轮的修法方向本身是错的**。先核对两件事:
+- 上轮 fix_direction 说的改动**上卷了吗**——对照当前卷面/provenance 确认;
+- 上卷了、签名仍复现 = 那个方向已被设备证伪——本轮 fix_direction 不得同方向再开:换方向,或 disposition=frozen 并写明已试过什么。
+实证(588691 三轮):round1 的修法在框架断言语义下永不可能匹配,round2 归因没核对上轮修法是否生效、按表象另开方子,拖到冻结才暴露方向错。
+
 ## 附带职责(有则做,没有跳过)
 
 - 卷面有 `<RUNTIME>` 待填槽(先 `compile_runtime_slots` 看):从设备证据原文里该槽观测命令的输出提真实值,调 `compile_runtime_fill` 回填。值只能来自设备原文,提不出就留空。

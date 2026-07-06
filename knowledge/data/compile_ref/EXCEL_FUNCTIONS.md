@@ -77,9 +77,10 @@ host 语义:`APV_0`=被测设备(第一台);`APV_1`=第二台被测设备(双机
 - ⚠ `ip addr` / `ip route` 增删的框架管理契约对直连槽同样成立(同一个 ssh 会话类、同一条记账路径),emit 门同拒。
 
 **E = `check_point`（断言）**
-- `found`：上一个观测步的输出里**能找到** G（G 当正则，跨行匹配）→ 通过
+- `found`：上一个观测步的输出里**能找到** G（G 当正则,`re.DOTALL` 跨行、**无 MULTILINE**——`^`/`$` 只锚字符串首尾,而输出开头永远是命令回显行,行首锚永不匹配:found 恒 fail、not_found 恒真。要锚数据行用 `\n` 前缀。`check_point.py:23`）→ 通过
 - `not_found`：输出里**找不到** G → 通过
 - `abs_found`：和 found 一样找，但把 G 当**纯字面文本**（里面的 `.` `*` 等就是它本身、不当正则元字符）
+- ⚠ 被检查的「输出」= **命令回显 + 数据 + 提示符**（框架 send(cmd) 后 read_until(prompt)，`ssh_server.py:cmd`）。模式若在**命令原文**上就能匹配（查询目标 IP、域名、命令关键字都在回显里），found/abs_found 恒真、not_found 恒 fail——什么都没验证，emit 门拦。写成只有**数据行**才满足的形态；结尾 `$`/`\Z` 锚同废（窗口末尾是提示符，emit 门同拦）。
 - `found_times`：**禁用**（emit 必崩门拒绝）。框架对 check_point 只传 2 个参数（期望、输出，`test_xlsx.py:293-304`），这个方法要第 3 个「次数」参数，调用即 TypeError、崩整卷。旧说法「次数写在 I 格」与源码不符——check_point 里的 I 格是变量名（见「变量机制」节），不是次数。
 
 **E = `time`（等待）**

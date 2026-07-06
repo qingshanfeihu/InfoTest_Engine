@@ -56,7 +56,12 @@ def fork_executor(n_items: int):
     from main.ist_core.resilience import AdaptiveLimiter, ForkExecutor
     ceiling = _resolve_concurrency(0, n_items=max(1, n_items))
     limiter = AdaptiveLimiter(start=max(2, ceiling // 2), min_limit=1, max_limit=ceiling)
-    return ForkExecutor(limiter), limiter, ceiling
+    # 墙钟 900s(诊断 P4):欠定/重编族 worker 是 15-22 LLM 轮的重算例(fork_trace
+    # 实证),deepseek 端点延迟下 600s 装不下,超时=白烧后 escalate。非死循环场景
+    # 放宽;死循环由 fork 内 loop_guard 与轮内进展看护。IST_FORK_WALLCLOCK_S 仍可覆盖。
+    import os as _os
+    wc = float(_os.environ.get("IST_FORK_WALLCLOCK_S") or 900)
+    return ForkExecutor(limiter, wallclock_s=wc), limiter, ceiling
 
 
 def read_json(path: Path, default=None):

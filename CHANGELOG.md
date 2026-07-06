@@ -90,7 +90,7 @@
 - 删除 `backup/`（1.6G 历史归档）、`logs/`、`ist_core.sqlite*` checkpoint、`__pycache__`/`.DS_Store`/空目录等运行时产物
 - 文档全量更新：README / ARCHITECTURE / know_issue / todolist / WHATS_NEW 对齐统一 OpenAI 架构，移除 backup 悬空引用
 
-详见 `WHATS_NEW.md`。
+（原 `WHATS_NEW.md` 已并入本文，1.0.5-beta.1 清理时移除。）
 
 ## [1.0.4] - 2026-05-29
 

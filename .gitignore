@@ -1,6 +1,7 @@
-# IST-Core v1 .gitignore
+# InfoTest Engine .gitignore(2026-07-06 全面清理:根锚化过宽规则、knowledge 层层开门、
+# .claude 团队资产入库、删除确认失效的死条目。规则动机随节注释。)
 
-# Python
+# --- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
@@ -8,94 +9,80 @@ __pycache__/
 dist/
 build/
 .eggs/
-
-# Virtual environment
 .venv/
 .venv311/
 venv/
 ENV/
-
-# Python test / lint caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
 
-# IDE
+# --- IDE / OS ---
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
+.DS_Store
+Thumbs.db
 
-# Environment / secrets
+# --- 密钥 / 环境(绝不入库;模板 environment.example / ssh_users.example.json 跟踪) ---
 environment
+environment.bak*
 .env
 *.env
+ssh_users.json
 
-# Backup (local only, not in git)
-backup/
-
-# Logs / temp
-logs/
-tmp/
-*.log
-
-# Data stores (dev containers)
-postgres_storage/
-qdrant_storage/
-.langgraph_data/
-.langgraph_api/
+# --- 运行时产物(与 agent 沙箱黑名单同源) ---
+runtime/
 .web_server.pid
-
-# LangGraph checkpoint（QA_AGENT_SQLITE_PATH，含 WAL/SHM 同伴文件）
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite.wal
 *.sqlite.shm
+.langgraph_data/
+.langgraph_api/
+# 历史:v1 时代仓库根下曾有的运行目录,根锚防复活(无锚版曾误伤任意层同名目录,
+# 如 skill 资产包内的 reference/,实证 ssh_template.md 被挡)
+/logs/
+/tmp/
+/large_tool_results/
+/conversation_history/
+/backup/
+/reference/
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Runtime（CLAUDE.md：logs / conversation_history / large_tool_results / users）
-runtime/
-
-# 历史：仓库根下同名目录（与 runtime/ 子目录并存时仍生效）
-large_tool_results/
-conversation_history/
-
-# Memory subsystem: 用户私有偏好 / 工作记忆 / dream 锁不进 git；
-# AGENTS.md 是团队级项目指令，git 跟踪（用 ! 反选必须先按子路径忽略，
-# 不能直接 ignore "memory/" 整体——目录级 ignore 优先于反选规则）
-memory/working/
-memory/long_term/
-memory/reviews/
-memory/.dream/
-/knowledge/
-
-# Agent workspace（运行时：上传 / 产出 / 缺陷缓存；仅跟踪 .gitkeep 占位）
+# --- Agent workspace(运行时上传/产出;仅跟踪 .gitkeep 占位) ---
 workspace/*
 !workspace/*/
 workspace/*/*
 !workspace/*/.gitkeep
 
-# 本地开发笔记（不进版本库）
+# --- Memory:用户私有层不入库;AGENTS.md 是团队级项目指令,跟踪 ---
+memory/working/
+memory/long_term/
+memory/reviews/
+memory/.dream/
+
+# --- 知识库:源文档/KMS 产出/框架镜像量大且可重建,不入库;
+#     data/compile_ref 是平台承重参考资产(agent 编写时必读),跟踪。
+#     注意:`dir/` 整体 ignore 会挡住内部反选,必须 `dir/*` 层层开门。 ---
+/knowledge/*
+!/knowledge/data/
+/knowledge/data/*
+!/knowledge/data/compile_ref/
+
+# --- Claude Code:团队质量资产入库(评审 agents/防泄漏 hooks/run-tests skill/
+#     团队 hook 配置 settings.json);会话本地态不入 ---
+.claude/*
+!.claude/agents/
+!.claude/hooks/
+!.claude/skills/
+!.claude/settings.json
+
+# --- 本地开发笔记(不进版本库) ---
 测试评审skill开发tips.md
 docs/context_reuse_vs_cc_haha.md
 docs/prompt_gap_vs_cc_haha.md
-
-# Claude
-.claude/
-ssh_users.json
-
-# 框架镜像层（framework_sync 从跳转机增量拉取的实证用例 + 能力源；量大、可重建，不进库）
-# derived/（idiom 库等挖掘产物）需跟踪，单独豁免
-knowledge/framework/mirror/
-# 跳转机 smoke_test xlsx 全量 zip 备份（本地留存，可重建）
-knowledge/framework/backups/
-!knowledge/framework/derived/
-reference/
-.cursor/
-environment.bak*

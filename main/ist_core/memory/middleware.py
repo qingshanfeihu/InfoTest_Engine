@@ -358,9 +358,9 @@ class MemoryWriteMiddleware(AgentMiddleware):
             pass
         import os as _os
         user = _os.environ.get("IST_SSH_USER", "").strip()
-        session = _os.environ.get("IST_SESSION_ID", "").strip()
-        if user and session:
-            return f"{user}_{session}"
+        conversation = _os.environ.get("IST_CONVERSATION_ID", "").strip()
+        if user and conversation:
+            return f"{user}_{conversation}"
         return "default"
 
 

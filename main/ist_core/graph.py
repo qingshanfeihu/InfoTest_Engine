@@ -604,20 +604,23 @@ def _open_sync_sqlite_checkpointer(sqlite_path: str) -> Any:
     return saver
 
 def _make_checkpointer(mode: str = "async"):
-    """三级降级：Postgres -> SQLite -> InMemorySaver。
+    """三级降级：SQLite -> InMemorySaver。
 
     ``mode``:
-      - ``"async"``（默认，TUI / langgraph dev / astream_events）：SQLite 用 AsyncSqliteSaver
-      - ``"sync"``（runner.py print 模式 / graph.invoke）：SQLite 用同步 SqliteSaver
+      - ``"async"``（默认，TUI / langgraph dev / astream_events）：使用 AsyncSqliteSaver 或 InMemorySaver
+      - ``"sync"``（runner.py print 模式 / graph.invoke）：使用 SqliteSaver 或 InMemorySaver
 
-    Postgres 与 InMemory 的实现 sync/async 通用，无需分支。
+    **重要**：同步的 PostgresSaver 不支持 aget_tuple()，在 async 模式下会抛出 NotImplementedError。
+    因此 PostgreSQL checkpoint 仅在 sync 模式下使用。如需在 async 模式下使用 PostgreSQL 持久化，
+    需要使用 AsyncPostgresSaver（需要 async with 上下文，当前架构不支持）。
     """
     postgres_dsn = (
         os.environ.get("IST_POSTGRES_CHECKPOINT_DSN")
         or os.environ.get("LANGGRAPH_POSTGRES_DSN")
         or ""
     ).strip()
-    if postgres_dsn:
+    
+    if postgres_dsn and mode == "sync":
         try:
             import psycopg  # type: ignore[import-not-found]
             from psycopg.rows import dict_row  # type: ignore[import-not-found]
@@ -636,7 +639,7 @@ def _make_checkpointer(mode: str = "async"):
                 saver.setup()
             return saver
         except Exception as exc:  # noqa: BLE001
-            logger.warning("PostgresSaver 初始化失败，降级本地 checkpointer: %s", exc)
+            logger.warning("PostgresSaver (sync) 初始化失败，降级本地 checkpointer: %s", exc)
 
     sqlite_path = (os.environ.get("IST_SQLITE_PATH") or "").strip()
     if sqlite_path:

@@ -23,6 +23,22 @@ from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
+
+def _get_user_output_dir() -> Path:
+    """获取当前用户专属的 outputs 目录。
+
+    从 IST_SSH_USER 环境变量获取用户名，创建并返回 workspace/outputs/{username}/ 目录。
+    """
+    root = Path(__file__).resolve().parents[4]
+    username = os.environ.get("IST_SSH_USER", "").strip()
+    if not username:
+        username = os.environ.get("IST_USERNAME", "").strip()
+    if not username:
+        username = "default"
+    user_dir = root / "workspace" / "outputs" / username
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
+
 # 框架执行契约(死知识):test_xlsx.py 是**延迟执行模型**——最后一个 case 走 `if last_case`
 # 收尾分支,只 parser_case_id 记录、**不执行步骤**。所以 xlsx 末尾必须垫一个哨兵 case,
 # 让真实 case 都不是最后一个、走正常执行路径。哨兵自己当 last_case 不执行,无副作用。
@@ -946,8 +962,8 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     sub = (out_name or autoid).strip().replace("/", "_")
     fir = FileIR(feature=sub, author="IST-Core-agent", init_rows=init_rows,
                  cases=[case, _build_sentinel()], module="ist_smoke")
-    root = Path(__file__).resolve().parents[4]
-    out = root / "workspace" / "outputs" / sub / "case.xlsx"
+    user_dir = _get_user_output_dir()
+    out = user_dir / sub / "case.xlsx"
     try:
         stats = emit_xlsx(fir, out)
     except Exception as e:  # noqa: BLE001
@@ -1262,8 +1278,8 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
     sub = (out_name or case_irs[0].autoid).strip().replace("/", "_")
     fir = FileIR(feature=sub, author="IST-Core-agent", init_rows=init_rows,
                  cases=[*case_irs, _build_sentinel()], module="ist_smoke")
-    root = Path(__file__).resolve().parents[4]
-    out = root / "workspace" / "outputs" / sub / "case.xlsx"
+    user_dir = _get_user_output_dir()
+    out = user_dir / sub / "case.xlsx"
     try:
         stats = emit_xlsx(fir, out)
     except Exception as e:  # noqa: BLE001

@@ -182,26 +182,27 @@ def _cmd_threads(args: str, app: "IstApp") -> SlashCommandResult:
     return TextResult(text="\n".join(lines))
 
 
-def _cmd_resume(args: str, app: "IstApp") -> SlashCommandResult:
-    tid = (args or "").strip()
-    if not tid:
-        return ErrorResult(text="usage: /resume <thread-id>")
-    try:
-        app._on_thread_selected(tid)
-    except Exception as exc:  # noqa: BLE001
-        return ErrorResult(text=f"failed to resume {tid}: {exc}")
-    return InfoResult(text=f"resumed thread {tid}")
+# 【屏蔽切换对话功能】/resume 和 /continue 命令注释
+# def _cmd_resume(args: str, app: "IstApp") -> SlashCommandResult:
+#     tid = (args or "").strip()
+#     if not tid:
+#         return ErrorResult(text="usage: /resume <thread-id>")
+#     try:
+#         app._on_thread_selected(tid)
+#     except Exception as exc:  # noqa: BLE001
+#         return ErrorResult(text=f"failed to resume {tid}: {exc}")
+#     return InfoResult(text=f"resumed thread {tid}")
 
 
-def _cmd_continue(args: str, app: "IstApp") -> SlashCommandResult:
-    tid = app._checkpoint_repo.most_recent_thread_id()
-    if not tid:
-        return ErrorResult(text="no recent thread to continue")
-    try:
-        app._on_thread_selected(tid)
-    except Exception as exc:  # noqa: BLE001
-        return ErrorResult(text=f"failed to continue: {exc}")
-    return InfoResult(text=f"continuing thread {tid}")
+# def _cmd_continue(args: str, app: "IstApp") -> SlashCommandResult:
+#     tid = app._checkpoint_repo.most_recent_thread_id()
+#     if not tid:
+#         return ErrorResult(text="no recent thread to continue")
+#     try:
+#         app._on_thread_selected(tid)
+#     except Exception as exc:  # noqa: BLE001
+#         return ErrorResult(text=f"failed to continue: {exc}")
+#     return InfoResult(text=f"continuing thread {tid}")
 
 
 def _cmd_model(args: str, app: "IstApp") -> SlashCommandResult:
@@ -372,8 +373,9 @@ BUILTIN_COMMANDS: list[SlashCommand] = [
     SlashCommand("help",     "List all commands with descriptions",          _cmd_help),
     SlashCommand("clear",    "Clear conversation transcript (keep thread)",  _cmd_clear),
     SlashCommand("threads",  "List recent threads with previews",            _cmd_threads),
-    SlashCommand("resume",   "Resume specific thread (usage: /resume <tid>)", _cmd_resume),
-    SlashCommand("continue", "Resume the most recent thread",                _cmd_continue),
+    # 【屏蔽切换对话功能】/resume /continue 命令已注释
+    # SlashCommand("resume",   "Resume specific thread (usage: /resume <tid>)", _cmd_resume),
+    # SlashCommand("continue", "Resume the most recent thread",                _cmd_continue),
     SlashCommand("model",    "Override LLM model for next turn",             _cmd_model),
     SlashCommand("style",    "Switch output style (explanatory / learning / default)", _cmd_style),
     SlashCommand("cost",     "Show token usage and call counts",             _cmd_cost),

@@ -111,6 +111,7 @@ class MessageSnapshot:
     usage: Mapping[str, int] = field(default_factory=lambda: _EMPTY_MAP)
     llm_phase: str = ""
     output_token_count: int = 0
+    run_end_info: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAP)
 
 
 

@@ -93,7 +93,21 @@ async def astream_to_bus(
 ) -> dict[str, Any]:
     """异步驱动 Graph、把 LangChain 事件翻译成 ``IstCoreEvent``。返回最终 state。"""
     bus = bus or reset_default_bus(run_id=uuid.uuid4().hex[:12])
-    bus.emit("run_start", payload={"config": {"thread_id": (config or {}).get("configurable", {}).get("thread_id")}})
+
+    user_input = ""
+    if isinstance(initial_state, dict):
+        messages = initial_state.get("messages", [])
+        if messages:
+            last_msg = messages[-1]
+            if hasattr(last_msg, "content"):
+                user_input = str(last_msg.content) if last_msg.content else ""
+            elif isinstance(last_msg, dict):
+                user_input = str(last_msg.get("content", ""))
+
+    bus.emit("run_start", payload={
+        "config": {"thread_id": (config or {}).get("configurable", {}).get("thread_id")},
+        "user_input": user_input,
+    })
 
     final_state: dict[str, Any] = {}
     try:
@@ -223,11 +237,13 @@ def stream_and_collect(
     # 注入会话上下文到 bus default_tags（审计 sink 用）
     import os as _os
     _session_user = _os.environ.get("IST_SSH_USER", "").strip()
-    _session_id = _os.environ.get("IST_SESSION_ID", "").strip()
+    _session_id = _os.environ.get("IST_AUTH_SESSION_ID", "").strip()
+    _conversation_id = _os.environ.get("IST_CONVERSATION_ID", "").strip()
     if _session_user or _session_id:
         bus.set_default_tags({
             "session_user": _session_user,
             "session_id": _session_id,
+            "conversation_id": _conversation_id,
         })
     # 自动注册 PgAuditSink（第四个 Sink：CLI / JSONL / LangSmith / Audit）
     try:
@@ -235,6 +251,18 @@ def stream_and_collect(
         bus.subscribe(PgAuditSink())
     except Exception as exc:
         logger.debug("PgAuditSink 注册失败（审计日志禁用）: %s", exc)
+    # 自动注册 DialogueCollector（第五个 Sink：对话业务持久存储）
+    if _session_user and _session_id and _conversation_id:
+        try:
+            from main.ist_core.sinks.dialog_sink import DialogueCollector
+            dialog_collector = DialogueCollector(
+                username=_session_user,
+                session_id=_session_id,
+                conversation_id=_conversation_id,
+            )
+            bus.subscribe(dialog_collector)
+        except Exception as exc:
+            logger.debug("DialogueCollector 注册失败: %s", exc)
 
     try:
         return asyncio.run(astream_to_bus(graph, initial_state, config=config, bus=bus))

@@ -20,7 +20,7 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 /* 主布局：左侧栏 + 右侧终端 */
 #termPage { display: none; height: 100vh; flex-direction: row; }
 
-/* 左侧对话面板 */
+/* 【屏蔽切换对话功能】左侧对话面板
 #sidebar {
   width: 260px; min-width: 260px; background: #16161e; border-right: 1px solid #414868;
   display: flex; flex-direction: column; overflow: hidden;
@@ -57,6 +57,7 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 }
 .conv-item:hover .conv-del { visibility: visible; }
 .conv-item .conv-del:hover { color: #f7768e; background: #24283b; }
+*/
 
 /* 右侧终端区域 */
 #mainArea { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -89,12 +90,13 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 #downloadPanel .dl-empty { color:#565f89; font-size:0.82rem; padding:4px; }
 #terminal { flex: 1; }
 
-/* 重命名输入 */
+/* 【屏蔽切换对话功能】重命名输入
 .conv-rename-input {
   background: #1a1b26; border: 1px solid #7aa2f7; border-radius: 3px;
   color: #c0caf5; font-size: 0.82rem; padding: 2px 6px; width: 100%;
   outline: none;
 }
+*/
 </style>
 </head>
 <body>
@@ -108,6 +110,7 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
   </div>
 </div>
 <div id="termPage">
+  <!-- 【屏蔽切换对话功能】左侧对话历史侧边栏
   <div id="sidebar">
     <div id="sidebarHeader">
       <span class="title">对话历史</span>
@@ -115,9 +118,12 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
     </div>
     <div id="convList"></div>
   </div>
+  -->
   <div id="mainArea">
+
+
     <div id="toolbar">
-      <button class="toggle-sidebar" onclick="toggleSidebar()" title="切换侧栏">☰</button>
+      <button class="toggle-sidebar" onclick="toggleSidebar()" title="切换侧栏" style="display:none">☰</button>
       <input type="file" id="fileInput" hidden>
       <button class="upload-btn" onclick="document.getElementById('fileInput').click()">📎 上传文件</button>
       <button class="upload-btn" id="downloadBtn" onclick="showDownloads()">📥 下载<span id="dlBadge" style="display:none;background:#f7768e;color:#1a1b26;border-radius:8px;padding:0 5px;margin-left:4px;font-size:0.75rem;font-weight:bold;"></span></button>
@@ -127,16 +133,19 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
     <div id="terminal"></div>
   </div>
 </div>
+
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script>
 let token = '';
 let sessionId = '';
 let conversationId = '';
+
+// 【屏蔽切换对话功能】
+// let conversations = [];
 let ws = null;
 let term = null;
 let fitAddon = null;
-let conversations = [];
 
 // ------------------------------------------------------------------
 // 登录
@@ -158,13 +167,15 @@ async function doLogin() {
     document.getElementById('loginPage').style.display = 'none';
     document.getElementById('termPage').style.display = 'flex';
     initTerminal();
-    loadConversations();
+    // 【屏蔽切换对话功能】不再加载历史对话列表
+    // loadConversations();
   } catch(e) { document.getElementById('loginError').textContent = '连接失败'; }
 }
 
 // ------------------------------------------------------------------
-// 对话列表
+// 【屏蔽切换对话功能】对话列表相关函数全部注释
 // ------------------------------------------------------------------
+/*
 async function loadConversations() {
   try {
     const r = await fetch('/api/conversations?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token));
@@ -172,7 +183,7 @@ async function loadConversations() {
     const d = await r.json();
     conversations = d.items || [];
     renderConvList();
-  } catch(e) { /* ignore */ }
+  } catch(e) { }
 }
 
 function renderConvList() {
@@ -222,7 +233,7 @@ async function newConversation() {
     if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({type:'switch_conversation', conversation_id: conversationId, title: d.title}));
     }
-  } catch(e) { /* ignore */ }
+  } catch(e) { }
 }
 
 async function switchConversation(cid, title) {
@@ -239,7 +250,6 @@ async function deleteConversation(cid) {
   try {
     await fetch('/api/conversations/' + encodeURIComponent(cid) + '?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token), {method:'DELETE'});
     if (cid === conversationId) {
-      // 删的是当前对话，切到最近一个
       await loadConversations();
       if (conversations.length > 0) {
         const next = conversations.find(c => c.conversation_id !== cid) || conversations[0];
@@ -250,7 +260,7 @@ async function deleteConversation(cid) {
     } else {
       await loadConversations();
     }
-  } catch(e) { /* ignore */ }
+  } catch(e) { }
 }
 
 function startRename(cid, titleEl) {
@@ -270,7 +280,7 @@ function startRename(cid, titleEl) {
           method: 'PUT', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({title: val})
         });
-      } catch(e) { /* ignore */ }
+      } catch(e) { }
     }
     await loadConversations();
   };
@@ -283,6 +293,7 @@ function toggleSidebar() {
   sb.classList.toggle('hidden');
   setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 50);
 }
+*/
 
 // ------------------------------------------------------------------
 // 终端
@@ -322,11 +333,14 @@ function initTerminal() {
       try {
         const d = JSON.parse(e.data);
         if (d.type === 'error') { term.write('\r\n\x1b[31m' + d.msg + '\x1b[0m\r\n'); }
+        // 【屏蔽切换对话功能】不再处理切换对话的 WS 响应
+        /*
         else if (d.type === 'switched') {
           term.write('\r\n\x1b[36m已切换到: ' + (d.title || d.conversation_id) + '\x1b[0m\r\n');
           conversationId = d.conversation_id;
           renderConvList();
         }
+        */
       } catch(e2) { /* ignore non-JSON */ }
     }
   };

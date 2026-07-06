@@ -137,6 +137,7 @@ async def audit_logs(
     event_kind: Optional[str] = None,
     username: Optional[str] = None,
     session_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
     run_id: Optional[str] = None,
     tool_name: Optional[str] = None,
     is_error: Optional[bool] = None,
@@ -153,6 +154,7 @@ async def audit_logs(
         ("a.event_kind = %(event_kind)s", "event_kind", event_kind),
         ("u.username = %(username)s", "username", username),
         ("a.session_id = %(session_id)s", "session_id", session_id),
+        ("a.conversation_id = %(conversation_id)s", "conversation_id", conversation_id),
         ("a.run_id = %(run_id)s", "run_id", run_id),
         ("a.tool_name = %(tool_name)s", "tool_name", tool_name),
         ("a.is_error = %(is_error)s", "is_error", is_error),
@@ -174,7 +176,7 @@ async def audit_logs(
 
         cur.execute(
             f"""SELECT a.id, u.username, u.role,
-                       a.session_id, a.run_id, a.thread_id,
+                       a.session_id, a.conversation_id, a.run_id, a.thread_id,
                        a.recorded_at, a.event_kind, a.event_summary,
                        a.model_name,
                        a.token_input, a.token_output,
@@ -243,6 +245,7 @@ async def audit_export(
     event_kind: Optional[str] = None,
     username: Optional[str] = None,
     session_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
     run_id: Optional[str] = None,
     tool_name: Optional[str] = None,
     is_error: Optional[bool] = None,
@@ -258,6 +261,7 @@ async def audit_export(
         ("a.event_kind = %(event_kind)s", "event_kind", event_kind),
         ("u.username = %(username)s", "username", username),
         ("a.session_id = %(session_id)s", "session_id", session_id),
+        ("a.conversation_id = %(conversation_id)s", "conversation_id", conversation_id),
         ("a.run_id = %(run_id)s", "run_id", run_id),
         ("a.tool_name = %(tool_name)s", "tool_name", tool_name),
         ("a.is_error = %(is_error)s", "is_error", is_error),
@@ -269,7 +273,7 @@ async def audit_export(
         buf = io.StringIO()
         writer = csv.writer(buf)
         header = [
-            "id", "username", "role", "session_id", "run_id", "thread_id",
+            "id", "username", "role", "session_id", "conversation_id", "run_id", "thread_id",
             "recorded_at", "event_kind", "event_summary", "model_name",
             "token_input", "token_output", "token_cache_hit", "token_cache_miss",
             "tool_name", "tool_duration_ms", "file_path", "file_operation",
@@ -288,7 +292,7 @@ async def audit_export(
                 cur.itersize = 500
                 cur.execute(
                     f"""SELECT a.id, u.username, u.role,
-                               a.session_id, a.run_id, a.thread_id,
+                               a.session_id, a.conversation_id, a.run_id, a.thread_id,
                                a.recorded_at, a.event_kind, a.event_summary,
                                a.model_name,
                                a.token_input, a.token_output,
@@ -308,6 +312,7 @@ async def audit_export(
                         row.get("username", ""),
                         row.get("role", ""),
                         row.get("session_id", ""),
+                        row.get("conversation_id", ""),
                         row.get("run_id", ""),
                         row.get("thread_id", ""),
                         row["recorded_at"].isoformat() if isinstance(row.get("recorded_at"), datetime) else row.get("recorded_at", ""),
@@ -540,6 +545,8 @@ async def list_sessions(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     username: Optional[str] = None,
+    session_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
     is_valid: Optional[bool] = None,
 ):
     """会话列表（分页）。"""
@@ -547,6 +554,8 @@ async def list_sessions(
     offset = (page - 1) * page_size
     where_sql, params = _build_where([
         ("u.username = %(username)s", "username", username),
+        ("s.session_id = %(session_id)s", "session_id", session_id),
+        ("c.conversation_id = %(conversation_id)s", "conversation_id", conversation_id),
         ("s.is_valid = %(is_valid)s", "is_valid", is_valid),
     ])
     params["page_size"] = page_size
@@ -557,15 +566,18 @@ async def list_sessions(
             f"""SELECT count(*) AS total
                FROM ist_audit.sessions s
                JOIN ist_audit.users u ON s.user_id = u.id
+               LEFT JOIN ist_audit.conversations c ON s.session_id = c.session_id
                WHERE {where_sql}""",
             params,
         )
         total = cur.fetchone()["total"]
         cur.execute(
             f"""SELECT s.session_id, u.username, u.role,
-                      s.created_at, s.expires_at, s.is_valid
+                      s.created_at, s.expires_at, s.is_valid,
+                      c.conversation_id, c.is_active AS conversation_status
                FROM ist_audit.sessions s
                JOIN ist_audit.users u ON s.user_id = u.id
+               LEFT JOIN ist_audit.conversations c ON s.session_id = c.session_id
                WHERE {where_sql}
                ORDER BY s.created_at DESC
                LIMIT %(page_size)s OFFSET %(offset)s""",

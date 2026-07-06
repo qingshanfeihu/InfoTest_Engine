@@ -74,14 +74,15 @@ class GraphBridge:
     def thread_id(self) -> str:
         return self._thread_id
 
-    def switch_thread(self, new_thread_id: str) -> None:
-        """切换到另一个对话的 thread_id。重置 run 状态，下次用户消息触发新 graph run。"""
-        if self.is_running:
-            logger.warning("Bridge running; switch_thread deferred until run completes")
-        self._thread_id = new_thread_id
-        self._run = None
-        self._last_final_state = {}
-        logger.info("Bridge switched to thread_id=%s", new_thread_id)
+    # 【屏蔽切换对话功能】切换 thread_id 注释
+    # def switch_thread(self, new_thread_id: str) -> None:
+    #     """切换到另一个对话的 thread_id。重置 run 状态，下次用户消息触发新 graph run。"""
+    #     if self.is_running:
+    #         logger.warning("Bridge running; switch_thread deferred until run completes")
+    #     self._thread_id = new_thread_id
+    #     self._run = None
+    #     self._last_final_state = {}
+    #     logger.info("Bridge switched to thread_id=%s", new_thread_id)
 
     @property
     def is_running(self) -> bool:
@@ -157,7 +158,7 @@ class GraphBridge:
                 bus.subscribe(sink)
             import os as _os
             _session_user = _os.environ.get("IST_SSH_USER", "").strip()
-            _session_id = _os.environ.get("IST_AUTH_SESSION_ID", "").strip() or _os.environ.get("IST_SESSION_ID", "").strip()
+            _session_id = _os.environ.get("IST_AUTH_SESSION_ID", "").strip()
             _conversation_id = _os.environ.get("IST_CONVERSATION_ID", "").strip()
             if _session_user or _session_id:
                 bus.set_default_tags({
@@ -165,6 +166,19 @@ class GraphBridge:
                     "session_id": _session_id,
                     "conversation_id": _conversation_id,
                 })
+
+            if _session_user and _session_id and _conversation_id:
+                try:
+                    from main.ist_core.sinks.dialog_sink import DialogueCollector
+                    dialog_collector = DialogueCollector(
+                        username=_session_user,
+                        session_id=_session_id,
+                        conversation_id=_conversation_id,
+                    )
+                    bus.subscribe(dialog_collector)
+                except Exception as exc:
+                    logger.error("DialogueCollector 注册失败: %s", exc)
+                    pass
 
             coro = astream_to_bus(graph, payload, config=config, bus=bus)
             self._task = loop.create_task(coro)

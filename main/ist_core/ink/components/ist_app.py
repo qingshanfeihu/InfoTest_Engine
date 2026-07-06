@@ -255,7 +255,11 @@ class IstInkApp:
         # ask_user 交互式问答的活跃会话（None=非问答模式）
         self._ask_user: Any = None
         
-        
+        # 评分系统状态
+        self._rating_run_id: str = ""
+        self._rating_waiting: bool = False
+        self._rating_comment_mode: bool = False
+        self._pending_rating_run_id: str = ""  # 待显示的评分run_id（等待流式输出结束）
         
         self._ai_stream_idx: int = -1
         # 流式结束后,暂存流式 ⏺ 消息的行号,供提交版(snapshot.messages 的最终 BLOCK_TEXT)
@@ -295,24 +299,24 @@ class IstInkApp:
             self._checkpoint_repo_obj = CheckpointRepo()
         return self._checkpoint_repo_obj
 
-    def _on_thread_selected(self, thread_id: str) -> None:
-        """切换到指定 thread_id（由 /resume 等 slash 命令调用）。"""
-        if self._bridge and self._bridge.is_running:
-            raise RuntimeError("当前对话正在进行中，请等待完成后再切换")
-        self._thread_id = thread_id
-        self.tui_state = TuiState(thread_id=thread_id)
-        if self._bridge:
-            self._bridge.switch_thread(thread_id)
-        with self._app.lock:
-            self._transcript.append_message(f"已切换到对话: {thread_id[-16:]}")
-            self._app.render()
+    # 【屏蔽切换对话功能】切换对话相关方法注释
+    # def _on_thread_selected(self, thread_id: str) -> None:
+    #     if self._bridge and self._bridge.is_running:
+    #         raise RuntimeError("当前对话正在进行中，请等待完成后再切换")
+    #     self._thread_id = thread_id
+    #     self.tui_state = TuiState(thread_id=thread_id)
+    #     if self._bridge:
+    #         self._bridge.switch_thread(thread_id)
+    #     with self._app.lock:
+    #         self._transcript.append_message(f"已切换到对话: {thread_id[-16:]}")
+    #         self._app.render()
 
-    def _switch_conversation(self, conversation_id: str) -> None:
-        """切换到指定对话（由前端 switch_conversation 消息触发）。"""
-        if not self._username:
-            return
-        new_tid = f"{self._username}_{conversation_id}"
-        self._on_thread_selected(new_tid)
+    # def _switch_conversation(self, conversation_id: str) -> None:
+    #     """切换到指定对话（由前端 switch_conversation 消息触发）。"""
+    #     if not self._username:
+    #         return
+    #     new_tid = f"{self._username}_{conversation_id}"
+    #     self._on_thread_selected(new_tid)
 
     def run(self) -> None:
         """Start the TUI (blocking)."""
@@ -501,11 +505,19 @@ class IstInkApp:
 
     @staticmethod
     def _outputs_dir() -> Path:
-        return Path(__file__).resolve().parents[4] / "workspace" / "outputs"
+        """获取当前用户专属的 outputs 目录。"""
+        root = Path(__file__).resolve().parents[4]
+        username = os.environ.get("IST_SSH_USER", "").strip()
+        if not username:
+            username = os.environ.get("IST_USERNAME", "").strip()
+        if not username:
+            username = "default"
+        return root / "workspace" / "outputs" / username
 
     def _snapshot_outputs(self) -> set[str]:
-        """快照 workspace/outputs/ 当前文件集合（用于 run 前后 diff 出新产物）。"""
+        """快照 workspace/outputs/{username}/ 当前文件集合（用于 run 前后 diff 出新产物）。"""
         d = self._outputs_dir()
+        d.mkdir(parents=True, exist_ok=True)
         try:
             return {f.name for f in d.iterdir() if f.is_file() and not f.name.startswith(".")}
         except OSError:
@@ -534,6 +546,132 @@ class IstInkApp:
             )
         except Exception:  # noqa: BLE001
             pass
+
+    def _show_rating_prompt(self, run_id: str) -> None:
+        """对话结束后在终端输出评分选项。
+
+        输出格式：
+        ── 请对本次对话服务进行评分 ──
+        [0] 0分  [1] 1分  [2] 2分  [3] 3分  [4] 4分  [5] 5分  [6] 自定义评价
+        输入数字选择评分（不阻塞对话，可继续输入其他内容）
+        """
+        self._rating_run_id = run_id
+        self._rating_waiting = True
+        self._rating_comment_mode = False
+
+        self._transcript.append_message("")
+        self._transcript.append_message(
+            "\x1b[36m── 请对本次对话服务进行评分 ──\x1b[0m"
+        )
+        self._transcript.append_message(
+            "\x1b[2m[0] 0分  [1] 1分  [2] 2分  [3] 3分  [4] 4分  [5] 5分  [6] 自定义评价\x1b[0m"
+        )
+        self._transcript.append_message(
+            "\x1b[2m输入数字选择评分（不阻塞对话，可继续输入其他内容）\x1b[0m"
+        )
+        self._app.render()
+
+    def _handle_rating_input(self, text: str) -> bool:
+        """处理用户输入的评分。
+
+        返回 True 表示输入被评分系统处理，False 表示输入应交给正常对话流程。
+        """
+        if not self._rating_waiting:
+            return False
+
+        text = text.strip()
+        if not text:
+            return False
+
+        # 检查是否是评分数字 0-6
+        if text in ("0", "1", "2", "3", "4", "5", "6"):
+            if text == "6":
+                # 进入自定义评价模式
+                self._rating_comment_mode = True
+                self._transcript.append_message(
+                    "\x1b[36m请输入自定义评价内容（输入后按回车提交）：\x1b[0m"
+                )
+                self._app.render()
+                return True
+            else:
+                # 直接提交评分
+                score = int(text)
+                self._submit_rating(score, "")
+                return True
+
+        # 自定义评价模式：提交评价
+        if self._rating_comment_mode:
+            self._submit_rating(5, text)
+            return True
+
+        # 不是评分输入，交给正常对话流程
+        return False
+
+    def _submit_rating(self, score: int, comment: str) -> None:
+        """提交评分到后端API并显示结果。"""
+        import os as _os
+        import requests as _requests
+
+        session_user = _os.environ.get("IST_SSH_USER", "").strip()
+        session_id = _os.environ.get("IST_AUTH_SESSION_ID", "").strip()
+        conversation_id = _os.environ.get("IST_CONVERSATION_ID", "").strip()
+
+        if not session_user or not session_id:
+            self._transcript.append_message(
+                "\x1b[31m✗ 评分提交失败：缺少认证信息\x1b[0m"
+            )
+            self._rating_waiting = False
+            self._rating_comment_mode = False
+            self._app.render()
+            return
+
+        try:
+            from main.ist_core.web_server import get_auth_token
+            token = get_auth_token(session_user, session_id) or ""
+        except Exception:
+            token = ""
+
+        # 从环境变量读取 web server 地址和端口
+        web_host = _os.environ.get("IST_WEB_HOST", "127.0.0.1")
+        web_port = _os.environ.get("IST_WEB_PORT", "8080")
+
+        try:
+            url = f"http://{web_host}:{web_port}/api/chat/rating/submit?session_id={session_id}&token={token}"
+            resp = _requests.post(
+                url,
+                json={
+                    "conversation_id": conversation_id,
+                    "run_id": self._rating_run_id,
+                    "score": score,
+                    "comment": comment,
+                },
+                timeout=5,
+            )
+            if resp.ok:
+                result = resp.json()
+                if result.get("ok"):
+                    msg = f"\x1b[32m✓ 评分已提交（{score}分）\x1b[0m"
+                    if comment:
+                        msg += f"\x1b[2m - {comment}\x1b[0m"
+                    self._transcript.append_message(msg)
+                else:
+                    self._transcript.append_message(
+                        f"\x1b[31m✗ 评分提交失败：{result.get('detail', '未知错误')}\x1b[0m"
+                    )
+            else:
+                err = resp.json().get("detail", f"HTTP {resp.status_code}")
+                self._transcript.append_message(
+                    f"\x1b[31m✗ 评分提交失败：{err}\x1b[0m"
+                )
+        except Exception as e:
+            self._transcript.append_message(
+                f"\x1b[31m✗ 评分提交失败：{e}\x1b[0m"
+            )
+
+        self._rating_waiting = False
+        self._rating_comment_mode = False
+        self._rating_run_id = ""
+        self._app.render()
 
     def _handle_key(self, kp: KeyPress) -> None:
         """Handle keyboard events."""
@@ -867,6 +1005,10 @@ class IstInkApp:
 
     def _on_submit(self, text: str) -> None:
         """Called when user presses Enter in prompt."""
+        # 评分系统：先检查是否是评分输入
+        if self._handle_rating_input(text):
+            self._prompt.clear()
+            return
         self._submit(text)
 
     def _submit(self, text: str, *, pre_expanded: str | None = None) -> None:
@@ -1148,6 +1290,20 @@ class IstInkApp:
             # 故与其他完成路径重复调用也幂等（第二次 new_files 为空）。
             self._notify_new_outputs()
 
+            # 评分系统：对话结束后，设置待显示的评分run_id
+            # 不立即显示，等待下一次snapshot更新时（此时所有消息都已渲染）
+            run_end_info = getattr(snapshot, 'run_end_info', None) or {}
+            run_id = run_end_info.get('run_id', '')
+            if run_id and not self._rating_waiting:
+                self._pending_rating_run_id = run_id
+
+        elif snapshot.status == "running" and (not prev or prev.status != "running"):
+            # 新对话开始：清除评分状态
+            self._rating_waiting = False
+            self._rating_comment_mode = False
+            self._rating_run_id = ""
+            self._pending_rating_run_id = ""
+
         elif snapshot.status == "error" and (not prev or prev.status != "error"):
             self._flush_pending_tools()
             self._is_loading = False
@@ -1181,6 +1337,14 @@ class IstInkApp:
             # 粘性错误条:transcript 的 [error] 行会被后续输出滚出屏,把摘要驻留在
             # footer 状态行直到下一轮 run 开始(实证:批量编译长会话里错误无感知)。
             self._footer.set_sticky_error(_err_text or "run error(详见上方 [error] 行)")
+
+        # 在所有渲染完成后，检查是否有待显示的评分系统
+        # 条件：没有新的流式输出、status为done
+        if self._pending_rating_run_id and snapshot.streaming_text is None and snapshot.status == "done":
+            run_id = self._pending_rating_run_id
+            self._pending_rating_run_id = ""
+            if not self._rating_waiting:
+                self._show_rating_prompt(run_id)
 
         self._app.render()
 

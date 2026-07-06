@@ -70,6 +70,20 @@ def _emit_progress(text: str) -> None:
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
+def _get_user_output_dir() -> Path:
+    """获取当前用户专属的 outputs 目录。
+
+    从 IST_SSH_USER 环境变量获取用户名，创建并返回 workspace/outputs/{username}/ 目录。
+    """
+    root = _project_root()
+    username = os.environ.get("IST_SSH_USER", "").strip()
+    if not username:
+        username = os.environ.get("IST_USERNAME", "").strip()
+    if not username:
+        username = "default"
+    user_dir = root / "workspace" / "outputs" / username
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
 
 def _grade_extract_facts(xp: Path, prov: Path) -> dict:
     """缺陷①：grade 前确定性预跑 ist-compile-grade/scripts/grade_extract.py 的 extract(xp, prov)。
@@ -469,15 +483,15 @@ IP 取下方「本测试床网络事实源」的可达值，绝不照抄示例 I
 
 
 def _extract_xlsx_path(fork_output: str, autoid: str, since: float = 0.0) -> Path | None:
-    """从 draft fork 的文本输出里定位它产的 case.xlsx（落盘规律 outputs/<autoid>/case.xlsx）。
+    """从 draft fork 的文本输出里定位它产的 case.xlsx（落盘规律 outputs/{username}/<autoid>/case.xlsx）。
 
     **新鲜度校验（治旧草稿污染）**：since>0 时，文件 mtime 必须晚于 since（本次 draft 开工时间），
     否则视作"本轮 draft 没真产出新文件"（沿用了上一轮旧草稿）→ 返回 None，让上层重试/escalate，
     绝不把旧 buggy 草稿当本轮产物合并进去。
     """
-    root = _project_root()
+    user_dir = _get_user_output_dir()
     # 落盘规律固定：out_name 默认 autoid
-    cand = root / "workspace" / "outputs" / autoid / "case.xlsx"
+    cand = user_dir / autoid / "case.xlsx"
     if not cand.is_file():
         return None
     if since > 0:
@@ -667,12 +681,12 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
     run_token = _new_run_token()   # dev_probe single-flight 作用域（run 结束清、跨 run 不复用）
     result: dict[str, Any] = {"mindmap": mindmap_path, "out_name": out_name,
                               "phases": [], "errors": []}
-    root = _project_root()
+    user_dir = _get_user_output_dir()
     manual_glob = f"cli_{product_version}_Chapter*.md"
 
     # 1. prep（一次）
     prep_out = compile_prep.invoke({"mindmap_path": mindmap_path, "out_name": out_name})
-    manifest_path = root / "workspace" / "outputs" / out_name / "manifest.json"
+    manifest_path = user_dir / out_name / "manifest.json"
     if not manifest_path.is_file():
         result["errors"].append(f"prep 未产 manifest: {prep_out[:200]}")
         return result

@@ -69,9 +69,9 @@ CREATE INDEX IF NOT EXISTS idx_conversations_session
 
 CREATE TABLE IF NOT EXISTS ist_audit.audit_log (
     id            BIGSERIAL PRIMARY KEY,
-    user_id       UUID REFERENCES ist_audit.users(id),
-    session_id    VARCHAR(80) REFERENCES ist_audit.sessions(session_id),
-    conversation_id VARCHAR(80) REFERENCES ist_audit.conversations(conversation_id),
+    user_id       UUID,
+    session_id    VARCHAR(80),
+    conversation_id VARCHAR(80),
     run_id        VARCHAR(32) NOT NULL,
     thread_id     VARCHAR(64),
     recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -114,7 +114,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_payload
 
 CREATE TABLE IF NOT EXISTS ist_audit.token_daily_summary (
     id            BIGSERIAL PRIMARY KEY,
-    user_id       UUID NOT NULL REFERENCES ist_audit.users(id),
+    user_id       UUID NOT NULL ,
     date          DATE NOT NULL,
     model_name    VARCHAR(64) NOT NULL,
     call_count    INTEGER NOT NULL DEFAULT 0,
@@ -128,13 +128,88 @@ CREATE TABLE IF NOT EXISTS ist_audit.token_daily_summary (
 CREATE INDEX IF NOT EXISTS idx_token_daily_user
     ON ist_audit.token_daily_summary(user_id, date DESC);
 
--- 迁移：给已有表添加新列
-ALTER TABLE IF EXISTS ist_audit.conversations
-    ADD COLUMN IF NOT EXISTS session_id VARCHAR(80) REFERENCES ist_audit.sessions(session_id) ON DELETE SET NULL;
-ALTER TABLE IF EXISTS ist_audit.audit_log
-    ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(80) REFERENCES ist_audit.conversations(conversation_id);
-"""
+-- ── 对话业务持久存储（sys_dialog_chat）──
+-- 职责：前端对话历史展示、分页查询、审计导出、合规归档
+-- 不作为推理数据源（推理上下文仅从 Checkpointer 加载）
+-- 无物理外键，仅逻辑关联字段
+-- 每轮对话一行：用户输入 + 模型最终回答
+CREATE TABLE IF NOT EXISTS ist_audit.sys_dialog_chat (
+    id                BIGSERIAL PRIMARY KEY,
 
+    -- 归属标识（逻辑关联，无物理外键）
+    username          VARCHAR(64)  NOT NULL,
+    session_id        VARCHAR(120) NOT NULL,
+    conversation_id   VARCHAR(120) NOT NULL,
+    thread_id         VARCHAR(256) NOT NULL,
+    run_id            VARCHAR(64)  NOT NULL,
+
+    -- 用户输入
+    user_input        TEXT,
+
+    -- 模型
+    model_name        VARCHAR(64),
+
+    -- 模型最终回答
+    llm_output        TEXT,
+
+    -- 评分冗余字段（前端对话列表展示，无需联表 sys_chat_rating）
+    rating            SMALLINT CHECK (rating BETWEEN 0 AND 5),
+
+    -- 保留字段（JSONB，供后续扩展）
+    reserved          JSONB,
+
+    -- 元数据
+    recorded_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 前端对话历史列表（核心查询路径）
+CREATE INDEX IF NOT EXISTS idx_sdc_user_conv_time
+    ON ist_audit.sys_dialog_chat (username, conversation_id, recorded_at DESC);
+
+-- 按 run_id 查询单轮对话
+CREATE INDEX IF NOT EXISTS idx_sdc_run
+    ON ist_audit.sys_dialog_chat (run_id);
+
+-- 审计导出：按时间范围 + 用户筛选
+CREATE INDEX IF NOT EXISTS idx_sdc_recorded_at
+    ON ist_audit.sys_dialog_chat (recorded_at DESC);
+
+-- ── 对话评分表（sys_chat_rating）──
+-- 职责：存储用户对单轮对话的评分和评价
+-- 无物理外键，仅逻辑关联字段
+-- 每轮对话可提交一次评分，重复提交覆盖原有分数
+CREATE TABLE IF NOT EXISTS ist_audit.sys_chat_rating (
+    id                BIGSERIAL PRIMARY KEY,
+
+    -- 归属标识（逻辑关联，无物理外键）
+    username          VARCHAR(64)  NOT NULL,
+    session_id        VARCHAR(120) NOT NULL,
+    conversation_id   VARCHAR(120) NOT NULL,
+    run_id            VARCHAR(64)  NOT NULL,
+    thread_id         VARCHAR(256),
+
+    -- 评分（0~5 分）
+    score             SMALLINT NOT NULL CHECK (score BETWEEN 0 AND 5),
+
+    -- 文字评价（选填）
+    comment           TEXT,
+
+    -- 元数据
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- 唯一约束：每轮对话仅允许一条评分记录
+    UNIQUE (username, conversation_id, run_id)
+);
+
+-- 索引：按用户、对话、单次执行快速查询评分
+CREATE INDEX IF NOT EXISTS idx_rating_user_conv
+    ON ist_audit.sys_chat_rating (username, conversation_id);
+CREATE INDEX IF NOT EXISTS idx_rating_run
+    ON ist_audit.sys_chat_rating (run_id);
+CREATE INDEX IF NOT EXISTS idx_rating_time
+    ON ist_audit.sys_chat_rating (created_at DESC);
+
+"""
 
 def _build_dsn() -> str:
     """从环境变量构建 DSN，兼容 IST_POSTGRES_DSN 或分项参数。"""

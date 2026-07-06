@@ -890,11 +890,20 @@ _WRITABLE_SUFFIXES = _TEXT_SUFFIXES | {".json", ".jsonl"}
 def _resolve_writable_path(raw_path: str | None) -> Path:
     """Resolve a path for write operations (four gates).
 
-    Writes are restricted to workspace/outputs/ only.
+    Writes are restricted to workspace/outputs/{username}/ only.
+    Username is obtained from IST_SSH_USER environment variable.
     """
     text = (raw_path or ".").strip() or "."
 
-    
+    # 获取当前用户的 username，用于创建用户专属目录
+    username = os.environ.get("IST_SSH_USER", "").strip()
+    if not username:
+        # 如果没有 IST_SSH_USER，尝试从其他环境变量获取
+        username = os.environ.get("IST_USERNAME", "").strip()
+    # 如果仍然没有 username，使用 "default" 作为兜底
+    if not username:
+        username = "default"
+
     parts = Path(text).parts
     if ".." in parts or text.startswith("~") or "~" in parts:
         raise PermissionError(
@@ -905,14 +914,22 @@ def _resolve_writable_path(raw_path: str | None) -> Path:
     if path.is_absolute():
         resolved = path.resolve()
     else:
-        
-        
-        if text.startswith("workspace/"):
+        # 根据路径前缀解析到正确的目录
+        if text.startswith("workspace/outputs/"):
+            # 已经包含完整前缀，插入 username
+            # workspace/outputs/file.txt -> workspace/outputs/{username}/file.txt
+            relative_part = text[len("workspace/outputs/"):]
+            resolved = (_WORKSPACE_ROOT / "outputs" / username / relative_part).resolve()
+        elif text.startswith("workspace/"):
+            # workspace/ 下的其他路径，不允许写入
             resolved = (_PROJECT_ROOT / path).resolve()
         elif text.startswith("outputs/"):
-            resolved = (_WORKSPACE_ROOT / path).resolve()
+            # outputs/file.txt -> outputs/{username}/file.txt
+            relative_part = text[len("outputs/"):]
+            resolved = (_WORKSPACE_ROOT / "outputs" / username / relative_part).resolve()
         else:
-            resolved = (_WORKSPACE_ROOT / "outputs" / path).resolve()
+            # 裸路径，默认写入到 outputs/{username}/ 下
+            resolved = (_WORKSPACE_ROOT / "outputs" / username / path).resolve()
 
     
     try:

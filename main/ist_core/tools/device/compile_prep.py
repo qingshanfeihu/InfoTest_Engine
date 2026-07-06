@@ -19,11 +19,28 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
+
+
+def _get_user_output_dir() -> Path:
+    """获取当前用户专属的 outputs 目录。
+
+    从 IST_SSH_USER 环境变量获取用户名，创建并返回 workspace/outputs/{username}/ 目录。
+    """
+    root = Path(__file__).resolve().parents[4]
+    username = os.environ.get("IST_SSH_USER", "").strip()
+    if not username:
+        username = os.environ.get("IST_USERNAME", "").strip()
+    if not username:
+        username = "default"
+    user_dir = root / "workspace" / "outputs" / username
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
 
 
 def _load_mindmap(path: Path) -> list:
@@ -205,7 +222,9 @@ def compile_prep(mindmap_path: str, out_name: str = "") -> str:
         manifest["env_capabilities"] = cap
     except Exception:  # noqa: BLE001
         logger.debug("env_capabilities.json 不可用(manifest 不带该节)", exc_info=True)
-    out = root / "workspace" / "outputs" / sub / "manifest.json"
+    # out = root / "workspace" / "outputs" / sub / "manifest.json"
+    user_dir = _get_user_output_dir()
+    out = user_dir / sub / "manifest.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 

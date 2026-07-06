@@ -71,12 +71,30 @@ def _load_input(args: argparse.Namespace) -> Any:
     sys.exit(2)
 
 def _resolve_thread_id() -> str:
-    """生成 thread_id。Web session 用 {username}_{session_id}，CLI 兜底用随机 ID。"""
+    """生成 thread_id。标准格式 {username}_{session_id}_{conversation_id}，CLI 兜底用随机 ID。"""
     user = os.environ.get("IST_SSH_USER", "").strip()
-    session = os.environ.get("IST_SESSION_ID", "").strip()
-    if user and session:
-        return f"{user}_{session}"
+    session = os.environ.get("IST_AUTH_SESSION_ID", "").strip()
+    conversation = os.environ.get("IST_CONVERSATION_ID", "").strip()
+    if user and session and conversation:
+        return f"{user}_{session}_{conversation}"
+    if user and conversation:
+        return f"{user}_{conversation}"
     return f"run-{uuid.uuid4().hex[:8]}"
+
+
+def validate_thread_id_ownership(thread_id: str, username: str) -> bool:
+    """多用户隔离校验：验证 thread_id 归属当前用户。
+
+    thread_id 格式为 {username}_{session_id}_{conversation_id}，
+    首段必须是当前 username，防止跨用户读取 checkpoint。
+    """
+    if not username:
+        return False
+    if thread_id.startswith(f"{username}_"):
+        return True
+    if thread_id == username:
+        return True
+    return False
 
 
 

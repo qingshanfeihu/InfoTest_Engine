@@ -196,15 +196,16 @@ def attribute(state: dict) -> dict:
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail="frozen")
         elif disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
-        elif (disp == "reflow" or layer == "G") and round_no < max_rounds:
+        elif (disp == "reflow" or layer == "G") and int(c.get("rounds_used") or 0) < max_rounds:
             c["evidence_excerpt"] = ctx[:4000]
             c["redispatch_reason"] = "verify_fail"
             led.transition(aid, L.S_PENDING)
-        elif round_no >= max_rounds:
-            # 轮次耗尽仍 fail 且无定性结论(上面的 known_defect/frozen/disposition
-            # 终态都没接住)→ 升级人工,不再静默判 failed_terminal:CNAME 570 实证
-            # 种子理解错的 case 烧满 3 轮后被吞成"编译失败",用户无从拍板。
-            # reflow/G 封顶也走这里(转 pending 后已无派发轮,是死滞留态)。
+        elif int(c.get("rounds_used") or 0) >= max_rounds:
+            # 轮次耗尽仍 fail 且无定性结论 → 升级人工,不静默判 failed_terminal(CNAME 570
+            # 实证:烧满轮的种子错被吞成"编译失败",用户无从拍板)。**判据用本 case
+            # rounds_used、非全局 round_no**(2026-07-07 根治):脏 checkpoint 续跑时全局轮次
+            # 带高、而新鲜 case rounds_used=1——旧版 round_no>=max 会把首 fail 就误升级、偷走
+            # reflow(实测 11→7 假回归)。reflow/G 封顶也走这里(转 pending 后已无派发轮)。
             led.transition(aid, L.S_ESCALATED,
                            last_detail="max_rounds_exhausted",
                            escalation_reason="max_rounds_exhausted")

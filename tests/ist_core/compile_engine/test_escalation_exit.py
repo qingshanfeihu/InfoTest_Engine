@@ -190,3 +190,37 @@ def test_transition_legality():
     led.transition("a2", L.S_PASSED)
     with pytest.raises(L.IllegalTransition):
         led.transition("a2", L.S_ESCALATED)
+
+
+def test_high_global_round_fresh_case_reflows_not_premature_escalate(monkeypatch):
+    """脏 checkpoint 续跑根治(2026-07-07):全局 round 带高、但 case 新鲜(rounds_used 从 0)时,
+    升级/reflow 判据用本 case rounds_used——新鲜 case 应走满 max_rounds reflow 才 escalate,
+    不因 round_no>=max 在首 fail 就误升级(旧版实测 11→7 假回归)。"""
+    def hi_prep(state):
+        out_root = SH.outputs_root()
+        (out_root / _OUT).mkdir(exist_ok=True)
+        (out_root / _OUT / "manifest.json").write_text(
+            json.dumps({"cases": [{"autoid": a} for a in (_AID_OK, _AID_BAD)]}), encoding="utf-8")
+        led = SH.load_ledger({**state, "out_name": _OUT,
+                              "ledger_ref": f"outputs/{_OUT}/engine_ledger.json"})
+        for a in (_AID_OK, _AID_BAD):
+            if not led.case(a).get("state"):
+                led.transition(a, L.S_PENDING)
+        led.save()
+        return {"phase_status": "ok", "out_name": _OUT,
+                "manifest_ref": f"outputs/{_OUT}/manifest.json",
+                "ledger_ref": str(led.path.relative_to(SH.project_root())),
+                "round": 5, "wave": 0, **SH.counts_update(led)}   # ← 全局轮次带高(模拟脏续跑)
+    monkeypatch.setattr(N, "prep", hi_prep)
+
+    led, rep = _run(monkeypatch, _make_digest(
+        {"layer": "V", "disposition": "reflow", "fix_direction": "stub"}),
+        max_rounds=3, thread="t-hi-round")
+
+    bad = led.case(_AID_BAD)
+    assert bad["state"] == L.S_ESCALATED
+    # 关键:走满 3 轮 reflow 才升级(非首 fail 即升级)——per-case rounds_used 判据、非全局 round_no
+    assert int(bad.get("rounds_used") or 0) == 3, f"新鲜 case 应走满 3 轮 reflow,实 {bad.get('rounds_used')}"
+    assert len(bad["fail_evidence"]) == 3, f"应有 3 轮逐轮证据,实 {len(bad['fail_evidence'])}"
+    assert led.case(_AID_OK)["state"] == L.S_PASSED
+    assert rep["outcome"] == "delivered_with_labels"

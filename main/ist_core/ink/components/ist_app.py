@@ -383,7 +383,8 @@ class IstInkApp:
                         continue
                     last_ft = ft
                     with self._app.lock:
-                        self._footer.update(fork_input=ft[0], fork_output=ft[1])
+                        self._footer.update(fork_input=ft[0], fork_output=ft[1],
+                                            fork_cache_hit=ft[2])
                         if new_lines:
                             # 供 footer 判「worker 静默多久」（无相位时 busy 行标注在等 worker）
                             self._footer.fork_last_event_ts = _time.time()

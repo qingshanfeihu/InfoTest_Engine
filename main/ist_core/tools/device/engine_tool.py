@@ -73,15 +73,9 @@ def compile_engine_run(mindmap_path: str, product_version: str,
     from langgraph.types import Command
     from main.ist_core.compile_engine.graph import build_compile_engine_graph
 
-    # fork token 直计:引擎独立 invoke 使 qa 图 callback 不传播,footer 的 fork
-    # 累计通道断——引擎运行期间打开 loader 直计(execute_fork_skill 末态累计),
-    # TUI 每 0.3s 拉 get_fork_tokens 即恢复真实成本显示。
-    from main.ist_core.skills.loader import set_direct_fork_tally
-    set_direct_fork_tally(True)
-    try:
-        return _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)
-    finally:
-        set_direct_fork_tally(False)
+    # fork token 计量:execute_fork_skill 在 fork invoke 上显式挂 _ForkUsageTally,
+    # 不依赖 callback 传播——引擎/线程池路径天然覆盖,无需开关。
+    return _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)
 
 
 def _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root) -> str:

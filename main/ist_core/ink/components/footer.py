@@ -69,6 +69,7 @@ class FooterPane:
         self.output_tokens: int = 0
         self.fork_input: int = 0      # fork(draft/grade)累计用量 → 合并进总 token + 成本显示
         self.fork_output: int = 0
+        self.fork_cache_hit: int = 0  # fork 累计 cache 命中(进成本 hit 价,不计则全按 miss 高估)
         self._latest_evidence: str = ""   # 最新一条 fork 步骤,塞进 busy 状态行(单行,不刷 transcript)
         self._cache_hit_tokens: int = 0
         self._llm_phase: str = ""
@@ -107,6 +108,7 @@ class FooterPane:
         output_tokens: int | None = None,
         fork_input: int | None = None,
         fork_output: int | None = None,
+        fork_cache_hit: int | None = None,
         latest_evidence: str | None = None,
         llm_phase: str | None = None,
         output_token_count: int | None = None,
@@ -133,6 +135,8 @@ class FooterPane:
             self.fork_input = fork_input
         if fork_output is not None:
             self.fork_output = fork_output
+        if fork_cache_hit is not None:
+            self.fork_cache_hit = fork_cache_hit
         if latest_evidence is not None:
             self._latest_evidence = latest_evidence
         if llm_phase is not None:
@@ -218,7 +222,7 @@ class FooterPane:
         """
         total_in = self.input_tokens + self.fork_input
         total_out = self.output_tokens + self.fork_output
-        hit = min(self._cache_hit_tokens, total_in)
+        hit = min(self._cache_hit_tokens + self.fork_cache_hit, total_in)
         miss = max(total_in - hit, 0)
         parts = [
             f"↑ {_format_token_count(total_in)} · ↓ {_format_token_count(total_out)} tokens"
@@ -264,18 +268,17 @@ class FooterPane:
             #   thinking/output=生成阶段（↓，用实时 _output_token_count——每 token 累加、
             #     含思考期 reasoning；input 也叠加到 ↑，让用户看到本轮总消耗）。
             if _state:
+                # 单箭头=当前相位方向(2026-07-06 用户要求"要不然在上传要不然在下载"):
+                # input 相位只显 ↑ 本轮增量;thinking/output 只显 ↓ 本轮增量(+当次实时)。
+                # 两方向同显被读成"堆积的会话累计";另一方向的量在收尾/空闲行仍可见。
                 if self._llm_phase == "input":
-                    _tok = (
-                        f"↑ {_format_token_count(_run_in)}"
-                        f" · ↓ {_format_token_count(_run_out)} tokens"
-                    )
+                    _tok = f"↑ {_format_token_count(_run_in)} tokens"
                 else:  # thinking / output
                     # ↓ 口径恒定为本轮累计;当次调用的实时估算以 (+N) 增量并列——
                     # 旧版此处直接显示当次估算(每调用清零),与等待分支的累计口径在同一
                     # 显示位轮换,用户读成"不同步/退化成 total"(2026-07-03 实证两次)。
                     _tok = (
-                        f"↑ {_format_token_count(_run_in)}"
-                        f" · ↓ {_format_token_count(_run_out)}"
+                        f"↓ {_format_token_count(_run_out)}"
                         f"(+{_format_token_count(self._output_token_count)}) tokens"
                     )
                 thinking_text = f"✶ {self._verb}… ({elapsed_str} · {_tok} · {_state})"

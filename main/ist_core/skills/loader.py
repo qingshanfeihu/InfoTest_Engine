@@ -607,42 +607,51 @@ def _fork_emit(text: str) -> None:
 
 # fork token 用量累计:compile 期主 agent 阻塞在 compile_pipeline、footer token 冻结,
 # 实际烧的是 draft/grade fork 的 LLM 调用。这里累加,供 TUI footer 单独显示真实成本。
-_FORK_TOKENS = [0, 0]  # [input, output]
+_FORK_TOKENS = [0, 0, 0]  # [input, output, cache_hit]
 _FORK_TOKENS_LOCK = threading.Lock()
 
 
-def get_fork_tokens() -> tuple[int, int]:
-    """返回 (input, output) fork token 累计(供 TUI 显示)。"""
+def get_fork_tokens() -> tuple[int, int, int]:
+    """返回 (input, output, cache_hit) fork token 累计(供 TUI 显示+成本计算)。"""
     with _FORK_TOKENS_LOCK:
-        return (_FORK_TOKENS[0], _FORK_TOKENS[1])
+        return (_FORK_TOKENS[0], _FORK_TOKENS[1], _FORK_TOKENS[2])
 
 
 def reset_fork_tokens() -> None:
     with _FORK_TOKENS_LOCK:
         _FORK_TOKENS[0] = 0
         _FORK_TOKENS[1] = 0
+        _FORK_TOKENS[2] = 0
 
 
-# V6 引擎直计开关:引擎图在薄工具内独立 invoke,qa 图的 callback 不传播到
-# 引擎内的 fork(工具边界有意隔离)→ parent_subagent 路零累计、footer 只剩 main
-# 自己的量(2026-07-06 用户实证)。引擎运行期间置 True,execute_fork_skill 从
-# fork 末态 messages 直接累计 usage;v5 路径(callback 活)保持 False 防双计。
-# main agent 同进程单 turn,引擎与 v5 fork 不会并发——模块级布尔即安全。
-_DIRECT_FORK_TALLY = False
 
 
-def set_direct_fork_tally(on: bool) -> None:
-    global _DIRECT_FORK_TALLY
-    _DIRECT_FORK_TALLY = bool(on)
+class _ForkUsageTally:
+    """挂在 fork invoke config 上的轻量 usage 回调——fork 每次 LLM 调用即时计量。
 
+    曾用「末态 messages 的 usage_metadata 累加」直计:fork 内摘要压缩把早期轮次
+    AIMessage 撤出末态(整轮丢计)、transient 重试第一次烧的、看门狗杀掉的 fork
+    全不进账——系统性偏小,与供应商官方(按每请求真实计量)对不上。显式挂载不依赖
+    callback contextvar 传播(线程池/引擎路径断传播),每条 on_llm_end 都到。
+    """
+    raise_error = False
+    ignore_llm = False
+    ignore_chain = True
+    ignore_agent = True
+    ignore_retriever = True
+    ignore_chat_model = False
+    run_inline = True
 
-def _tally_from_messages(messages: list) -> None:
-    for m in messages or []:
-        um = getattr(m, "usage_metadata", None)
-        if isinstance(um, dict) and (um.get("input_tokens") or um.get("output_tokens")):
-            accumulate_fork_tokens_from_usage({
-                "input_tokens": um.get("input_tokens") or 0,
-                "output_tokens": um.get("output_tokens") or 0})
+    def on_llm_end(self, response, **kwargs) -> None:  # noqa: ANN001
+        from main.ist_core.graph import extract_llm_usage
+        u = extract_llm_usage(response)
+        if u:
+            accumulate_fork_tokens_from_usage(u)
+
+    def __getattr__(self, name):  # 其余回调一律 no-op(鸭型 BaseCallbackHandler)
+        if name.startswith("on_"):
+            return lambda *a, **k: None
+        raise AttributeError(name)
 
 
 def accumulate_fork_tokens_from_usage(usage: dict) -> None:
@@ -655,10 +664,12 @@ def accumulate_fork_tokens_from_usage(usage: dict) -> None:
     try:
         it = int(usage.get("input_tokens") or 0)
         ot = int(usage.get("output_tokens") or 0)
+        hit = int(usage.get("prompt_cache_hit_tokens") or 0)
         if it or ot:
             with _FORK_TOKENS_LOCK:
                 _FORK_TOKENS[0] += it
                 _FORK_TOKENS[1] += ot
+                _FORK_TOKENS[2] += hit
     except Exception:  # noqa: BLE001
         pass
 
@@ -825,14 +836,15 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str) -> dict
     ``IST_FORK_STEP_EMIT=0`` 可关实时步骤(只留编排层的轮次标记)。"""
     from langchain_core.messages import HumanMessage
     inp = {"messages": [HumanMessage(content=rendered_body)]}
+    cfg = {"callbacks": [_ForkUsageTally()]}   # fork usage 唯一采集点(每次 LLM 调用即时计)
     stream = getattr(runnable, "stream", None)
     if not callable(stream) or not _fork_step_emit_enabled():
         # runnable 不支持流式 或 关了步骤显示(IST_FORK_STEP_EMIT=0)→ 退回阻塞 invoke,
         # 行为与旧版完全一致(只是看不到实时步骤)。
-        return runnable.invoke(inp)
+        return runnable.invoke(inp, cfg)
     final_state: dict = {}
     seen = 0
-    for state in stream(inp, stream_mode="values"):
+    for state in stream(inp, cfg, stream_mode="values"):
         if not isinstance(state, dict):
             continue
         final_state = state
@@ -897,8 +909,6 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
     _label = (tag or skill_name.replace("ist_compile_", "")).strip() or skill_name
     try:
         result = _invoke_fork_streamed(runnable, rendered_body, _label)
-        if _DIRECT_FORK_TALLY:
-            _tally_from_messages((result or {}).get("messages", []))
     except Exception as exc:
         # 递归上限是「已处理」的预期情况——compile_pipeline 会捕获后**立即 escalate**(不再做
         # 3 轮等价重做:同 brief 必然同样递归 spin)。回带确定性标记 `[recursion-limit]` 让上层

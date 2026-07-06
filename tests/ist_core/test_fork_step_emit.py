@@ -38,10 +38,10 @@ def test_streamed_fork_emits_each_tool_call(monkeypatch):
     states = _states()
 
     class _R:
-        def stream(self, inp, stream_mode=None):
+        def stream(self, inp, config=None, stream_mode=None):
             yield from states
 
-        def invoke(self, inp):
+        def invoke(self, inp, config=None):
             return states[-1]
 
     result = loader._invoke_fork_streamed(_R(), "body", "532519 draft")
@@ -63,7 +63,7 @@ def test_fallback_to_invoke_when_runnable_has_no_stream(monkeypatch):
     monkeypatch.setattr(loader, "_fork_emit", lambda t: emitted.append(t))
 
     class _OnlyInvoke:
-        def invoke(self, inp):
+        def invoke(self, inp, config=None):
             return {"messages": []}
 
     r = loader._invoke_fork_streamed(_OnlyInvoke(), "body", "x")
@@ -76,11 +76,11 @@ def test_disabled_emit_uses_invoke_not_stream(monkeypatch):
     calls = {"stream": 0, "invoke": 0}
 
     class _R:
-        def stream(self, inp, stream_mode=None):
+        def stream(self, inp, config=None, stream_mode=None):
             calls["stream"] += 1
             yield {"messages": []}
 
-        def invoke(self, inp):
+        def invoke(self, inp, config=None):
             calls["invoke"] += 1
             return {"messages": []}
 

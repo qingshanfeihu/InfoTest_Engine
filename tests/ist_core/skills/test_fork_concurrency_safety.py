@@ -38,7 +38,7 @@ class _FakeRunnable:
         self._active = 0
         self._lock = threading.Lock()
 
-    def invoke(self, state: dict) -> dict:
+    def invoke(self, state: dict, config=None) -> dict:
         with self._lock:
             self.invoke_count += 1
             self._active += 1

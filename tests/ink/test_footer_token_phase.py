@@ -123,16 +123,17 @@ def test_footer_thinking_line_no_phase_shows_run_increment_tokens():
 
 
 def test_footer_thinking_line_live_download_tokens():
-    """思考/回答期 ↓ 用**实时** _output_token_count（不是等 usage 上报、响应结束才有的会话累计）。
-    当前格式各相位都带 ↑本轮增量 · ↓实时下载 两箭头。"""
+    """思考/回答期只显 ↓(单箭头=当前相位方向,2026-07-06):本轮累计+(当次实时)。"""
     line = _busy_thinking_line(llm_phase="thinking", output_token_count=1234, output_tokens=0)
     # 口径统一(2026-07-03):↓ 恒显本轮累计,当次调用实时估算以 (+N) 并列——
     # 同一显示位不再随相位切换含义(旧版 thinking 显当次、等待显累计,被读成"不同步")。
     assert "↓ 0(+1.2k) tokens" in line              # 累计 0 + 当次实时 1.2k
     assert "深度思考中" in line
-    # input 相位：↑本轮增量 · ↓ 两箭头（不再是单箭头 "↑ 2.0k tokens"）
+    assert "↑" not in line                           # 下载相位不显上传箭头
+    # input 相位：只显 ↑ 本轮增量(单箭头=当前方向)
     line2 = _busy_thinking_line(llm_phase="input", input_tokens=2000)
-    assert "↑ 2.0k · ↓" in line2
+    assert "↑ 2.0k tokens" in line2
+    assert "↓" not in line2
     assert "接收/处理中" in line2
 
 

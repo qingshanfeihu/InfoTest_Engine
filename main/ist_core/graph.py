@@ -71,6 +71,43 @@ def _extract_latest_user_text(messages: list[Any]) -> str:
 
 
 
+
+def extract_llm_usage(response) -> dict:
+    """从 LLMResult 提取 usage(usage_metadata + llm_output 的 cache 字段合并)。
+
+    usage_metadata 有 input/output/total 但缺 cache;response.llm_output.token_usage
+    有 DeepSeek 顶层 prompt_cache_hit/miss_tokens 或 OpenAI prompt_tokens_details.cached_tokens。
+    这是主 agent(IstCallback)与 fork(loader._ForkUsageTally)共用的唯一口径——
+    每次 LLM 调用即时取 API 返回的真实计量,与供应商官方统计同源。
+    """
+    usage: dict = {}
+    try:
+        gens = getattr(response, "generations", None) or []
+        if gens and gens[0]:
+            msg = getattr(gens[0][0], "message", None)
+            um = getattr(msg, "usage_metadata", None)
+            if isinstance(um, dict):
+                usage = dict(um)
+        llm_out = getattr(response, "llm_output", None) or {}
+        raw = llm_out.get("token_usage") or llm_out.get("usage") or {}
+        if isinstance(raw, dict) and raw:
+            if not usage:
+                usage = dict(raw)
+            for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
+                if k in raw and k not in usage:
+                    usage[k] = raw[k]
+            if "prompt_cache_hit_tokens" not in usage:
+                ptd = raw.get("prompt_tokens_details") or {}
+                cached = ptd.get("cached_tokens")
+                if isinstance(cached, int) and cached > 0:
+                    usage["prompt_cache_hit_tokens"] = cached
+                    prompt_total = usage.get("input_tokens") or raw.get("prompt_tokens") or 0
+                    usage["prompt_cache_miss_tokens"] = max(prompt_total - cached, 0)
+    except Exception:  # noqa: BLE001
+        pass
+    return usage
+
+
 class _MainAgentProgressHandler(BaseCallbackHandler):
     """把 main_agent 的 LLM 输出 / 工具调用转发到全局 EventBus。
 
@@ -200,36 +237,10 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
                         if isinstance(rc, str) and rc.strip():
                             thinking_text = rc
                     
-                    um = getattr(msg, "usage_metadata", None) or {}
-                    if isinstance(um, dict):
-                        usage = dict(um)
                 if not text:
                     text = getattr(first, "text", "") or ""
 
-            # usage_metadata 有 input/output/total 但缺 cache 字段；
-            # response.llm_output.token_usage 有 prompt_cache_hit/miss_tokens。
-            # 两者合并（与 streaming.py 的提取逻辑对齐）。
-            if not usage:
-                llm_out = getattr(response, "llm_output", None) or {}
-                tu = llm_out.get("token_usage") or llm_out.get("usage") or {}
-                if isinstance(tu, dict):
-                    usage = dict(tu)
-            else:
-                llm_out = getattr(response, "llm_output", None) or {}
-                raw = llm_out.get("token_usage") or llm_out.get("usage") or {}
-                if isinstance(raw, dict):
-                    # DeepSeek: 顶层 prompt_cache_hit_tokens / prompt_cache_miss_tokens
-                    for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
-                        if k in raw and k not in usage:
-                            usage[k] = raw[k]
-                    # MiMo / OpenAI 标准: prompt_tokens_details.cached_tokens
-                    if "prompt_cache_hit_tokens" not in usage:
-                        ptd = raw.get("prompt_tokens_details") or {}
-                        cached = ptd.get("cached_tokens")
-                        if isinstance(cached, int) and cached > 0:
-                            usage["prompt_cache_hit_tokens"] = cached
-                            prompt_total = usage.get("input_tokens") or raw.get("prompt_tokens") or 0
-                            usage["prompt_cache_miss_tokens"] = max(prompt_total - cached, 0)
+            usage = extract_llm_usage(response)
         except Exception:  # noqa: BLE001
             text = ""
         text = (text or "").strip()
@@ -252,11 +263,10 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         # 该路径重新可见),reducer 端只认 usage_only,防双计。
         if usage:
             if sub_tags.get("parent_subagent"):
-                try:
-                    from main.ist_core.skills.loader import accumulate_fork_tokens_from_usage
-                    accumulate_fork_tokens_from_usage(usage)
-                except Exception:  # noqa: BLE001
-                    pass
+                # fork 的 usage 由 loader._ForkUsageTally(fork invoke 显式挂载)统一收集
+                # ——此处不再累计(contextvar 传播使本回调也能看到 fork 调用,双计过)。
+                # 本分支只负责「不发 usage_only」,防 fork 用量灌进主计数。
+                pass
             else:
                 self._emit_to_bus(
                     "llm_end",

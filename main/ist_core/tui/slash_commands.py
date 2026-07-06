@@ -156,13 +156,8 @@ def _cmd_exit(args: str, app: "IstApp") -> SlashCommandResult:
 
 
 def _cmd_version(args: str, app: "IstApp") -> SlashCommandResult:
-    # 版本从包元数据动态读(pyproject 单一事实源)——硬编码曾漂移(1.0.4 vs pyproject 1.0.5)
-    try:
-        from importlib.metadata import version as _pkg_version
-        v = _pkg_version("infotest-engine")
-    except Exception:  # noqa: BLE001
-        v = "unknown"
-    return InfoResult(text=f"infotest {v} (IST-Core)")
+    from main.common.version import app_version
+    return InfoResult(text=f"infotest {app_version()} (IST-Core)")
 
 
 def _cmd_threads(args: str, app: "IstApp") -> SlashCommandResult:

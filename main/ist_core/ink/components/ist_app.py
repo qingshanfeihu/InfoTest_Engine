@@ -414,7 +414,8 @@ class IstInkApp:
 
         
         self._transcript.append_message("")
-        self._transcript.append_message(f"  \x1b[1mInfoTest Engine v1.0.4\x1b[0m")
+        from main.common.version import app_version
+        self._transcript.append_message(f"  \x1b[1mInfoTest Engine v{app_version()}\x1b[0m")
         self._transcript.append_message(f"  \x1b[2m{model} · {os.getcwd()}\x1b[0m")
         self._transcript.append_message("")
         self._transcript.append_message(f"  \x1b[2m输入自然语言描述测试分析需求，自动调用工具查阅知识库。\x1b[0m")

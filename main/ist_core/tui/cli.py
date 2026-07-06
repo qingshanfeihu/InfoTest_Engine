@@ -261,7 +261,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.version:
         from main.ist_core.tui import __init__ as _init  # noqa: F401
-        print("infotest 1.0.5 (IST-Core)")
+        from main.common.version import app_version
+        print(f"infotest {app_version()} (IST-Core)")
         return 0
 
     

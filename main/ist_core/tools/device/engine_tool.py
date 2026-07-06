@@ -73,6 +73,15 @@ def compile_engine_run(mindmap_path: str, product_version: str,
     from langgraph.types import Command
     from main.ist_core.compile_engine.graph import build_compile_engine_graph
 
+    # 引擎运行元信息 → .events.jsonl(TUI 引擎卡建卡信号;失败静默)
+    try:
+        from main.ist_core.skills.loader import _fork_emit_event
+        _fork_emit_event({"event": "run_meta", "run": name, "kind": "engine",
+                          "mindmap": str(mindmap_path),
+                          "ledger": f"workspace/outputs/{name}/engine_ledger.json"})
+    except Exception:  # noqa: BLE001
+        pass
+
     # fork token 计量:execute_fork_skill 在 fork invoke 上显式挂 _ForkUsageTally,
     # 不依赖 callback 传播——引擎/线程池路径天然覆盖,无需开关。
     return _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)

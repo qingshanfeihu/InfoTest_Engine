@@ -37,6 +37,40 @@ def test_envelope_idempotent_and_nested_tags_kept():
     assert twice == once   # 幂等
 
 
+def test_parse_envelope_roundtrip_and_multiline():
+    body = "APV# show version\n第 2 行\n第 3 行"
+    name, status, parsed = te.parse_tool_result_envelope(te.envelope_text("dev_probe", body))
+    assert (name, status, parsed) == ("dev_probe", "ok", body)
+    # error status 往返
+    err_body = "error: case X 步骤载荷为空"
+    _, st, pb = te.parse_tool_result_envelope(te.envelope_text("compile_emit", err_body))
+    assert st == "error" and pb == err_body
+
+
+def test_parse_envelope_missing_close_tag():
+    """ToolResultPrune 剪过的旧消息可能只剩前半段——缺闭标签取开标签后全部。"""
+    truncated = '<tool_result name="fs_read" status="ok">\n前 160 字符…[已剪枝]'
+    name, status, body = te.parse_tool_result_envelope(truncated)
+    assert name == "fs_read" and status == "ok"
+    assert body == "前 160 字符…[已剪枝]"
+
+
+def test_parse_envelope_nested_inner_tags():
+    """内层嵌套节保留在 body;闭标签取最后一个(rfind)。"""
+    inner = '<skill_content name="x">正文</skill_content>'
+    wrapped = te.envelope_text("invoke_skill", inner)
+    _, _, body = te.parse_tool_result_envelope(wrapped)
+    assert body == inner
+
+
+def test_parse_envelope_non_envelope_returns_none():
+    assert te.parse_tool_result_envelope("普通文本 <tool_result 不在开头") is None
+    assert te.parse_tool_result_envelope("") is None
+    assert te.parse_tool_result_envelope(None) is None  # type: ignore[arg-type]
+    # 开头像信封但 header 结构不符 → None(调用方按原文用)
+    assert te.parse_tool_result_envelope("<tool_result 坏标签没有属性>x") is None
+
+
 def test_wrap_toolmessage_and_passthrough(monkeypatch):
     msg = ToolMessage(content="设备回显…", name="dev_probe", tool_call_id="t1")
     out = te._wrap(_Req("dev_probe"), msg)

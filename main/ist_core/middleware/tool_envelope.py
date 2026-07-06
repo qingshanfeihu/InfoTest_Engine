@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any, Awaitable, Callable
 
 from langchain.agents.middleware.types import AgentMiddleware
@@ -45,6 +46,38 @@ def envelope_text(name: str, text: str) -> str:
     status = "error" if text.lstrip().lower().startswith(("error:", "error ", "错误")) \
         or text.lstrip().startswith("ERROR:") else "ok"
     return f'<tool_result name="{name}" status="{status}">\n{text}\n</tool_result>'
+
+
+_ENVELOPE_HEAD_RE = re.compile(r'<tool_result\s+name="([^"]*)"\s+status="([^"]*)"\s*>')
+_ENVELOPE_CLOSE = "</tool_result>"
+
+
+def parse_tool_result_envelope(text: str) -> tuple[str, str, str] | None:
+    """解析 ``envelope_text`` 包出的信封,返回 ``(name, status, body)``;非信封返回 None。
+
+    显示层用它把信封拆回内容,不再把 ``<tool_result …>`` 开标签原文当摘要泄漏。
+    容忍两种残缺:缺闭标签(ToolResultPrune 剪过的旧消息)——body 取开标签后全部;
+    嵌套信封——闭标签 rfind 取最后一个,内层嵌套节保留在 body。解析失败返回 None,
+    调用方按原文使用。与 ``envelope_text`` 同文件对偶,格式契约单源。
+    """
+    if not isinstance(text, str):
+        return None
+    stripped = text.lstrip()
+    if not stripped.startswith("<tool_result"):
+        return None
+    m = _ENVELOPE_HEAD_RE.match(stripped)
+    if not m:
+        return None
+    body = stripped[m.end():]
+    close_idx = body.rfind(_ENVELOPE_CLOSE)
+    if close_idx >= 0:
+        body = body[:close_idx]
+    # envelope_text 是 >\n{text}\n</tool_result> —— 剥恰好一层首尾换行,精确往返
+    if body.startswith("\n"):
+        body = body[1:]
+    if body.endswith("\n"):
+        body = body[:-1]
+    return m.group(1), m.group(2), body
 
 
 def _wrap(request, result):

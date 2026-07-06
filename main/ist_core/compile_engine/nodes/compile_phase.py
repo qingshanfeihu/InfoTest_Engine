@@ -30,6 +30,7 @@ def prep(state: dict) -> dict:
         res = compile_prep.invoke({"mindmap_path": str(state.get("mindmap_path")),
                                    "out_name": out_name})
         if not manifest.is_file():
+            sh.emit_tick(led, {**state, "out_name": out_name}, "prep")
             return {"phase_status": "error", "out_name": out_name,
                     "error": f"prep 未产出 manifest: {str(res)[:200]}"}
         m = sh.read_json(manifest, {})
@@ -55,6 +56,7 @@ def prep(state: dict) -> dict:
         led.save()
         sh.emit(f"回收 {len(orphans)} 个派发孤儿(进程中断残留)")
 
+    sh.emit_tick(led, {**state, "out_name": out_name}, "prep")
     return {"phase_status": "ok", "out_name": out_name,
             "manifest_ref": str(manifest.relative_to(sh.project_root())),
             "ledger_ref": str(led.path.relative_to(sh.project_root())),
@@ -120,6 +122,7 @@ def worker_fanout(state: dict) -> dict:
         led.transition(aid, L.S_DISPATCHED)
     led.save()
     sh.emit(f"wave{int(state.get('wave') or 0) + 1}: 派 {len(pending)} worker")
+    sh.emit_tick(led, state, "worker_fanout")
 
     executor, limiter, ceiling = sh.fork_executor(len(pending))
     out_name = str(state.get("out_name"))
@@ -151,12 +154,14 @@ def worker_fanout(state: dict) -> dict:
                        produced_mtime=(sh.outputs_root() / aid / "case.xlsx").stat().st_mtime
                        if final == L.S_PRODUCED else None,
                        last_detail=detail)
+        sh.emit_tick(led, state, "worker_fanout")   # 每 case 落账即刷引擎卡
 
     with cf.ThreadPoolExecutor(max_workers=ceiling) as ex:
         list(ex.map(_run, pending))
     led.save()
     sh.emit(f"wave 完成: produced={len(led.in_state(L.S_PRODUCED))} "
             f"欠定={len(led.in_state(L.S_PENDING_DECISION))}")
+    sh.emit_tick(led, state, "worker_fanout")
     return {"phase_status": "ok", "wave": int(state.get("wave") or 0) + 1,
             **sh.counts_update(led)}
 
@@ -190,11 +195,13 @@ def ask_decision(state: dict) -> dict:
             ledgers.pop(aid, None)
     if not pend:
         led.save()
+        sh.emit_tick(led, state, "ask_decision")
         return {"phase_status": "ok", **sh.counts_update(led)}
 
     questions = build_questions(ledgers)
     if not validate_questions(questions, ledgers):   # 模板自检(构造即合法,失败=bug)
         led.save()
+        sh.emit_tick(led, state, "ask_decision")
         return {"phase_status": "error", "error": "问题模板自检失败", **sh.counts_update(led)}
 
     # 图级挂起:payload JSON 可序列化(官方要求);内部键(_autoid 等)留给桥接方路由。
@@ -227,4 +234,5 @@ def ask_decision(state: dict) -> dict:
         else:
             led.transition(aid, L.S_PENDING, redispatch_reason="user_decision")
     led.save()
+    sh.emit_tick(led, state, "ask_decision")
     return {"phase_status": "ok", **sh.counts_update(led)}

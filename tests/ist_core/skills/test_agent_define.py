@@ -56,7 +56,7 @@ def test_dispatch_via_execute_fork_skill(dyn_dirs, monkeypatch):
     _define()
     monkeypatch.setattr(loader, "get_subagent_runnable", lambda name: object())
     monkeypatch.setattr(loader, "_invoke_fork_streamed",
-                        lambda r, b, l: {"messages": [AIMessage(content="差异数:3")]})
+                        lambda r, b, l, **kw: {"messages": [AIMessage(content="差异数:3")]})
     out = loader.execute_fork_skill("dyn-xlsx-differ", brief="对比 A 和 B")
     assert out == "差异数:3"
 

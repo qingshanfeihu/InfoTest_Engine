@@ -370,10 +370,16 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
                 skill, len(norm), workers, len(skipped))
 
     def _run(item: dict) -> dict:
+        # tag=per-item 归属标识(2026-07-06):旧版不传,N worker 的 fastlog 行全是同一个
+        # skill 名 label、无法分辨哪行属于哪个 case;格式对齐引擎 `engine:{aid[-6:]}`——
+        # `{skill短名}:{autoid尾6}`(非 autoid key 取前 12)。
+        _k = str(item.get("key") or "").strip()
+        _short = (skill or "fork").replace("ist-compile-", "").replace("compile-", "")
+        _tag = f"{_short}:{_k[-6:]}" if len(_k) == 18 and _k.isdigit() else f"{_short}:{_k[:12]}"
         last_exc = None
         for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
             try:
-                out = execute_fork_skill(skill, item["brief"])
+                out = execute_fork_skill(skill, item["brief"], tag=_tag)
                 ok = not (isinstance(out, str) and out.startswith("ERROR:"))
                 return {"key": item["key"], "ok": ok, "output": out}
             except Exception as exc:  # noqa: BLE001
@@ -582,11 +588,14 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
 
             # 跑批进度 → evidence fastlog（TUI 300ms tail 同一文件即实时显示，零 TUI 改动）。
             # 降噪：完成数变化或 ≥30s 心跳才写一行；任何异常静默——可观测性不拖垮跑批。
+            # 双写(2026-07-06):人读 ▸ 行照旧(tail -f 契约);结构化 progress 事件带稳定
+            # key=runbatch:{submit}——TUI 卡片模式同 key 恒一行原地更新,不再 48 条心跳平铺。
             _t0 = time.time()
+            _prog_key = f"runbatch:{submit}"
             _prog_state = {"sig": "", "ts": 0.0}
             def _on_poll(st: dict) -> None:
                 try:
-                    from main.ist_core.skills.loader import _fork_emit
+                    from main.ist_core.skills.loader import _fork_emit, _fork_emit_event
                     now = time.time()
                     # 整卷单跑模式下 len(results) 开跑即满(框架一次性建全 per-case 条目),
                     # 旧版拿它当分子显示「34/34」恒满假进度(2026-07-03 实证)。改为诚实
@@ -600,11 +609,25 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                     tail = f" · {tail_txt}" if tail_txt else ""
                     _fork_emit(f"▸ 上机运行 {int(now - _t0)}s/{total_max}s"
                                f"(整卷 {len(autoids)} case 单跑){tail}")
+                    _fork_emit_event({"event": "progress", "key": _prog_key,
+                                      "phase": "上机", "elapsed_s": int(now - _t0),
+                                      "total_s": int(total_max), "n_cases": len(autoids),
+                                      "detail": tail_txt, "status": "running"})
                 except Exception:  # noqa: BLE001
                     pass
 
             run = client.run_and_wait(module, submit, build, autoids, max_s=total_max,
                                       progress_cb=_on_poll)
+            try:
+                from main.ist_core.skills.loader import _fork_emit_event as _fee
+                _run_err = run.get("error") or ("device_busy" if run.get("busy") else "")
+                _fee({"event": "progress", "key": _prog_key, "phase": "上机",
+                      "elapsed_s": int(time.time() - _t0), "total_s": int(total_max),
+                      "n_cases": len(autoids),
+                      "detail": str(_run_err)[:70] if _run_err else "完成",
+                      "status": "error" if _run_err else "done"})
+            except Exception:  # noqa: BLE001
+                pass
             if run.get("busy") or run.get("error") == "device_busy":
                 return json.dumps({"error": "device_busy", "busy": True,
                                    "message": run.get("message") or "环境忙：正在验证上一个用例，请稍后重试。"},

@@ -27,6 +27,7 @@ EventKind = Literal[
     "todo_list",
     "phase_marker",
     "evidence_added",
+    "fork_cards",
     "finding_emitted",
     
     

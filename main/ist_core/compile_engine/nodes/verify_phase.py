@@ -52,6 +52,7 @@ def merge(state: dict) -> dict:
         return {"phase_status": "error",
                 "error": f"合并失败: {str(res)[-400:]}", **sh.counts_update(led)}
     sh.emit(f"merge[{scope}] {len(target)} case → {name}/case.xlsx")
+    sh.emit_tick(led, state, "merge")
     return {"phase_status": "ok", "run_scope": scope,
             "merged_xlsx_ref": str(xlsx.relative_to(sh.project_root())),
             **sh.counts_update(led)}
@@ -79,6 +80,7 @@ def run_digest(state: dict) -> dict:
     if not already:
         from main.ist_core.tools.device.batch_tools import dev_run_batch_digest
         sh.emit(f"上机 round{round_no}({state.get('run_scope')}): {xlsx.parent.name}")
+        sh.emit_tick(led, {**state, "round": round_no}, "run_digest")
         for attempt in range(4):
             out = dev_run_batch_digest.func(str(xlsx))
             if "run_in_progress" in str(out) or "device_busy" in str(out):
@@ -119,6 +121,7 @@ def run_digest(state: dict) -> dict:
         else:
             led.transition(aid, L.S_FAILED_ACTIVE)
     led.save()
+    sh.emit_tick(led, {**state, "round": round_no}, "run_digest")
     return {"phase_status": "ok", "round": round_no,
             "last_run_ref": str(last_run.relative_to(sh.project_root())),
             **sh.counts_update(led)}
@@ -234,4 +237,5 @@ def attribute(state: dict) -> dict:
             else:
                 led.transition(aid, L.S_FAILED_TERMINAL, last_detail="attribution_missing")
     led.save()
+    sh.emit_tick(led, state, "attribute")
     return {"phase_status": "ok", **sh.counts_update(led)}

@@ -50,6 +50,36 @@ def emit(text: str) -> None:
         logger.debug("engine 进度 emit 失败", exc_info=True)
 
 
+def emit_tick(led: L.EngineLedger, state: dict, phase: str) -> None:
+    """引擎聚合进度 → .events.jsonl(TUI 引擎卡数据源)。
+
+    每条 tick 自含**全量** counts(ledger 即算即发,非增量)——消费端纯覆盖,乱序/
+    丢事件容忍;节点边界+每 case 落账后各发一次,幂等。失败静默(可观测性不拖垮引擎)。
+    """
+    try:
+        from main.ist_core.skills.loader import _fork_emit_event
+        c = led.counts()
+        counts = {
+            "pending": c.get(L.S_PENDING, 0),
+            "dispatched": c.get(L.S_DISPATCHED, 0),
+            "produced": c.get(L.S_PRODUCED, 0),
+            "pending_decision": c.get(L.S_PENDING_DECISION, 0),
+            "awaiting_user": c.get(L.S_AWAITING_USER, 0),
+            "passed": c.get(L.S_PASSED, 0),
+            "failed_active": c.get(L.S_FAILED_ACTIVE, 0),
+            "failed_terminal": c.get(L.S_FAILED_TERMINAL, 0),
+            "escalated": c.get(L.S_ESCALATED, 0),
+        }
+        _fork_emit_event({"event": "engine_tick",
+                          "run": str(state.get("out_name") or "engine"),
+                          "phase": phase,
+                          "round": int(state.get("round") or 0),
+                          "wave": int(state.get("wave") or 0),
+                          "counts": counts, "total": sum(counts.values())})
+    except Exception:  # noqa: BLE001
+        logger.debug("engine tick emit 失败", exc_info=True)
+
+
 def fork_executor(n_items: int):
     """[llm] 孔的执行器:AdaptiveLimiter+看门狗+transient 重试(步骤1 抽取件)。"""
     from main.ist_core.tools.device.batch_tools import _resolve_concurrency

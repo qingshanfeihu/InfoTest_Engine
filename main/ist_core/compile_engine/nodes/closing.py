@@ -40,6 +40,7 @@ def writeback(state: dict) -> dict:
             led.data["audit"]["notes"].append({"autoid": aid, "event": "behavior_promote_fail"})
     led.save()
     sh.emit(f"写回: {wrote}/{len(passed)} PASS case")
+    sh.emit_tick(led, state, "writeback")
     return {"phase_status": "ok", **sh.counts_update(led)}
 
 
@@ -150,6 +151,7 @@ def report(state: dict) -> dict:
     import os
     os.replace(tmp, rp)
     sh.emit(f"report: {outcome} pass={n_pass}/{n_total}")
+    sh.emit_tick(led, state, "report")
     return {"phase_status": "ok",
             "report_ref": str(rp.relative_to(sh.project_root())),
             **sh.counts_update(led)}

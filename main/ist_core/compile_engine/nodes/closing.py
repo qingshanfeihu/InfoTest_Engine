@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import time
 from pathlib import Path
 
 from main.ist_core.compile_engine import ledger as L
 from main.ist_core.compile_engine.nodes import _shared as sh
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------- [mech] writeback
@@ -135,6 +139,8 @@ def report(state: dict) -> dict:
                         "verdicts": cc.get("verdict_history", []),
                         "detail": cc.get("last_detail", ""),
                         "runtime_underdetermined": bool(cc.get("runtime_underdetermined")),
+                        "escalation_reason": cc.get("escalation_reason", ""),
+                        "fail_evidence": cc.get("fail_evidence", []),
                         "attribution": cc.get("attribution", {})}
                   for aid, cc in sorted(led.data["cases"].items())},
         "audit": led.data.get("audit", {}),
@@ -144,14 +150,201 @@ def report(state: dict) -> dict:
                  "ledger": state.get("ledger_ref")},
     }
     out_name = str(state.get("out_name") or "engine")
+    delivered = outcome in ("delivered_all_pass", "delivered_with_labels")
+    # 收尾①(交付成功):归档非 pass 卷 + md 报告——**写 engine_report 前产出**(refs 进报告),
+    # 两者都读 per-autoid/manifest,必须早于清 temp。收尾失败不阻断交付。
+    fin_summary = ""
+    if delivered:
+        try:
+            arch = _archive_unsuccessful(led, out_name)
+            md = _write_unsuccessful_md(led, state, rep, out_name)
+            rep["refs"]["archive_xlsx"] = arch
+            rep["refs"]["unsuccessful_md"] = md
+            n_np = len(_nonpass_autoids(led))
+            fin_summary = (f"归档非pass {n_np}" + (f"→{Path(arch).parent.name}" if arch else "")
+                           + (" · md✓" if md else ""))
+        except Exception:  # noqa: BLE001
+            logger.debug("交付收尾:归档/md 失败", exc_info=True)
     rp = sh.outputs_root() / out_name / "engine_report.json"
     rp.parent.mkdir(parents=True, exist_ok=True)
     tmp = rp.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
     import os
     os.replace(tmp, rp)
-    sh.emit(f"report: {outcome} pass={n_pass}/{n_total}")
+    # 收尾②:清 temp——**最后一步**(md/归档/engine_report 均已落盘、读取已完成)。
+    if delivered:
+        try:
+            n_rm = _cleanup_temp(led, out_name)
+            fin_summary += (f" · 清{n_rm}项" if n_rm else " · 留temp")
+        except Exception:  # noqa: BLE001
+            logger.debug("交付收尾:清 temp 失败", exc_info=True)
+    sh.emit(f"report: {outcome} pass={n_pass}/{n_total}"
+            + (" · " + fin_summary if fin_summary else ""))
     sh.emit_tick(led, state, "report")
     return {"phase_status": "ok",
             "report_ref": str(rp.relative_to(sh.project_root())),
             **sh.counts_update(led)}
+
+
+# ============================================ 交付收尾:归档卷 + md 报告 + 清 temp
+# 需求(用户 2026-07-07):① 非 pass 用例(缺陷/改描述/编写卡死/上机对不上/设备报错)如实
+# 归档进独立 excel(主卷保持全绿);② 出 unsuccessful_cases.md 全量报告(脑图原始/自动化/
+# ask_user 改动/逐轮 CUT/设备原文/main 判断/bug);③ 交付后清 temp。md 自足→不押 LangSmith。
+# **顺序铁律**:先产全量交付物(archive→md,读 per-autoid/manifest/provenance)再删。
+
+_NONPASS_STATES = (L.S_FAILED_TERMINAL, L.S_ESCALATED, L.S_AWAITING_USER)
+
+
+def _nonpass_autoids(led) -> list[str]:
+    return sorted(a for a, c in led.data["cases"].items()
+                  if c.get("state") in _NONPASS_STATES)
+
+
+def _fail_category(attr: dict, st: str) -> str:
+    """失败分类(桶):由 attribution.layer/disposition + state 机械判,给 md 一眼归类。"""
+    disp = str((attr or {}).get("disposition") or "")
+    layer = str((attr or {}).get("layer") or "")
+    if st == L.S_ESCALATED:
+        return "编写卡死/引擎穷尽(升级人工)"
+    if disp == "defect_candidate" or layer == "product_defect":
+        return "产品缺陷"
+    if disp == "env_blocked":
+        return "环境阻塞"
+    if layer == "G":
+        return "设备执行报错/语法拒绝"
+    if layer == "V":
+        return "上机输出与编写不符"
+    if st == L.S_AWAITING_USER:
+        return "改描述/待人工厘清"
+    return "未分类"
+
+
+def _archive_unsuccessful(led, out_name: str) -> str | None:
+    """全部非 pass case 合并成独立归档卷 ``<批名>_unsuccessful/case.xlsx``。
+
+    走 ``compile_emit_merged`` 的 ``cases_json`` 通道——**gate-free**:交付门(grade 凭证/
+    lint/CUT 拒)是给主交付卷的,归档的本就是过不了门的失败卷,自己 ``_load_case_rows`` 抽行
+    绕过。返回相对路径或 None(无非 pass / 全部回读失败)。"""
+    aids = _nonpass_autoids(led)
+    if not aids:
+        return None
+    from main.ist_core.tools.device.precedent_tools import _load_case_rows
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit_merged
+    cases = []
+    for aid in aids:
+        xp = sh.outputs_root() / aid / "case.xlsx"
+        if not xp.is_file():
+            continue
+        try:
+            rows = _load_case_rows(str(xp))
+        except Exception:  # noqa: BLE001
+            continue
+        if rows:
+            cases.append({"autoid": aid, "steps": rows})
+    if not cases:
+        return None
+    arch_name = f"{out_name}_unsuccessful"
+    compile_emit_merged.func(cases_json=json.dumps(cases, ensure_ascii=False),
+                             out_name=arch_name)
+    xlsx = sh.outputs_root() / arch_name / "case.xlsx"
+    return str(xlsx.relative_to(sh.project_root())) if xlsx.is_file() else None
+
+
+def _write_unsuccessful_md(led, state, rep: dict, out_name: str) -> str | None:
+    """逐非 pass case 全量报告(删 temp 前生成、自足)。数据源:manifest(脑图原始 title+
+    step_intents)/ provenance(自动化 steps)/ user_decision(ask_user 改动)/ rep 的
+    fail_evidence(逐轮 device 原文)+ attribution(main 判断/bug)。"""
+    aids = _nonpass_autoids(led)
+    if not aids:
+        return None
+    base = sh.outputs_root() / out_name
+    manifest = sh.read_json(base / "manifest.json", {})
+    mcases = {str(c.get("autoid")): c for c in (manifest.get("cases") or [])}
+    rcases = rep.get("cases", {})
+    from collections import Counter
+    cats = Counter(_fail_category((rcases.get(a, {}).get("attribution") or {}),
+                                  led.case(a).get("state")) for a in aids)
+    out = [f"# 未成功用例报告 — {out_name}",
+           f"> 脑图: {manifest.get('source', '')}",
+           f"> 生成: {time.strftime('%Y-%m-%d %H:%M', time.localtime())} · 共 {len(aids)} 个未成功",
+           "> 分类: " + " · ".join(f"{k} {v}" for k, v in cats.items()),
+           ""]
+    for aid in aids:
+        c = led.case(aid)
+        rc = rcases.get(aid, {})
+        attr = rc.get("attribution") or {}
+        mc = mcases.get(aid, {})
+        out.append(f"## …{aid[-6:]} · 【{_fail_category(attr, c.get('state'))}】{mc.get('title', '')}")
+        out.append(f"- autoid `{aid}` · state `{c.get('state')}` · 轮次 {c.get('rounds_used')} "
+                   f"· verdicts {rc.get('verdicts', [])}")
+        out.append("\n### 脑图原始用例")
+        out.append(f"- 描述: {mc.get('title', '') or '(无)'}")
+        for si in (mc.get("step_intents") or []):
+            out.append(f"  - 过程: {si.get('desc', '')} → 预期: {si.get('expected', '') or '(未写)'}")
+        prov = sh.read_json(sh.outputs_root() / aid / "case.provenance.json", {})
+        out.append("\n### 自动化用例(编译产物)")
+        for stp in (prov.get("steps") or []):
+            src = stp.get("source") or {}
+            ref = (":" + src.get("ref")) if src.get("ref") else ""
+            out.append(f"  - `{stp.get('E', '')}`/`{stp.get('F', '')}`: {stp.get('G', '')} "
+                       f"[{stp.get('layer', '')}·{src.get('kind', '')}{ref}]")
+        ud = sh.read_json(sh.outputs_root() / aid / "user_decision.json", {})
+        if ud:
+            out.append(f"\n### ⚙ ask_user 改动: **{ud.get('decision', '')}** · 断言形态="
+                       f"{ud.get('expected_assertion_form', '') or '—'}"
+                       + (f" · 备注: {ud.get('note')}" if ud.get("note") else ""))
+        out.append("\n### 逐轮 CUT 原因 + 设备实际输出")
+        fe = rc.get("fail_evidence") or []
+        if not fe:
+            out.append("  (无逐轮证据)")
+        for e in fe:
+            out.append(f"\n**Round {e.get('round')}** — verdict={e.get('verdict')}")
+            out.append("```\n" + str(e.get("device_context") or "").rstrip() + "\n```")
+        out.append("\n### main 归因判断")
+        out.append(f"- layer `{attr.get('layer', '') or '—'}` · disposition "
+                   f"`{attr.get('disposition', '') or '—'}`")
+        if attr.get("fix_direction"):
+            out.append(f"- 判断/修法: {attr.get('fix_direction')}")
+        dc = attr.get("defect_candidate")
+        if isinstance(dc, dict) and dc:
+            out.append("\n### 🐞 缺陷描述")
+            for k in ("repro", "expected_with_source", "actual", "version", "ticket_id"):
+                if dc.get(k):
+                    out.append(f"- {k}: {dc.get(k)}")
+        out.append("\n---\n")
+    md_path = base / "unsuccessful_cases.md"
+    md_path.write_text("\n".join(out), encoding="utf-8")
+    return str(md_path.relative_to(sh.project_root()))
+
+
+def _cleanup_temp(led, out_name: str) -> int:
+    """交付后清 temp:per-autoid dir + 子集卷(``<批名>_fails_r*``)+ 批目录中间 JSON
+    (manifest/last_run)。**保留**交付物:主卷 case.xlsx + engine_report.json +
+    unsuccessful_cases.md + engine_ledger.json(审计)+ 归档卷。``IST_ENGINE_KEEP_TEMP=1``
+    保留全部供 debug。返回删除项数。"""
+    # 默认删(交付后清 temp);IST_ENGINE_KEEP_TEMP=1 保留供 debug。此闸是「默认关」——
+    # 不用 sh.env_flag(它是「默认开」语义,会把未设也当保留),直接判显式开关值。
+    if (os.environ.get("IST_ENGINE_KEEP_TEMP") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return 0
+    import shutil
+    root = sh.outputs_root()
+    n = 0
+    for aid in list(led.data["cases"].keys()):
+        d = root / aid
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+            n += 1
+    for d in root.glob(f"{out_name}_fails_r*"):
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+            n += 1
+    base = root / out_name
+    for f in ("manifest.json", "last_run.json"):
+        p = base / f
+        if p.is_file():
+            try:
+                p.unlink()
+                n += 1
+            except Exception:  # noqa: BLE001
+                pass
+    return n

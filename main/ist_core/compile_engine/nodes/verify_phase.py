@@ -163,6 +163,15 @@ def attribute(state: dict) -> dict:
         ctx = str(it.get("device_context") or "")
         attr = it.get("_attribution") if isinstance(it.get("_attribution"), dict) else {}
         c = led.case(aid)
+        # 逐轮 fail 证据(升级/报告用):main 复述曾凭上下文记忆重构设备回显并伪造
+        # 配置会话(CNAME 570 LangSmith 实证)——真原文按轮存进台账,复述才有据可引。
+        # 按 round 幂等(checkpoint 续跑重入 attribute 不重复追加)。
+        ev = c.setdefault("fail_evidence", [])
+        if not any(e.get("round") == round_no for e in ev if isinstance(e, dict)):
+            ev.append({"round": round_no, "verdict": "fail",
+                       # 20000(2026-07-07):unsuccessful_cases.md 从 fail_evidence 读逐轮设备
+                       # 原文,清 temp 后自足(不押 LangSmith)——旧 800 会截掉配置会话/回显。
+                       "device_context": ctx[:20000]})
         # 冻结(digest 已判连续同签名)→ 终态
         frozen = (sh.outputs_root() / aid / ".frozen.json").is_file()
         if attr:
@@ -187,12 +196,18 @@ def attribute(state: dict) -> dict:
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail="frozen")
         elif disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
-        elif disp == "reflow" or layer == "G":
+        elif (disp == "reflow" or layer == "G") and round_no < max_rounds:
             c["evidence_excerpt"] = ctx[:4000]
             c["redispatch_reason"] = "verify_fail"
             led.transition(aid, L.S_PENDING)
         elif round_no >= max_rounds:
-            led.transition(aid, L.S_FAILED_TERMINAL, last_detail="max_rounds")
+            # 轮次耗尽仍 fail 且无定性结论(上面的 known_defect/frozen/disposition
+            # 终态都没接住)→ 升级人工,不再静默判 failed_terminal:CNAME 570 实证
+            # 种子理解错的 case 烧满 3 轮后被吞成"编译失败",用户无从拍板。
+            # reflow/G 封顶也走这里(转 pending 后已无派发轮,是死滞留态)。
+            led.transition(aid, L.S_ESCALATED,
+                           last_detail="max_rounds_exhausted",
+                           escalation_reason="max_rounds_exhausted")
         else:
             need_fork.append(aid)
 
@@ -235,7 +250,11 @@ def attribute(state: dict) -> dict:
             elif disp == "transient":
                 pass   # 保持 failed_active:不重编直接随下轮复跑
             else:
-                led.transition(aid, L.S_FAILED_TERMINAL, last_detail="attribution_missing")
+                # fork 跑了但没落回可路由的 disposition——引擎不知道怎么办,这不是
+                # 定性结论,升级人工而非吞成 failed_terminal。
+                led.transition(aid, L.S_ESCALATED,
+                               last_detail="attribution_missing",
+                               escalation_reason="attribution_missing")
     led.save()
     sh.emit_tick(led, state, "attribute")
     return {"phase_status": "ok", **sh.counts_update(led)}

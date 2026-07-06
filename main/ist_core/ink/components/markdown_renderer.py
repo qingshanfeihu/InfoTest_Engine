@@ -192,7 +192,12 @@ class MarkdownRenderer:
             no_color=False,
             highlight=False,
         )
-        md = Markdown(text, code_theme="monokai")
+        # code_theme 必须是 ANSI 系主题:monokai 等真彩主题给代码行涂固定 24-bit
+        # 前景(无语言围栏也涂 248,248,242 浅灰白),背景又被下面剥掉——浅色终端上
+        # 整块近乎不可见(实证:main 复述 device_context 的围栏段)。ansi_light 对
+        # 裸围栏不加前景(终端默认色,深浅主题都可读),带语言时用基础 ANSI 色由
+        # 终端调色板解色。
+        md = Markdown(text, code_theme="ansi_light")
         console.print(md, end="")
         rendered = buf.getvalue()
         rendered = _NON_SGR_RE.sub("", rendered)

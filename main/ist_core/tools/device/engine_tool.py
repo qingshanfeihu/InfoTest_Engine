@@ -127,6 +127,10 @@ def _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)
     if not rp.is_file():
         return f"error: 引擎结束但无报告(state={json.dumps(result, ensure_ascii=False, default=str)[:300]})"
     rep = json.loads(rp.read_text(encoding="utf-8"))
+    return _summarize_report(rep, str(rp.relative_to(root)), name)
+
+
+def _summarize_report(rep: dict, report_ref: str, name: str) -> str:
     t = rep.get("totals", {})
     lines = [
         f"编译引擎完成: {rep.get('outcome')}(轮次 {rep.get('rounds')})",
@@ -134,8 +138,31 @@ def _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)
         f",待用户拍板 {t.get('awaiting_user', 0)}"
         f",阻塞/缺陷标注 {t.get('failed_terminal', 0)}"
         f",升级人工 {t.get('escalated', 0)}",
-        f"机读报告: {rp.relative_to(root)}",
+        f"机读报告: {report_ref}",
     ]
+    # 非 pass 用例逐条附证据:main 复述曾凭上下文记忆重构设备回显(伪造配置会话、
+    # 把「设备不支持」说成「执行成功」)——返回里给真原文摘录,复述才有据可引。
+    evid = []
+    for aid, cc in sorted((rep.get("cases") or {}).items()):
+        st = str(cc.get("state") or "")
+        if st not in ("escalated", "failed_terminal"):
+            continue
+        reason = cc.get("escalation_reason") or cc.get("detail") or st
+        tag = "升级人工" if st == "escalated" else "标注终态"
+        line = f"- [{tag}] …{aid[-6:]}: {reason}"
+        ev = cc.get("fail_evidence") or []
+        last = ev[-1] if ev and isinstance(ev[-1], dict) else {}
+        ctx = str(last.get("device_context") or "").strip()
+        if ctx:
+            line += f" | 末轮设备回显: {ctx[:200]}"
+        evid.append(line)
+    if evid:
+        lines.append("非 pass 用例证据(复述设备行为只引用下面的原文摘录、"
+                     "engine_report 的 fail_evidence 或 last_run.json 的"
+                     " device_context,不要凭记忆重构回显):")
+        lines.extend(evid)
+        lines.append(f"完整逐轮回显: {report_ref} 各 case 的 fail_evidence;"
+                     f"整卷原文 workspace/outputs/{name}/last_run.json")
     if rep.get("error"):
         lines.append(f"中止原因: {rep['error']}")
     return "\n".join(lines)

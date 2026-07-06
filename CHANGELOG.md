@@ -1,6 +1,42 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.5-beta.1] - 2026-07-06
+
+> 1.0.5 系列首个 beta 发布。下方 [1.0.5] - 2026-06-09 为内部里程碑（未发布 GitHub release）；本条覆盖其后约 84 个提交（V4 收口 → V5 编排 → **V6 循环驱动编译引擎**）与本次发布收口。
+
+### V6 编译引擎：LangGraph StateGraph 图 DSL（`main/ist_core/compile_engine/`）
+
+- **编译闭环 = 一张图**：8 节点三类（[mech] 直调工具 `.func` / [llm] 孔经 `execute_fork_skill` / [user] 孔经官方 `interrupt`+`Command(resume)`），条件边为 state 计数纯函数；main agent 只调薄工具 `compile_engine_run(mindmap, version)` 一次。回退 `IST_COMPILE_ENGINE=0` 走 v5 main-orchestrated
+- **断点续跑**：独立 SqliteSaver 分库（`runtime/compile_engine_checkpoints.db`，thread_id=`engine:<out_name>`），同参重调即从 checkpoint 继续；`run_marker` 幂等防重烧设备轮。对照轮中实战恢复 2 次
+- **EngineLedger 迁移合法性表**：`passed→pending_compile` 在数据层非法（修复轮改坏 pass 卷的事故形态写不出来）；pass 即锁卷面 mtime，交付前复核；派发审计（重派集 ⊆ fail 集）
+- **欠定先问后落**：worker 报欠定 → 引擎 interrupt 挂起问用户（机械模板问题文本，含 autoid 与顺序语义句）→ 决策落 `user_decision.json` 带回重派；`compile_user_decision` 无含 autoid 的问答台账记录即拒（越权拍板的机器门）
+- **终验整卷路由**（beta.1 收口修复）：子集轮收敛于「部分 pass+部分 terminal」时曾直接 writeback——终验整卷从未发生，主交付卷停留旧版。现收敛后先回 merge 终验整卷再收口，无环
+- **三域对照轮**：dongkl 21/34（重灾域）→ yzg 25/26（豁免后 100%）→ zhaiyq 51/53（新域首跑 71.7%→豁免后 98.1%）；编排事故全程 0
+
+### 断言质量门体系（`structural_gate`，全部从框架 mirror 源码语义推导）
+
+- **恒真/恒假断言族必崩门**：框架 `found/not_found` 为 `re.DOTALL` 无 MULTILINE、窗口=命令回显+数据+提示符——由此机械成立六门：行首/结尾锚必假、断言模式命中命令原文（恒真假 PASS，588691 三轮 fail 的真根因形态）、零 check_point 卷恒 FAIL、I 注入 format 结构坏崩卷、H 撞框架名字空间（ast 解析 mirror 闭集）、cmd_config 多行拍平粘连
+- capture 引用门（未定义引用 NameError 崩卷）从成品卷 lint 前移进 emit 无条件必崩门
+- 存量反扫 325 卷：当前交付 pass 单卷零命中；3 个历史归档 PASS 卷证实携恒真断言（当年 PASS 为假验证）
+
+### 归因与修法生效性闭环
+
+- last_run 按 autoid merge 时保留上一轮 `_attribution` 为 `_prev_attribution`（曾整条覆盖丢失）；attributor 对重编后再 fail 的 case 先核对「上轮修法上卷了吗/同签名复现了吗」，方向已证伪禁同向再开
+- `.frozen.json` 重写保留 `overrides` 换法历史；frozen 语义澄清：≠终态，是「重编必须换法」标记（emit `override_frozen_reason` 门强制声明），终态=frozen∧轮次封顶
+- 机械预判收缩为协议级事实（G 语法拒标记/文件级崩溃签名），其余交 LLM 读原文归因；known_defects token 组匹配短路
+
+### 知识闭环与构造式接口
+
+- **device_verified 第二权威源**：digest 落 `runtime/logs/verified_runs.jsonl` 防篡改台账（agent 沙箱黑名单内），footprint 写回经三重校验（台账存在∧pass∧命令∈卷面）——运行时命令不在手册导致的写回全 skip 就此修通
+- **行为知识两段闸**：`submit_behavior_fact` 候选登记（observe_cmd∈卷面校验）→ 真 PASS 晋升挂 footprint 叶节点
+- **blocks 构造式接口**：`compile_emit(blocks=…)` 组合子 + `ref` 字段（`footprint:`/`manual:`/`precedent:`/`config_derived`/`intent`）自动组装 provenance；emit 打回率从基线 48-52% 降至 12-20%
+- 载荷通道一致性：批量入参原生数组+workspace 文件双通道，批量出参落盘全文+内联留尾
+
+### Token 计量与 TUI
+
+- **fork 计量重做**（beta.1 收口）：废弃「末态 messages 累计」（摘要撤史/transient 重试/看门狗超时全丢计，系统性偏小、与供应商官方统计对不上），改为 fork invoke 显式挂 `_ForkUsageTally` 回调——每次 LLM 调用即时取 API usage，与官方同源；fork cache 命中进成本公式（此前全按 miss 价高估）
+- footer busy 行相位单箭头：上传相位只显 `↑ 本轮增量`，思考/生成相位只显 `↓ 本轮累计(+当次实时)`
+- 多供应商适配（minimax/deepseek）；mimo 深度思考多轮 reasoning_content 非流式漏收修复；TUI 渲染修复（灰块阴影/think 内联/零响应消毒）
 
 ### 死循环护栏 + 上传/下载结构化信号 + 文档去外部来源引用
 

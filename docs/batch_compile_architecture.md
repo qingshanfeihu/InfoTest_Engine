@@ -1,5 +1,7 @@
 # 批量编译架构（整脑图 → 一个 excel）
 
+> **演进备注(2026-07-06)**:本文的 `ist_compile_batch`/pipeline 编排是 v4 时代主路,现为二级 fallback;主路为 **V6 StateGraph 引擎**(见 [DESIGN_v6_engine.md](DESIGN_v6_engine.md)),v5 main-orchestrated 为一级 fallback(`IST_COMPILE_ENGINE=0`)。
+
 ## 背景
 
 `ist_compile_batch` 是**唯一的编译入口**（2026-06-15 合并：原单条编排器 `ist_compile_orchestrate` 已删除）。无论用户要编译**单条** case 还是把**整个脑图文件**（含几十上百条 case）/ **多个 txt** 批量转成 excel，都走本 skill。逐条从头编译既慢又重复——每条都从头解析、查证、生成；`ist_compile_batch` 通读用例一次性解析出 case 清单，再按阶段把工作铺开给子流程，能并行的并行、必须串行的串行。**单条是 N=1 特例**：prep 出 1 case 的 manifest、draft fanout 并发度 1、merged 退化成单 case+哨兵，同一流程无需特殊分支。

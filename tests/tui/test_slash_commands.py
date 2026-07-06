@@ -128,7 +128,8 @@ def test_dispatch_version_returns_info_result_with_version():
     result = dispatch_slash_command(p, _mock_app())
     assert isinstance(result, InfoResult)
     assert "infotest" in result.text
-    assert "1.0.4" in result.text
+    # 版本号从包元数据动态读(pyproject 单一事实源),不锁具体值——硬编码曾漂移
+    assert result.text != "infotest  (IST-Core)"
 
 
 def test_dispatch_resume_without_arg_returns_error():

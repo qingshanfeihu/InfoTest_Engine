@@ -2,7 +2,8 @@
 
 本文档是 InfoTest Engine 的核心架构说明，覆盖端到端数据流、模块职责、以及历史兼容性机制。
 
-为了进一步深入理解系统的设计细节，请阅读以下 4 篇全新编写的高质量底座架构设计文档：
+为了进一步深入理解系统的设计细节，请阅读以下底座架构设计文档：
+- **V6 编译引擎(1.0.5-beta.1 主路)**：[docs/DESIGN_v6_engine.md](docs/DESIGN_v6_engine.md) (LangGraph StateGraph 图 DSL、三层栈数据形态、质量门与知识闭环)
 - **深度记忆系统**：[docs/memory_system.md](docs/memory_system.md) (L1/L2/L3层、庄周梦蝶 DreamTask、足迹 Footprint 知识树)
 - **零信任多根沙箱**：[docs/file_sandbox.md](docs/file_sandbox.md) (多根路径、遍历防护、三闸与四闸拦截防御)
 - **KMS 知识管线**：[docs/kms_pipeline.md](docs/kms_pipeline.md) (去向量化 RAG 决策、知识库/工作区分流、Markdown 高保真直出)

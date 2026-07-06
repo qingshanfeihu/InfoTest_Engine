@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_OPENAI_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
 DEFAULT_IST_MODEL = "mimo-v2.5-pro"
-DEFAULT_HAIKU_MODEL = "mimo-v2.5"
+DEFAULT_HAIKU_MODEL = "mimo-v2.5"   # 兼容别名(旧 env/调用面);新代码用 DEFAULT_FLASH_MODEL
+DEFAULT_FLASH_MODEL = "deepseek-v4-flash"
 
 # 默认请求超时 / 重试。streaming 模式下端点中途 stall 时，没有 timeout
 # 会无限挂（TUI 永远转圈、无报错）。可用 env 覆盖。
@@ -108,7 +109,7 @@ def _resolve_endpoint() -> tuple[str, str]:
     return base_url, api_key
 
 
-def _build_chat_model(model_name: str, **kwargs: Any):
+def _build_chat_model(model_name: str, effort: str = "", **kwargs: Any):
     """统一的 ChatOpenAI 工厂（OpenAI 兼容端点）。"""
     try:
         from langchain_openai import ChatOpenAI  # noqa: F401  type: ignore[import-not-found]
@@ -129,6 +130,17 @@ def _build_chat_model(model_name: str, **kwargs: Any):
         _param = thinking_param_for_model(model_name, _on)
         if _param is not None:
             extra_body["thinking"] = _param
+
+    # 思考深度 reasoning_effort(2026-07-06):deepseek 族支持 high|max,平台默认 max
+    # (思考+流式是标准形态,深想是默认;IST_EFFORT=high 全局降,或 effort= 按调用点覆盖
+    # ——fork 经 agents md frontmatter 的 effort: 字段)。仅思考开启且 deepseek 族注入,
+    # 其他族支持面未证实、不赌 400;非法值按 max 处理。
+    if ("reasoning_effort" not in extra_body
+            and extra_body.get("thinking", {}).get("type") in ("enabled", "adaptive")):
+        _fam = (model_name or "").lower().rpartition("/")[-1]
+        if _fam.startswith("deepseek"):
+            _eff = (effort or os.environ.get("IST_EFFORT") or "max").strip().lower()
+            extra_body["reasoning_effort"] = _eff if _eff in ("high", "max") else "max"
 
     # 深度思考开启(enabled/adaptive)时端点多强制自家采样参数、不接受自定义(如 mimo 官方
     # deep-thinking 页)。再发 0.0/0.5 是冗余,且可能触发端点告警或被静默忽略。仅未开 thinking
@@ -159,7 +171,7 @@ def _build_chat_model(model_name: str, **kwargs: Any):
 
 
 def build_agent_chat_model(**kwargs: Any):
-    """主 LLM 工厂。模型取 ``IST_MODEL``。"""
+    """主 LLM 工厂。模型取 ``IST_MODEL``;``effort=`` 可按调用点覆盖思考深度(high/max)。"""
     model_name = (
         kwargs.pop("model", None)
         or os.environ.get("IST_MODEL")
@@ -169,13 +181,12 @@ def build_agent_chat_model(**kwargs: Any):
 
 
 def build_explore_model(**kwargs: Any):
-    """Explore sub-agent：haiku tier 模型，快速低成本检索。
+    """Explore sub-agent：flash 档模型，快速低成本检索。
 
-    走 OpenAI 兼容端点；模型取 ``IST_HAIKU_MODEL``。
+    走 OpenAI 兼容端点；模型取 ``IST_FLASH``(兼容回落旧 IST_HAIKU_MODEL)。
     所有 streaming / timeout / thinking 逻辑复用 ``_build_chat_model``。
     """
-    model_name = (os.environ.get("IST_HAIKU_MODEL") or DEFAULT_HAIKU_MODEL).strip()
-    return _build_chat_model(model_name, **kwargs)
+    return _build_chat_model(ist_core_flash_model(), **kwargs)
 
 
 def _reasoning_from_raw(raw_chunk_dict) -> str | None:
@@ -547,10 +558,12 @@ def _get_chat_openai_with_reasoning():
 
 
 def ist_core_default_model() -> str:
-    """Return the platform default model configured by environment."""
+    """平台主档模型:``IST_MODEL`` 单源(2026-07-06 配置收敛:与旧 IST_REVIEW_MODEL/
+    IST_OPUS_MODEL/IST_SONNET_MODEL 合并,后两者不再读取;IST_REVIEW_MODEL 保留为
+    兼容 fallback,仅在 IST_MODEL 缺省的旧环境里生效)。"""
     return (
-        os.environ.get("IST_REVIEW_MODEL")
-        or os.environ.get("IST_MODEL")
+        os.environ.get("IST_MODEL")
+        or os.environ.get("IST_REVIEW_MODEL")
         or DEFAULT_IST_MODEL
     ).strip()
 
@@ -561,19 +574,26 @@ def ist_core_default_model() -> str:
 
 
 
-TIER_ENV_VARS = {
-    "opus": "IST_OPUS_MODEL",
-    "sonnet": "IST_SONNET_MODEL",
-    "haiku": "IST_HAIKU_MODEL",
-}
+# 两档收敛(2026-07-06):主档=IST_MODEL(pro,全局默认),省钱档=IST_FLASH。
+# 旧三档词汇保留为别名:opus/sonnet→主档;haiku→flash。fork md 的 model: 标注不用改。
+_FLASH_TIERS = frozenset({"flash", "haiku"})
+
+
+def ist_core_flash_model() -> str:
+    """省钱档模型:``IST_FLASH``(缺省回落旧 IST_HAIKU_MODEL,再回落 deepseek-v4-flash)。
+    与主档同样开思考(effort 同规则),只为降低 token 单价。"""
+    return (
+        os.environ.get("IST_FLASH")
+        or os.environ.get("IST_HAIKU_MODEL")
+        or DEFAULT_FLASH_MODEL
+    ).strip()
 
 
 def ist_core_tier_model(tier: str) -> str:
-    """Return the configured model for ``tier``（opus / sonnet / haiku）."""
-    env_var = TIER_ENV_VARS.get(tier.lower(), "")
-    if not env_var:
-        return ist_core_default_model()
-    return (os.environ.get(env_var) or ist_core_default_model()).strip()
+    """Return the configured model for ``tier``(flash/haiku → IST_FLASH;其余 → IST_MODEL)."""
+    if (tier or "").lower() in _FLASH_TIERS:
+        return ist_core_flash_model()
+    return ist_core_default_model()
 
 
 def ist_core_select_model_for_task(task_complexity: str) -> str:

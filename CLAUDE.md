@@ -228,7 +228,7 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 
 ### 常用环境变量
 
-- **模型**：`IST_MODEL` / `IST_OPUS_MODEL` / `IST_SONNET_MODEL` / `IST_HAIKU_MODEL`；`IST_THINKING=off` 加速 agentic loop
+- **模型**（2026-07-06 两档收敛）：`IST_MODEL` 主档（全局，思考默认开、effort 默认 max）/ `IST_FLASH` 省钱档（explore/footprint 提取/dream 等轻任务，同样思考+max）；`IST_EFFORT=high` 全局降思考深度，fork 经 agents md frontmatter `effort:` 按点覆盖；旧 `IST_REVIEW/OPUS/SONNET/HAIKU_MODEL` 已合并（读取兼容保留）；`IST_THINKING=off` 仅调试逃生口
 - **流式**：`IST_LLM_STREAMING=0` 关流式（批量编译跑 `infotest -p` 时防网关空 chunk 死挂）
 - **KMS**：`KMS_PRODUCT_FILES`、`KMS_OUTPUT_BUCKET`、`MINERU_BATCH_SIZE`、`KMS_UPDATE_TIMEOUT_SEC`
 - **缺陷库**：`DEFECT_BACKEND`、`DEFECT_ON_DEMAND_ENABLED`、`CAPTCHA_OCR_RETRY`

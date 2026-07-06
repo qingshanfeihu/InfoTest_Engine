@@ -121,7 +121,7 @@ def _dream_llm_http_setup(*, tier: str = "default") -> tuple[Any, str, str, str]
     """解析 OpenAI 兼容 HTTP LLM 参数。
 
     返回 ``(session, api_key, base_url, model)``；无可用 key 时返回 None。
-    ``tier`` 为 ``haiku`` 时用 IST_HAIKU_MODEL，否则用平台默认模型。
+    ``tier`` 为 ``haiku``/``flash`` 时用 IST_FLASH(兼容回落旧 IST_HAIKU_MODEL)，否则用平台默认模型。
     """
     try:
         import requests as _requests
@@ -483,7 +483,7 @@ class DreamTask:
     def _consolidate_footprints(self) -> list[str]:
         """LLM 提取 footprint 产品事实，然后纯代码 route + merge。
 
-        使用 IST_HAIKU_MODEL（默认 deepseek-v4-flash）降低成本。
+        使用 IST_FLASH（默认 deepseek-v4-flash）降低成本。
         """
         if os.environ.get("FOOTPRINT_ENABLED", "1") != "1":
             return []
@@ -553,7 +553,7 @@ class DreamTask:
         """构建 footprint 提取用的 haiku tier LLM 调用函数。
 
         复用 function_llm.chat_completion，获得 retry + truncation 检测 + cache。
-        使用 IST_HAIKU_MODEL（默认 deepseek-v4-flash）。
+        使用 IST_FLASH（默认 deepseek-v4-flash）。
         """
         setup = _dream_llm_http_setup(tier="haiku")
         if setup is None:

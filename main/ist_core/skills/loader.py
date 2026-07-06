@@ -173,6 +173,8 @@ _MODEL_MAP = {
     "opus": "opus",
     "sonnet": "sonnet",
     "haiku": "haiku",
+    "flash": "flash",   # 两档收敛后的新词;旧三词经 tier 解析归并(opus/sonnet→主档,haiku→flash)
+    "pro": "opus",
 }
 
 _TOOL_REGISTRY: dict[str, Any] = {}
@@ -451,6 +453,7 @@ def load_subagent(name: str) -> dict[str, Any] | None:
         "system_prompt": body,
         "tools_spec": fm.get("tools") or fm.get("allowed-tools") or [],
         "model": fm.get("model", "opus"),
+        "effort": str(fm.get("effort", "") or ""),   # 思考深度 high|max(空=全局默认)
     }
 
 
@@ -500,7 +503,8 @@ def get_subagent_runnable(name: str) -> Any | None:
         # → httpx 每 chunk 重置读超时 → 整体响应永不完成(0% CPU 死挂、draft 卡满墙钟)。非流式是
         # 单次请求 + 干净 request_timeout,遇 stall 按时超时重试,不无限挂。主 TUI 流式不受影响。
         model = build_agent_chat_model(
-            model=ist_core_tier_model(model_tier), streaming=False, stream_usage=False)
+            model=ist_core_tier_model(model_tier), streaming=False, stream_usage=False,
+            effort=spec.get("effort") or "")
 
         tools = _resolve_tools(spec["tools_spec"])
 

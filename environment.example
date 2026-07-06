@@ -37,12 +37,14 @@ LANGSMITH_TRACING=false
 # =============================================================================
 
 # 示例为小米 MiMo CN 集群
+# 两档模型(2026-07-06 收敛,旧 IST_REVIEW/OPUS/SONNET/HAIKU_MODEL 已合并):
+# IST_MODEL=主档(全局默认,深度思考默认开、effort 默认 max);
+# IST_FLASH=省钱档(explore 检索/footprint 提取/dream 蒸馏等轻任务;同样思考+max,只为降 token 单价)。
 IST_MODEL=mimo-v2.5-pro
-IST_OPUS_MODEL=mimo-v2.5-pro
-IST_SONNET_MODEL=mimo-v2.5-pro
-IST_HAIKU_MODEL=mimo-v2.5
+IST_FLASH=mimo-v2.5
 IST_ALLOWED_MODELS=mimo-v2.5-pro,mimo-v2.5
-# IST_THINKING=off          # 深度思考开关（MiMo/DeepSeek 经 extra_body.thinking）；on（默认）| off。
+# IST_EFFORT=high            # 思考深度全局档(high|max,默认 max;deepseek 族生效);fork 可在 agents/*.md frontmatter 用 effort: 覆盖
+# IST_THINKING=off          # 调试逃生口:关深度思考(默认 on,思考+流式是平台标准形态,常规无需配置)。
 #                           # agentic loop 建议 off：快（1s/次 vs 分钟级）+ 确定性（思考模式下
 #                           # 端点会强制 temperature=1.0/top_p=0.95，忽略自定义值）。
 

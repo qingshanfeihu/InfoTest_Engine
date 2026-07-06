@@ -115,8 +115,9 @@ project_root/
 ```bash
 OPENAI_BASE_URL=…
 OPENAI_API_KEY=sk-…
-IST_MODEL=mimo-v2.5-pro
-# 3 tier 分级:IST_OPUS_MODEL / IST_SONNET_MODEL / IST_HAIKU_MODEL
+IST_MODEL=deepseek-v4-pro     # 主档:全局默认,深度思考默认开(effort 默认 max)
+IST_FLASH=deepseek-v4-flash   # 省钱档:检索/提取/蒸馏类轻任务,同样思考+max,只为降单价
+# IST_EFFORT=high             # 思考深度全局档(high|max);fork 可按点覆盖(agents md 的 effort:)
 ```
 
 ## 常用 TUI 命令

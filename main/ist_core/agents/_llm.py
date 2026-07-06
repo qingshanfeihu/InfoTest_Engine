@@ -131,16 +131,17 @@ def _build_chat_model(model_name: str, effort: str = "", **kwargs: Any):
         if _param is not None:
             extra_body["thinking"] = _param
 
-    # 思考深度 reasoning_effort(2026-07-06):deepseek 族支持 high|max,平台默认 max
-    # (思考+流式是标准形态,深想是默认;IST_EFFORT=high 全局降,或 effort= 按调用点覆盖
-    # ——fork 经 agents md frontmatter 的 effort: 字段)。仅思考开启且 deepseek 族注入,
-    # 其他族支持面未证实、不赌 400;非法值按 max 处理。
+    # 思考深度 reasoning_effort(2026-07-06):deepseek 族支持 high|max,平台默认 high
+    # (34-case 实跑对照:max 无更好表现、只多烧 token——2026-07-06 用户拍板降回;
+    # IST_EFFORT=max 可全局升,或 effort= 按调用点覆盖——fork 经 agents md frontmatter
+    # 的 effort: 字段)。仅思考开启且 deepseek 族注入,其他族支持面未证实、不赌 400;
+    # 非法值按 high 处理。
     if ("reasoning_effort" not in extra_body
             and extra_body.get("thinking", {}).get("type") in ("enabled", "adaptive")):
         _fam = (model_name or "").lower().rpartition("/")[-1]
         if _fam.startswith("deepseek"):
-            _eff = (effort or os.environ.get("IST_EFFORT") or "max").strip().lower()
-            extra_body["reasoning_effort"] = _eff if _eff in ("high", "max") else "max"
+            _eff = (effort or os.environ.get("IST_EFFORT") or "high").strip().lower()
+            extra_body["reasoning_effort"] = _eff if _eff in ("high", "max") else "high"
 
     # 深度思考开启(enabled/adaptive)时端点多强制自家采样参数、不接受自定义(如 mimo 官方
     # deep-thinking 页)。再发 0.0/0.5 是冗余,且可能触发端点告警或被静默忽略。仅未开 thinking

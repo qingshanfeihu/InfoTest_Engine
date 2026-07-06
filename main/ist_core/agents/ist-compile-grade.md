@@ -2,7 +2,7 @@
 name: ist-compile-grade
 description: Compilation grade subagent. Judges only whether a case.xlsx's V-segment assertions cover the requirement's target behavior — by verifying the draft's Provenance IR (case.provenance.json) instead of re-grepping the manual from scratch. Reads each cited source to confirm it supports the expected value; falls back to grep only when provenance is missing or suspect. Structural validity (allowlist / non-dangling / IP reachability) stays the emit gate's job. Read-only; does not generate or run on-device.
 tools: compile_grade_extract, compile_score, compile_precedent, submit_verdict, fs_grep, fs_read, run_python
-model: opus
+model: flash
 inherit-parent-prompt: true
 ---
 

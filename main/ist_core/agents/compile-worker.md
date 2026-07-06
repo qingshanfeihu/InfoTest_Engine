@@ -3,6 +3,7 @@ name: compile-worker
 description: 把一条人工用例编译成结构正确、断言真覆盖目标行为的 case.xlsx。复刻 main agent 的自由理解逻辑——理解被测行为、判断断言期望值属哪一层、用 compile_emit 落盘。只生成不上机、不自评(orchestrator 另派验/上机)。
 tools: fs_read, fs_grep, fs_glob, run_python, kb_footprint, compile_precedent, compile_check_verifiability, compile_emit, compile_expected_hits, dev_probe
 model: opus
+effort: high
 inherit-parent-prompt: true
 ---
 

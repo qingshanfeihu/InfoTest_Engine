@@ -54,7 +54,7 @@ def test_define_creates_loadable_pair(dyn_dirs):
 
 def test_dispatch_via_execute_fork_skill(dyn_dirs, monkeypatch):
     _define()
-    monkeypatch.setattr(loader, "get_subagent_runnable", lambda name: object())
+    monkeypatch.setattr(loader, "get_subagent_runnable", lambda name, **kw: object())
     monkeypatch.setattr(loader, "_invoke_fork_streamed",
                         lambda r, b, l, **kw: {"messages": [AIMessage(content="差异数:3")]})
     out = loader.execute_fork_skill("dyn-xlsx-differ", brief="对比 A 和 B")
@@ -95,5 +95,5 @@ def test_duplicate_requires_overwrite(dyn_dirs):
 
 def test_static_skills_unaffected(dyn_dirs):
     # 静态目录优先:dyn 目录存在不影响静态 skill 解析
-    p = loader.skill_md_path("ist-compile")
+    p = loader.skill_md_path("ist-compile-engine")
     assert p.exists() and "dyn_skills" not in str(p)

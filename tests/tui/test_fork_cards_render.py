@@ -106,7 +106,7 @@ def test_render_states_shapes():
         "brief_head": "编写", "status": "running", "start_ts": now - 65,
         "last_event_ts": now, "current_tool": "dev_probe",
         "current_arg": "show statistics sdns", "n_calls": 7}, now=now)
-    assert "worker·994838" in running and "↳ Probe(" in running and "7 calls" in running
+    assert "编写·994838" in running and "↳ Probe(" in running and "7 calls" in running
     assert running.count("\n") == 1, "running 卡=标题+当前工具两行"
 
     done = _render_fork_card({"kind": "fork", "skill": "ist-compile-grade",
@@ -141,6 +141,7 @@ def test_render_engine_bottom_line_and_progress():
                                       "counts": {"produced": 4, "passed": 22, "dispatched": 7,
                                                  "failed_terminal": 1, "escalated": 0}})
     assert "编译 dongkl" in eng and "上机" in eng and "26/34" in eng
+    assert "轮次1" in eng and "r1" not in eng, "轮次标签用中文『轮次N』,不用缩写 r"
     assert "█" in eng and "░" in eng, "必须有进度条"
     assert "产出4" in eng and "通过22" in eng and "编写中7" in eng and "失败1" in eng
     # 欠定/待用户段(dongkl 实跑暴露:漏了它,7 case 在聚合行凭空消失)
@@ -215,7 +216,7 @@ def test_fork_card_replay_restores_and_registers():
     app._prev_snapshot = snap
     app._replay_snapshot()
     lines = app._transcript.lines
-    assert any("worker·994838" in l for l in lines)
+    assert any("编写·994838" in l for l in lines)
     assert not any("dongkl" in l for l in lines), "引擎卡不进 transcript"
     assert "编译 dongkl" in app._footer.engine_text and "4/34" in app._footer.engine_text
     assert app._fork_card_rows == {"fork:f1": 0}

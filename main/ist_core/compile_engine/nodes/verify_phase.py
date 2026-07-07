@@ -10,6 +10,27 @@ from main.ist_core.compile_engine import ledger as L
 from main.ist_core.compile_engine.nodes import _shared as sh
 
 
+def _archive_round_config(aid: str, round_used: int) -> None:
+    """重编覆盖前把本轮失败的 case.xlsx 归档到 outputs/<aid>/history/case.r{N}.xlsx。
+
+    每轮 worker 覆盖同一 case.xlsx,前几次配置会丢——升级末轮 worker 靠这些归档卷对比
+    前几次到底怎么写错的(_build_brief 引用路径,worker fs_read 逐卷比对)。round_used=本轮
+    已完成的写轮号(1-based:第 1 次失败存 r1)。best-effort,失败不阻断重编。
+    """
+    try:
+        import shutil
+        src = sh.outputs_root() / aid / "case.xlsx"
+        if not src.is_file():
+            return
+        hist = sh.outputs_root() / aid / "history"
+        hist.mkdir(parents=True, exist_ok=True)
+        dst = hist / f"case.r{max(1, int(round_used))}.xlsx"
+        if not dst.is_file() or dst.stat().st_mtime < src.stat().st_mtime:
+            shutil.copy2(src, dst)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ---------------------------------------------------------------- [mech] merge
 def merge(state: dict) -> dict:
     """合并本轮目标集(首轮=全部 produced;修复轮=fail 子集;终验=整卷)。
@@ -51,7 +72,7 @@ def merge(state: dict) -> dict:
     if not xlsx.is_file():
         return {"phase_status": "error",
                 "error": f"合并失败: {str(res)[-400:]}", **sh.counts_update(led)}
-    sh.emit(f"merge[{scope}] {len(target)} case → {name}/case.xlsx")
+    sh.emit(f"合并[{'整卷' if scope == 'full' else '子集'}] {len(target)} 个用例 → {name}/case.xlsx")
     sh.emit_tick(led, state, "merge")
     return {"phase_status": "ok", "run_scope": scope,
             "merged_xlsx_ref": str(xlsx.relative_to(sh.project_root())),
@@ -79,7 +100,7 @@ def run_digest(state: dict) -> dict:
                and last_run.is_file())
     if not already:
         from main.ist_core.tools.device.batch_tools import dev_run_batch_digest
-        sh.emit(f"上机 round{round_no}({state.get('run_scope')}): {xlsx.parent.name}")
+        sh.emit(f"上机 第{round_no}轮({'整卷' if state.get('run_scope') == 'full' else '子集'}): {xlsx.parent.name}")
         sh.emit_tick(led, {**state, "round": round_no}, "run_digest")
         for attempt in range(4):
             out = dev_run_batch_digest.func(str(xlsx))
@@ -168,10 +189,17 @@ def attribute(state: dict) -> dict:
         # 按 round 幂等(checkpoint 续跑重入 attribute 不重复追加)。
         ev = c.setdefault("fail_evidence", [])
         if not any(e.get("round") == round_no for e in ev if isinstance(e, dict)):
+            _a = attr or {}
             ev.append({"round": round_no, "verdict": "fail",
                        # 20000(2026-07-07):unsuccessful_cases.md 从 fail_evidence 读逐轮设备
                        # 原文,清 temp 后自足(不押 LangSmith)——旧 800 会截掉配置会话/回显。
-                       "device_context": ctx[:20000]})
+                       "device_context": ctx[:20000],
+                       # 逐轮归因结论/失败签名(2026-07-07,升级末轮 brief 全回显用):ledger 的
+                       # attribution 只存最新会被覆盖,这里按轮留 attr 现值(机械/先例预判;fork
+                       # 归因以最新落 ledger),供 _build_brief 末轮遍历全历史喂 worker。纯附加。
+                       "fix_direction": str(_a.get("fix_direction") or "")[:2000],
+                       "layer": str(_a.get("layer") or ""),
+                       "disposition": str(_a.get("disposition") or "")})
         # 冻结(digest 已判连续同签名)→ 终态
         frozen = (sh.outputs_root() / aid / ".frozen.json").is_file()
         if attr:
@@ -197,6 +225,7 @@ def attribute(state: dict) -> dict:
         elif disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
         elif (disp == "reflow" or layer == "G") and int(c.get("rounds_used") or 0) < max_rounds:
+            _archive_round_config(aid, int(c.get("rounds_used") or 0))  # 覆盖前留本轮失败配置
             c["evidence_excerpt"] = ctx[:4000]
             c["redispatch_reason"] = "verify_fail"
             led.transition(aid, L.S_PENDING)
@@ -220,7 +249,7 @@ def attribute(state: dict) -> dict:
             "xlsx_path": str(state.get("merged_xlsx_ref")),   # submit_attribution 按它定位落盘文件,别让 fork 推断
             "provenance_path": f"workspace/outputs/{aid}/case.provenance.json",
         }, ensure_ascii=False)} for aid in need_fork]
-        sh.emit(f"归因 fork: {len(need_fork)} case")
+        sh.emit(f"归因:{len(need_fork)} 个用例")
         compile_fanout.func(skill="compile-attributor", briefs_json=briefs,
                             evidence_from_xlsx=str(sh.project_root()
                                                    / str(state.get("merged_xlsx_ref") or "")))
@@ -245,6 +274,7 @@ def attribute(state: dict) -> dict:
             if disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
                 led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
             elif disp in ("reflow", "fixed"):
+                _archive_round_config(aid, int(c.get("rounds_used") or 0))  # 覆盖前留本轮失败配置
                 c["evidence_excerpt"] = str(items2.get(aid, {}).get("device_context") or "")[:4000]
                 c["redispatch_reason"] = "verify_fail"
                 led.transition(aid, L.S_PENDING)

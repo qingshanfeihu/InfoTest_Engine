@@ -157,7 +157,7 @@ def test_execute_fork_skill_renders_arguments(monkeypatch):
                 ]
             }
 
-    def _stub_runnable_factory(name):
+    def _stub_runnable_factory(name, **kwargs):
         return _StubRunnable()
 
     monkeypatch.setattr(

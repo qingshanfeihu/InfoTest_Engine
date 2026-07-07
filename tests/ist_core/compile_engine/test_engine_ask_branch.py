@@ -48,7 +48,7 @@ def _env(monkeypatch, tmp_path):
                 "round": 0, "wave": 0, **SH.counts_update(led)}
     monkeypatch.setattr(N, "prep", fake_prep)
 
-    def fake_dispatch(executor, aid, brief, t0):
+    def fake_dispatch(executor, aid, brief, t0, effort=""):
         calls["dispatch"] += 1
         d = out_root / aid
         d.mkdir(exist_ok=True)

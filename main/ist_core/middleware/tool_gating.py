@@ -46,12 +46,9 @@ _GATED_PREFIX_GROUPS: dict[str, str] = {
 # skill → 激活组。映射对象是"main 编排该 skill 时自己要用的工具域",宁多勿断
 # (多给只是 schema 重量,少给才可能断工作流)。未列出的 skill 视为未知 → 全量放行。
 _SKILL_GROUPS: dict[str, set[str]] = {
-    "ist-compile": {"compile", "device"},
     "ist-compile-engine": {"compile", "device"},
     "compile-attributor": {"compile", "device"},
     "compile-worker": {"compile", "device"},
-    "ist-compile-draft": {"compile", "device"},
-    "ist-compile-grade": {"compile", "device"},
     "ist-verify": {"compile", "device"},
     "device-verify": {"device"},
     "config-automation": {"device"},
@@ -63,10 +60,9 @@ _SKILL_GROUPS: dict[str, set[str]] = {
     "review-verification": set(),
     "escalate-when-stuck": set(),
     # 旧下划线名(B1 连字符化前的历史对话/续聊线程里仍会出现,与新名同义)
-    "ist_compile": {"compile", "device"},
+    "ist_compile_engine": {"compile", "device"},
     "compile_worker": {"compile", "device"},
-    "ist_compile_draft": {"compile", "device"},
-    "ist_compile_grade": {"compile", "device"},
+    "compile_attributor": {"compile", "device"},
     "ist_verify": {"compile", "device"},
 }
 

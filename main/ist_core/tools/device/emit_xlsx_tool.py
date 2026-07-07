@@ -1007,11 +1007,10 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
         _fix_note = (f"\n⚠ 已自动把 {_fixed_literal_n} 处命令载荷里的字面反斜杠n纠正为真实换行"
                      "(命令语境它只可能是想换行写错了;JSON 字符串里写单反斜杠 n 即可,双反斜杠成字面字符)。")
 
-    # lint 凭证(V4 步骤1,2026-07-04):合并门的判据从「grade PASS」换源为「过全部机械门」。
-    # 实证依据(942 对时点配对):grade verdict 判别力 PASS 56% vs CUT 53%(3pp,统计无效),
-    # CUT+重做后上机通过率不升——LLM 审 LLM 不构成质量门,机械 lint + 上机 oracle 才是。
-    # emit 走到这里=8 道门+crash-gate 全过,直接落凭证(xlsx_mtime 精确签名,直改立即失效);
-    # source 字段区分来源,IST_GRADE_MAINPATH=1 时合并门只认 grade(旧行为一键回退)。
+    # lint 凭证:合并门判据=「过全部机械门」。实证依据(942 对时点配对):LLM grade
+    # verdict 判别力仅 3pp(PASS 56% vs CUT 53%),LLM 审 LLM 不构成质量门,机械 lint +
+    # 上机 oracle(ist-verify)才是。emit 走到这里=8 道门+crash-gate 全过,直接落凭证
+    # (source=lint、xlsx_mtime 精确签名,直改立即失效);合并门只校验签名新鲜度。
     try:
         import time as _time
         _credp = Path(out).parent / ".grade_credential.json"
@@ -1045,7 +1044,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
     **首选用法(main-orchestrated):只传 ``autoids``。** 各 worker 已用 compile_emit 把 case
     落到 workspace/outputs/<autoid>/case.xlsx,本工具自己从这些成品 xlsx **回读 steps** 合并——
     你**不用、也不该**自己提供 steps/init(那些数据 worker 早写进 xlsx 了,你手里没有、凑也凑不全)。
-    传 autoid 列表即可。``cases_json`` 仅 compile_pipeline 内部回读后自用,手工编排别走它。
+    传 autoid 列表即可。``cases_json`` 仅 V6 引擎 closing 节点内部用(gate-free 归档通道),手工编排别走它。
 
     用于批量编译收尾:把同一脑图里已逐个生成好的 N 个 case 合并进一个 case.xlsx,
     末尾自动垫一个哨兵 case(框架延迟执行契约)——这样前 N 个真 case 全部正常执行。
@@ -1065,7 +1064,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         autoids: **首选传这个**。autoid 列表(JSON 数组字符串如 ["203...","203..."],或逗号分隔)。
             工具对每个 autoid 读 workspace/outputs/<autoid>/case.xlsx、用 _load_case_rows 回读
             steps(init 作为首个 APV_0 步已含其中)合并。传了 autoids 就忽略 cases_json。
-        cases_json: (compile_pipeline 内部用)JSON 数组字符串,每项 case dict 含键:autoid、
+        cases_json: (V6 引擎 closing 内部用)JSON 数组字符串,每项 case dict 含键:autoid、
             steps(每步 {E,F,G,H?,I?,desc?},至少一个 check_point)、init(可空)、title(可选)。
             **手工编排不要用它**——你多半凑不全 steps,改传 autoids 让工具自己回读。
         shared_init: 所有 case 共享的文件级前置(C=1),换行分隔;通常留空。
@@ -1076,13 +1075,12 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         上机验证由独立 ist-verify 流程触发。
 
     Note:
-        autoids 路径带 grade 凭证机械门:每个 autoid 需在当前 case.xlsx 上实跑过
-        grade(compile_score 落盘的 score.json,且不早于 case.xlsx)。缺凭证/过期
-        凭证 → 拒绝合并并列出 case 清单。cases_json 路径(compile_pipeline 内部)
-        不走此门——pipeline 自带 grade 环节与机读判定解析。
+        autoids 路径带 lint 凭证机械门:每个 autoid 需在当前 case.xlsx 上过 compile_emit 的
+        全部机械门(过门时自动落 .grade_credential.json,精确签名 xlsx_mtime)。缺凭证/过期
+        凭证 → 拒绝合并并列出 case 清单。cases_json 路径(V6 引擎 closing 归档)不走此门。
     """
-    # 首选:从 autoids 回读各成品 case.xlsx(main-orchestrated 不用自己提供 steps;
-    # 复用 compile_pipeline merge 同一套 _load_case_rows,init 作为首步已含回读结果)。
+    # 首选:从 autoids 回读各成品 case.xlsx(不用自己提供 steps;
+    # _load_case_rows 回读,init 作为首步已含回读结果)。
     aid_list, autoids_err = _parse_autoids_arg(autoids)
     if autoids_err:
         return autoids_err
@@ -1092,46 +1090,29 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         cases = []
         no_grade: list[str] = []
         stale_grade: list[str] = []
-        cut_grade: list[str] = []
         for aid in aid_list:
             aid = str(aid).strip()
             xp = root / "workspace" / "outputs" / aid / "case.xlsx"
             if not xp.is_file():
                 return f"error: autoid {aid} 的 case.xlsx 不存在({xp});该 case 可能没编译成功,先补编/重派 worker"
-            # grade 实跑凭证机械门(A 层):每个 case 必须在**当前这份** case.xlsx 上实跑过
-            # grade 链路(compile_score 落盘 .grade_credential.json)。凭证缺失=从没 grade;
-            # 凭证记录的 xlsx_mtime 不等于当前 xlsx mtime=重编后没重新 grade。校验内容签名
-            # 字段(xlsx_mtime)而非文件 mtime——2026-07-03 实测 grade fork 会自发 run_python
-            # 写同类文件,mtime 冒充得了、精确的 xlsx_mtime 值冒充不了(它只能从工具落盘获得)。
-            # orchestrator 自查/探针零信号都不构成豁免——2026-07-02 实证 34-case 零 grade
-            # 直接合并交付,prompt 层约束在长上下文下会被遗忘,故此门确定性强制。
-            # V4 步骤1(2026-07-04)凭证换源:默认主路认「lint 凭证」(emit 过全部机械门时
-            # 自动落盘,source=lint)与 grade 凭证(source=grade)两者;实证依据=942 对时点
-            # 配对里 grade verdict 判别力仅 3pp(PASS 56% vs CUT 53%)、CUT 重做零质量增益,
-            # 质量门=机械 lint+上机 oracle。IST_GRADE_MAINPATH=1 恢复旧行为(只认 grade)。
-            _grade_mainpath = (os.environ.get("IST_GRADE_MAINPATH") or "").strip() == "1"
+            # lint 凭证机械门(A 层):每个 case 必须在**当前这份** case.xlsx 上过 emit 的全部
+            # 机械门——compile_emit 过门时自动落盘 .grade_credential.json(source=lint、精确
+            # 签名 xlsx_mtime)。凭证缺失=没经 gated emit;xlsx_mtime 不匹配=重编后没重新 emit。
+            # 校验内容签名字段(xlsx_mtime)而非文件 mtime——mtime 冒充得了、精确 xlsx_mtime 值
+            # 只能从工具落盘获得,手写文件冒充不了。质量门=机械 lint + 上机 oracle(ist-verify);
+            # 实证依据=942 对时点配对里 LLM grade verdict 判别力仅 3pp,故语义终判交上机不交 grade。
             sj = xp.parent / ".grade_credential.json"
             cred_ok = False
-            cred_verdict = ""
-            cred_source = ""
             if sj.is_file():
                 try:
                     cred = json.loads(sj.read_text(encoding="utf-8"))
                     cred_ok = abs(float(cred.get("xlsx_mtime", -1)) - xp.stat().st_mtime) < 1e-6
-                    cred_verdict = str(cred.get("verdict") or "").upper()
-                    cred_source = str(cred.get("source") or "grade")
                 except Exception:  # noqa: BLE001
                     cred_ok = False
             if not sj.is_file():
                 no_grade.append(aid)
             elif not cred_ok:
                 stale_grade.append(aid)
-            elif _grade_mainpath and cred_source != "grade":
-                # 旧模式:lint 凭证不算 grade 实跑,按"从未 grade"处理
-                no_grade.append(aid)
-            elif cred_verdict == "CUT":
-                # submit_verdict 提交的判定就是 CUT——带 CUT 合并=拿弱产物充数,直接拒。
-                cut_grade.append(aid)
             try:
                 rows = _load_case_rows(str(xp))  # 含 init 首步 APV_0 + 全步骤(E/F/G/H/I/desc),遇哨兵停
             except Exception as e:  # noqa: BLE001
@@ -1139,18 +1120,15 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
             if not rows:
                 return f"error: {aid} 回读 steps 为空(case.xlsx 数据区空?)"
             cases.append({"autoid": aid, "steps": rows})  # init 已在 steps 首行,不另传(传了会重复)
-        if no_grade or stale_grade or cut_grade:
+        if no_grade or stale_grade:
             parts = []
             if no_grade:
-                parts.append(f"从未 grade(缺凭证): {', '.join(no_grade)}")
+                parts.append(f"缺 lint 凭证(没经 gated compile_emit): {', '.join(no_grade)}")
             if stale_grade:
-                parts.append(f"重编后未重新 grade(凭证对应的不是当前 case.xlsx): {', '.join(stale_grade)}")
-            if cut_grade:
-                parts.append(f"grade 判定为 CUT(按重做意见重派 worker,别带 CUT 合并): {', '.join(cut_grade)}")
-            return ("error: 合并被 grade 凭证门拒绝——以下 case 没有在当前 case.xlsx 上实跑过 grade 审批:\n"
+                parts.append(f"重编后未重新 emit(凭证对应的不是当前 case.xlsx): {', '.join(stale_grade)}")
+            return ("error: 合并被 lint 凭证门拒绝——以下 case 没有在当前 case.xlsx 上过 emit 的全部机械门:\n"
                     + "\n".join(parts)
-                    + "\n对每个列出的 case 派 ist-compile-grade(其流程会调 compile_score 落盘凭证),"
-                      "拿到 判定：PASS 后再合并;判 CUT 的按重做意见重派 worker。")
+                    + "\n对每个列出的 case 重新走 compile_emit(过全部机械门即自动落 lint 凭证)后再合并。")
         # 成品卷 lint(最后防线):凭证全绿也可能是 lint 挂点上线前落的旧凭证,或卷面在
         # 凭证之后又被直改。合并是终卷产出的最后一道必经之路,对每卷再跑必崩/必假 lint——
         # 一个必崩 case 会让整份 pytest 39 秒崩掉、其余 33 个全不跑(2026-07-04 两轮实证)。
@@ -1165,7 +1143,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
             return ("error: 合并被成品卷 lint 拒绝——以下 case 存在机械可判的必崩/必假形态"
                     "(一个必崩 case 会崩掉整份 pytest,其余全不跑):\n  "
                     + "\n  ".join(lint_bad)
-                    + "\n修正后重新 grade 再合并(违例详情见对应 grade/score 返回)。")
+                    + "\n修正后重新 compile_emit 再合并(违例详情见对应 emit 返回)。")
     else:
         try:
             cases = json.loads(cases_json)

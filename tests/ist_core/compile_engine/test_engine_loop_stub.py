@@ -53,7 +53,7 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setattr(N, "prep", fake_prep)   # 图从 nodes 包 getattr 绑定节点
 
     # worker stub:落 xlsx + produced
-    def fake_dispatch(executor, aid, brief, t0):
+    def fake_dispatch(executor, aid, brief, t0, effort=""):
         d = out_root / aid
         d.mkdir(exist_ok=True)
         (d / "case.xlsx").write_bytes(b"x" + aid.encode())

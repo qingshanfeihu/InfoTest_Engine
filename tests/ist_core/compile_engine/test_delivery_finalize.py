@@ -104,7 +104,58 @@ def test_md_has_all_required_fields(env):
     assert "sdns pool cname cname1 cname1.a.com" in md         # 自动化
     assert "改描述" in md and "歧义待厘清" in md                # ask_user 改动
     assert "Round 1" in md and "语法拒绝" in md                 # 逐轮 CUT + 设备原文
-    assert "命令语法与手册一致但设备拒" in md                    # main 判断
+    assert "命令语法与手册一致但设备拒" in md                    # main 判断(fix_direction)
+    # 归因 layer/disposition 译成人读,不暴露 raw code(用户实证:「layer E · disposition …」不适合阅读)
+    assert "疑似产品缺陷" in md and "缺陷候选" in md
+    assert "disposition `" not in md and "- layer `" not in md
+
+
+def _full_rep(led):
+    c = led.counts()
+    return {"outcome": "delivered_with_labels", "rounds": 4,
+            "totals": {"cases": len(led.data["cases"]), "passed": c.get(L.S_PASSED, 0), **c},
+            "refs": {"merged_xlsx": f"workspace/outputs/{OUT}/case.xlsx",
+                     "archive_xlsx": f"workspace/outputs/{OUT}/unsuccessful_cases.xlsx",
+                     "unsuccessful_md": f"workspace/outputs/{OUT}/unsuccessful_cases.md",
+                     "ledger": f"workspace/outputs/{OUT}/engine_ledger.json"},
+            "cases": {aid: {"state": cc["state"], "rounds_used": cc.get("rounds_used"),
+                            "escalation_reason": cc.get("escalation_reason", ""),
+                            "fail_evidence": [{"round": 1, "verdict": "fail",
+                                               "device_context": "APV(config)# ^ 语法拒绝"}]}
+                      for aid, cc in led.data["cases"].items()}}
+
+
+def test_delivery_md_summary_paths_and_escalated(env):
+    """人话交付报告落盘(抗截断):含 pass/fail 汇总 + 交付件路径 + 升级 case 原因+证据。"""
+    _, outputs = env
+    led = _led()
+    _seed(outputs, led)
+    closing._write_delivery_md(led, {}, _full_rep(led), OUT)
+    md = (outputs / OUT / "delivery_report.md").read_text(encoding="utf-8")
+    assert "上机通过 1" in md                                 # fixture 里 1 个 passed
+    assert "交付件" in md and f"{OUT}/case.xlsx" in md          # 主交付卷路径
+    assert f"{OUT}/unsuccessful_cases.xlsx" in md              # 归档卷路径(挡进主目录)
+    assert "需人工处置" in md and "escalated" in md             # 升级态
+    assert "…035570" in md and "max_rounds_exhausted" in md    # 升级 case autoid + 原因
+    assert "语法拒绝" in md                                     # 末轮设备回显摘录
+
+
+def test_cleanup_sweeps_compile_evidence_logs(env):
+    """清 temp 扩展:本进程当次的 + 已死进程的孤儿日志清掉;活着的别会话日志保留。"""
+    import os
+    tmp_path, outputs = env
+    logs = tmp_path / "runtime" / "logs"
+    logs.mkdir(parents=True)
+    cur1 = logs / f"compile_evidence.{os.getpid()}.live.log"; cur1.write_text("x")
+    cur2 = logs / f"compile_evidence.{os.getpid()}.events.jsonl"; cur2.write_text("x")
+    dead = logs / "compile_evidence.99999999.live.log"; dead.write_text("x")   # 已死 PID → 孤儿
+    alive = logs / "compile_evidence.1.live.log"; alive.write_text("x")        # PID 1 活着(init,PermissionError)
+    led = _led()
+    _seed(outputs, led)
+    closing._cleanup_temp(led, OUT)
+    assert not cur1.exists() and not cur2.exists()            # 本进程当次的清掉
+    assert not dead.exists()                                  # 已死进程孤儿日志清掉
+    assert alive.exists()                                     # 活着的别会话日志保留
 
 
 def test_cleanup_deletes_temp_keeps_deliverables(env):
@@ -151,7 +202,9 @@ def test_archive_gate_free_all_nonpass(env, monkeypatch):
 
     monkeypatch.setattr(ex.compile_emit_merged, "func", _fake_merged)
     ref = closing._archive_unsuccessful(led, OUT)
-    assert ref and ref.endswith(f"{OUT}_unsuccessful/case.xlsx")
-    assert seen["out_name"] == f"{OUT}_unsuccessful"
+    assert ref and ref.endswith(f"{OUT}/unsuccessful_cases.xlsx")   # 挡进主目录
+    assert seen["out_name"] == f"{OUT}_unsuccessful"                # emit 仍先写临时目录再移入
+    assert (outputs / OUT / "unsuccessful_cases.xlsx").is_file()    # 落主目录
+    assert not (outputs / f"{OUT}_unsuccessful").exists()           # 临时目录已清
     aids = {c["autoid"] for c in json.loads(seen["cases_json"])}   # gate-free 通道
     assert aids == {"204651759025035453", "204651759025035570", "204651759025035999"}

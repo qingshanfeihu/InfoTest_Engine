@@ -507,6 +507,11 @@ class FrameworkMCPClient:
         self._c = _connect(env)
         self._server_cmd = env.server_cmd if env is not None else SERVER_CMD
 
+    @property
+    def host(self) -> str:
+        """当前上机占用的跳板机 host(env 池取 env.jumphost,否则全局 IST_JUMPHOST_HOST)。"""
+        return self._env.jumphost if self._env is not None else JUMPHOST
+
     def close(self):
         try:
             self._c.close()

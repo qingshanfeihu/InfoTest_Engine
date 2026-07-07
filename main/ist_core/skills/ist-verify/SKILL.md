@@ -1,6 +1,6 @@
 ---
 name: ist-verify
-description: "把已编译好的成品 case.xlsx 上机跑一遍：采集设备真实裁决、回填留空的 RUNTIME 断言、对失败做四层归因（G/E/V/瞬态）并按层交回 ist-compile 重编，真 PASS 的写回 footprint。只验已有 excel、不生成新用例。当用户说上机验证 / 上机复验 / verify 这个 case.xlsx / 上机跑一遍看结果 / 验证用例 / 跑通看看 / 按 G·E·V·瞬态归因 / 上机 PASS 写回 footprint，或想让已编译好的成品 excel 在设备上实跑确认时用本 skill。"
+description: "把已编译好的成品 case.xlsx 上机跑一遍：采集设备真实裁决、回填留空的 RUNTIME 断言、对失败做四层归因（G/E/V/瞬态）并按层派 compile-worker 定向重编，真 PASS 的写回 footprint。只验已有 excel、不生成新用例。当用户说上机验证 / 上机复验 / verify 这个 case.xlsx / 上机跑一遍看结果 / 验证用例 / 跑通看看 / 按 G·E·V·瞬态归因 / 上机 PASS 写回 footprint，或想让已编译好的成品 excel 在设备上实跑确认时用本 skill。"
 context: inline
 user-invocable: true
 source: hand
@@ -10,12 +10,12 @@ when_to_use: |
   用户要对已编译好的 excel / case.xlsx 做上机验证、上机复验、跑一遍看结果、确认能不能在设备上跑通；含四层归因 / 上机回填 / 闭环写回。
   例："把这个 excel 上机验证"、"上机复验编译好的用例"、"上机跑一遍看结果"、"验证并按 G/E/V/瞬态归因"、"上机 PASS 的写回 footprint"。
   触发词：上机验证, 上机复验, 上机跑, 验证excel, 验证用例, 跑一遍, 复验, 设备验证, 四层归因, 闭环写回。
-  跳过：要编译/生成新用例走 ist-compile；只查一条 CLI 回显用 dev_probe；评审用例文件质量但不上机走 test-list-review。
+  跳过：要编译/生成新用例走 ist-compile-engine；只查一条 CLI 回显用 dev_probe；评审用例文件质量但不上机走 test-list-review。
 ---
 
 # 上机验证：串行上机 + 四层归因 + 回流交接
 
-把**已编译好的** excel 串行上机一遍，采集框架真实裁决，回填 `<RUNTIME>`，对每个 fail 四层归因、按层 reflow 交给 `ist-compile` 重编，真 PASS 双写回。**只验一遍 + 交接修复**——不自己改 case（改归 `ist-compile`），也不自己套"验到全过"的迭代循环（迭代由上层：用户 / goal 循环驱动；本 skill 跑一遍即返回）。流程即下方 Steps 1-8;各工具的参数与返回形态以工具自身说明为准,不在此复述。
+把**已编译好的** excel 串行上机一遍，采集框架真实裁决，回填 `<RUNTIME>`，对每个 fail 四层归因、按层 reflow 派 `compile-worker` 定向重编，真 PASS 双写回。**只验一遍 + 交接修复**——不自己改 case（改归 `compile-worker`），也不自己套"验到全过"的迭代循环（迭代由上层：用户 / goal 循环驱动；本 skill 跑一遍即返回）。流程即下方 Steps 1-8;各工具的参数与返回形态以工具自身说明为准,不在此复述。
 
 归因落盘纪律贯穿全程:每个有结论的 fail 调 `submit_attribution`,evidence 必须是 device_context/causality **原文子串**(复制勿转述)——不落盘则下一轮「瞬态复现=误归」「冻结同法」护栏读不到你的结论。
 
@@ -92,19 +92,17 @@ when_to_use: |
 
 **Execution**: Direct（委派 fork）
 
-多个 fail case 要重编时，**一次并发 fan-out、别逐个串行**：给每个 fail case 建一条 brief（autoid + target_layer + 应改方向 + 「定向重做：针对问题改、保留正确部分」；device_context 用 `evidence_from_xlsx` 参数让工具自动注入原文,别手抄转述），调**一次** `compile_fanout(skill="ist-compile-draft", briefs_json=[原生数组])`——N 个 draft worker 真并发,一次返回逐 case 产物。fan-out 返回后各 case 的新 `case.xlsx` 已在 `outputs/<autoid>/`，回步骤 2 再验（上机才是真门）。
-
-**何时改用 `invoke_skill(ist-compile)`**：需要 grade 质量再审批（断言形态可疑、非单纯 IP/命令订正）时——它内部跑完整 `compile_pipeline`（prep→draft→grade→merge）带收敛环。fan-out draft **跳过 grade**、靠上机复验兜底，适合归因明确的定向订正（G(^) 命令订正、E 层换真实 IP、V 层按设备语义改期望）。
+多个 fail case 要重编时，**一次并发 fan-out、别逐个串行**：给每个 fail case 建一条 brief（autoid + target_layer + 应改方向 + 「定向重做：针对问题改、保留正确部分」；device_context 用 `evidence_from_xlsx` 参数让工具自动注入原文,别手抄转述），调**一次** `compile_fanout(skill="compile-worker", briefs_json=[原生数组])`——N 个 worker 真并发,一次返回逐 case 产物。fan-out 返回后各 case 的新 `case.xlsx` 已在 `outputs/<autoid>/`，回步骤 2 再验（上机才是真门）。
 
 **Rules**:
-- **两条 sanctioned 重编路径**：① `compile_fanout(ist-compile-draft, briefs)`（多 case 并发定向重编，快，跳 grade 靠复验）；② `invoke_skill(ist-compile)`（要 grade 再审时，带收敛环）。**除这两个外绝不**自己 ad-hoc 逐个手调 `compile_emit`/`compile_score`/`compile_precedent`/`compile_prep` 去 churn——单步 ad-hoc 循环不收敛、会把单轮 tool_call 撞 recursion 上限（300）整轮崩（实测反例：churn 4 轮 excel 零改动）。`compile_fanout` 是**批量派发器**（不是被 churn 的单步），用它一次派完、不循环。
+- **唯一 sanctioned 重编路径**：`compile_fanout(skill="compile-worker", briefs)`（多 case 并发定向重编，靠上机复验兜底）。**除它外绝不**自己 ad-hoc 逐个手调 `compile_emit`/`compile_precedent`/`compile_prep` 去 churn——单步 ad-hoc 循环不收敛、会把单轮 tool_call 撞 recursion 上限（300）整轮崩（实测反例：churn 4 轮 excel 零改动）。`compile_fanout` 是**批量派发器**（不是被 churn 的单步），用它一次派完、不循环。
 - **绝不 `fs_edit` case.xlsx**——二进制，文本编辑改不动；改 case 一律走上面两条 reflow 路径。
 - **瞬态不回流**——标注"环境排查 / 换时间重跑"，它和编译质量无关。
 - **收敛止损（digest 的跨轮对照信号是硬事实）**：摘要点名「连续两轮同签名 fail」的 case → 上轮修法已被证伪，**这些 case 不进本轮 reflow brief**（第三轮同法大概率再 fail、白烧钱——实测同签名 case 连续两轮重编零转正）。改为：①先核实环境事实（dev_probe/dev_ssh 查该 IP/配置在设备上的真实状态——topology 写的和设备实况可能不符）；②环境确认正常仍复现 → 疑似**产品缺陷**：`kb_bug_search` 比对缺陷库，已知则关联、未知则在最终报告「疑似产品缺陷」区记缺陷候选（复现步骤=case 步骤、期望+文档出处、实际=device_context 证据、版本号）。摘要点名「上轮归瞬态本轮复现」→ 那不是瞬态，按同法重新归因。**无论哪种，流程都跑到终点出完整报告（真 PASS 清单 + 阻塞清单带证据），不中途停摆等人。**
 - 非交互（`infotest -p`）：直接输出归因 + reflow brief，reflow 作为独立步骤由调用方发起。
 - **本 skill 到此即返回**：是否拿重编后的 excel 再 verify 一遍，由**上层**（用户 / goal 循环）决定——verify **不自己套循环**。
 
-**Success criteria**: 待重编的 G/E/V 错经**一次** `compile_fanout` 并发派完（或需 grade 再审时 invoke 一次 ist-compile）；连续两轮同签名 fail 的不进重编（走环境核实/产品缺陷出口）；瞬态单列
+**Success criteria**: 待重编的 G/E/V 错经**一次** `compile_fanout(compile-worker)` 并发派完；连续两轮同签名 fail 的不进重编（走环境核实/产品缺陷出口）；瞬态单列
 **Artifacts**: reflow_brief（fan-out briefs;>6 个 case 先把 briefs 数组落 workspace 文件、传 `briefs_path`——内联大数组会被序列化截断）
 
 ### 7. 闭环写回先例库

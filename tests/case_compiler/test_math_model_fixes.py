@@ -1,8 +1,8 @@
 """数学公式模型三处修复的回归锁定：
 F1 先例分数读结构化分（不再正则抠显示文本，修 config-only 轴误判 0）;
 F2 observe_ops 单一事实源（confidence_f 与 grade_extract 共用）;
-F3 compile_score 的 min() 只对贡献覆盖的 V 段行取（配置存在性检查不拖垮行为类 case，
-   但全配置存在性的配置验证类 case 退回全行 min 不误杀）。
+F3 confidence_f.score_case 的 min() 只对贡献覆盖的 V 段行取（配置存在性检查不拖垮行为类
+   case，但全配置存在性的配置验证类 case 退回全行 min 不误杀）。
 全部确定性可断言（F3 mock LLM 判分器）。
 """
 from __future__ import annotations

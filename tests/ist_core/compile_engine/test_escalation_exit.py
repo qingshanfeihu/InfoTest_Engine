@@ -62,7 +62,7 @@ def _env(monkeypatch, tmp_path):
 
     monkeypatch.setattr(N, "prep", fake_prep_for([_AID_OK, _AID_BAD]))
 
-    def fake_dispatch(executor, aid, brief, t0):
+    def fake_dispatch(executor, aid, brief, t0, effort=""):
         d = out_root / aid
         d.mkdir(exist_ok=True)
         (d / "case.xlsx").write_bytes(b"x" + aid.encode())

@@ -236,27 +236,23 @@ def _build_tool_registry_locked() -> dict[str, Any]:
             _TOOL_REGISTRY["kb_footprint"] = kb_footprint
         except ImportError:
             logger.debug("工具 kb_footprint 未可用，跳过注册")
-        # 单 case 编译/上机 tools（draft/grade 子 agent 用）
+        # 单 case 编译/上机 tools（compile-worker fork 用）
         try:
             from main.ist_core.tools.device import (
                 compile_emit,
                 compile_check_verifiability,
-                compile_grade_extract,
-                submit_verdict,
                 dev_probe,
                 dev_run_case,
                 dev_init_device,
             )
             _TOOL_REGISTRY["compile_emit"] = compile_emit
             _TOOL_REGISTRY["compile_check_verifiability"] = compile_check_verifiability
-            _TOOL_REGISTRY["compile_grade_extract"] = compile_grade_extract
-            _TOOL_REGISTRY["submit_verdict"] = submit_verdict
             _TOOL_REGISTRY["dev_run_case"] = dev_run_case
             _TOOL_REGISTRY["dev_probe"] = dev_probe
             _TOOL_REGISTRY["dev_init_device"] = dev_init_device
         except ImportError:
             logger.debug("工具 compile_emit/dev_probe/dev_run_case 未可用，跳过注册")
-        # 批量编译 tools（ist_compile 编译链用）：解析清单 + 合并打包 + fan-out + 串行上机
+        # 批量编译 tools（V6 引擎构件 / ist-verify 链）：解析清单 + 合并打包 + fan-out + 串行上机
         try:
             from main.ist_core.tools.device import (
                 compile_fanout,
@@ -272,12 +268,10 @@ def _build_tool_registry_locked() -> dict[str, Any]:
             logger.debug("工具 compile_prep/compile_emit_merged/compile_fanout/dev_run_batch 未可用，跳过注册")
         try:
             from main.ist_core.tools.device.precedent_tools import (
-                compile_score,
                 compile_precedent,
                 compile_writeback,
             )
             _TOOL_REGISTRY["compile_precedent"] = compile_precedent
-            _TOOL_REGISTRY["compile_score"] = compile_score
             _TOOL_REGISTRY["compile_writeback"] = compile_writeback
             from main.ist_core.tools.device.checker_tool import compile_expected_hits
             _TOOL_REGISTRY["compile_expected_hits"] = compile_expected_hits
@@ -293,7 +287,7 @@ def _build_tool_registry_locked() -> dict[str, Any]:
             _TOOL_REGISTRY["compile_runtime_fill"] = compile_runtime_fill
             _TOOL_REGISTRY["submit_behavior_fact"] = submit_behavior_fact
         except ImportError:
-            logger.debug("工具 compile_precedent/compile_score 未可用，跳过注册")
+            logger.debug("工具 compile_precedent/compile_writeback 未可用，跳过注册")
         try:
             from main.ist_core.tools.knowledge.command_builder import build_command
             _TOOL_REGISTRY["build_command"] = build_command
@@ -480,13 +474,19 @@ def _build_fork_middleware() -> list:
     return out
 
 
-def get_subagent_runnable(name: str) -> Any | None:
+def get_subagent_runnable(name: str, *, effort_override: str = "") -> Any | None:
     """构建并缓存 subagent 的 LangChain runnable。
 
     缓存策略：按 name 缓存。如需刷新（如热重载 .md 文件），调 clear_subagent_cache()。
+    effort_override（可选,high|max）：按调用点覆盖 frontmatter 的思考深度——升级重编
+    的最后一次用 max。覆盖态另建 runnable、按 `name#effort` 独立缓存键(不污染常规态)。
     """
-    if name in _SUBAGENT_RUNNABLE_CACHE:
-        return _SUBAGENT_RUNNABLE_CACHE[name]
+    eff = (effort_override or "").strip().lower()
+    if eff not in ("high", "max"):
+        eff = ""
+    cache_key = f"{name}#{eff}" if eff else name
+    if cache_key in _SUBAGENT_RUNNABLE_CACHE:
+        return _SUBAGENT_RUNNABLE_CACHE[cache_key]
 
     spec = load_subagent(name)
     if spec is None:
@@ -499,12 +499,24 @@ def get_subagent_runnable(name: str) -> Any | None:
 
         model_name = spec["model"]
         model_tier = _MODEL_MAP.get(model_name, model_name)
-        # fork LLM 强制非流式：fork 子流程不进 TUI 流式渲染,而流式遇不稳定网关会周期发空 chunk
-        # → httpx 每 chunk 重置读超时 → 整体响应永不完成(0% CPU 死挂、draft 卡满墙钟)。非流式是
-        # 单次请求 + 干净 request_timeout,遇 stall 按时超时重试,不无限挂。主 TUI 流式不受影响。
+        # fork 跟随全局流式(2026-07-07 翻案):历史上强制非流式是「空 chunk 挂死」还没停滞守卫
+        # 时的止血(streaming=False 引入 06-28,守卫 07-05 晚一周、fork 那条一直没回头重审)。现在
+        # _stream/_astream 的 _chunk_has_substance 守卫已能区分保活空 chunk 与真进度(真 reasoning
+        # 增量持续续期,连续 180s 纯空 chunk 才断流)——非流式不再必需。走流式让 fork 的 .invoke 经
+        # _should_stream→_stream 守卫(langchain_core:self.streaming 为真且未 disable_streaming →
+        # _generate 委托 _stream),深思考 worker 靠「有真输出就续期」不被固定墙钟误杀;批量 print
+        # 模式 IST_LLM_STREAMING=0 时 build_agent_chat_model 全局回落非流式(并发批量仍稳)。
+        # 不传 streaming= → 由 build_agent_chat_model 按 _resolve_streaming() 全局默认决定。
+        # max request_timeout 兜底仅在非流式模式生效(env IST_LLM_TIMEOUT_MAX,默认 600)。
+        _extra: dict[str, Any] = {}
+        if eff == "max":
+            try:
+                _extra["request_timeout"] = float(os.environ.get("IST_LLM_TIMEOUT_MAX") or 600)
+            except (TypeError, ValueError):
+                _extra["request_timeout"] = 600.0
         model = build_agent_chat_model(
-            model=ist_core_tier_model(model_tier), streaming=False, stream_usage=False,
-            effort=spec.get("effort") or "")
+            model=ist_core_tier_model(model_tier),
+            effort=eff or spec.get("effort") or "", **_extra)
 
         tools = _resolve_tools(spec["tools_spec"])
 
@@ -518,7 +530,7 @@ def get_subagent_runnable(name: str) -> Any | None:
             middleware=fork_middleware,
         ).with_config({"recursion_limit": int(os.environ.get("IST_FORK_RECURSION_LIMIT") or 120)})
 
-        _SUBAGENT_RUNNABLE_CACHE[spec["name"]] = runnable
+        _SUBAGENT_RUNNABLE_CACHE[cache_key] = runnable
         return runnable
     except Exception:
         logger.exception("Failed to build subagent runnable for %s", name)
@@ -971,7 +983,7 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str, *,
 
 
 def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
-                       summary_sink: dict | None = None) -> str:
+                       summary_sink: dict | None = None, effort: str = "") -> str:
     """执行 fork skill 的定义逻辑。
 
     流程：
@@ -1010,7 +1022,7 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
             f"to use as execution container."
         )
 
-    runnable = get_subagent_runnable(agent_name)
+    runnable = get_subagent_runnable(agent_name, effort_override=effort)
     if runnable is None:
         return (
             f"ERROR: fork skill {skill_name!r} references unknown subagent "
@@ -1038,16 +1050,20 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
             if isinstance(_env0, dict):
                 _parts = []
                 if _env0.get("round"):
-                    _parts.append(f"r{_env0['round']}")
+                    # 卡片=该 case 第几次编写(per-case,rounds_used+1)。与底部条的
+                    # 「轮次N」(全局上机轮次)是两个计数,故用不同的词「第N次」避免同词歧义。
+                    _parts.append(f"第{_env0['round']}次")
                 if _env0.get("redispatch_reason"):
                     _parts.append(str(_env0["redispatch_reason"])[:40])
                 _bh = " · ".join(_parts)
         except Exception:  # noqa: BLE001
             _bh = ""
     _tally = _ForkUsageTally()
+    _eff_norm = (effort or "").strip().lower()
+    _eff_norm = _eff_norm if _eff_norm in ("high", "max") else ""
     _fork_emit_event({"event": "fork_start", "fork_id": _fork_id, "skill": skill_name,
                       "agent": agent_name, "tag": tag, "autoid": _autoid,
-                      "brief_head": _bh})
+                      "brief_head": _bh, "effort": _eff_norm})
 
     def _emit_fork_end(ok: bool, error: str, summary: dict) -> None:
         tc = summary.get("tool_calls")

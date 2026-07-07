@@ -39,7 +39,7 @@ def prep(state: dict) -> dict:
             if aid and not led.case(aid).get("state"):
                 led.transition(aid, L.S_PENDING)
         led.save()
-        sh.emit(f"prep 完成: {len(led.data['cases'])} case → pending")
+        sh.emit(f"准备完成:{len(led.data['cases'])} 个用例 → 待编写")
 
     # dispatched 孤儿回收(resume 缺口,2026-07-06):进程死在 worker 在飞时,这些
     # case 停在 dispatched——重启后无人认领。prep 是幂等重跑入口:无新鲜产出的
@@ -67,12 +67,20 @@ def prep(state: dict) -> dict:
 
 # ------------------------------------------------------- [llm]孔① worker_fanout
 def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
-    """机读信封(worker 契约零改动)+可选附件引用——数据按引用,不内联 manifest。"""
+    """机读信封(worker 契约零改动)+可选附件引用——数据按引用,不内联 manifest。
+
+    末轮增强(2026-07-07):前 max_rounds-1 次上机均 fail 的最后一次(与 worker_fanout 的
+    effort=max 同判据 rounds_used>=max_rounds-1),改喂全历史设备回显+逐轮归因+前几次配置卷
+    路径(数据按引用),让顶满思考深度的 worker 拿到前几次全貌、别重复错法;非末轮维持轻量
+    (只喂最新一轮证据)不膨胀上下文。
+    """
+    max_rounds = int(state.get("max_rounds") or 3)
+    rounds_used = int(case_led.get("rounds_used") or 0)
     envelope = {
         "autoid": aid,
         "manifest_path": state.get("manifest_ref", ""),
         "product_version": state.get("product_version", ""),
-        "round": int(case_led.get("rounds_used") or 0) + 1,
+        "round": rounds_used + 1,
         "redispatch_reason": case_led.get("redispatch_reason") or None,
     }
     adv = sh.outputs_root() / out_name / "advisory.md"
@@ -86,15 +94,43 @@ def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
         case_led.get("attribution"), dict) else None
     if fix:
         parts.append(f"\n## 定向重做\n针对以下问题改,保留正确部分:\n{str(fix)[:1500]}")
-    ev = case_led.get("evidence_excerpt")
-    if ev:
-        parts.append(f"\n## 上机设备证据(原文节选)\n```\n{str(ev)[:4000]}\n```")
+
+    hist = [e for e in (case_led.get("fail_evidence") or []) if isinstance(e, dict)]
+    if rounds_used >= max_rounds - 1 and hist:
+        # 末轮全回显:思考深度已由 worker_fanout 升到 max,这里配套喂前几次全历史(设备回显逐轮
+        # +逐轮归因结论/失败签名);前几次配置卷按引用给路径,worker fs_read 逐卷对比不内联。
+        parts.append(
+            f"\n## 最后一次编写(前 {rounds_used} 次上机均失败,思考深度已升至 max)\n"
+            f"仔细读下面每一轮的设备回显与归因,找出反复失败的真因,别重复前几次的错法。")
+        for e in hist:
+            rn = e.get("round")
+            sig = "/".join(x for x in (str(e.get("layer") or ""),
+                                       str(e.get("disposition") or "")) if x)
+            head = f"### 第{rn}次" + (f"(归因:{sig})" if sig else "")
+            fd = str(e.get("fix_direction") or "")
+            dc = str(e.get("device_context") or "")[:6000]
+            parts.append(head + (f"\n定向:{fd[:800]}" if fd else "")
+                         + f"\n设备回显:\n```\n{dc}\n```")
+        hist_dir = sh.outputs_root() / aid / "history"
+        prev = sorted(hist_dir.glob("case.r*.xlsx")) if hist_dir.is_dir() else []
+        if prev:
+            listing = "\n".join(f"- {p.relative_to(sh.project_root())}" for p in prev)
+            parts.append(f"\n## 前几次配置卷(fs_read 逐卷对比,别再犯同样错)\n{listing}")
+    else:
+        ev = case_led.get("evidence_excerpt")
+        if ev:
+            parts.append(f"\n## 上机设备证据(原文节选)\n```\n{str(ev)[:4000]}\n```")
     return "\n".join(parts)
 
 
-def _dispatch_one(executor, aid: str, brief: str, t0: float) -> tuple[str, str]:
-    """派单个 worker,按盘上事实+机读尾块判终态。返回 (终态, 详情)。"""
-    out = executor.call("compile-worker", brief, tag=f"engine:{aid[-6:]}")
+def _dispatch_one(executor, aid: str, brief: str, t0: float,
+                  effort: str = "") -> tuple[str, str]:
+    """派单个 worker,按盘上事实+机读尾块判终态。返回 (终态, 详情)。
+
+    effort（可选,空|max）：升级重编的最后一次(rounds_used 已达上限前一步)传 max,把
+    思考深度顶满——对标用户「最后一次跑把 thinking 强度改 max」。
+    """
+    out = executor.call("compile-worker", brief, tag=f"engine:{aid[-6:]}", effort=effort)
     xlsx = sh.outputs_root() / aid / "case.xlsx"
     fresh = xlsx.is_file() and xlsx.stat().st_mtime >= t0 - 1
     m = _TAIL_RE.search(out or "")
@@ -121,11 +157,12 @@ def worker_fanout(state: dict) -> dict:
     for aid in pending:
         led.transition(aid, L.S_DISPATCHED)
     led.save()
-    sh.emit(f"wave{int(state.get('wave') or 0) + 1}: 派 {len(pending)} worker")
+    sh.emit(f"第{int(state.get('wave') or 0) + 1}批:派发 {len(pending)} 个编写")
     sh.emit_tick(led, state, "worker_fanout")
 
     executor, limiter, ceiling = sh.fork_executor(len(pending))
     out_name = str(state.get("out_name"))
+    max_rounds = int(state.get("max_rounds") or 3)
     t0 = time.time()
 
     def _run(aid: str) -> None:
@@ -133,8 +170,12 @@ def worker_fanout(state: dict) -> dict:
         rework = 0
         final, detail = L.S_ESCALATED, "未执行"
         while rework <= _MAX_REWORK:
+            # 最后一次(前 max_rounds-1 轮已 fail):思考深度顶满 max,并让 brief 带上全历史证据。
+            # rounds_used 是本 case 已跑过的写轮,达 max_rounds-1 即"这是最后一次机会"。
+            eff = "max" if int(c.get("rounds_used") or 0) >= max_rounds - 1 else ""
             with limiter:
-                final, detail = _dispatch_one(executor, aid, _build_brief(aid, state, c, out_name), t0)
+                final, detail = _dispatch_one(
+                    executor, aid, _build_brief(aid, state, c, out_name), t0, effort=eff)
             c["rounds_used"] = int(c.get("rounds_used") or 0) + 1
             if final == L.S_PRODUCED:
                 # 机械探针(grade 出主路后的第二道闸):suspect 信号带反馈重做
@@ -159,8 +200,8 @@ def worker_fanout(state: dict) -> dict:
     with cf.ThreadPoolExecutor(max_workers=ceiling) as ex:
         list(ex.map(_run, pending))
     led.save()
-    sh.emit(f"wave 完成: produced={len(led.in_state(L.S_PRODUCED))} "
-            f"欠定={len(led.in_state(L.S_PENDING_DECISION))}")
+    sh.emit(f"本批完成:产出 {len(led.in_state(L.S_PRODUCED))} · "
+            f"欠定 {len(led.in_state(L.S_PENDING_DECISION))}")
     sh.emit_tick(led, state, "worker_fanout")
     return {"phase_status": "ok", "wave": int(state.get("wave") or 0) + 1,
             **sh.counts_update(led)}

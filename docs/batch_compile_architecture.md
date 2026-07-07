@@ -1,6 +1,6 @@
 # 批量编译架构（整脑图 → 一个 excel）
 
-> **演进备注(2026-07-06)**:本文的 `ist_compile_batch`/pipeline 编排是 v4 时代主路,现为二级 fallback;主路为 **V6 StateGraph 引擎**(见 [DESIGN_v6_engine.md](DESIGN_v6_engine.md)),v5 main-orchestrated 为一级 fallback(`IST_COMPILE_ENGINE=0`)。
+> **演进备注(2026-07-07)**:本文的 `ist_compile_batch`/pipeline 编排是 v4/v5 时代路径,**已于 2026-07-07 全部删除**(beta 发布后编译只留 **V6 StateGraph 引擎**,见 [DESIGN_v6_engine.md](DESIGN_v6_engine.md))。以下内容仅存历史,不代表当前代码。
 
 ## 背景
 

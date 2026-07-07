@@ -565,6 +565,7 @@ class MessageReducer:
                     "skill": rec.get("skill") or "", "agent": rec.get("agent") or "",
                     "tag": rec.get("tag") or "", "autoid": rec.get("autoid") or "",
                     "brief_head": rec.get("brief_head") or "",
+                    "effort": rec.get("effort") or "",
                     "status": "running", "n_calls": 0,
                     "start_ts": rec.get("ts"), "last_event_ts": rec.get("ts"),
                 })
@@ -618,6 +619,7 @@ class MessageReducer:
                     "phase": rec.get("phase") or "",
                     "elapsed_s": rec.get("elapsed_s"), "total_s": rec.get("total_s"),
                     "n_cases": rec.get("n_cases"), "detail": rec.get("detail") or "",
+                    "env": rec.get("env") or "", "case_idx": rec.get("case_idx") or 0,
                     "status": rec.get("status") or "running",
                     "last_event_ts": rec.get("ts"),
                 })

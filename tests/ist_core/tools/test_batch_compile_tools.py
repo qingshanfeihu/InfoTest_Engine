@@ -410,9 +410,9 @@ def test_digest_cross_run_repeat_and_transient_recur(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# grade 凭证机械门(autoids 路径):合并前每 case 必须在当前 case.xlsx 上实跑过
-# grade(compile_score 落盘 score.json)。2026-07-02 实证 34-case 零 grade 直接
-# 合并交付——prompt 层约束在长上下文下会被遗忘,此门确定性强制。
+# lint 凭证机械门(autoids 路径):合并前每 case 必须在当前 case.xlsx 上过 compile_emit
+# 的全部机械门(过门自动落 .grade_credential.json、精确签名 xlsx_mtime)。2026-07-02
+# 实证 34-case 零凭证直接合并交付——prompt 层约束在长上下文下会被遗忘,此门确定性强制。
 # ---------------------------------------------------------------------------
 
 def _emit_gate_case(autoid: str) -> str:
@@ -431,28 +431,21 @@ def _emit_gate_case(autoid: str) -> str:
     return str(Path("workspace/outputs") / autoid / "case.xlsx")
 
 
-def test_merged_autoids_credential_gate_dual_mode(monkeypatch):
-    """凭证门双模式(V4 步骤1,2026-07-04 凭证换源)。
+def test_merged_autoids_lint_credential_gate():
+    """lint 凭证门:emit 过全部机械门即自动落 lint 凭证(source=lint)→ 合并放行。
 
-    新主路:emit 过全部机械门即自动落 lint 凭证(source=lint)→ 合并放行——实证依据
-    942 对时点配对:grade verdict 判别力 3pp(PASS 56% vs CUT 53%),LLM 审 LLM 不构成
-    质量门,质量=机械 lint+上机 oracle。IST_GRADE_MAINPATH=1 恢复旧行为:lint 凭证
-    不算 grade 实跑,按"从未 grade"拒。
+    实证依据 942 对时点配对:LLM grade verdict 判别力仅 3pp(PASS 56% vs CUT 53%),
+    LLM 审 LLM 不构成质量门,质量=机械 lint + 上机 oracle(ist-verify)。
     """
     import shutil
     from pathlib import Path
     aid = "PYTEST_GATE_NOGRADE"
     try:
         _emit_gate_case(aid)
-        # 新主路:lint 凭证放行
+        # emit 落的 lint 凭证放行
         out = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
                                           "out_name": "_pytest_gate_merged"})
         assert "已合并" in out, out
-        # 旧模式:只认 grade 实跑凭证
-        monkeypatch.setenv("IST_GRADE_MAINPATH", "1")
-        out2 = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
-                                           "out_name": "_pytest_gate_merged"})
-        assert "grade 凭证门" in out2 and aid in out2 and "从未 grade" in out2
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
         shutil.rmtree(Path("workspace/outputs") / "_pytest_gate_merged", ignore_errors=True)
@@ -466,12 +459,12 @@ def test_merged_autoids_rejects_stale_grade_credential():
     try:
         xp = Path(_emit_gate_case(aid))
         sj = xp.parent / ".grade_credential.json"
-        # 签名指向旧 mtime(重编后没重新 grade);文件 mtime 再新也冒充不了
+        # 签名指向旧 mtime(重编后没重新 emit);文件 mtime 再新也冒充不了
         sj.write_text(json.dumps({"overall": 0.8, "abstain": False,
                                   "xlsx_mtime": xp.stat().st_mtime - 100}), encoding="utf-8")
         out = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
                                           "out_name": "_pytest_gate_merged"})
-        assert "grade 凭证门" in out and "重编后未重新 grade" in out
+        assert "lint 凭证门" in out and "重编后未重新 emit" in out
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
         shutil.rmtree(Path("workspace/outputs") / "_pytest_gate_merged", ignore_errors=True)
@@ -485,12 +478,12 @@ def test_merged_autoids_passes_with_fresh_grade_credential():
     try:
         xp = Path(_emit_gate_case(aid))
         sj = xp.parent / ".grade_credential.json"
-        # 有效凭证:签名精确等于当前 xlsx mtime(只有 compile_score 工具落盘能拿到)
+        # 有效凭证:签名精确等于当前 xlsx mtime(只有 compile_emit 工具落盘能拿到)
         sj.write_text(json.dumps({"overall": 0.8, "abstain": False,
                                   "xlsx_mtime": xp.stat().st_mtime}), encoding="utf-8")
         out = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
                                           "out_name": "_pytest_gate_merged"})
-        assert "grade 凭证门" not in out
+        assert "lint 凭证门" not in out
         assert "已合并 1 个真 case + 1 哨兵" in out
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
@@ -630,55 +623,6 @@ def test_dev_run_batch_rejects_autoid_not_in_xlsx():
         assert "不在该 xlsx 数据区" in res2  # 字符串通道同样校验
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
-
-
-# ---------------------------------------------------------------------------
-# P1 结构化:submit_verdict 工具(grade 交付)+ 合并门认凭证判定
-# ---------------------------------------------------------------------------
-
-def test_submit_verdict_validation_and_credential():
-    import shutil
-    from pathlib import Path
-    from main.ist_core.tools.device import submit_verdict, compile_emit
-    aid = "203031750000000101"  # 18位合法形态(submit_verdict 校验位数)
-    try:
-        compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
-        # 校验:verdict 枚举、CUT 必须给 root_cause
-        assert "error" in submit_verdict.invoke({"autoid": aid, "verdict": "MAYBE"})
-        assert "root_cause" in submit_verdict.invoke({"autoid": aid, "verdict": "CUT"})
-        out = submit_verdict.invoke({
-            "autoid": aid, "verdict": "PASS",
-            "caveats": ["英文错误回显需第一发核对"],
-            "report_md": "# 审批报告\n断言覆盖到位。"})
-        assert "已提交判定" in out
-        cred = json.loads((Path("workspace/outputs") / aid / ".grade_credential.json")
-                          .read_text(encoding="utf-8"))
-        assert cred["verdict"] == "PASS" and cred["caveats"] and "xlsx_mtime" in cred
-        assert (Path("workspace/outputs") / aid / "grade_report.md").is_file()
-        # 凭证签名有效 → 合并门放行
-        merged = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
-                                             "out_name": "_pytest_sv_merged"})
-        assert "grade 凭证门" not in merged and "已合并 1 个真 case" in merged
-    finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
-        shutil.rmtree(Path("workspace/outputs") / "_pytest_sv_merged", ignore_errors=True)
-
-
-def test_merged_rejects_cut_verdict_credential():
-    import shutil
-    from pathlib import Path
-    from main.ist_core.tools.device import submit_verdict, compile_emit
-    aid = "203031750000000102"  # 18位合法形态
-    try:
-        compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
-        submit_verdict.invoke({"autoid": aid, "verdict": "CUT", "root_cause": "可修复",
-                               "report_md": "断言太弱,重做。"})
-        merged = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
-                                             "out_name": "_pytest_sv_merged"})
-        assert "grade 凭证门" in merged and "判定为 CUT" in merged and aid in merged
-    finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
-        shutil.rmtree(Path("workspace/outputs") / "_pytest_sv_merged", ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------

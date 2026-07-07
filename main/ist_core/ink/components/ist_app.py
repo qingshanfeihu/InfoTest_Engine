@@ -60,20 +60,15 @@ _TOOL_SHORT_NAMES: dict[str, str] = {
     "compile_emit_merged": "EmitMerged",
     "compile_engine_run": "EngineRun",
     "compile_fanout": "Fanout",
-    "compile_prep": "Prep",
-    "compile_pipeline": "Pipeline",
-    "compile_score": "Score",
+    "compile_prep": "解析脑图",
     "compile_precedent": "Precedent",
-    "compile_grade_extract": "GradeExtract",
     "compile_check_verifiability": "Verifiability",
     "compile_expected_hits": "ExpectedHits",
     "compile_attribute": "Attribute",
     "compile_runtime_slots": "RuntimeSlots",
     "compile_runtime_fill": "RuntimeFill",
-    "compile_skeleton": "Skeleton",
     "compile_writeback": "Writeback",
     "compile_footprint_writeback": "FpWriteback",
-    "submit_verdict": "Verdict",
     "submit_attribution": "Attribution",
     "dev_probe": "Probe",
     "dev_ssh": "Ssh",
@@ -137,9 +132,9 @@ def _arg_stem(path: str) -> str:
 
 # 参数摘要=autoid 尾 6 位的编译链工具(单 case 域,`…994838` 即最有辨识度的标识)
 _AUTOID_ARG_TOOLS = frozenset({
-    "compile_emit", "compile_score", "compile_grade_extract", "compile_precedent",
+    "compile_emit", "compile_precedent",
     "compile_check_verifiability", "compile_attribute", "compile_runtime_slots",
-    "compile_runtime_fill", "submit_verdict", "submit_attribution",
+    "compile_runtime_fill", "submit_attribution",
 })
 
 
@@ -191,7 +186,7 @@ def _tool_display_arg(name: str, args: dict) -> str:
             aid = m.group(0) if m else ""
         if aid:
             return f"…{aid[-6:]}"
-    if name in ("compile_engine_run", "compile_prep", "compile_pipeline"):
+    if name in ("compile_engine_run", "compile_prep"):
         ver = str(args.get("version") or _extract_from_raw(args, "version") or "")
         mm = str(args.get("mindmap_path") or args.get("mindmap")
                  or _extract_from_raw(args, "mindmap_path") or _extract_from_raw(args, "mindmap") or "")
@@ -268,12 +263,13 @@ _B, _C2, _D2, _X2 = "\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m"
 _G2, _R2, _Y2 = "\x1b[32m", "\x1b[31m", "\x1b[33m"
 
 
-def _render_engine_bottom_line(p: dict) -> str:
+def _render_engine_bottom_line(p: dict, *, max_thinking: bool = False) -> str:
     """引擎聚合 → footer 底部常驻行(2026-07-06 用户定稿):进度条+文字计数,不用符号标签。
 
-    形如 `` 编译 dongkl · r1 编写 ██████████░░░░░░░░░░ 26/34 · 产出26 编写中1 欠定7 通过0 失败0``。
+    形如 `` 编译 dongkl · 轮次1 编写 ██████████░░░░░░░░░░ 26/34 · 产出26 编写中1 欠定7 通过0 失败0``。
     九个 ledger 状态全部有归属:产出=produced,通过=passed,编写中=pending+dispatched+
     failed_active(待重跑),欠定=pending_decision+awaiting_user,失败=failed_terminal+escalated。
+    max_thinking:任一 fork 处于 max 思考深度(升级重编最后一次)时挂「最大深度思考中」尾标。
     """
     p = dict(p or {})
     counts = dict(p.get("counts") or {})
@@ -292,9 +288,23 @@ def _render_engine_bottom_line(p: dict) -> str:
     if p.get("status") == "done":
         phase = "已收尾"
     D, X = _D2, _X2
-    return (f" 编译 {p.get('run', '')} · r{p.get('round', 0)} {phase} "
+    tail = f" {_B}{_Y2}· 最大深度思考中{X}" if max_thinking else ""
+    return (f" 编译 {p.get('run', '')} · 轮次{p.get('round', 0)} {phase} "
             f"{bar} {done}/{total}{D} · 产出{produced} 编写中{spin} "
-            f"欠定{pend} 通过{passed} 失败{bad}{X}")
+            f"欠定{pend} 通过{passed} 失败{bad}{X}{tail}")
+
+
+def _payloads_have_max_thinking(payloads) -> bool:
+    """任一 running fork 卡处于 max 思考深度 → 引擎底部条挂「最大深度思考中」。
+
+    纯函数(入参=fork 卡 payload 可迭代,快照派生),便于测试且 replay 一致。max 深度
+    只在升级重编最后一次触发(effort=max 由 worker_fanout 判 rounds_used 决定)。
+    """
+    for pl in payloads:
+        if ((pl.get("kind") or "fork") == "fork" and pl.get("status") == "running"
+                and str(pl.get("effort") or "") == "max"):
+            return True
+    return False
 
 
 def _skill_short(skill: str) -> str:
@@ -302,7 +312,7 @@ def _skill_short(skill: str) -> str:
     for p in ("ist-compile-", "compile-", "ist_compile_"):
         if s.startswith(p):
             s = s[len(p):]
-    return s or "fork"
+    return {"worker": "编写", "attributor": "归因"}.get(s, s or "fork")
 
 
 def _card_ident(p: dict) -> str:
@@ -333,17 +343,22 @@ def _render_fork_card(payload: dict, *, now: float,
     if kind == "progress":
         phase = str(p.get("phase") or "进行")
         n_cases = p.get("n_cases")
+        env = str(p.get("env") or "")
+        case_idx = p.get("case_idx") or 0
         cases = f" · {n_cases} case" if n_cases else ""
+        env_s = f" · 环境 {env}" if env else ""
+        # 有当前 case 序号 → 显「第X/N」(诚实推进);否则回落总数
+        prog_s = (f" · 第{case_idx}/{n_cases}" if (case_idx and n_cases) else cases)
         if p.get("status") == "done":
-            return (f"   {G}✓{X} {D}▸ {phase}完成{cases} · "
+            return (f"   {G}✓{X} {D}▸ {phase}完成{env_s}{cases} · "
                     f"{_fmt_secs(p.get('elapsed_s'))}{X}")
         if p.get("status") == "error":
-            return (f"   {R}✗{X} {D}▸ {phase}失败{cases} · "
+            return (f"   {R}✗{X} {D}▸ {phase}失败{env_s}{cases} · "
                     f"{_middle_ellipsis(str(p.get('detail') or ''), 70)}{X}")
-        detail = _middle_ellipsis(str(p.get("detail") or ""), 56)
+        detail = _middle_ellipsis(str(p.get("detail") or ""), 48)
         return (f"   {Y}{frame}{X} {B}▸ {phase}{X} {D}"
                 f"{int(p.get('elapsed_s') or 0)}s/{int(p.get('total_s') or 0)}s"
-                f"{cases}{(' · ' + detail) if detail else ''}{X}")
+                f"{env_s}{prog_s}{(' · ' + detail) if detail else ''}{X}")
 
     # kind == "fork"
     ident = _card_ident(p)
@@ -1525,6 +1540,11 @@ class IstInkApp:
         """fork_board_rev 变更:已登记卡行原地重渲;引擎卡刷 footer 底部行(无则清)。"""
         indices = getattr(snapshot, "fork_card_indices", None) or {}
         rows = getattr(self, "_fork_card_rows", {})
+        # 预扫快照(顺序无关):任一 running fork 处于 max 深度 → 引擎底部条挂标。
+        max_thinking = _payloads_have_max_thinking(
+            (snapshot.messages[mi].content[0].payload or {})
+            for mi in indices.values()
+            if 0 <= mi < len(snapshot.messages) and snapshot.messages[mi].content)
         saw_engine = False
         for uuid_, mi in indices.items():
             if not (0 <= mi < len(snapshot.messages)):
@@ -1536,7 +1556,8 @@ class IstInkApp:
             if (payload.get("kind") or "") == "engine":
                 saw_engine = True
                 self._fork_card_payloads[uuid_] = payload
-                self._footer.set_engine_line(_render_engine_bottom_line(payload))
+                self._footer.set_engine_line(
+                    _render_engine_bottom_line(payload, max_thinking=max_thinking))
                 continue
             row = rows.get(uuid_)
             if row is None:
@@ -1763,7 +1784,9 @@ class IstInkApp:
             # 引擎聚合卡走 footer 底部常驻行(用户定稿),不占 transcript 行
             if (payload.get("kind") or "") == "engine":
                 self._fork_card_payloads[msg.uuid] = payload
-                self._footer.set_engine_line(_render_engine_bottom_line(payload))
+                self._footer.set_engine_line(_render_engine_bottom_line(
+                    payload, max_thinking=_payloads_have_max_thinking(
+                        self._fork_card_payloads.values())))
                 return
             idx = self._transcript.message_count()
             self._transcript.append_message(self._card_line(msg.uuid, payload))

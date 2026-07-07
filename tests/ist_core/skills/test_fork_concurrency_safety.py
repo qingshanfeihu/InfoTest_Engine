@@ -61,7 +61,7 @@ def _seed_fake_subagent(monkeypatch, fake: _FakeRunnable) -> None:
     通过 monkeypatch 让 get_subagent_runnable 返回 fake，避免真 create_agent /
     真 LLM。SKILL.md 解析走真实路径（验证真实的 fork skill 渲染链）。
     """
-    monkeypatch.setattr(loader, "get_subagent_runnable", lambda name: fake)
+    monkeypatch.setattr(loader, "get_subagent_runnable", lambda name, **kw: fake)
 
 
 def test_concurrent_fork_invocations_do_not_cross_talk(monkeypatch):
@@ -69,8 +69,8 @@ def test_concurrent_fork_invocations_do_not_cross_talk(monkeypatch):
     fake = _FakeRunnable()
     _seed_fake_subagent(monkeypatch, fake)
 
-    # 用真实存在的 fork skill（ist-compile-draft 是 context: fork）
-    skill = "ist-compile-draft"
+    # 用真实存在的 fork skill（compile-worker 是 context: fork）
+    skill = "compile-worker"
     briefs = [f"BRIEF-{i}-autoid-{1000 + i}" for i in range(12)]
 
     with cf.ThreadPoolExecutor(max_workers=6) as ex:

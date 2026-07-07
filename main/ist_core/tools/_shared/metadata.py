@@ -108,19 +108,6 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "fallback_for": None,
         "intent": "read",
     },
-    "compile_score": {
-        "read_only": True,
-        "concurrency_safe": True,
-        "fallback_for": None,
-        "intent": "read",
-    },
-    "compile_grade_extract": {
-        # grade 确定性探针:只读 case.xlsx/provenance、产 suspect 信号,无副作用,可并发。
-        "read_only": True,
-        "concurrency_safe": True,
-        "fallback_for": None,
-        "intent": "read",
-    },
     "remember": {
         "read_only": False,
         "concurrency_safe": False,
@@ -134,7 +121,14 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "intent": "write",
     },
 
-    # 批量编译工具(ist-compile 编译链/compile_pipeline)
+    # V6 编译引擎入口:一次跑完整条闭环(编写/合并/上机/归因/重编),写本地产物 + 设备上机。
+    "compile_engine_run": {
+        "read_only": False,
+        "concurrency_safe": False,
+        "fallback_for": None,
+        "intent": "exec",
+    },
+    # 批量编译工具(V6 引擎构件 / ist-verify 链)
     "compile_prep": {
         # 解析脑图→manifest 落盘:写本地 manifest.json(非设备态),read_only=False。
         "read_only": False,
@@ -148,13 +142,6 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "concurrency_safe": True,
         "fallback_for": None,
         "intent": "read",
-    },
-    "compile_pipeline": {
-        # v3 approach A：确定性编译流水线(内部 prep+fanout+merge)。写本地产物,内部串行调度。
-        "read_only": False,
-        "concurrency_safe": False,
-        "fallback_for": None,
-        "intent": "exec",
     },
     "compile_fanout": {
         # 内部线程池并发派发 fork(draft/grade),本身可并发,但通常一次性调度全批。

@@ -104,10 +104,11 @@ async def astream_to_bus(
             elif isinstance(last_msg, dict):
                 user_input = str(last_msg.get("content", ""))
 
+    thread_id = (config or {}).get("configurable", {}).get("thread_id", "")
     bus.emit("run_start", payload={
-        "config": {"thread_id": (config or {}).get("configurable", {}).get("thread_id")},
+        "config": {"thread_id": thread_id},
         "user_input": user_input,
-    })
+    }, tags={"configurable_thread_id": thread_id})
 
     final_state: dict[str, Any] = {}
     try:

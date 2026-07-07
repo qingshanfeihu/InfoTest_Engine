@@ -14,6 +14,23 @@ InfoTest Engine 把技术文档（网络 / IPv6 / HTTP/2 / 网关配置指南等
 
 **架构原则**：`knowledge/data/orgin/` 经 KMS 分桶后转 markdown 直出；知识消费靠 agent 直读 + Footprint 已验证 CLI 事实树；用例编译走确定性 `compile_*` 工具链，与上机验证（`ist-verify`）解耦。
 
+## 给 Opus 的标准工作准则（证据优先 12 条）
+
+这一节把用户在 900+ 轮对话里反复纠正的思维错误固化成标准动作，每条＝一个实证反例 + 为什么 + 怎么做。相关长期记忆用 `[[名]]` 标注（`kb_memory_search` 或 `memory/` 拉全文）。落地这些动作的可复用 skill：`/investigate`、`/compile-e2e`、`/excel-spotcheck`、`/restart-regen`、`/ship-it`、`/run-tests`，全景见 `docs/CLAUDE_USAGE_GUIDE.md`。
+
+1. **症状反复出现＝根因没找到。** 别叠补丁/兜底/gapfill/全量重跑绕过去——停下，挖到能解释**全部**现象的那一个根因（常在自己的用法/配置里）再动手。实证：footprint 抽取漏命令一路打补丁烧掉一天 token，真根因是 function-calling 没开 strict（`[[footprint-mimo-strict-functioncalling]]`、`[[working-style-evidence-first]]`）。
+2. **别猜。** 查不到就找参考实现（如 cc-switch 源码）、vendor 官方文档、web 搜索——用事实说话，不凭想象改代码。
+3. **先记录/先看/先确认范围，再动手。** 调查类默认只读、零代码改动，把修法写进报告让用户拍板；大改/上机/全量跑前先确认范围，按 step-by-step 节奏，别自作主张铺开（`[[working-style-evidence-first]]`）。
+4. **改代码前先确认问题是不是本次引入的。** git diff / stash 对照给铁证；分清「共性/系统性」与「个案」再谈修复优先级。
+5. **给 LLM 原始事实，别喂预消化的关键字信号表。** 设备真实报错直接交给 LLM，别造 E_MARKERS / 裸数字 marker 之类关键字表替它判断（会误伤：裸 "429" 误中 autoid 4291）（`[[transient-error-bare-digit-marker]]`）。
+6. **判定用结构化事实，别退化成关键字白名单。** 命令/断言性质读 F 列方法 + found/not_found 算子这类结构化信号，机械闭集从 mirror 源码解析——别 grep 命令文本套关键字白名单（强字典会误杀金标准，GA-CUT 回归即此）（`[[compile-judgment-structural-not-strongdict]]`）。
+7. **该上机验证的别离线硬推。** 分清哪类必须上机找实际状态/结果，别自己脑补预期值当验证（`[[verify-loop-convergence-stoploss]]`）。
+8. **debug LLM 行为要抓思维链，别猜。** 开思考模式，一条条看 draft/grade 到底怎么想的——不知道思考链去猜，永远不对。
+9. **断言期望值溯源脑图/手册，不 observe-then-assert。** 把设备 show 回显照抄成断言期望值＝假验证（项目铁红线）。
+10. **判「框架做不到」前先查是不是用错了已有能力。** 先确认不是自己用错（abs_found vs found 教训）再下结论（`[[framework-capability-before-limitation]]`）。
+11. **改闸门前先画状态生命周期、核对设计意图。** 门的条件常与远处机制成对（如 frozen 闸配 override 通道）；门挂凭证路不挂编辑路（直改文件会绕过编辑入口门），翻案需行级证据（`[[gate-change-verify-design-intent]]`、`[[gates-on-credential-path-not-edit-path]]`）。
+12. **写 prompt/skill 讲事实、按自由度分层。** 陈述现象+后果+为什么，别造术语、别把 ALL-CAPS「必须/绝不」当默认；高自由度给方向信任模型，低自由度才上精确护栏；参考文档只写机制、数据按引用（fs_read mirror 现查）（`[[prompt-facts-not-coined-terms]]`、`[[reference-docs-mechanism-not-data]]`）。
+
 ## 常用命令
 
 ```bash

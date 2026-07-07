@@ -288,6 +288,49 @@ python -m wecom_bot.main
 `setup_frp.py` 一键部署：自签证书（CN/SAN 用 `wecom.<IP>.nip.io`）+ 写 frpc.toml + 重启 frpc。
 企微后台 URL：`https://wecom.<IP>.nip.io/wecom/callback`
 
+## 企业微信智能机器人 — WebSocket 长连接模式（`wecom_bot_smart/`）
+
+免公网 URL、免 frp——直接通过 WebSocket 长连接对接企微网关，内网即可用。
+鉴权只需 Bot ID + Secret，消息体为 JSON 明文，**无** CorpID / EncodingAESKey / 加解密。
+
+### 协议
+
+1. WS 连接 → 发 ``aibot_subscribe{"bot_id","secret"}`` 鉴权
+2. 收到 ``aibot_msg_callback`` → 5s 内回 ``aibot_respond_msg(finish=false)`` 占位
+3. IST-Core 完成后 → 同一 stream_id 回 ``finish=true``，客户端原位替换
+4. 断线指数退避自动重连
+
+### 架构 vs 旧 HTTP 模式
+
+| 维度 | 旧 HTTP（`wecom_bot/`） | 新 WebSocket（`wecom_bot_smart/`） |
+|------|----------------------|-------------------------------|
+| 连接方式 | 企微主动 POST 回调 | 本机主动 WS 连企微网关 |
+| 鉴权 | Token + EncodingAESKey + CorpID | Bot ID + Secret |
+| 公网需求 | 需要域名 + frp 穿透 | 无——内网直连 |
+| 消息体 | WXBizMsgCrypt 加密 XML | JSON 明文 |
+| 回复方式 | `requests.post(message/send)` | 同一 WS 连接 `aibot_respond_msg` |
+| 流式 | 不支持 | stream 原位替换（finish=false → true） |
+| 并发隔离 | 多线程 + `_active_tasks` | 多线程 + `_task_registry`（按 user_id） |
+
+### 模块
+
+| 模块 | 职责 |
+|------|------|
+| `wecom_bot_smart/main.py` | 启动入口 |
+| `wecom_bot_smart/gateway.py` | WS 长连接 + 鉴权 + IST-Core 调度 + 流式回复 + 任务注册表 |
+| `wecom_bot_smart/config.py` | `environment` 加载 |
+
+### 启动
+
+```bash
+pip install websocket-client
+python -m wecom_bot_smart.main
+```
+
+### 关键环境变量
+
+`WECOM_SMART_BOT_ID` / `WECOM_SMART_SECRET` / `WECOM_SMART_GATEWAY_URL`（见 `environment.example` §十三）
+
 ## 技术栈
 
 - Python 3.11+（`deepagents>=0.5.3` 强约束），`langchain` ≥ 1.2.15，`langgraph` ≥ 1.1，`textual` TUI + `fastapi` Web Terminal

@@ -238,3 +238,22 @@ WECOM_APP_SECRET=your_app_secret
 # WECOM_BOT_PORT=8088
 # WECOM_SYNC_TIMEOUT=5        # 同步模式超时（秒），超时转异步
 # WECOM_IST_TIMEOUT=300       # IST-Core 单次调用最长等待（秒）
+
+
+# =============================================================================
+# 十三、企业微信智能机器人 — WebSocket 长连接模式（wecom_bot_smart/）
+#
+# 无需公网 URL，直接 WebSocket 连企微网关，内网即可用。
+# 在企微后台「应用管理 → 智能机器人 → API 模式 → 使用长连接」获取参数。
+# 详见 wecom_bot_smart/.env.example + CLAUDE.md「企业微信智能机器人」。
+# =============================================================================
+WECOM_SMART_BOT_ID=your_bot_id_here
+WECOM_SMART_SECRET=your_secret_here
+WECOM_SMART_GATEWAY_URL=wss://qyapi.weixin.qq.com/cgi-bin/wwvm/wecom/message/gateway
+
+# --- 文档/智能表格工具（可选）---
+# 企微后台「智能机器人 → 编辑 → 可使用权限」授权后复制 streamableHTTP URL
+WECOM_SMART_MCP_DOC_URL=https://...
+
+# --- 服务配置（可选）---
+# WECOM_SMART_IST_TIMEOUT=600  # IST-Core 单次调用最长等待（秒）

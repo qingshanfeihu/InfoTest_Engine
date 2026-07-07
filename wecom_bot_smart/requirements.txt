@@ -1,3 +1,4 @@
 # 企业微信智能机器人 — WebSocket 长连接模式
 websocket-client>=1.7,<2          # WebSocket 长连接客户端
-requests>=2.28,<3                 # 文档/智能表格 API 调用
+requests>=2.28,<3                 # MCP/文件下载 HTTP 调用
+pycryptodome>=3.20,<4             # AES-256-CBC 文件解密

@@ -15,9 +15,11 @@ import json
 import logging
 import ctypes
 import os
+import queue
 import threading
 import time
 import uuid
+from collections.abc import Generator
 from typing import Any
 
 import websocket
@@ -61,6 +63,158 @@ def _call_ist_core(user_query: str, user_id: str = "smart_user",
     final = result.get("final_answer") or ""
     logger.info("IST-Core 完成: thread=%s len=%d", tid, len(final))
     return final
+
+
+def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
+                          thread_id: str = "") -> Generator[dict[str, Any], None, str]:
+    """流式调用 IST-Core，通过 ``stream_and_collect`` + EventBus sink。
+
+    使用 IST-Core 已有的 ``stream_and_collect`` 函数，它正确处理了
+    ``_MainAgentProgressHandler`` 发出的 ``adispatch_custom_event`` 事件。
+
+    作为 sync generator 使用::
+
+        gen = _call_ist_core_stream(query, user_id, thread_id)
+        for event in gen:
+            if event["type"] == "delta":
+                ws.send(event["content"])   # LLM 流式 delta
+            elif event["type"] == "thought":
+                ws.send(event["content"])   # 思考过程
+            elif event["type"] == "tool":
+                ws.send(event["content"])   # 工具调用
+        # StopIteration.value 即为 final_answer
+    """
+    import os as _os
+    _os.environ.setdefault("IST_NON_INTERACTIVE", "1")
+
+    from main.ist_core.runner import _ensure_env
+    _ensure_env()
+
+    from main.ist_core.graph import build_ist_core_graph
+    from main.ist_core.streaming import stream_and_collect
+    from main.ist_core.events import IstCoreEvent, reset_default_bus
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langchain_core.messages import HumanMessage
+
+    tid = thread_id or f"smart-{user_id or 'anon'}-{uuid.uuid4().hex[:8]}"
+    logger.info("IST-Core 流式开始: thread=%s query=%.100s", tid, user_query)
+
+    q: queue.Queue = queue.Queue()
+    final_answer = ""
+
+    def _sink(event: IstCoreEvent) -> None:
+        """将 IstCoreEvent 转换为适合企微的 dict 格式放入 queue."""
+        try:
+            kind = event.get("kind", "")
+            payload = event.get("payload", {})
+            # DEBUG: 确认事件是否到达
+            logger.debug("sink event: kind=%s payload_keys=%s", kind, list(payload.keys()))
+
+            if kind == "llm_token":
+                # LLM 流式 delta
+                content = payload.get("content", "")
+                if content:
+                    q.put({"type": "delta", "content": content})
+            elif kind == "thought":
+                # 思考过程（从 llm_end 或 custom event）
+                content = payload.get("content", "")
+                if content:
+                    q.put({"type": "thought", "content": f"💭 {content}"})
+            elif kind == "tool_call" or kind == "tool_start":
+                # 工具调用开始
+                name = payload.get("name", "工具")
+                inp = payload.get("input", {})
+                # 格式化 input 显示（避免显示原始字典）
+                input_preview = ""
+                if isinstance(inp, dict):
+                    # 提取关键信息
+                    if "skill" in inp:
+                        input_preview = inp.get("skill", "")
+                        brief = inp.get("brief", "")
+                        if brief:
+                            input_preview += f" ({brief[:50]}...)" if len(brief) > 50 else f" ({brief})"
+                    elif "raw" in inp:
+                        raw = inp.get("raw", "")
+                        input_preview = raw[:80] if len(raw) > 80 else raw
+                    elif "query" in inp:
+                        query = inp.get("query", "")
+                        input_preview = query[:80] if len(query) > 80 else query
+                    else:
+                        # 其他情况，显示简短摘要
+                        keys = list(inp.keys())[:3]
+                        input_preview = ", ".join(keys)
+                elif isinstance(inp, str):
+                    input_preview = inp[:80] if len(inp) > 80 else inp
+                tool_msg = f"🔧 调用 {name}"
+                if input_preview:
+                    tool_msg += f"\n{input_preview}"
+                q.put({"type": "tool", "content": tool_msg})
+            elif kind == "tool_result" or kind == "tool_end":
+                # 工具调用结束
+                name = payload.get("name", "工具")
+                q.put({"type": "tool", "content": f"✅ {name} 完成"})
+            elif kind == "phase_marker":
+                # 阶段标记
+                phase = payload.get("phase", "")
+                if phase:
+                    q.put({"type": "phase", "content": f"📍 {phase}"})
+            elif kind == "error" or kind == "run_error":
+                # 错误
+                error_msg = payload.get("error", "") or payload.get("message", "")
+                if error_msg:
+                    q.put({"type": "error", "content": error_msg})
+            # 其他事件类型忽略（node_start/node_end 等）
+        except Exception as e:
+            logger.error("_sink 处理异常: %s", e)
+
+    def _run() -> None:
+        nonlocal final_answer
+        try:
+            with InMemorySaver() as saver:
+                graph = build_ist_core_graph(checkpointer=saver, checkpointer_mode="async")
+                config: dict[str, Any] = {"configurable": {"thread_id": tid}}
+                initial_state: dict[str, Any] = {
+                    "task_type": "QA",
+                    "user_input": user_query,
+                    "messages": [HumanMessage(content=user_query)],
+                }
+                result = stream_and_collect(
+                    graph, initial_state, config=config, sinks=[_sink]
+                )
+                final_answer = result.get("final_answer") or ""
+        except Exception as exc:
+            logger.exception("IST-Core 流式异常")
+            q.put({"type": "error", "content": str(exc)})
+        finally:
+            q.put(None)  # 结束信号
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    last_event_ts = time.monotonic()
+    try:
+        while True:
+            try:
+                item = q.get(timeout=30)  # 30秒超时，保持活跃
+            except queue.Empty:
+                # 超时，发送心跳消息让用户知道还在运行
+                elapsed_min = int((time.monotonic() - last_event_ts) / 60) or 1
+                yield {"type": "heartbeat", "content": f"⏳ 仍在处理中（{elapsed_min} 分钟）…"}
+                continue
+
+            if item is None:
+                break
+            if item.get("type") == "error":
+                logger.error("IST-Core 流式错误: %s", item["content"])
+                final_answer = f"执行失败: {item['content']}"
+                break
+            last_event_ts = time.monotonic()
+            yield item
+    finally:
+        t.join(timeout=10)
+
+    logger.info("IST-Core 流式完成: thread=%s len=%d", tid, len(final_answer))
+    return final_answer
 
 
 # ============================================================================
@@ -169,8 +323,8 @@ _sessions: dict[str, dict[str, Any]] = {}
 _sessions_lock = threading.Lock()
 
 
-def _get_thread_id(user_id: str) -> tuple[str, str | None]:
-    """返回 (thread_id, auto_split_reason | None)。
+def _get_thread_id(user_id: str) -> tuple[str, str | None, int]:
+    """返回 (thread_id, auto_split_reason | None, turn_count).
 
     切分条件:
       1. idle > 30 分钟
@@ -180,7 +334,7 @@ def _get_thread_id(user_id: str) -> tuple[str, str | None]:
     with _sessions_lock:
         sess = _sessions.get(user_id)
         if sess is None:
-            return (_new_session_locked(user_id), None)
+            return (_new_session_locked(user_id), None, 1)
 
         idle = now - sess["last_active"]
         turns = sess["turn_count"]
@@ -194,12 +348,12 @@ def _get_thread_id(user_id: str) -> tuple[str, str | None]:
             logger.info("自动切分会话: user=%s reason=%s old_thread=%s",
                          user_id, reason, sess["thread_id"][-12:])
             tid = _new_session_locked(user_id)
-            return (tid, reason)
+            return (tid, reason, 1)
 
         # 正常复用
         sess["last_active"] = now
         sess["turn_count"] = turns + 1
-        return (sess["thread_id"], None)
+        return (sess["thread_id"], None, turns + 1)
 
 
 def _new_session_locked(user_id: str) -> str:
@@ -410,41 +564,58 @@ class SmartBotGateway:
 
     def _run_agent_task(self, user_id: str, query: str, req_id: str) -> None:
         # === SE_MANAGEMENT === 取/建会话，获取 thread_id + 切分提示
-        tid, split_reason = _get_thread_id(user_id)
+        tid, split_reason, turn_count = _get_thread_id(user_id)
 
         stream_id = str(uuid.uuid4())
         cancel_evt = _register_task(user_id, stream_id)
-        _send_stream(self._ws, stream_id, False, "InfoTest 正在运行，请稍候…", req_id)
-
-        heartbeat_running = True
         start_ts = time.monotonic()
 
-        def _hb() -> None:
-            msgs = ["仍在处理中…（{elapsed} 分钟）",
-                    "AI 正在检索分析，已等待 {elapsed} 分钟…",
-                    "正在整理结果，已过 {elapsed} 分钟…",
-                    "执行中，已等待 {elapsed} 分钟…"]
-            i = 0
-            while heartbeat_running and not cancel_evt.is_set():
-                time.sleep(300)
-                if not heartbeat_running or cancel_evt.is_set():
-                    break
-                m = int((time.monotonic() - start_ts) / 60) or 1
-                _send_stream(self._ws, stream_id, False,
-                             msgs[i % len(msgs)].format(elapsed=m), req_id)
-                i += 1
+        # --- 流式调用 IST-Core，逐 delta 发送到企微 ---
+        # 首先发送初始提示
+        seq = 0
+        _send_stream_delta(self._ws, stream_id, seq, "InfoTest 正在运行，请稍候…", False, req_id)
 
-        threading.Thread(target=_hb, daemon=True).start()
-
+        answer = ""
+        gen = _call_ist_core_stream(query, user_id, thread_id=tid)
         try:
-            answer = _call_ist_core(query, user_id, thread_id=tid)
+            while True:
+                try:
+                    event = next(gen)
+                except StopIteration as exc:
+                    answer = exc.value or ""
+                    break
+
+                if cancel_evt.is_set():
+                    gen.close()
+                    answer = "任务已被终止。"
+                    break
+
+                # 根据事件类型处理
+                event_type = event.get("type", "")
+                event_content = event.get("content", "")
+
+                if event_type == "delta":
+                    # LLM 流式 delta，直接发送
+                    seq += 1
+                    _send_stream_delta(self._ws, stream_id, seq, event_content, False, req_id)
+                elif event_type == "heartbeat":
+                    # 心跳消息，不增加 seq（保持流式序列）
+                    _send_stream_delta(self._ws, stream_id, seq, event_content, False, req_id)
+                elif event_type in ("thought", "tool", "phase"):
+                    # 中间过程，作为独立消息发送
+                    seq += 1
+                    _send_stream_delta(self._ws, stream_id, seq, event_content, False, req_id)
+
         except SystemExit:
             answer = "任务已被终止。"
         except Exception:
-            logger.exception("IST-Core 异常: user=%s", user_id)
+            logger.exception("IST-Core 流式异常: user=%s", user_id)
             answer = "执行失败，请稍后重试。"
         finally:
-            heartbeat_running = False
+            try:
+                gen.close()
+            except Exception:
+                pass
 
         if cancel_evt.is_set() and "已被终止" not in answer:
             answer = "任务已被终止。"
@@ -452,9 +623,12 @@ class SmartBotGateway:
         total_min = int((time.monotonic() - start_ts) / 60) or 0
         final_md = _format_markdown(
             query[:100], answer, total_min, split_reason=split_reason,
+            turn_count=turn_count,
         )
         _last_result[user_id] = {"query": query[:100], "answer": answer}
-        _send_stream(self._ws, stream_id, True, final_md, req_id)
+
+        # 发送最终流式消息（is_end=True），附带完整格式化 markdown
+        _send_stream_delta(self._ws, stream_id, seq + 1, final_md, True, req_id)
         _deregister_task(user_id)
 
     def _send_file_result(self, local_path: str, user_id: str,
@@ -515,19 +689,19 @@ class SmartBotGateway:
             }, req_id=req_id)
             return
 
-        if content in ("停止", "/stop"):
+        if content in ("停止", "终止", "强制终止", "/stop", "/kill", "/abort"):
             ok = _cancel_task(user_id)
             _send_cmd(self._ws, "aibot_respond_msg", {
                 "msgtype": "stream",
                 "stream": {"id": str(uuid.uuid4()), "finish": True,
-                           "content": "已终止" if ok else "无运行中的任务"},
+                           "content": "✅ 已强制终止任务" if ok else "⚠️ 无运行中的任务"},
             }, req_id=req_id)
             return
 
         if content in ("新对话", "新会话", "重置", "/new", "/reset"):
             # 手动重置会话：先取消正在跑的任务，再新建 thread
             _cancel_task(user_id)
-            new_tid = _new_session(user_id)
+            new_tid = _new_session_locked(user_id)
             _send_cmd(self._ws, "aibot_respond_msg", {
                 "msgtype": "stream",
                 "stream": {"id": str(uuid.uuid4()), "finish": True,
@@ -536,11 +710,18 @@ class SmartBotGateway:
             return
 
         if content in ("帮助", "help"):
-            tips = ["InfoTest Engine 智能助手\n直接发送技术问题即可。",
-                    "停止 -- 终止任务",
-                    "帮助 -- 显示帮助"]
+            tips = [
+                "InfoTest Engine 智能助手",
+                "",
+                "直接发送技术问题即可获得解答。",
+                "",
+                "命令列表:",
+                "  新会话 / 新对话 -- 开启新对话",
+                "  停止 / 终止 -- 强制终止当前任务",
+                "  帮助 -- 显示此帮助",
+            ]
             if server_config.mcp_doc_url:
-                tips.append("报告 -- 将结果生成文档")
+                tips.append("  报告 -- 将结果生成文档")
             _send_cmd(self._ws, "aibot_respond_msg", {
                 "msgtype": "stream",
                 "stream": {"id": str(uuid.uuid4()), "finish": True,
@@ -553,43 +734,60 @@ class SmartBotGateway:
             return
 
         # === SE_MANAGEMENT === 取/建会话，获取 thread_id + 切分提示
-        tid, split_reason = _get_thread_id(user_id)
+        tid, split_reason, turn_count = _get_thread_id(user_id)
 
         stream_id = str(uuid.uuid4())
         cancel_evt = _register_task(user_id, stream_id)
-        _send_stream(self._ws, stream_id, False,
-                     "InfoTest 正在运行，请稍候…", req_id)
-
-        heartbeat_running = True
         start_ts = time.monotonic()
 
-        def _hb() -> None:
-            msgs = ["仍在处理中…（{elapsed} 分钟）",
-                    "AI 正在检索分析，已等待 {elapsed} 分钟…",
-                    "正在整理结果，已过 {elapsed} 分钟…",
-                    "执行中，已等待 {elapsed} 分钟…"]
-            i = 0
-            while heartbeat_running and not cancel_evt.is_set():
-                time.sleep(300)
-                if not heartbeat_running or cancel_evt.is_set():
-                    break
-                m = int((time.monotonic() - start_ts) / 60) or 1
-                _send_stream(self._ws, stream_id, False,
-                             msgs[i % len(msgs)].format(elapsed=m), req_id)
-                i += 1
-
-        threading.Thread(target=_hb, daemon=True).start()
-
         cleaned_query = _clean_content(content, user_id)
+
+        # --- 流式调用 IST-Core，逐 delta 发送到企微 ---
+        # 首先发送初始提示
+        seq = 0
+        _send_stream_delta(self._ws, stream_id, seq, "InfoTest 正在运行，请稍候…", False, req_id)
+
+        answer = ""
+        gen = _call_ist_core_stream(cleaned_query, user_id, thread_id=tid)
         try:
-            answer = _call_ist_core(cleaned_query, user_id, thread_id=tid)
+            while True:
+                try:
+                    event = next(gen)
+                except StopIteration as exc:
+                    answer = exc.value or ""
+                    break
+
+                if cancel_evt.is_set():
+                    gen.close()
+                    answer = "任务已被终止。"
+                    break
+
+                # 根据事件类型处理
+                event_type = event.get("type", "")
+                event_content = event.get("content", "")
+
+                if event_type == "delta":
+                    # LLM 流式 delta，直接发送
+                    seq += 1
+                    _send_stream_delta(self._ws, stream_id, seq, event_content, False, req_id)
+                elif event_type == "heartbeat":
+                    # 心跳消息，不增加 seq（保持流式序列）
+                    _send_stream_delta(self._ws, stream_id, seq, event_content, False, req_id)
+                elif event_type in ("thought", "tool", "phase"):
+                    # 中间过程，作为独立消息发送
+                    seq += 1
+                    _send_stream_delta(self._ws, stream_id, seq, event_content, False, req_id)
+
         except SystemExit:
             answer = "任务已被终止。"
         except Exception:
-            logger.exception("IST-Core 异常: user=%s", user_id)
+            logger.exception("IST-Core 流式异常: user=%s", user_id)
             answer = "执行失败，请稍后重试。"
         finally:
-            heartbeat_running = False
+            try:
+                gen.close()
+            except Exception:
+                pass
 
         if cancel_evt.is_set() and "已被终止" not in answer:
             answer = "任务已被终止。"
@@ -598,11 +796,13 @@ class SmartBotGateway:
         # === SE_MANAGEMENT === 自动切分时在回复中追加弱提示
         final_md = _format_markdown(
             content, answer, total_min, split_reason=split_reason,
+            turn_count=turn_count,
         )
 
         _last_result[user_id] = {"query": content, "answer": answer}
 
-        _send_stream(self._ws, stream_id, True, final_md, req_id)
+        # 发送最终流式消息（is_end=True），附带完整格式化 markdown
+        _send_stream_delta(self._ws, stream_id, seq + 1, final_md, True, req_id)
         _deregister_task(user_id)
 
         if len(answer) > 200 and server_config.mcp_doc_url:
@@ -667,6 +867,29 @@ def _send_stream(ws, stream_id: str, finish: bool,
     }, req_id=req_id)
 
 
+def _send_stream_delta(ws, stream_id: str, stream_seq: int, content: str,
+                       is_end: bool, req_id: str) -> None:
+    """发送流式 delta 报文（企业微信规范）。
+
+    每个 delta 报文包含:
+      - ``is_stream=True``  标识流式消息
+      - ``stream_seq``      严格递增的序号
+      - ``is_end``          完毕时置为 ``True``
+      - ``finish``          与 is_end 同步，兼容旧版
+    """
+    _send_cmd(ws, "aibot_respond_msg", {
+        "msgtype": "stream",
+        "stream": {
+            "id": stream_id,
+            "finish": is_end,
+            "content": content,
+            "is_stream": True,
+            "stream_seq": stream_seq,
+            "is_end": is_end,
+        },
+    }, req_id=req_id)
+
+
 def _safe_user_dir(user_id: str) -> str:
     import re
     return re.sub(r'[<>:"/\\|?*]', '_', user_id.strip()) or "unknown"
@@ -680,7 +903,8 @@ def _clean_content(raw: str, user_id: str) -> str:
 
 # === SE_MANAGEMENT === 切分提示注入
 def _format_markdown(query: str, answer: str, elapsed_min: int,
-                     split_reason: str | None = None) -> str:
+                     split_reason: str | None = None,
+                     turn_count: int = 0) -> str:
     body = answer
     d = body.encode("utf-8")
     if len(d) > 20000:
@@ -693,9 +917,17 @@ def _format_markdown(query: str, answer: str, elapsed_min: int,
             f"已自动为您开启新对话以保障响应速度与准确度。</font>\n\n"
         )
 
+    # 显示轮数（如 5/20）
+    turn_info = f"会话轮数: {turn_count}/{MAX_TURNS}" if turn_count > 0 else ""
+
     ft = (f"<font color=\"comment\">总耗时约 {elapsed_min} 分钟</font>"
           if elapsed_min > 0
           else "<font color=\"comment\">Powered by IST-Core</font>")
+
+    footer = ft
+    if turn_info:
+        footer = f"{turn_info} | {ft}"
+
     return (f"## InfoTest Engine 结果\n"
             f"{prefix}"
-            f"> **问题：**{query[:100]}\n---\n{body}\n---\n{ft}")
+            f"> **问题：**{query[:100]}\n---\n{body}\n---\n{footer}")

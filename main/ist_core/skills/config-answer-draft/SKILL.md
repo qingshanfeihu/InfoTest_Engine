@@ -8,8 +8,10 @@ user-invocable: false
 
 # 生成 APV CLI 配置命令
 
-主 agent 已经把需求或源配置文件信息放在 brief 中。你的任务：按 subagent prompt 的流程 grep 手册、提取数据、生成命令、保存 evidence 和 candidate。
-
 ## Brief from orchestrator
 
 $ARGUMENTS
+
+<instructions>
+主 agent 已把需求或源配置文件信息放在上面 brief 中。你的任务：按 subagent prompt 的流程 grep 手册、提取数据、生成命令、保存 evidence 和 candidate。
+</instructions>

@@ -569,6 +569,9 @@ def check_crash_gates_mandatory(steps: list) -> StructuralResult:
         _check_line_anchor_assertions(steps, result)
         _check_assertion_matches_command_echo(steps, result)
         _check_has_assertion(steps, result)
+        # 2026-07-08 取证收录:空 G 断言=恒真(假 PASS)/恒 fail/框架回退乱搜三态之一,
+        # 无合法形态(044605 白烧一轮实证)——按"误判即真错"标准进无条件门。
+        _check_empty_assertion_pattern(steps, result)
         # 2026-07-06 从 lint 前移:未定义 I 引用=NameError 崩卷、I 注入 format 结构坏=
         # ValueError/KeyError/IndexError 崩卷、H 撞框架名字空间=覆盖执行器状态——全部
         # 必崩/必污染类,按本门收录标准(必崩类不躲后置卡点)进 emit 无条件门。
@@ -613,10 +616,10 @@ def steps_from_xlsx(xlsx_path) -> tuple[str, list[dict]]:
                 begun = True
             continue
         e = str(row[4].value or "").strip()
-        if a and _AUTOID_RE.match(a) is None and a.startswith("203"):
-            # 位数异常的 autoid 也要带出去让上层报——用原文记录
-            autoid = autoid or a
-        elif a.startswith("203"):
+        # autoid 行按「纯数字且 ≥12 位」认(截断 id 也要带出去让上层报 autoid_malformed)。
+        # 勿按 "203" 前缀认:204 批实证前缀硬编致 autoid 恒空、malformed 检查静默失效。
+        # 排除框架哨兵 999999999999999(15 位,合并卷末尾垫底的延迟执行契约占位,合法)。
+        if a.isdigit() and len(a) >= 12 and a != "999999999999999":
             autoid = autoid or a
         if not e:
             continue
@@ -753,6 +756,30 @@ def _check_has_assertion(steps: list, result: StructuralResult) -> None:
             "(check_point.py:126),纯配置/纯观测卷上机恒 fail。补至少一条断言;"
             "只想执行不验证的步不构成测试用例。",
             0,
+        )
+
+
+def _check_empty_assertion_pattern(steps: list, result: StructuralResult) -> None:
+    """check_point 的 G、H、I **全空** = 断言无物可比,无合法形态。
+
+    只查三列全空:**G 空 + H 有值是金标准合法形态**(捕获比较——check_point(H=v1) 拿
+    寄存器 v1 的捕获值当匹配模式,mirror 的 verified_* 先例与 smoke_test 大量使用,
+    2026-07-08 存量反扫 541 卷发现 28 卷全是这形态,险些误杀)。三列全空则框架没有任何
+    模式可搜——实证 044605:captured_relation 未产出值留下空断言,框架回退拿观测命令
+    文本当模式搜索失败,白烧一轮上机。运行时才定的值写 ``<RUNTIME>`` 字面占位(非空,
+    不触发本门)待 compile_runtime_fill 回填,不许留空。"""
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict) or str(s.get("E", "")).strip() != "check_point":
+            continue
+        if str(s.get("G", "") or "").strip() or str(s.get("H", "") or "").strip() \
+                or str(s.get("I", "") or "").strip():
+            continue
+        result.add(
+            "empty_assertion_pattern",
+            "check_point 的 G/H/I 全空——没有模式、没有寄存器引用,框架无物可比"
+            "(会回退拿观测命令文本乱搜,044605 实证白烧一轮上机)。给 G 写模式,或"
+            "引用已捕获的 H 寄存器;运行时才定的值写 <RUNTIME> 占位等回填,别留空。",
+            i,
         )
 
 
@@ -1035,7 +1062,8 @@ def _check_autoid_rows_runnable(xlsx_path, result: StructuralResult) -> None:
         if not begun:
             begun = a == "自动化ID"
             continue
-        if a.startswith("203") and not str(row[4].value or "").strip():
+        if a.isdigit() and len(a) >= 12 and a != "999999999999999" \
+                and not str(row[4].value or "").strip():
             result.add(
                 "autoid_row_not_runnable",
                 f"autoid 行({a})的 E 列为空——框架 ifrun 对此整 case **静默跳过**"

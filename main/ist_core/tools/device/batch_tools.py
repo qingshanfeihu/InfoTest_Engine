@@ -320,8 +320,17 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
                         continue
                     ev = (r.get("device_context") or r.get("causality") or "").strip()
                     if ev:
-                        it["brief"] += ("\n\n## 上机设备证据(last_run.json 原文,工具注入未经转述)\n"
-                                        f"```\n{ev[:6000]}\n```")
+                        block = ('<device_evidence source="last_run.json" '
+                                 'note="工具注入原文,未经转述">\n'
+                                 f"{ev[:6000]}\n</device_evidence>")
+                        # 长数据置顶(官方长上下文实践):插在机读信封首行之后——信封保持
+                        # 首行供卡片/解析读取,长证据紧随其后,指令留在消息末尾。
+                        b = it["brief"]
+                        first, sep, rest = b.partition("\n")
+                        if first.lstrip().startswith("{"):
+                            it["brief"] = first + "\n" + block + (("\n" + rest) if sep else "")
+                        else:
+                            it["brief"] = block + "\n" + b
         except Exception:  # noqa: BLE001
             logger.debug("fanout 证据注入失败(跳过)", exc_info=True)
 
@@ -712,7 +721,10 @@ def _xlsx_apv_lines(xlsx_path) -> dict[str, list[str]]:
                 if not begun:
                     begun = a == "自动化ID"
                     continue
-                if a.startswith("203"):
+                # autoid 行=18 位纯数字(勿按前缀认:曾硬编 "203" 前缀,204 批全体 autoid
+                # 不被识别→apv_cmds 恒空→device_verified 写回/行为晋升对 204 批静默失效,
+                # 2026-07-08 实测台账 105/105 条空 vs 203 批 26/26 全有)
+                if len(a) == 18 and a.isdigit():
                     cur = a
                     out.setdefault(cur, [])
                 if not cur or len(row) < 7:
@@ -769,6 +781,20 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
 
     含 ``<RUNTIME>`` 占位的 case 首跑必 fail（框架找字面 "<RUNTIME>"），属预期待回填——
     先看 digest 里它归到哪层，回填仍走 ``compile_runtime_slots`` / ``compile_runtime_fill``。
+
+    **何时不用**：只想跑**单个** case 看它过不过 → ``dev_run_case``（轻量、免合并）；
+    要原样拿完整大 JSON 自己解析 → ``dev_run_batch``（但结果会被 offload，见上）。
+
+    返回摘要形态（据此决定下一步，别再要求全量明细内联）::
+
+        === dev_run_batch_digest ===
+        <run_summary>
+        excel: <路径> | 总 case: N
+        真通过 P:n | fail F:m (G(^拒绝):g 待归因:u) | unknown:k
+        全量明细: <last_run.json 路径>
+        </run_summary>
+        <cross_run_alerts>…跨轮同签名/瞬态复现警报(有则)…</cross_run_alerts>
+        …裁决表/指引各自成节…
 
     Args:
         xlsx_path: 合并后的 case.xlsx 本地路径。

@@ -375,3 +375,46 @@ def test_reserved_names_narrowed_to_executor_frame():
     ns = _framework_reserved_names()
     assert "result" in ns and "value" in ns      # 执行函数局部
     assert "v1" not in ns and "ip1" not in ns    # 常规寄存器名
+
+
+def test_empty_assertion_all_three_blank_rejected():
+    # G/H/I 全空的 check_point=无物可比,框架回退拿观测命令乱搜(044605 白烧一轮实证)
+    base = [{"E": "test_env", "F": "routera", "G": "dig @1.1.1.1 a.com CNAME"}]
+    assert "empty_assertion_pattern" in _codes(base + [
+        {"E": "check_point", "F": "found", "G": "", "H": "", "I": ""}])
+
+
+def test_empty_g_with_h_register_is_gold_standard_form():
+    # 空 G + H 寄存器=捕获比较(check_point(H=v1) 拿捕获值当模式)——mirror verified_*
+    # 先例与 smoke_test 大量使用;2026-07-08 存量反扫 541 卷 28 卷全是此形态,险被误杀。
+    cap = {"E": "test_env", "F": "clientc", "G": "dig @1.1.1.1 a.com +short", "H": "v1"}
+    obs = {"E": "test_env", "F": "clientc", "G": "dig @1.1.1.1 a.com +short"}
+    assert "empty_assertion_pattern" not in _codes([cap, obs,
+        {"E": "check_point", "F": "abs_found", "G": "", "H": "v1"}])
+
+
+def test_runtime_placeholder_not_flagged_empty():
+    # <RUNTIME> 待填槽字面非空,不触发空断言门
+    base = [{"E": "test_env", "F": "routera", "G": "dig @1.1.1.1 a.com"}]
+    assert "empty_assertion_pattern" not in _codes(base + [
+        {"E": "check_point", "F": "found", "G": "<RUNTIME:hit_ip>"}])
+
+
+def test_autoid_prefix_agnostic_204(tmp_path):
+    """autoid 识别按 18 位纯数字,不按 '203' 前缀——204 批实证:前缀硬编致
+    _xlsx_apv_lines 恒空(verified_runs 台账 105/105 条 apv_cmds 空、device_verified
+    写回对 204 批静默失效)、autoid_malformed/autoid_row_not_runnable 检查静默 no-op。"""
+    import openpyxl
+    from main.ist_core.tools.device.batch_tools import _xlsx_apv_lines
+    from main.ist_core.tools.device.structural_gate import steps_from_xlsx
+    aid = "204651750000000301"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["标题行(框架模板占位——自动化ID 标记行须在 min_row=2 之后)", "", "", "", "", "", "", "", ""])
+    ws.append(["自动化ID", "B", "C", "D", "E", "F", "G", "H", "I"])
+    ws.append([aid, "", "", "配置", "APV_0", "cmds_config", "sdns on\nsdns listener 1.1.1.1", "", ""])
+    ws.append(["", "", "", "断言", "check_point", "found", "x", "", ""])
+    p = tmp_path / "c204.xlsx"; wb.save(p)
+    lines = _xlsx_apv_lines(p)
+    assert lines.get(aid) == ["sdns on", "sdns listener 1.1.1.1"]
+    got_aid, steps = steps_from_xlsx(p)
+    assert got_aid == aid and len(steps) == 2

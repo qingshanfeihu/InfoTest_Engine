@@ -162,3 +162,28 @@ def test_clean_device_echo_strips_ts_and_collapses_blanks():
     assert _clean_device_echo(raw, limit=10) == clean[:10]   # limit 截断
     # 原始不动(喂 LLM 归因的 device_context 保留时间戳=causality 照妖镜)
     assert "2026-07-07 23:30:08" in raw
+
+
+# ------------------------- 布局门(2026-07-08 官方长上下文实践,PROMPT_ENGINEERING_STANDARD §一)
+def test_build_brief_layout_data_top_instructions_last():
+    """末轮 brief:首行机读信封;数据区(device_evidence)在前,intent 紧邻 round_task(指令)收尾。"""
+    hist = [{"round": 1, "device_context": "DEV-CTX", "fix_direction": "FIX",
+             "layer": "V", "disposition": "reflow"}]
+    b = _brief({"rounds_used": 2, "fail_evidence": hist,
+                "attribution": {"fix_direction": "HYP"}})
+    assert b.splitlines()[0].lstrip().startswith("{")          # 机读信封首行
+    order = ["<device_evidence>", "<prior_hypothesis", "<intent", "<round_task>"]
+    pos = [b.find(t) for t in order]
+    assert all(p >= 0 for p in pos[:1] + pos[-1:]), b[:200]
+    present = [(t, p) for t, p in zip(order, pos) if p >= 0]
+    assert [p for _, p in present] == sorted(p for _, p in present), present
+    assert b.rstrip().endswith("</round_task>")                 # 指令收尾
+
+
+def test_worker_skill_has_tail_examples_and_instructions_last():
+    """worker SKILL:尾块 <examples> 存在;$ARGUMENTS(数据)在 <instructions>(指令)之前。"""
+    from pathlib import Path
+    body = (Path("main/ist_core/skills/compile-worker/SKILL.md")).read_text(encoding="utf-8")
+    assert "<examples>" in body and "状态：produced" in body and "状态：needs_user_decision" in body
+    assert body.find("$ARGUMENTS") < body.find("<instructions>")
+    assert body.rstrip().endswith("</instructions>")

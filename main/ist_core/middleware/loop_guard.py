@@ -42,7 +42,7 @@ from langchain.agents.middleware.types import (
     ModelRequest,
     ModelResponse,
 )
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 
@@ -276,11 +276,19 @@ class LoopGuardMiddleware(AgentMiddleware):
         empty_threshold: int | None = None,
         soft_budget: int | None = None,
         window: int | None = None,
+        recursion_budget: int = 0,
     ) -> None:
         self._dup_thr = dup_threshold if dup_threshold is not None else _env_int("IST_LOOP_DUP_THRESHOLD", 3)
         self._empty_thr = empty_threshold if empty_threshold is not None else _env_int("IST_LOOP_EMPTY_THRESHOLD", 4)
         self._soft_budget = soft_budget if soft_budget is not None else _env_int("IST_LOOP_SOFT_BUDGET", 25)
         self._window = window if window is not None else _env_int("IST_LOOP_WINDOW", 8)
+        # 轮次预算感知(2026-07-08,官方 context-awareness 的本仓化):>0 时,AI 轮数达预算
+        # 75%/90% 起每轮尾挂收敛提示。fork 撞 recursion_limit 此前是**事后** escalate
+        # (GraphRecursionError 被捕获),模型全程无感知——临限前给信号,让它先收敛产出而不是
+        # 被硬切。无状态设计:中间件实例经 runnable 缓存被同名 fork 的并发派发共享,不能存
+        # per-run 状态,故用"达阈值后每轮都提示"替代"只提示一次"。0=关(主 agent 不挂:
+        # 交互式会话轮数语义不同,软预算已覆盖)。
+        self._recursion_budget = max(0, int(recursion_budget))
 
     def _maybe_reminder_messages(self, request: ModelRequest) -> list:
         messages = request.messages
@@ -298,6 +306,9 @@ class LoopGuardMiddleware(AgentMiddleware):
             empty_thr=self._empty_thr,
             soft_budget=self._soft_budget,
         )
+        budget_text = self._budget_hint(messages)
+        if budget_text:
+            reminder_text = (reminder_text + "\n\n" + budget_text) if reminder_text else budget_text
         if not reminder_text:
             return list(messages)
 
@@ -308,6 +319,25 @@ class LoopGuardMiddleware(AgentMiddleware):
         new_msgs = list(messages)
         new_msgs.append(HumanMessage(content=reminder_text))
         return new_msgs
+
+    def _budget_hint(self, messages) -> str:
+        """轮次预算提示文本(达 75% 起;90% 起换更紧措辞)。预算=0 或未达阈值返回空。"""
+        if self._recursion_budget <= 0:
+            return ""
+        try:
+            rounds = sum(1 for m in messages if isinstance(m, AIMessage))
+        except Exception:  # noqa: BLE001
+            return ""
+        budget = self._recursion_budget
+        if rounds >= int(budget * 0.9):
+            return (f"<budget_notice>已用 {rounds}/{budget} 轮,即将到硬上限(超限会被直接切断,"
+                    "产出丢失)。现在就收敛:用已有信息完成产出与机读尾块,不再开任何新调查线;"
+                    "确实完不成就按失败路径如实返回,带上已确认的事实。</budget_notice>")
+        if rounds >= int(budget * 0.75):
+            return (f"<budget_notice>已用 {rounds}/{budget} 轮(硬上限后会被直接切断)。"
+                    "优先收敛:把已确认的结论落成产出,新调查只开与完成产出直接相关的。"
+                    "</budget_notice>")
+        return ""
 
     def wrap_model_call(
         self,

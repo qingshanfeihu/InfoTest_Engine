@@ -109,6 +109,13 @@ _MEMBER_ANCHOR_SHAPE_RE = re.compile(r"\\b\(\?:.+\)\\b")
 _POOL_SERVICE_RE = re.compile(r'sdns\s+pool\s+service\s+"?([\w.-]+)"?\s+"?([\w.-]+)"?', re.IGNORECASE)
 _SERVICE_IP_RE = re.compile(r'sdns\s+service\s+ip\s+"?([\w.-]+)"?\s+([0-9a-fA-F:.]+)', re.IGNORECASE)
 _HOST_POOL_RE = re.compile(r'sdns\s+host\s+pool\s+"?[\w.-]+"?\s+"?([\w.-]+)"?', re.IGNORECASE)
+_HOST_NAME_RE = re.compile(r'sdns\s+host\s+name\s+"?([\w.-]+)"?', re.IGNORECASE)
+_CNAME_MEMBER_RE = re.compile(
+    r'sdns\s+pool\s+cname\s+member\s+"?[\w.-]+"?\s+"?([\w.-]+)"?', re.IGNORECASE)
+# 一行式变体（先例卷观测到 `sdns pool cname <池名> <域名>`）：第二参**含点**才当成员域名
+# （池名惯例无点），首参是 name/member/method 子命令词则不是这个形态。
+_CNAME_INLINE_RE = re.compile(
+    r'sdns\s+pool\s+cname\s+"?([\w-]+)"?\s+"?([\w-]+(?:\.[\w-]+)+)\.?"?\s*$', re.IGNORECASE)
 
 
 def _ip_literal_pattern(ip: str) -> str:
@@ -169,6 +176,42 @@ def _unanchored_new_pools(config_so_far: list, config_line_rows: list,
         if not anchored:
             unanchored.append(pool)
     return unanchored
+
+
+def _cname_members_without_local_host(config_so_far: list) -> list:
+    """cname 池成员域名里,未被本案 `sdns host name` 定义为本地域名的那些(结构事实,不判对错)。
+
+    为什么值得报:设备对这种配置**静默接受**(config 全程无报错),但 A/AAAA 查询的 re-query
+    需要成员域名自身是本地域名才解析得出 IP——不是的话 dig 只返回 CNAME 记录串,解析链在
+    成员域名处断头(2026-07-08 设备实证;dongkl 035413 三轮 escalated 的根因即此,三轮设备
+    回显里 dig 恒返回 `cname.a.com.` 而非 IP,无人质疑)。另一面,委托外部 DNS/只验证 CNAME
+    记录返回的意图下这个形态又完全合法——所以这里只产结构事实当**提示**,要不要紧由 worker
+    对照脑图意图判,不做门。DNS 名字比较大小写不敏感、忽略尾点。
+    """
+    local_hosts: set[str] = set()
+    members: list[str] = []
+    for line in config_so_far:
+        if _leading_verb(line) in ("no", "clear", "show"):
+            continue
+        m = _HOST_NAME_RE.search(line)
+        if m:
+            local_hosts.add(m.group(1).rstrip(".").lower())
+            continue
+        m = _CNAME_MEMBER_RE.search(line)
+        if m:
+            members.append(m.group(1))
+            continue
+        m = _CNAME_INLINE_RE.search(line)
+        if m and m.group(1).lower() not in ("name", "member", "method"):
+            members.append(m.group(2))
+    out: list[str] = []
+    seen: set[str] = set()
+    for d in members:
+        dn = d.rstrip(".").lower()
+        if dn not in local_hosts and dn not in seen:
+            seen.add(dn)
+            out.append(d)
+    return out
 
 
 def _detect_lb_methods(config_so_far: list) -> list:
@@ -472,10 +515,24 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
     new_member_unanchored_suspect = bool(unanchored_new_pools)
     has_membership_anchor = any(c["is_membership_anchor"] for c in check_points)
 
+    # —— case 级：cname 池成员的本地域名闭合（引用图提示；设备静默接受、离线才查得到）——
+    cname_members_not_local = _cname_members_without_local_host(config_so_far)
+    cname_member_not_local_host_suspect = bool(cname_members_not_local)
+    cname_member_not_local_host_note = (
+        ("配置把 " + "、".join(cname_members_not_local) + " 作为 cname 池成员引用,但本案没有"
+         "对应的 `sdns host name` 把它配成本地域名。两类意图受此影响:①A/AAAA 查询要最终解析出"
+         " IP——re-query 需要成员自身是本地域名,否则 dig 只返回 CNAME 记录串、解析链断头;"
+         "②域名状态门控类(service down 后不返回别名/按域名状态选池)——域名状态只对本地域名"
+         "存在(远端域名恒可用,手册),成员不配本地域名则门控无对象、别名恒返回。设备对这两种"
+         "情况都静默接受配置、不报任何错。只有「委托外部 DNS 且仅验证 CNAME 记录字符串返回」"
+         "的意图下,现状才合法。对照脑图意图判断属于哪类。")
+        if cname_members_not_local else "")
+
     suspect_count = (sum(1 for c in check_points if c["suspect"])
                      + (1 if weak_v_coverage_suspect else 0)
                      + (1 if distribution_coverage_gap_suspect else 0)
-                     + (1 if new_member_unanchored_suspect else 0))
+                     + (1 if new_member_unanchored_suspect else 0)
+                     + (1 if cname_member_not_local_host_suspect else 0))
 
     return {
         "status": "success",
@@ -500,6 +557,9 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
         "unanchored_new_pools": unanchored_new_pools,
         "new_member_unanchored_suspect": new_member_unanchored_suspect,
         "has_membership_anchor": has_membership_anchor,
+        "cname_members_not_local": cname_members_not_local,
+        "cname_member_not_local_host_suspect": cname_member_not_local_host_suspect,
+        "cname_member_not_local_host_note": cname_member_not_local_host_note,
         "suspect_count": suspect_count,
         "check_points": check_points,
     }

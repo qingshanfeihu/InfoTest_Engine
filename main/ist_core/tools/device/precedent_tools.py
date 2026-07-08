@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re as _re
 import threading
@@ -323,9 +324,24 @@ def _retrieve_precedent_hits(my_config: str, intent: str, limit: int) -> tuple[l
     return [c for c in cands[:limit] if c[0] > 0], my_toks, intent
 
 
+def _load_precedent_annotations() -> dict:
+    """先例策展标注(判例化,2026-07-08):不删迁就嫌疑卷(结构仍是金标准),检索返回时附
+    警示——pe1 减法实验实证:裸 worker 把迁就卷的断言方向当"产品行为如此"的佐证,
+    与污染知识互相印证后放弃了正确的配置探索。标注让先例回到"结构参考"的本位。"""
+    try:
+        p = _MIRROR / "precedent_annotations.json"
+        if p.is_file():
+            d = json.loads(p.read_text(encoding="utf-8"))
+            return {k: v for k, v in d.items() if isinstance(v, dict)}
+    except Exception:  # noqa: BLE001
+        logger.debug("precedent_annotations.json 读取失败(忽略)", exc_info=True)
+    return {}
+
+
 def _format_precedent_hits(hits: list, my_toks: set, intent: str) -> str:
     """把 hits 渲染成 draft 可读的先例文本（触发→断言链 + 警示 + env_facts）。"""
     axis = "config+intent 融合" if (my_toks and intent) else ("intent 意图轴" if intent else "config 结构轴")
+    anns = _load_precedent_annotations()
     out = [f"=== compile_precedent(按{axis}相似度排序;含完整触发→断言链)==="]
     for score, cfg_sim, intent_sim, fn, seq, autoid in hits:
         if my_toks and intent:
@@ -336,6 +352,9 @@ def _format_precedent_hits(hits: list, my_toks: set, intent: str) -> str:
             tag = f"相似度{cfg_sim:.2f}"
         fn_show = f"{fn}[{autoid}]" if autoid else fn
         out.append(f"\n先例 {fn_show}({tag})的触发→断言链:")
+        ann = anns.get(str(autoid)) if autoid else None
+        if ann and ann.get("note"):
+            out.append(f"  ⚠ 策展标注[{ann.get('flag', 'curated')}]: {str(ann['note'])[:260]}")
         for e, f, g in seq:
             # 多行 cmds_config 用**真换行**展示(缩进续行),draft 照抄即得真 \n——
             # 切勿用 ⏎ 等替身字符:draft 会把字面替身抄进配置,框架按 \n 拆命令时整串变一条废命令。

@@ -201,3 +201,17 @@ def test_soft_budget_yields_to_dup_signal(monkeypatch):
     out = mw._maybe_reminder_messages(_Req(msgs))
     last = out[-1].content
     assert "停止重复尝试" in last  # dup 触发 → 强提醒，而非软预算温和提示
+
+
+# ── 轮次预算感知(2026-07-08,官方 context-awareness 本仓化) ─────────────────
+def test_budget_hint_thresholds():
+    from main.ist_core.middleware.loop_guard import LoopGuardMiddleware
+    from langchain_core.messages import AIMessage, HumanMessage
+    mw = LoopGuardMiddleware(recursion_budget=100)
+    mk = lambda n: [HumanMessage(content="t")] + [AIMessage(content=str(i)) for i in range(n)]
+    assert mw._budget_hint(mk(50)) == ""                       # 未达 75%
+    h75 = mw._budget_hint(mk(75))
+    assert "75/100" in h75 and "budget_notice" in h75          # 75% 档
+    h90 = mw._budget_hint(mk(95))
+    assert "95/100" in h90 and "硬上限" in h90                  # 90% 档更紧措辞
+    assert LoopGuardMiddleware(recursion_budget=0)._budget_hint(mk(99)) == ""  # 0=关

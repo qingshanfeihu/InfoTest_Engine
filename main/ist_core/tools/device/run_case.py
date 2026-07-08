@@ -417,6 +417,85 @@ def dev_probe(command: str) -> str:
 
 
 @tool(parse_docstring=True)
+def dev_help(command: str) -> str:
+    """一条命令被设备拒绝（回显里出现 ``^`` 或 ``Failed to execute the command``）时，
+    追问设备这个位置到底期望什么，把说不清的 ``^`` 解释成人话。
+
+    ``^`` 停在设备从左往右能认到的最后一个词的位置——解析到这里就走不下去了，后面它接不住。
+    ``^`` 本身没有任何文字，看不出为什么。诊断办法：把命令保留到 ``^`` 停住的地方、在那儿加一个
+    空格和问号，设备就会说出这个位置它期望接什么。本工具替你做这一步：找到设备能认到的最长
+    前缀，在那个位置问一次（只是问，不回车、不执行、不改配置，用 Ctrl-U 清行），把设备对该位置
+    的说明拿回来。
+
+    举例：``sdns host pool "www.a.com" "poolA" ga`` 报 ``^``，是设备认到池名 ``"poolA"`` 就停住了。
+    本工具在那个位置问一次，得到“该位置期望一个 0 到 65535 的数字优先级，仅 method 为 wrr 或 ga
+    时生效”。于是清楚：这里要的是一个数字，你写了算法名 ``ga`` 所以走不下去。
+
+    何时用：在 dev_probe 或上机回显里看到 ``^`` 或 ``Failed to execute the command``，想知道为什么、
+    该怎么改。何时不用：命令能跑通、只是结果不对，那是语义或配置问题，看设备回显里的原因行，
+    或用 dev_run_case 把整个 case 上机。
+
+    另外，``Failed to execute the command`` 若伴随一句原因（比如“The SDNS host "x" does not
+    exist”），那是语义问题——引用了不存在的对象、缺前置配置，不是语法错。这时本工具会告诉你
+    命令语法其实完整，真正的原因以设备那句回显为准，补上前置对象即可。
+
+    Args:
+        command: 那条被设备拒绝的命令（原样传入，含引号）。
+
+    Returns:
+        设备能识别到的最长前缀 + 该位置期望什么 + 你接的哪个 token 不符合。据此改命令语法/换参数。
+    """
+    cmd = (command or "").strip()
+    if not cmd:
+        return "error: 空命令"
+    try:
+        from main.case_compiler.config import get_config
+        _build = get_config().build
+    except Exception:  # noqa: BLE001
+        logger.debug("读取 compiler config 失败，build 使用空串", exc_info=True)
+        _build = ""
+    try:
+        from main.case_compiler.device_mcp_client import cli_qhelp
+    except Exception as exc:  # noqa: BLE001
+        return f"error: 加载 cli_qhelp 失败(paramiko?): {exc}"
+
+    try:
+        r = cli_qhelp(cmd, build=_build)
+    except Exception as exc:  # noqa: BLE001
+        return f"error: dev_help 异常: {exc}"
+
+    if not r.get("ok"):
+        return (f"=== dev_help ===\ncommand: {cmd}\nstatus: 无法追问\n"
+                f"{r.get('error', '未知原因')}\n"
+                f"（设备不可达时改用 dev_probe 看原始回显，或先例/手册查语法。）")
+
+    lines = [f"=== dev_help ===", f"command: {cmd}", f"mode: {r.get('mode')}"]
+    if r.get("full_valid"):
+        lines.append("整条命令的语法设备都能解析，`^` 不是语法问题。")
+        if r.get("expect"):
+            lines.append(f"这条命令之后，这个位置还可以接：{r['expect']}")
+        lines.append("若上机报 `Failed to execute the command`，多半是语义问题："
+                     "引用了不存在的对象、缺前置配置。以设备回显里那句原因为准，补齐前置项。")
+    else:
+        vp = r.get("valid_prefix") or "(无)"
+        off = r.get("offending")
+        lines.append(f"设备从左往右能识别到的最长前缀（`^` 停在这之后，解析到此走不下去）：`{vp}`")
+        if r.get("expect"):
+            lines.append(f"该位置设备期望接：{r['expect']}")
+        if off is not None:
+            lines.append(f"你接的 `{off}` 不符合这个期望，这就是 `^` 停在这里的原因。")
+        lines.append("看清这个位置要的是一个取值还是一个固定关键字，据此改；"
+                     "说明里举的值只是示例，不要抄成断言。")
+    # 附各位置期望图（供自查更细的位置）
+    mp = [m for m in (r.get("map") or []) if m.get("expect")]
+    if mp:
+        lines.append("--- 各前缀位置的期望（自查用）---")
+        for m in mp:
+            lines.append(f"  `{m['prefix']}` ▸ {m['expect']}")
+    return "\n".join(lines)
+
+
+@tool(parse_docstring=True)
 def dev_init_device(jumphost: str, device_count: int = 0, device_index: int = -1) -> str:
     """通过串口初始化被测设备：清除全部配置 + 重新配置接口 IP。
 

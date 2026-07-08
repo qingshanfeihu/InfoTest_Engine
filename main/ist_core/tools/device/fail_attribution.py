@@ -167,9 +167,16 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
                        defect_candidate: dict | None = None) -> str:
     """把你对某个 fail case 的归因**结论**落盘进 last_run.json(归因判断本身仍由你读原文做)。
 
+    **何时用**:读完设备证据原文、判层结论已成型时——落盘成功才算归因完成,散文结论引擎不读。
+    **何时不用**:证据不足以判层时别硬填一个层凑数——照常落盘,但 disposition=reflow 且
+    fix_direction 写"证据不足,需补充观测 X"(诚实的欠定比错误的确定有用)。
+
     为什么要落盘:结论只留在会话文本里会断链——下一轮 digest 的「上轮归瞬态本轮复现=误归」
     护栏读的是落盘字段(不落盘该护栏是 dead code);「冻结同法重编」的"同法"判定也需要
     上一轮的修法记录;缺陷候选不落盘则多轮验证后无法汇总成缺陷清单。
+
+    evidence 形态(门校验):必须是该 case device_context/causality 的**原文子串**——从你
+    摘引的原文里逐字复制一条,不转述不改写(多行片段易被参数转义失真,抄单行最稳)。
 
     Args:
         xlsx_path: 本轮上机那份 case.xlsx 路径(工具据此定位同目录 last_run.json)。

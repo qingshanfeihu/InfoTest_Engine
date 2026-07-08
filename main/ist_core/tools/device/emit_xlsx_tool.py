@@ -539,10 +539,16 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                  blocks: list | None = None) -> str:
     """从步骤列表产出结构正确的 case.xlsx(克隆框架原生模板,你不用管模板结构/列对齐)。
 
+    **何时用**:单条 case 的语义设计(配置/触发/断言)已成型,要落成可上机的 xlsx。
+    **何时不用**:多 case 合并打包 → ``compile_emit_merged``;还没想清断言形态/期望值
+    出处就别 emit——被结构门打回的每一版都白烧一轮。
     **用这个,别用 run_python 手搓 openpyxl**——手搓总在 27 行说明区/C=0/C=1/E-F-G 列对齐上
     出错,导致框架跳过你的 case 行(零 check_point、空真 pass)。本工具保证结构 100% 合法。
 
-    你只决定**内容**:文件级前置命令 + 每个步骤的 操作对象/方法/数据。
+    你只决定**内容**:文件级前置命令 + 每个步骤的 操作对象/方法/数据。**首选 blocks
+    组合子通道**(原生数组;五种组合子语法在 EXCEL_FUNCTIONS.md 开头,emit 前读它)——
+    你只做语义决策,底层表示(捕获三步式/寄存器/列对齐)由工具展开,悬空断言这类形态
+    在组合子语言下写不出来;表达不了的边角形态才退回 ``steps`` 原生数组通道(列语义见下)。
 
     列语义(每个 step 一个 dict):
     - ``E`` 操作对象: 被测设备标识 / check_point(断言) / test_env(测试机) / time(等待)

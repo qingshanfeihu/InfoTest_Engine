@@ -499,6 +499,217 @@ def probe_via_fastmcp(command: str, build: str = "", env: Any = None,
     return {"text": text, "device_ip": device_ip}
 
 
+# ── CLI context-help（`?`）探针：设备回 `^`/Failed 后，追问设备"这个位置到底期望什么" ──
+# 为什么不复用 apv_ssh_execute：服务端 send_command 强制补 `\n`，`?` 打完帮助后那个 `\n` 会把
+# **截断到 `?` 前的前缀命令真的执行一次**（实测 `sdns host pool "h" "p" ?` → 触发一次 host-pool
+# 绑定尝试）。前缀若是完整的会改配置的命令（真实对象上就是 mutate），这就是**真实副作用**——
+# 引擎里自动跑不能留。故走跳板机 direct-tcpip 代理开设备交互 shell，自己控制字节：
+# 发 `<prefix> ?`（不回车）→ 读帮助 → 发 Ctrl-U(\x15) 杀整行（绝不回车执行）→ 零副作用（已实证
+# `show sdns host name` 无残留）。enable 密码为空（直接回车），config 模式进 `?` 才是配置命令语义。
+
+def _split_cli_tokens(command: str) -> list[str]:
+    """按空白切 CLI token，但**保留引号整体**（含引号本身），供逐前缀重建带引号命令。
+
+    `sdns host pool "a.b.com" "p1" 5` → ['sdns','host','pool','"a.b.com"','"p1"','5']。
+    引号内空白不切；未闭合引号吞到行尾（设备侧也会这么解析）。
+    """
+    toks: list[str] = []
+    buf = ""
+    quote = ""
+    for chch in command.strip():
+        if quote:
+            buf += chch
+            if chch == quote:
+                quote = ""
+        elif chch in ('"', "'"):
+            quote = chch
+            buf += chch
+        elif chch.isspace():
+            if buf:
+                toks.append(buf); buf = ""
+        else:
+            buf += chch
+    if buf:
+        toks.append(buf)
+    return toks
+
+
+def _qhelp_extract(raw: str, prefix: str) -> tuple[bool, str]:
+    """从 `<prefix> ?` 的原始回显里剥出帮助文本。返回 (是否真帮助, 帮助文本)。
+
+    无效位置设备回 `^`（无文字）；有效位置回一段说明/子命令表。剥掉命令回显行、裸提示符、
+    孤立 `^`、空行后若还有实质内容 = 真帮助。
+    """
+    help_lines: list[str] = []
+    only_caret = False
+    for ln in raw.replace("\r", "\n").split("\n"):
+        s = ln.strip()
+        if not s:
+            continue
+        if s == "^":
+            only_caret = True
+            continue
+        # 命令回显行（含发出的 prefix 或以 ? 结尾）
+        if prefix and prefix in ln:
+            continue
+        if s.endswith("?") and len(s) <= len(prefix) + 4:
+            continue
+        # 裸提示符
+        if re.match(r"^[\w\-]+(\([^)]*\))?[#>]\s*$", s):
+            continue
+        # 提示符粘着回显（APV(config)#sdns host pool）
+        if re.match(r"^[\w\-]+(\([^)]*\))?[#>]", s):
+            continue
+        help_lines.append(s)
+    text = "\n".join(help_lines).strip()
+    return (bool(text), text if text else ("(仅 ^，无文字：该位置语法非法)" if only_caret else ""))
+
+
+def cli_qhelp(command: str, build: str = "", env: Any = None,
+              timeout: int = 25) -> dict:
+    """对一条（通常刚报 `^`/Failed 的）命令做 CLI context-help 追问，解释设备为何拒绝。
+
+    机制：跳板机 direct-tcpip 代理 → 设备交互 shell → enable(空密码)+config → 对命令的各前缀
+    发 `<prefix> ?`（不回车）+ Ctrl-U 清行（零执行/零副作用）。从最长前缀往回退，找到**最长可
+    解析前缀**及其后设备期望的 token 说明 = 第一个"越位" token 的解释。
+
+    返回 dict：
+      device_ip / mode / ok(bool 连通)
+      full_valid(bool)：整条命令语法可解析（`^` 非语法问题，多为语义/引用类）
+      offending(str|None)：第一个越位 token
+      valid_prefix(str)：最长可解析前缀
+      expect(str)：该位置设备期望的说明（`?` 帮助文本）
+      map(list[{prefix,expect}])：探到的各位置期望（供 LLM 自查）
+      error(str)：连不通/异常时的说明
+    """
+    import paramiko
+    toks = _split_cli_tokens(command)
+    if not toks:
+        return {"ok": False, "error": "空命令"}
+    first = toks[0].lower()
+    # show/get 类在 enable 模式问 ?；配置命令进 config 模式
+    use_config = first not in ("show", "get", "ping", "ping6", "traceroute",
+                               "traceroute6", "nslookup")
+    device_ip = resolve_device_ip(build, env)
+    if not device_ip:
+        return {"ok": False, "error": "解析不出被测设备 IP（build 段）"}
+    duser = os.environ.get("APV_USERNAME", "admin")
+    dpass = os.environ.get("APV_PASSWORD", "admin")
+
+    j = d = ch = None
+    try:
+        j = _connect(env)
+        sock = j.get_transport().open_channel(
+            "direct-tcpip", (device_ip, 22), ("127.0.0.1", 0), timeout=10)
+        d = paramiko.SSHClient()
+        d.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        d.connect(device_ip, 22, username=duser, password=dpass, sock=sock,
+                  timeout=15, look_for_keys=False, allow_agent=False)
+        ch = d.invoke_shell(term="vt100", width=200, height=50)
+        ch.settimeout(8)
+        time.sleep(1.2)
+        try:
+            ch.recv(65535)
+        except Exception:  # noqa: BLE001
+            pass
+
+        def _ru(expect: str, t: float = 6.0) -> str:
+            out = ""
+            rx = re.compile(expect)
+            dl = time.time() + t
+            while time.time() < dl:
+                try:
+                    out += ch.recv(65535).decode("utf-8", "ignore")
+                except Exception:  # noqa: BLE001
+                    pass
+                if rx.search(out):
+                    break
+                time.sleep(0.2)
+            return out
+
+        # enable（空密码）→ 需要则 config
+        ch.send("enable\n")
+        o = _ru(r"(#)|(sword:)", 5)
+        if "sword" in o.lower():
+            ch.send("\n")
+            _ru(r"#", 5)
+        mode = "enable"
+        if use_config:
+            ch.send("config terminal\n")
+            cf = _ru(r"\(config\)#", 5)
+            if "(config)#" not in cf:
+                return {"ok": False, "error": "未能进入 config 模式", "device_ip": device_ip}
+            mode = "config"
+
+        def _probe(prefix: str) -> tuple[bool, str]:
+            while ch.recv_ready():
+                try:
+                    ch.recv(65535)
+                except Exception:  # noqa: BLE001
+                    break
+            ch.send(prefix + " ?")
+            raw = ""
+            dl = time.time() + 2.6
+            while time.time() < dl:
+                try:
+                    b = ch.recv(65535)
+                    if b:
+                        raw += b.decode("utf-8", "ignore")
+                except Exception:  # noqa: BLE001
+                    pass
+                time.sleep(0.2)
+            ch.send("\x15")   # Ctrl-U 杀整行，绝不回车执行
+            time.sleep(0.3)
+            try:
+                ch.recv(65535)
+            except Exception:  # noqa: BLE001
+                pass
+            return _qhelp_extract(raw, prefix)
+
+        probe_map: list[dict] = []
+        full_valid = False
+        offending = None
+        valid_prefix = ""
+        expect = ""
+        # 从最长前缀往回退，找最长可解析前缀
+        for k in range(len(toks), 0, -1):
+            prefix = " ".join(toks[:k])
+            is_help, text = _probe(prefix)
+            probe_map.insert(0, {"prefix": prefix, "expect": text})
+            if is_help:
+                valid_prefix = prefix
+                expect = text
+                if k == len(toks):
+                    full_valid = True
+                else:
+                    offending = toks[k]
+                break
+
+        try:
+            ch.send("\x15")
+            ch.send("end\n")
+            _ru(r"#", 3)
+        except Exception:  # noqa: BLE001
+            pass
+
+        return {
+            "ok": True, "device_ip": device_ip, "mode": mode,
+            "full_valid": full_valid, "offending": offending,
+            "valid_prefix": valid_prefix, "expect": _redact(expect),
+            "map": [{"prefix": m["prefix"], "expect": _redact(m["expect"])} for m in probe_map],
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("cli_qhelp 异常: cmd=%s", command, exc_info=True)
+        return {"ok": False, "error": f"设备交互异常: {exc}", "device_ip": device_ip}
+    finally:
+        for closable in (ch, d, j):
+            try:
+                if closable is not None:
+                    closable.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 class FrameworkMCPClient:
     """经 SSH 驱动跳转机 stdio MCP server。每次调用开一个 server 会话（无状态命令）。"""
 

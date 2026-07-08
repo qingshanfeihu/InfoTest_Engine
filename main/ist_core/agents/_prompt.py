@@ -75,6 +75,7 @@ def build_verifier_inherited_sections() -> str:
         _reading_vs_verification_section(),
         _faithful_reporting_section(),
         _anti_spin_section(),
+        _tool_cadence_section(),
     ])
     return f"<inherited_rules>\n{inherited}\n</inherited_rules>"
 
@@ -163,6 +164,16 @@ def _anti_spin_section() -> str:
 - **真卡住才升级**:调查后仍卡住,升级到 explore 子代理(更广搜索)或用 `ask_user` 向用户澄清——不是把同一类搜索再跑十遍。
 
 判断标准:发现自己第 3 次发起相似搜索、或 thinking 在重复同一段推理,**立即停下**,按上面收敛或升级。把找不到如实说出来(见忠实汇报)远好于空转。"""
+
+
+def _tool_cadence_section() -> str:
+    """工具调用节奏:并发/结果反思/改动克制。主 agent 的 tool_guidance 已各有专段;
+    本段是给 fork 的合订版(fork 不继承 tool_guidance,实证 worker 曾串行 10 次同类
+    footprint 检索白花墙钟)——经 build_verifier_inherited_sections 注入。"""
+    return """# 工具调用节奏
+- **无依赖的查证并发发起**:同一时刻要查多个互不依赖的事实(几条命令各查一次 footprint、几个文件各读一段),在同一条消息里并行发出这些工具调用——端点已实测支持并行返回,逐条串行只多花墙钟。有依赖(后一个调用的参数要用前一个的结果)才串行;不确定参数就先查,不用占位符猜。
+- **收到工具结果先评估再行动**:这个结果说明了什么、够不够回答当前的问题、下一步计划因此要不要变——评估完再发起下一批调用。结果已经回答的问题不用再查,别机械照预想清单挨个跑。
+- **只做任务要求的改动**:不顺手重构、不补没被要求的兜底与抽象——超出任务范围的每一行都是下游要额外核对的面积。"""
 
 
 def _communication_style_section() -> str:

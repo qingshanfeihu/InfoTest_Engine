@@ -317,3 +317,51 @@ def test_new_member_unanchored_ignores_upfront_pools(ge, monkeypatch):
     r = ge.extract("fake.xlsx", "-")
     assert r["unanchored_new_pools"] == []
     assert r["new_member_unanchored_suspect"] is False
+
+
+# ── cname 成员本地闭合(引用图链接器,2026-07-08) ────────────────────────────
+
+
+def _cfg_rows(lines: list[str]) -> list[dict]:
+    return [{"E": "APV_0", "F": "cmds_config", "G": "\n".join(lines)},
+            {"E": "test_env", "F": "routera", "G": "dig @1.1.1.1 www.a.com A"},
+            {"E": "check_point", "F": "found", "G": r"\b172\.16\.35\.231\b"}]
+
+
+def test_cname_member_without_local_host_flagged(ge, monkeypatch):
+    """035413 R1 真实形态:cname.a.com 只作 cname 池成员、无 sdns host name 定义 → 事实命中。"""
+    rows = _cfg_rows([
+        'sdns host name "www.a.com" 60',
+        "sdns pool cname name cname",
+        "sdns pool cname member cname cname.a.com",
+        'sdns host pool "www.a.com" cname'])
+    monkeypatch.setattr(ge, "_load_rows", lambda _p: rows)
+    r = ge.extract("x.xlsx", "-")
+    assert r["cname_member_not_local_host_suspect"] is True
+    assert r["cname_members_not_local"] == ["cname.a.com"]
+    assert "cname.a.com" in r["cname_member_not_local_host_note"]
+
+
+def test_cname_member_with_local_host_clean(ge, monkeypatch):
+    rows = _cfg_rows([
+        'sdns host name "www.a.com" 60',
+        'sdns host name "cname.a.com" 60',
+        "sdns pool cname name cname",
+        "sdns pool cname member cname cname.a.com"])
+    monkeypatch.setattr(ge, "_load_rows", lambda _p: rows)
+    r = ge.extract("x.xlsx", "-")
+    assert r["cname_member_not_local_host_suspect"] is False
+
+
+def test_cname_inline_variant_and_bare_name_line(ge):
+    # 一行式变体命中;仅 name 创建行不误报成员
+    assert ge._cname_members_without_local_host(
+        ["sdns host name www.a.com 60", "sdns pool cname cname_pool cname.a.com"]) == ["cname.a.com"]
+    assert ge._cname_members_without_local_host(["sdns pool cname name cnp"]) == []
+
+
+def test_cname_suspect_not_rework_eligible():
+    """12/13 真机 PASS 卷同形(委托外部 DNS 是常态)——该 suspect 无 rework 触发资格,
+    只走 fail 路径注入(compile_phase._PROBE_NO_REWORK)。防告警疲劳+派发风暴。"""
+    from main.ist_core.compile_engine.nodes.compile_phase import _PROBE_NO_REWORK
+    assert "cname_member_not_local_host_suspect" in _PROBE_NO_REWORK

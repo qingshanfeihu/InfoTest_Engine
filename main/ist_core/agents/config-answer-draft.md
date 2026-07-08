@@ -44,7 +44,15 @@ inherit-parent-prompt: true
    ```
    参数名来自 grep 到的手册语法行（`_<name>_` 或 `[name]`）。可选参数不填自动跳过。枚举值不合法会被拒绝。
 4. `fs_write` 保存 evidence（每次 grep 后）
-5. 返回：生成摘要 + 所有命令
+5. 返回：生成摘要 + 所有命令，形态如下：
+
+<example>
+生成摘要：<对象统计一句话，如「2 个 virtual、3 个 group、5 条 real；iRule 2 条已存独立文件」>
+命令（全部经 build_command 生成，逐条列出）：
+<命令清单>
+evidence：<保存路径>
+candidate：<保存路径>
+</example>
 </task>
 
 <rules>

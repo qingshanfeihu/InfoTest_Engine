@@ -242,6 +242,7 @@ def _build_tool_registry_locked() -> dict[str, Any]:
                 compile_emit,
                 compile_check_verifiability,
                 dev_probe,
+                dev_help,
                 dev_run_case,
                 dev_init_device,
             )
@@ -249,6 +250,7 @@ def _build_tool_registry_locked() -> dict[str, Any]:
             _TOOL_REGISTRY["compile_check_verifiability"] = compile_check_verifiability
             _TOOL_REGISTRY["dev_run_case"] = dev_run_case
             _TOOL_REGISTRY["dev_probe"] = dev_probe
+            _TOOL_REGISTRY["dev_help"] = dev_help
             _TOOL_REGISTRY["dev_init_device"] = dev_init_device
         except ImportError:
             logger.debug("工具 compile_emit/dev_probe/dev_run_case 未可用，跳过注册")
@@ -461,14 +463,18 @@ def _build_fork_middleware() -> list:
     """
     out: list = []
     import importlib as _il
-    for _mw_name, _mw_import in (
-        ("LoopGuardMiddleware", "main.ist_core.middleware.loop_guard"),
-        ("MessageSanitizeMiddleware", "main.ist_core.middleware.message_sanitize"),
-        ("ToolResultPruneMiddleware", "main.ist_core.middleware.tool_result_prune"),
-        ("ToolEnvelopeMiddleware", "main.ist_core.middleware.tool_envelope"),
+    # fork 的 LoopGuard 带轮次预算感知:达 recursion_limit 的 75%/90% 起提示收敛——
+    # 撞限此前是事后 escalate,模型全程无感知(官方 context-awareness 的本仓化)。
+    _budget = int(os.environ.get("IST_FORK_RECURSION_LIMIT") or 120)
+    for _mw_name, _mw_import, _mw_kwargs in (
+        ("LoopGuardMiddleware", "main.ist_core.middleware.loop_guard",
+         {"recursion_budget": _budget}),
+        ("MessageSanitizeMiddleware", "main.ist_core.middleware.message_sanitize", {}),
+        ("ToolResultPruneMiddleware", "main.ist_core.middleware.tool_result_prune", {}),
+        ("ToolEnvelopeMiddleware", "main.ist_core.middleware.tool_envelope", {}),
     ):
         try:
-            out.append(getattr(_il.import_module(_mw_import), _mw_name)())
+            out.append(getattr(_il.import_module(_mw_import), _mw_name)(**_mw_kwargs))
         except Exception:  # noqa: BLE001
             logger.info("fork %s 不可用,跳过", _mw_name)
     return out
@@ -1147,9 +1153,10 @@ def _render_skill_body(body: str, brief: str) -> str:
     Fork skill 的 body 用 $ARGUMENTS 引用调用者传入的参数。
     如果 body 不含 $ARGUMENTS，则在末尾追加 brief（兼容性兜底）。
     """
-    # 交互面 XML 分节(2026-07-05):brief 是「调用方数据」,SKILL 正文是「行为指令」
-    # ——<brief_from_caller> 标签让 fork 一眼分清边界(worker md 的 <rules> 收尾
-    # 紧邻此块,指令/数据相邻但不混排)。空 brief 不产空标签。
+    # 交互面 XML 分节(2026-05 起;2026-07-08 布局翻转):brief 是「调用方数据」,SKILL 正文
+    # 是「行为指令」——<brief_from_caller> 标签让 fork 一眼分清边界。现布局(官方长上下文
+    # 实践):system 的 <rules> 收尾 → Human 以 brief(数据)开场 → SKILL 的 <instructions>
+    # (指令)收尾在最末。空 brief 不产空标签。
     tagged = f"<brief_from_caller>\n{brief}\n</brief_from_caller>" if brief else ""
     if "$ARGUMENTS" in body or "${ARGUMENTS}" in body:
         return body.replace("${ARGUMENTS}", tagged).replace("$ARGUMENTS", tagged)

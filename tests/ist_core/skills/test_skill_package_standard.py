@@ -137,7 +137,8 @@ def test_underscore_alias_resolution():
 def test_agent_bodies_have_role_task_rules_structure():
     """B2(2026-07-04):agent body 统一 <role>→<task>→<rules> 骨架。
 
-    rules 收尾紧邻 $ARGUMENTS/brief 注入点(注意力最高位);这也是后续
+    rules 收尾=system prompt 末位,紧邻 Human 开场的 brief 数据区(2026-07-08 布局
+    翻转后:brief 在 Human 之首、SKILL <instructions> 在 Human 之末);这也是后续
     动态生成 agent 的模板契约——生成物过不了本门就不许派发。
     """
     for p in sorted(_AGENTS_DIR.glob("*.md")):

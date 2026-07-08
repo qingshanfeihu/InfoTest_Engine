@@ -163,6 +163,20 @@ def _build_chat_model(model_name: str, effort: str = "", **kwargs: Any):
     kwargs.setdefault("max_retries", retries)
     kwargs["extra_body"] = extra_body
 
+    # 模型窗口 profile(2026-07-08 修):deepagents 摘要中间件按 model.profile["max_input_tokens"]
+    # 算 fraction 阈值(0.85 触发/0.10 保留);自定义 ChatOpenAI 的 profile 恒 None → 一直走
+    # 无 profile 兜底 "tokens=170000 + keep 6 条消息"——对实测 1,048,565 token 窗口
+    # (deepseek-v4-pro/flash 同值,超限报错原文)的 16% 就砍到 6 条,过早过狠。挂上 profile 后
+    # fraction 生效:trigger≈891k/keep≈105k token。IST_MODEL_CTX 可覆盖(调小=更早摘要,
+    # 控请求体量与缓存 miss 成本;0 或负值=不挂,退回 170k 兜底)。
+    if "profile" not in kwargs:
+        try:
+            _ctx = int(os.environ.get("IST_MODEL_CTX") or 1048565)
+        except ValueError:
+            _ctx = 1048565
+        if _ctx > 0:
+            kwargs["profile"] = {"max_input_tokens": _ctx}
+
     cls = _get_chat_openai_with_reasoning()
     logger.info(
         "LLM: model=%s base_url=%s timeout=%ss retries=%s",

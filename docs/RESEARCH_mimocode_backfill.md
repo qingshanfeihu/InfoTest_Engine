@@ -49,3 +49,10 @@
 2. **A**:`middleware/tool_result_prune.py` —— 确定性工具结果剪枝(保护最近 2 轮 + 最近 N 字符预算 + 保护 invoke_skill/ask_user + 小结果豁免 + 头部 160 字符保留);默认开(`IST_PRUNE_TOOL_OUTPUTS=0` 关,预算 `IST_PRUNE_PROTECT_CHARS`)——它先于摘要生效,剪枝(留头+可恢复)严格优于被整段摘要有损吞掉。
 3. **C**:`tools/knowledge/memory_search.py` → `kb_memory_search` —— 记忆 FTS5/BM25 拉式检索(CJK bigram),index 落 runtime/,懒 reconcile,相对分数地板,top1 带正文;注册进 main agent(kb_ 前缀=基础组常驻)。
 4. C2 注释补缓存单调性约束。
+
+## 六、待办 B 收口(2026-07-08,提示工程改造批 0)
+
+- **fraction 阈值真相**:deepagents 摘要 fraction 仅当 `model.profile.max_input_tokens` 存在才生效;自定义 ChatOpenAI 的 profile 恒 None → 实际一直走 **tokens=170000 绝对阈值 + keep 6 条消息** 兜底档(2026-07-05 注释所称"fraction 阈值"当时不实)。实测端点窗口 **1,048,565 tokens**(deepseek-v4-pro/flash 同值,超限报错原文)——即此前在窗口 16% 处就砍到 6 条。
+- **已修**:`_llm.py::_build_chat_model` 按实测窗口挂 `profile`(env `IST_MODEL_CTX` 覆盖,0=退回兜底档),fraction(0.85 触发/0.10 保留)自此生效。单测 `tests/ist_core/agents/test_llm_model_profile.py`。
+- **仍待办**:定制摘要模板/便宜 compaction 模型(deepagents 无入口);fork 摘要层(现仅剪枝+recursion_limit,末轮 max worker 实测单 fork 500k+ token)——待下一次对照轮的上下文压力数据定。
+- **顺带实测**:`parallel_tool_calls` 端点默认即开(不传参数也返回多 tool_calls),无需配置;并行杠杆在 prompt(`_prompt.py::_tool_cadence_section` 经 inherited 注入 fork)。提示面构建标准全文:`docs/PROMPT_ENGINEERING_STANDARD.md`。

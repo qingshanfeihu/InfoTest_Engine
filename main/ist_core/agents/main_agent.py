@@ -18,7 +18,7 @@ from main.ist_core.tools.deepagent import (
     fs_write,
 )
 from main.ist_core.tools.deepagent.exec_tools import run_shell, run_python
-from main.ist_core.tools.device import dev_rest, dev_ssh, dev_run_case, dev_probe, dev_init_device
+from main.ist_core.tools.device import dev_rest, dev_ssh, dev_run_case, dev_probe, dev_help, dev_init_device
 from main.ist_core.tools.device import (
     dev_run_batch,
     dev_run_batch_digest,  # 整份上机 + 逐 case 四层归因 + 明细落 workspace，回精简摘要(不 offload)
@@ -64,6 +64,7 @@ def _default_generic_tools() -> list[Any]:
         dev_rest,
         dev_run_case,
         dev_probe,
+        dev_help,   # 命令报 ^/Failed 时追问设备该位置期望什么（? 上下文帮助，零副作用）
         dev_init_device,
 
         # 编译走 V6 引擎：主 agent 调 compile_engine_run 一次跑完整条闭环（编写/合并/
@@ -135,10 +136,14 @@ def build_main_agent(**kwargs: Any):
         return _build_fallback_react_agent(model=model, tools=tools, system_prompt=system_prompt)
 
     # 上下文压缩由 create_deep_agent **无条件自动挂载**的 create_summarization_middleware
-    # 提供(fraction 阈值 + 撤出历史落 runtime 的 /conversation_history/<thread>.md 可回读
-    # + 溢出兜底)。勿再往 middleware 里传自建摘要实例——会与默认双摘要。
+    # 提供(撤出历史落 runtime 的 /conversation_history/<thread>.md 可回读 + 溢出兜底)。
+    # 勿再往 middleware 里传自建摘要实例——会与默认双摘要。
     # (2026-07-05 修正:旧代码 import summarization_middleware(max_tokens=28000),该名在
     # deepagents 0.5.9 不存在,静默走 except——28k 配置从未生效过,属死代码,已删。)
+    # (2026-07-08 修正:fraction 阈值仅当 model.profile 带 max_input_tokens 才生效,此前
+    # 自定义 ChatOpenAI profile 恒 None → 实际一直走 "tokens=170000+keep 6 条" 兜底档;
+    # 现 _llm._build_chat_model 已按实测窗口 1,048,565 挂 profile(IST_MODEL_CTX 可覆盖),
+    # fraction(0.85 触发/0.10 保留)自此才真正生效。)
     middleware = kwargs.pop("middleware", None) or []
 
     backend_kwarg: dict[str, Any] = {}

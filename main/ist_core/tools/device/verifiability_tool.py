@@ -23,9 +23,20 @@ logger = logging.getLogger(__name__)
 def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools: int,
                                 claim_kind: str, weights_json: str = "",
                                 existing_pools: int = -1) -> str:
-    """判一个算法类 case「如写」能否验证它声称的行为（欠定就别编断言，上报 ask_user）。
+    """判一个算法类 case「如写」能否验证它声称的行为（数学欠定就别编断言，上报用户决策）。
 
-    先从脑图该 case 的 expected 抽取行为类型 claim_kind 与数值参数，再调本工具。
+    **何时用**：case 的预期落在运行时不确定区（"某一次请求命中第几个 pool"这类由算法
+    随机性/计数器状态决定的 claim）——先从脑图 expected 抽取 claim_kind 与数值参数
+    （算法、该 claim 涉及的请求数、候选池数、权重），再调本工具判可验性。
+    **何时不用**：预期已被配置/协议/设备规则**唯一确定**（静态层：配了就在、删了就不在、
+    固定响应格式）——不欠定，直接按静态层写断言，不进证伪。
+
+    返回两种判定，处置完全不同：
+    - ``VERIFIABLE``：可验，按算法类型选断言形态；**notes 带落地约束**（如顺序类 claim
+      "统计有命中≠最后才命中"），按 notes 落地、别自行降级成更弱的 claim。
+    - ``NEEDS_USER_DECISION``：欠定（按脑图的过程验不出声称的效果），**停手别编断言**，
+      把整段原样带回给 orchestrator 汇总问用户（改描述/改过程/改预期）。判定同时落台账
+      needs_decision.json——上报有锚，这个词只在本工具判定时使用。
 
     Args:
         autoid: 该 case 的 autoid（欠定时写进 NEEDS_USER_DECISION 标记）。

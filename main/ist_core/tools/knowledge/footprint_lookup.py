@@ -116,14 +116,44 @@ def _format_node(data: dict, brief: bool = False) -> str:
 
     rules = data.get("decision_rules", [])
     if rules:
+        # 判例化渲染(2026-07-08):互斥观察显式报冲突(冲突显式化实测可提升下游判断准确率——
+        # RAG 冲突文献 +24pp;pe1 570/608 实证:无条件规则被拉取后框死实验设计空间)。
+        # conflicts_with 由策展时声明;冲突组置顶保证可见,组内各观察带语境与 validity。
+        by_key = {r.get("fact_key"): r for r in rules if r.get("fact_key")}
+        in_conflict: set[str] = set()
+        conflict_pairs: list[tuple[dict, dict]] = []
+        for r in rules:
+            cw = r.get("conflicts_with")
+            if cw and cw in by_key and r.get("fact_key") not in in_conflict:
+                conflict_pairs.append((r, by_key[cw]))
+                in_conflict.add(r.get("fact_key", ""))
+                in_conflict.add(cw)
+
+        def _fmt_obs(r: dict) -> str:
+            v = r.get("validity", "")
+            ou = r.get("observed_under", "")
+            tag = "|".join(x for x in (v, ou and f"语境:{ou}") if x)
+            body = r.get("decision") or r.get("condition", "")
+            return (f"[{tag}] " if tag else "") + body
+
         lines.append(f"\nDecision rules ({len(rules)}):")
-        for r in rules[:5]:
+        for a, b in conflict_pairs:
+            lines.append("  ⚠ 条件冲突(同一行为在不同语境下观测相反,分辨条件未钉死——"
+                         "这正是定向设备实验该仲裁的,别把任一侧当无条件事实):")
+            lines.append(f"     A. {_fmt_obs(a)}")
+            lines.append(f"     B. {_fmt_obs(b)}")
+        rest = [r for r in rules if r.get("fact_key") not in in_conflict]
+        for r in rest[:5]:
             cond = r.get("condition", "")[:140]
             dec = r.get("decision", "")
+            suffix = ""
+            v, ou = r.get("validity", ""), r.get("observed_under", "")
+            if v or ou:
+                suffix = "〔" + "|".join(x for x in (v, ou and f"语境:{ou}") if x) + "〕"
             if dec:
-                lines.append(f"  - IF {cond} → {dec}")
+                lines.append(f"  - IF {cond} → {dec}{suffix}")
             else:
-                lines.append(f"  - {cond}")
+                lines.append(f"  - {cond}{suffix}")
 
     behaviors = data.get("behaviors", [])
     if behaviors:

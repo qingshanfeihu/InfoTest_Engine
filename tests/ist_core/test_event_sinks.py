@@ -6,13 +6,13 @@ import sys
 from pathlib import Path
 
 from main.ist_core.events import EventBus
-from main.ist_core.sinks import CLISink, JsonlFileSink, LangSmithSink
+from main.ist_core.sinks import CLISink, JsonlFileSink, LangfuseSink
 
 
 def test_sinks_package_exports_all_public_sinks() -> None:
     assert CLISink is not None
     assert JsonlFileSink is not None
-    assert LangSmithSink is not None
+    assert LangfuseSink is not None
 
 
 def test_jsonl_sink_roundtrip(tmp_path: Path) -> None:
@@ -73,10 +73,12 @@ def test_cli_sink_token_flush_preserves_content() -> None:
     assert "Hello, world!" in buf.getvalue()
 
 
-def test_langsmith_sink_disabled_by_default(monkeypatch) -> None:
-    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+def test_langfuse_sink_disabled_without_keys(monkeypatch) -> None:
+    monkeypatch.delenv("LANGFUSE_TRACING_ENABLED", raising=False)
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
 
-    sink = LangSmithSink()
+    sink = LangfuseSink()
 
     assert sink.enabled is False
     sink({"kind": "run_start", "payload": {}, "run_id": "x", "seq": 1, "ts": "", "tags": {}})

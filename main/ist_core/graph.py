@@ -148,7 +148,7 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         LangChain 默认把 callback 传播给子 chain（subagent）；通过
         ``metadata.lc_agent_name`` 区分主 / 子事件。
 
-        - ``parent_subagent``: 子 agent 名（如 "review-verification"）
+        - ``parent_subagent``: 子 agent 名（如 "review-verifier"）
         - ``parent_tool_use_id``: 主 agent 调 task 工具时的 run_id，
           所有该 subagent 内部事件挂到这个 id 下，TUI 据此把子事件渲染到
           对应 SubAgentTaskMessage 容器内。
@@ -351,7 +351,7 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
             self._current_task_tool_use_id = run_id
         elif name == "invoke_skill" and is_main_agent_event:
             
-            if "review-verification" in (input_str or "") or "context: fork" in (input_str or ""):
+            if "review-verifier" in (input_str or "") or "context: fork" in (input_str or ""):
                 self._current_task_tool_use_id = run_id
 
         tags = self._subagent_tags(kwargs, base_tags={"name": name})
@@ -478,17 +478,22 @@ def qa_node(state: IstCoreState, config: RunnableConfig | None = None) -> dict[s
         agent_input = {"messages": base_messages}
 
     handler = _MainAgentProgressHandler()
+    # Langfuse 链路追踪(2026-07-09 替代 LangSmith 全局自动 tracing):env 门控,
+    # 未启用返回 None。主 agent 是主链路,缺它则整条对话不进 Langfuse。
+    from main.ist_core.observability import get_langfuse_handler
+    _lf = get_langfuse_handler()
+    _extra_cbs = [handler] + ([_lf] if _lf else [])
 
     if config is None:
         merged_config: RunnableConfig = {
-            "callbacks": [handler],
+            "callbacks": _extra_cbs,
             "recursion_limit": 300,
         }
     else:
         existing_cbs = list(config.get("callbacks") or [])
         merged_config = {
             **config,
-            "callbacks": existing_cbs + [handler],
+            "callbacks": existing_cbs + _extra_cbs,
 
 
             "recursion_limit": max(config.get("recursion_limit") or 0, 300),

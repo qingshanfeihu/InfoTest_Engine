@@ -1,7 +1,7 @@
 """类型化事件模型（对应原计划 §16.1）。
 
 所有运行时日志 / 进度 / 结果 / HIL 询问 / 错误 **统一经"类型化事件流"**，
-CLI、未来 Web UI、LangSmith 三者订阅同一 ``EventBus``。
+CLI、未来 Web UI、Langfuse 三者订阅同一 ``EventBus``。
 """
 
 from __future__ import annotations

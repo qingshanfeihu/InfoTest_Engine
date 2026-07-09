@@ -1,0 +1,63 @@
+"""Langfuse 链路追踪(2026-07-09 替代 LangSmith)。
+
+LangSmith 靠 env 变量全局自动 tracing;Langfuse 走 LangChain CallbackHandler,
+须在每个 LLM 调用点手动挂进 ``config["callbacks"]``。本模块提供一个进程级缓存的
+handler:env 门控、懒初始化、best-effort(任何失败静默降级为不追踪,绝不阻断主流程)。
+
+启用条件(与旧 LangSmith sink 同哲学,该 sink 已删):``LANGFUSE_PUBLIC_KEY`` + ``LANGFUSE_SECRET_KEY``
+都在 → 默认开;``LANGFUSE_TRACING_ENABLED=false`` 显式关。host 走 ``LANGFUSE_BASE_URL``
+(或 ``LANGFUSE_HOST``,SDK 两者都认)。
+
+挂载点(全部 LangChain 调用点,缺一即该链路不进 Langfuse):
+- ``graph.qa_node`` — 主 agent(sync/async 都经它)
+- ``skills/loader._invoke_fork_streamed`` — fork 子 agent
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+_HANDLER = None
+_INIT_DONE = False
+
+
+def _enabled() -> bool:
+    v = (os.environ.get("LANGFUSE_TRACING_ENABLED") or "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    return bool(os.environ.get("LANGFUSE_PUBLIC_KEY")
+                and os.environ.get("LANGFUSE_SECRET_KEY"))
+
+
+def get_langfuse_handler():
+    """返回进程级缓存的 Langfuse CallbackHandler;未启用/初始化失败 → None。
+
+    调用方:``cbs = [...]; h = get_langfuse_handler(); cbs += [h] if h else []``。
+    首次调用懒初始化(auth_check 一次,失败即永久 None,不反复重试拖慢每次调用)。
+    """
+    global _HANDLER, _INIT_DONE
+    if _INIT_DONE:
+        return _HANDLER
+    _INIT_DONE = True
+    if not _enabled():
+        return None
+    try:
+        from langfuse import get_client
+        from langfuse.langchain import CallbackHandler
+        client = get_client()          # 自 env 读 key/host,进程级单例
+        try:
+            if not client.auth_check():  # 一次性校验,失败静默降级(不阻断)
+                logger.warning("Langfuse auth_check 未通过,链路追踪禁用")
+                return None
+        except Exception:  # noqa: BLE001 — auth_check 网络异常也降级,不抛
+            logger.debug("Langfuse auth_check 异常,按未通过处理", exc_info=True)
+            return None
+        _HANDLER = CallbackHandler()
+        logger.info("Langfuse 链路追踪已启用")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Langfuse handler 初始化失败(降级为不追踪): %s", exc)
+        _HANDLER = None
+    return _HANDLER

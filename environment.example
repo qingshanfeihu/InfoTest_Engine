@@ -20,10 +20,12 @@
 MINERU_TOKEN=
 
 
-# ---- LangSmith 观测（默认关闭；调试时临时打开，trace 含 prompt 全文）-------
-LANGSMITH_TRACING=false
-# LANGSMITH_API_KEY=
-# LANGSMITH_PROJECT=infotest_engine
+# ---- Langfuse 观测（默认关闭；填 key 即开，trace 含 prompt 全文）-----------
+# key 见 Langfuse 项目 Settings > API Keys；host 用 LANGFUSE_BASE_URL 或 LANGFUSE_HOST。
+LANGFUSE_TRACING_ENABLED=false
+# LANGFUSE_SECRET_KEY=sk-lf-...
+# LANGFUSE_PUBLIC_KEY=pk-lf-...
+# LANGFUSE_BASE_URL=https://jp.cloud.langfuse.com
 
 
 # =============================================================================

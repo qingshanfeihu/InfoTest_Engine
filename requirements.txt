@@ -12,7 +12,8 @@ langchain-openai>=1.0,<2              # IST-Core openai:qwen3.6-plus DashScope �
 langchain-anthropic>=1.4,<2
 # 修 LLM 输出裸 JSON 含未转义嵌套引号
 json-repair>=0.30
-langsmith>=0.3.0,<1
+langsmith>=0.3.0,<1                    # langchain-core 传递依赖(非直用；观测已切 Langfuse)
+langfuse>=3,<4                        # 链路追踪(替代 LangSmith，见 main/ist_core/observability.py)
 dashscope>=1.14.0
 # LangGraph（解锁 astream_events v2 + SqliteSaver）
 langgraph>=1.1,<2

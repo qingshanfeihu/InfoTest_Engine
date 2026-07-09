@@ -10,7 +10,7 @@
 - ``streaming.py``  — ``astream_events(version="v2")`` -> ``IstCoreEvent`` 适配器
 - ``agents/``       — IST-Core（main_agent 兼容入口）/ 专用 Reviewer（deepagents + ChatOpenAI 兼容端点）
 - ``tools/``        — 12 个 ``@tool``（8 检索 + 4 对话式评审编排）
-- ``sinks/``        — CLI / JSONL / LangSmith 三端 sink
+- ``sinks/``        — CLI / JSONL / Langfuse 三端 sink
 
 代码命名继续遵循历史 ``qa_`` 前缀规范，以保持工具、graph id 和已入库数据兼容。
 """

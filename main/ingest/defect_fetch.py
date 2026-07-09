@@ -53,8 +53,13 @@ class LoginRequiredError(RuntimeError):
     """登录态失效，需要 headful 重登。"""
 
 
-def _ensure_no_langsmith() -> None:
+def _ensure_no_tracing() -> None:
+    # 缺陷抓取链路不进观测(含 HTML 原文,避免上传)——两代观测都显式关。
     os.environ["LANGSMITH_TRACING"] = "false"
+    os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
+
+
+_ensure_no_langsmith = _ensure_no_tracing   # 兼容别名(旧调用点)
 
 
 def _canonical_backend(backend: str) -> str:

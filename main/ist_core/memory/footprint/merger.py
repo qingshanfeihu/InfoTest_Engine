@@ -187,6 +187,17 @@ def _evidence_supports(fact) -> bool:
     覆盖率与语言、quote 绝对长度无关，不再用 `>=N 字符` 这种硬阈值。
     """
     if getattr(fact, "device_evidence", None):
+        # uncertain 级观察(2026-07-08 自愈环):fail/escalated 轮的设备观察没有 PASS
+        # 台账可锚(pass-voucher 查证必假),但它的锚定已由上游两道门保证——behavior_tool
+        # 入口"observe_cmd 必在该 case 卷面"(卷面机械校验) + device_evidence 记 autoid。
+        # 放行条件:validity 明确为 uncertain ∧ 有 autoid ∧ 有观测命令。入库后带
+        # uncertain 标记渲染,不冒充 verified;同 fact_key 将来 PASS 实证时升级(见
+        # _append_behavior 的升级分支)。此前"fail 候选永不入库"把最有信息量的 episode
+        # 整体丢弃(pe1 570/608 实证:正解形态卡在知识断层外)。
+        if (getattr(fact, "validity", "") or "").strip() == "uncertain":
+            dev = fact.device_evidence or {}
+            cmd = (getattr(fact, "cli_syntax", "") or getattr(fact, "content", "") or "").strip()
+            return bool(str(dev.get("autoid") or "").strip() and cmd)
         if _device_evidence_supports(fact):
             return True
         # 设备证据校验不过时**不回落手册**——传了 device_evidence 表示调用方明知
@@ -235,11 +246,14 @@ def _write_json(path: Path, data: dict) -> None:
     )
 
 
-def _update_meta(fp: dict, source_thread: str) -> None:
+def _update_meta(fp: dict, source_thread: str, *, count_verified: bool = True) -> None:
     meta = fp.setdefault("footprint_meta", {})
     if not meta.get("created_at"):
         meta["created_at"] = _now_iso()
-    meta["verified_count"] = meta.get("verified_count", 0) + 1
+    # uncertain 观察入库不累计 verified_count——节点头的 `verified Nx` 是权威度信号,
+    # 未实证观察计入=冒充(红线评审 2026-07-08 中危项);升级 verified 时那次 merge 会计。
+    if count_verified:
+        meta["verified_count"] = meta.get("verified_count", 0) + 1
     threads = meta.setdefault("source_threads", [])
     if source_thread and source_thread not in threads:
         threads.append(source_thread)
@@ -253,6 +267,17 @@ def _evidence(fact) -> dict:
         ev["source_file"] = fact.evidence_file
     if fact.evidence_quote:
         ev["quoted_text"] = fact.evidence_quote
+    # K 锚持久化(理论 §5.1 anchor=(build, run_ts, lineage)):设备实证的条目把运行锚
+    # 落进 evidence.device_run——没有它,后续 build 锚差派生 stale(缺口 C)无数据可算。
+    # 缺位诚实缺位(autoid 有而 run/build 无=uncertain 级观察只有谱系锚),不造值。
+    dev = getattr(fact, "device_evidence", None) or {}
+    if dev.get("autoid"):
+        run: dict = {"autoid": str(dev["autoid"])}
+        if dev.get("run_ts"):
+            run["run_ts"] = dev["run_ts"]
+        if dev.get("build"):
+            run["build"] = str(dev["build"])
+        ev["device_run"] = run
     return ev
 
 
@@ -327,14 +352,39 @@ def _append_decision_rule(fp: dict, fact) -> str:
 
 def _append_behavior(fp: dict, fact) -> str:
     behaviors = fp.setdefault("behaviors", [])
+    validity = (getattr(fact, "validity", "") or "verified").strip() or "verified"
+    observed_under = (getattr(fact, "observed_under", "") or "").strip()
     for existing in behaviors:
         if existing.get("fact_key") == fact.fact_key:
+            # 升级分支(自愈环演化端):同 fact_key 的 uncertain 观察,后续 PASS 实证
+            # (validity=verified 到达)→ 就地升级并更新内容/证据;反向(verified 已在、
+            # uncertain 又来)不降级、不覆盖。
+            if existing.get("validity") == "uncertain" and validity == "verified":
+                existing["content"] = fact.content or existing.get("content", "")
+                existing["evidence"] = _evidence(fact)
+                existing["validity"] = "verified"
+                if observed_under:
+                    existing["observed_under"] = observed_under
+                try:
+                    from main.ist_core.memory.footprint.signals import emit_signal
+                    emit_signal("upgraded_verified", fact.fact_key,
+                                source="merger._append_behavior",
+                                autoid=str((fact.device_evidence or {}).get("autoid") or ""))
+                except Exception:  # noqa: BLE001
+                    pass
+                return "update"
             return "skip"
-    behaviors.append({
+    entry = {
         "fact_key": fact.fact_key,
         "content": fact.content,
         "evidence": _evidence(fact),
-    })
+    }
+    # 观察级字段(判例化):非默认才写,verified 且无语境的旧形态条目保持原样干净。
+    if validity != "verified":
+        entry["validity"] = validity
+    if observed_under:
+        entry["observed_under"] = observed_under
+    behaviors.append(entry)
     return "append"
 
 
@@ -367,6 +417,18 @@ def _append_known_issue(fp: dict, fact) -> str:
             vs["product_versions"] = sorted(cur)
     issues.append(entry)
     return "append"
+
+
+def _distinct_observation_contexts(fp: dict) -> set:
+    """节点内互异观察语境集(decision_rules+behaviors,与 footprint_lookup 渲染层
+    观察组判定同口径——那边是消费端每次查询都算,这里是入库端算迁移)。"""
+    out = set()
+    for e in (fp.get("decision_rules") or []) + (fp.get("behaviors") or []):
+        if isinstance(e, dict):
+            ou = (e.get("observed_under") or "").strip()
+            if ou:
+                out.add(ou)
+    return out
 
 
 _DISPATCH = {
@@ -416,7 +478,8 @@ def merge_fact(routed: RoutedFact, footprint_dir: Path) -> MergeResult:
         action = handler(fp, fact)
         if action == "skip":
             return MergeResult(action="skip", target_file=routed.target_file, detail="empty after handler")
-        _update_meta(fp, fact.source_thread)
+        _update_meta(fp, fact.source_thread,
+                     count_verified=(getattr(fact, "validity", "") or "verified") != "uncertain")
         _write_json(target_path, fp)
         return MergeResult(action="create", target_file=routed.target_file, detail=fact.fact_kind)
 
@@ -426,10 +489,23 @@ def merge_fact(routed: RoutedFact, footprint_dir: Path) -> MergeResult:
         logger.warning("footprint read failed %s: %s", target_path, exc)
         return MergeResult(action="skip", target_file=routed.target_file, detail=str(exc))
 
+    _ctx_before = _distinct_observation_contexts(fp)
     action = handler(fp, fact)
     if action == "skip":
         return MergeResult(action="skip", target_file=routed.target_file, detail="duplicate")
 
-    _update_meta(fp, fact.source_thread)
+    _update_meta(fp, fact.source_thread,
+                 count_verified=(getattr(fact, "validity", "") or "verified") != "uncertain")
     _write_json(target_path, fp)
+    # 观察组形成信号(→conditional 派生态,理论 §5.2):互异语境数在本次合并中首次
+    # 跨过 2——只在入库端的迁移瞬间发一次;渲染端每次查询都会看到组,不发(会刷屏)。
+    _ctx_after = _distinct_observation_contexts(fp)
+    if len(_ctx_before) < 2 <= len(_ctx_after):
+        try:
+            from main.ist_core.memory.footprint.signals import emit_signal
+            emit_signal("observation_group_formed", target_path.stem,
+                        source="merger.merge_fact", fact_key=fact.fact_key,
+                        contexts=sorted(_ctx_after)[:6])
+        except Exception:  # noqa: BLE001
+            pass
     return MergeResult(action=action, target_file=routed.target_file, detail=fact.fact_kind)

@@ -1,8 +1,10 @@
 """submit_behavior_fact:设备行为知识**候选**登记(V6 支柱2b,归因孔③的子义务)。
 
-候选≠入库:落 outputs/<autoid>/behavior_candidates.json,由引擎 writeback 节点在
-该 case **上机真 PASS** 后机械晋升(RawFact(behavior)+device_evidence,经 merger
-的 device_verified 门)。fail/awaiting 的候选永不入库——两段闸防散文污染 footprint。
+候选≠直接入库:落 outputs/<autoid>/behavior_candidates.json,由引擎 writeback 节点
+按结局分流(自愈环,2026-07-08)——该 case **上机真 PASS** → 机械晋升为 verified
+(RawFact(behavior)+device_evidence,经 merger 的 device_verified 门);**fail/escalated**
+→ 以 validity=uncertain + 观测语境入库(带标渲染、不冒充已验证,同 fact_key 将来 PASS
+实证时自动升级)。fail 轮的观察恰恰最有信息量,照常登记,别因未通过而少登记。
 
 机械校验:observe_cmd 必须真实出现在该 case 卷面的 APV 命令里(读 case.xlsx),
 防"给不存在的观测编行为"。
@@ -23,8 +25,9 @@ logger = logging.getLogger(__name__)
 def submit_behavior_fact(autoid: str, observe_cmd: str, content: str, note: str = "") -> str:
     """登记一条设备行为知识候选(回显格式/计数器语义/断言技法类现象)。
 
-    候选不直接入库——该 case 上机真 PASS 后由引擎机械晋升进 footprint(设备实证门);
-    fail 的候选永不入库。观测命令必须真实出现在该 case 卷面上。
+    候选不直接入库——上机真 PASS 由引擎晋升为 verified(设备实证门);fail/escalated
+    以 uncertain 级带语境入库,PASS 实证后自动升级。fail 轮观察最有信息量,照常登记。
+    观测命令必须真实出现在该 case 卷面上。
 
     Args:
         autoid: 该 case 的 autoid(18 位)。

@@ -5,16 +5,24 @@ observe_kind / object_tokens / 配置存在性检查；两套实现的分词/算
 grade 矛盾信号。本模块把这三个客观判据收敛成单一实现，两边共用。逻辑取自 `grade_extract`
 （缺陷①专用脚本，更完整为权威：剥前导算子词、statistic/count 也算行为观测）。
 
-纯客观、零领域词表：不写任何"某命令该用某断言"的规则——只做算子代数的机械分类。
+分类逻辑（算子代数）在此闭合于论文 §3.2；**动词词面**是文法层数据——从
+`knowledge/data/compile_ref/domain_grammar.json` 加载（出处标注在数据里），
+产品 CLI 语言演进时改 JSON 不改本模块（三层架构，2026-07-08 P2）。
 """
 from __future__ import annotations
 
 import re
 
+from main.case_compiler import domain_grammar as _dg
+
 # 瞬时态动词（操作运行时状态/连接表，不改静态配置）。public：grade_extract 也复用，免双份漂移。
-MUTATING_VERBS = ("clear", "no", "reset", "flush")
-# 命令开头的算子词（动词）；剥掉它们后剩下的才是命令「对象」。客观算子词表，非领域配置词表。
-_LEADING_OPS = MUTATING_VERBS + ("show", "dig", "display", "get", "list", "nslookup", "ping", "curl")
+MUTATING_VERBS = _dg.verbs("mutating")
+# 命令开头的算子词（动词）；剥掉它们后剩下的才是命令「对象」。
+_LEADING_OPS = MUTATING_VERBS + _dg.verbs("observe_leading")
+# 观测算子性质词（behavior/config_query 判定用，词面见文法数据 provenance）。
+_BEHAVIOR_PROBES_RE = re.compile(r"\b(" + "|".join(_dg.verbs("behavior_probes")) + r")\b")
+_CONFIG_QUERY_RE = re.compile(r"\b(" + "|".join(_dg.verbs("config_query_probes")) + r")\b")
+_RUNTIME_STATE_RE = re.compile(r"\b(" + "|".join(_dg.verbs("runtime_state_words")) + r")\b")
 
 
 def object_tokens(text: str) -> list[str]:
@@ -47,13 +55,12 @@ def observe_kind(cmd: str) -> str:
     c = (cmd or "").lower()
     if not c.strip():
         return ""
-    if re.search(r"\b(dig|curl|nslookup|ping)\b", c):
+    if _BEHAVIOR_PROBES_RE.search(c):
         return "behavior"          # 客户端请求/解析 = 业务行为观测
-    if re.search(r"\b(show|display)\b", c):
-        # 去 list/get：\blist\b 会经连字符词边界误匹配 access-list/get-config 这类**配置**命令
-        # （对抗 review LOW 修复）；观测面 dig/show/display 已足够覆盖，list/get 作观测罕见。
-        # show statistics / session / counter = 运行时状态/统计 = 行为观测（V 性质）
-        if re.search(r"\b(stat|statistic|statistics|session|sessions|counter|counters|count)\b", c):
+    if _CONFIG_QUERY_RE.search(c):
+        # 观测面词表刻意不含 list/get（误匹配 access-list/get-config，见文法数据 provenance）。
+        # show + 运行时状态/统计词 = 行为观测（V 性质）
+        if _RUNTIME_STATE_RE.search(c):
             return "behavior"
         return "config_query"      # 纯 show 配置 = 配置存在性查询（G 性质）
     return ""

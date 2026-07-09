@@ -56,16 +56,24 @@ def _format_footprint(data: dict) -> str:
     for cmd in cli[:5]:
         lines.append(f"  cmd: {cmd.get('command', '')}")
 
+    # 观察级标注(2026-07-08 自愈环):uncertain 观察推进上下文必须带标——推式通道
+    # 无组头机制,漏标即冒充 verified(红线评审中危项);拉式 kb_footprint 另有观察组渲染。
+    def _obs_tag(e: dict) -> str:
+        v = e.get("validity", "")
+        ou = e.get("observed_under", "")
+        tag = "|".join(x for x in (v, ou and f"语境:{ou[:60]}") if x)
+        return f"[{tag}] " if tag else ""
+
     for r in data.get("decision_rules", [])[:4]:
         cond = r.get("condition", "")[:120]
         dec = r.get("decision", "")
         if dec:
-            lines.append(f"  rule: {cond} → {dec}")
+            lines.append(f"  rule: {_obs_tag(r)}{cond} → {dec}")
         else:
-            lines.append(f"  rule: {cond}")
+            lines.append(f"  rule: {_obs_tag(r)}{cond}")
 
     for b in data.get("behaviors", [])[:3]:
-        lines.append(f"  behavior: {b.get('content', '')[:120]}")
+        lines.append(f"  behavior: {_obs_tag(b)}{b.get('content', '')[:120]}")
 
     for iss in data.get("known_issues", [])[:4]:
         lines.append(f"  issue: {iss.get('issue_id', '')} {iss.get('title', '')[:80]}")

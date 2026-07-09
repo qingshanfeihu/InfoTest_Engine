@@ -30,6 +30,24 @@
 **红线**：本脚本只产**确定性信号**（layer 名实核对、观测算子类型、expect 是否匹配前序配置命令、
 回显是否语法错）。它**不下 PASS/CUT 终判**——终判由 grade LLM 结合需求意图与 source_ref 现场判。
 
+═══ 三层架构（2026-07-08 P2 重构：新坑的响应路径 = 纯数据变化）═══
+本模块只保留 **5 个通用原理检测器**（闭合于数学，零领域词面）；领域词面全在文法数据
+`knowledge/data/compile_ref/domain_grammar.json`（随产品手册演进，改 JSON 不改代码）；
+坑叙事/行为知识在判例层（footprint 观察，文案运行时按引用现取）。
+
+  原理（闭合于什么）              → 本文件的信号
+  ① 零信息断言（信息论：断言对任意结果恒成立）
+       → count_tautology_suspect（无界 \\d）、is_config_existence_check（found 前序配置）
+  ② 秩亏 / 弱覆盖（线代 §10：V 段覆盖维度不足）
+       → weak_v_coverage_suspect、distribution_coverage_gap_suspect、layer_mismatch
+  ③ 出处缺失（期望值与观测同源、无独立溯源 = observe-then-assert）
+       → count_hardcoded_suspect、asserts_literal_hit_ip / hardcoded_hit_ip_suspect
+  ④ 引用图（图论：悬空引用 / 派生值集合未被断言锚定）
+       → cname_member_not_local_host_suspect、new_member_unanchored_suspect
+       （对象文法来自 JSON reference_closures / anchoring_chains——新增同类检查零代码）
+  ⑤ 预期冲突（期望=拒绝语义 ∧ 出处=intent，无客观溯源）
+       → spec_conflict_suspect
+
 用法：
     python grade_extract.py <case.xlsx> <case.provenance.json | "-">
 
@@ -42,6 +60,7 @@ import re
 import sys
 from pathlib import Path
 
+from main.case_compiler import domain_grammar as _dg
 
 # observe_kind / object_tokens / 配置存在性检查 + 瞬时态动词表 收敛到单一事实源（与 confidence_f
 # 共用，免两套实现/常量漂移给 grade 矛盾信号）。瞬时态动词：操作运行时状态/连接表、不改静态配置——
@@ -61,35 +80,19 @@ def _leading_verb(cmd: str) -> str:
     return toks[0].strip().strip('"\'').lower() if toks else ""
 
 
-# 预期拒绝/不支持语义词表（draft 写的**人类预期**措辞）。spec_conflict 探针专用——
-# 断言期望值含"操作被拒绝/参数不支持"语义、且来源 kind=intent（无客观溯源）= 脑图预期设备会拒绝
-# 某操作却无手册依据（如"删/清 session ALL 预期不支持ALL"而实机 ALL 合法）。
-# ★对抗 review HIGH 修复：刻意**不复用** device_errors.has_cli_error——它面向真实设备统一裁决句
-#   (failed to execute/% invalid)、刻意不穷举业务措辞，对人写的 "not support"/"不支持"/"拒绝"
-#   几乎全失配（589432 被逮住纯因恰好写了 "Invalid input"，换个措辞就漏）。
-# ★刻意**不含** "不存在/not found"——那是合法的删除验证预期（删不存在配置→提示不存在），非预期冲突。
-_REJECTION_HINTS = (
-    "not support", "not supported", "unsupported", "not allow", "not allowed",
-    "not permitted", "invalid", "illegal", "reject", "refus", "denied",
-    "syntax error",  # 设备语法错误回显（不依赖 device_errors 避免循环 import）
-    "不支持", "不允许", "不被支持", "拒绝", "非法", "无效",
-)
-
-
 def _expect_is_rejection(expect: str) -> bool:
-    """断言期望值是否含"操作被拒绝/参数不支持"语义（人写预期措辞）。spec_conflict 探针用。"""
+    """断言期望值是否含"操作被拒绝/参数不支持"语义（原理⑤预期冲突的语义面）。
+    词表在文法数据 rejection_semantics（出处/刻意取舍见其 provenance：不复用
+    has_cli_error、不含"不存在/not found"）。"""
     low = (expect or "").lower()
-    return any(h in low for h in _REJECTION_HINTS)
+    return any(h in low for h in _dg.rejection_hints())
 
 
-# ── 分布区间断言（算法类 rr/wrr）确定性识别 ─────────────────────────────────────────
-# 分布类负载均衡：发 N 次→各后端累计命中∈统计区间（守恒 Σ==N），是合法 V 覆盖；与「ga 优先级 /
-# 一致性哈希 / 会话保持」（确定性映射，走 captured_relation 关系断言）区分。
-# rr/wrr/grr/gwrr = 均摊/加权轮询（分布类）；ga/hi/topology/rtt 等非分布（命中由优先级/探测/哈希定）。
-_DISTRIBUTION_METHODS = ("rr", "wrr", "grr", "gwrr")
-_METHOD_LINE_RE = re.compile(r"\bmethod\b\s+\S+\s+\"?([a-z]+)\"?", re.IGNORECASE)
-# 命中/计数字段词（断言锚定的统计字段）。
-_HIT_FIELD_RE = re.compile(r"(hit|命中|计数|counter|count|statistic)", re.IGNORECASE)
+# ── 分布区间断言（分布类算法）确定性识别 ─────────────────────────────────────────
+# 分布类负载均衡：发 N 次→各后端累计命中∈统计区间（守恒 Σ==N），是合法 V 覆盖；与确定性映射
+# （命中由优先级/探测/哈希定，固定落点合法）区分。算法分类与 method 行形态都是文法数据。
+# 命中/计数字段词（断言锚定的统计字段，词面在文法数据 count_field_words）。
+_HIT_FIELD_RE = re.compile("(" + "|".join(_dg.count_field_words()) + ")", re.IGNORECASE)
 # 有界区间标志：emit 区间正则签名 (?<!\d)…(?!\d)、数字字符类 [d-d]、或数字交替 (?:d…。
 _BOUNDED_RANGE_RE = re.compile(r"\(\?<!\\d\)|\[\d-\d\]|\(\?:\d")
 # 无界数字标志：\d（任意数字，对计数断言＝恒真）。
@@ -105,19 +108,6 @@ _LITERAL_IPV4_RE = re.compile(r"\d{1,3}(?:\\?\.\d{1,3}){3}")
 _MEMBER_ANCHOR_SHAPE_RE = re.compile(r"\\b\(\?:.+\)\\b")
 
 
-# ── 新增 pool 命中归属锚定（结构信号，pool→成员IP 映射由确定文法拼出，不猜领域语义）───────────
-_POOL_SERVICE_RE = re.compile(r'sdns\s+pool\s+service\s+"?([\w.-]+)"?\s+"?([\w.-]+)"?', re.IGNORECASE)
-_SERVICE_IP_RE = re.compile(r'sdns\s+service\s+ip\s+"?([\w.-]+)"?\s+([0-9a-fA-F:.]+)', re.IGNORECASE)
-_HOST_POOL_RE = re.compile(r'sdns\s+host\s+pool\s+"?[\w.-]+"?\s+"?([\w.-]+)"?', re.IGNORECASE)
-_HOST_NAME_RE = re.compile(r'sdns\s+host\s+name\s+"?([\w.-]+)"?', re.IGNORECASE)
-_CNAME_MEMBER_RE = re.compile(
-    r'sdns\s+pool\s+cname\s+member\s+"?[\w.-]+"?\s+"?([\w.-]+)"?', re.IGNORECASE)
-# 一行式变体（先例卷观测到 `sdns pool cname <池名> <域名>`）：第二参**含点**才当成员域名
-# （池名惯例无点），首参是 name/member/method 子命令词则不是这个形态。
-_CNAME_INLINE_RE = re.compile(
-    r'sdns\s+pool\s+cname\s+"?([\w-]+)"?\s+"?([\w-]+(?:\.[\w-]+)+)\.?"?\s*$', re.IGNORECASE)
-
-
 def _ip_literal_pattern(ip: str) -> str:
     """构造能同时匹配 IP 原始写法与正则转义写法（`.`→`\\.`）的检测模式，用于在 check_point
     expect 文本里查这个 IP 是否被引用过（不管是常量断言还是 member/dist 展开的转义正则）。"""
@@ -127,103 +117,52 @@ def _ip_literal_pattern(ip: str) -> str:
     return re.escape(ip)  # IPv6/其他：原样转义（冒号非正则元字符，不会被转义成 \:）
 
 
-def _unanchored_new_pools(config_so_far: list, config_line_rows: list,
-                           first_cp_row, check_points: list) -> list:
-    """找出「中途新增绑定到 host、但成员 IP 从未被任何 check_point 引用过」的 pool 名列表。
-
-    结构性判据（不解析领域语义、不猜 claim 类型）：
-    - pool→成员IP 映射由 `sdns pool service`/`sdns service ip` 两条命令的确定文法拼出——
-      这是配置的静态事实，不是猜的（对应 EXCEL_FUNCTIONS.md「命中归属锚点」①层）。
-    - 「中途新增」= 该 pool 第一次 `sdns host pool` 绑定行的行号 > 该 case 第一个
-      check_point 的行号（在这之前就已经在测某些东西了，这个 pool 才第一次接进解析链）。
-    - 「未被锚定」= 它的成员 IP 一个都没在任何 check_point 的 expect 里出现过（不管以哪种
-      转义形式）——不代表一定是缺陷（这条 case 可能压根没有顺序/归属类 claim），只是把
-      「这个结构事实」交给 grade 结合 need_intent 判要不要紧（对齐 new_member_last 的
-      成员归属锚序列：判定该在其他信号旁挂参考，不单独下终判）。
-    """
-    if first_cp_row is None:
-        return []
-    pool_services: dict[str, list[str]] = {}
-    service_ips: dict[str, str] = {}
-    first_bind_row: dict[str, int] = {}
-    for line, row_idx in zip(config_so_far, config_line_rows):
-        m = _POOL_SERVICE_RE.search(line)
-        if m:
-            pool_services.setdefault(m.group(1), []).append(m.group(2))
-            continue
-        m = _SERVICE_IP_RE.search(line)
-        if m:
-            service_ips.setdefault(m.group(1), m.group(2))
-            continue
-        m = _HOST_POOL_RE.search(line)
-        if m:
-            pool = m.group(1)
-            if pool not in first_bind_row:
-                first_bind_row[pool] = row_idx
-
-    all_expects = [c["expect"] for c in check_points if c.get("expect")]
-    unanchored: list[str] = []
-    for pool, bind_row in first_bind_row.items():
-        if bind_row <= first_cp_row:
-            continue  # 一开始就绑定的 pool，不是"中途新增"
-        member_ips = [service_ips[svc] for svc in pool_services.get(pool, []) if svc in service_ips]
-        if not member_ips:
-            continue  # 没解出成员 IP（命令变体/拼装不全），结构信息不够，不在此判
-        anchored = any(
-            re.search(_ip_literal_pattern(ip), expect)
-            for ip in member_ips for expect in all_expects
-        )
-        if not anchored:
-            unanchored.append(pool)
-    return unanchored
-
-
-def _cname_members_without_local_host(config_so_far: list) -> list:
-    """cname 池成员域名里,未被本案 `sdns host name` 定义为本地域名的那些(结构事实,不判对错)。
-
-    为什么值得报:设备对这种配置**静默接受**(config 全程无报错),但 A/AAAA 查询的 re-query
-    需要成员域名自身是本地域名才解析得出 IP——不是的话 dig 只返回 CNAME 记录串,解析链在
-    成员域名处断头(2026-07-08 设备实证;dongkl 035413 三轮 escalated 的根因即此,三轮设备
-    回显里 dig 恒返回 `cname.a.com.` 而非 IP,无人质疑)。另一面,委托外部 DNS/只验证 CNAME
-    记录返回的意图下这个形态又完全合法——所以这里只产结构事实当**提示**,要不要紧由 worker
-    对照脑图意图判,不做门。DNS 名字比较大小写不敏感、忽略尾点。
-    """
-    local_hosts: set[str] = set()
-    members: list[str] = []
-    for line in config_so_far:
-        if _leading_verb(line) in ("no", "clear", "show"):
-            continue
-        m = _HOST_NAME_RE.search(line)
-        if m:
-            local_hosts.add(m.group(1).rstrip(".").lower())
-            continue
-        m = _CNAME_MEMBER_RE.search(line)
-        if m:
-            members.append(m.group(1))
-            continue
-        m = _CNAME_INLINE_RE.search(line)
-        if m and m.group(1).lower() not in ("name", "member", "method"):
-            members.append(m.group(2))
-    out: list[str] = []
-    seen: set[str] = set()
-    for d in members:
-        dn = d.rstrip(".").lower()
-        if dn not in local_hosts and dn not in seen:
-            seen.add(dn)
-            out.append(d)
-    return out
+def _closure_case_law_note(closure: dict, names: list[str]) -> str:
+    """引用闭合发现的**判例层文案**：运行时从 footprint 节点取观察（数据按引用流，
+    坑叙事随观察演化/升级，不写死在代码——P2-3）。取不到时只留一句零领域兜底。"""
+    accepted = ("The device silently accepts this form with no error. " if closure.get("silently_accepted")
+                else "")   # closure 级事实,来自文法数据字段(带 provenance),不对所有 closure 通用
+    head = ("The config references " + ", ".join(names) + " as members, but this case has no matching "
+            f"definition command (reference-closure check {closure.get('id', '')}). {accepted}"
+            "Behavior varies with intent and config form. ")
+    node_id = (closure.get("footprint_node") or "").strip()
+    obs_lines: list[str] = []
+    if node_id:
+        try:
+            from main.knowledge_paths import KNOWLEDGE_FOOTPRINTS_NODES
+            node = json.loads((Path(KNOWLEDGE_FOOTPRINTS_NODES) / f"{node_id}.json")
+                              .read_text(encoding="utf-8"))
+            for e in (node.get("decision_rules", []) + node.get("behaviors", [])):
+                ou = (e.get("observed_under") or "").strip()
+                body = (e.get("decision") or e.get("content") or e.get("condition") or "").strip()
+                if not body:
+                    continue
+                tag = "|".join(x for x in ((e.get("validity") or ""), ou and f"ctx: {ou}") if x)
+                obs_lines.append(f"[{tag}] {body}" if tag else body)
+        except Exception:  # noqa: BLE001
+            obs_lines = []
+    if obs_lines:
+        return (head + "Footprint case-law observations (validity tagged per entry; pick by your config context; "
+                "contradictions are arbitrable by a targeted device experiment): "
+                + " ".join(f"◇{ln}" for ln in obs_lines[:6])
+                + " Judge which category this case falls into against the mindmap intent.")
+    return (head + f"Query behavior observations via kb_footprint (node {node_id or 'not yet created'}) "
+            "and judge against the mindmap intent whether this matters.")
 
 
 def _detect_lb_methods(config_so_far: list) -> list:
-    """从被测配置链抽负载均衡算法 token（生效的 method 行算法参数，小写；跳过 no/show/clear）。"""
+    """从被测配置链抽负载均衡算法 token（生效的 method 行算法参数，小写；跳过 no/show/clear）。
+    method 行形态是文法数据（statements.method_algorithm_line）。"""
     found: list[str] = []
+    method_re = _dg.stmt_re("method_algorithm_line")
     for c in config_so_far:
-        if re.search(r"\bmethod\b", c, re.IGNORECASE) and _leading_verb(c) not in ("no", "show", "clear"):
-            m = _METHOD_LINE_RE.search(c)
-            if m:
-                tok = m.group(1).lower()
-                if tok and tok not in found:
-                    found.append(tok)
+        if _leading_verb(c) in ("no", "show", "clear"):
+            continue
+        m = method_re.search(c)
+        if m:
+            tok = m.group("name").lower()
+            if tok and tok not in found:
+                found.append(tok)
     return found
 
 
@@ -289,7 +228,25 @@ def _prov_source(provenance, step_idx: int) -> tuple[str, str]:
     return (getattr(src, "kind", "") or "", getattr(src, "ref", "") or "")
 
 
-def extract(xlsx_path: str, prov_path: str) -> dict:
+def _intent_record_type_gap(intent_text: str, rows: list) -> list:
+    """意图↔卷面 DNS 记录类型覆盖比对(原理②秩亏的意图侧;类型闭集是协议文法数据)。
+
+    意图文本按词边界命中的记录类型,若在卷面任一 dig 观测命令中零出现 → 缺口列表。
+    只产结构事实交读者判(意图可能是否定语境如"不支持 AAAA"),不做门。实证 2026-07-09
+    selfheal2 035644:意图『请求A或AAAA类型』,worker 在 frozen override 压力下删掉会
+    fail 的 AAAA 断言——覆盖面被静默砍掉、假 PASS 交付+毒先例写回,离线只有这个比对能查到。
+    """
+    intent_types = {t for t in _dg.dns_record_types()
+                    if re.search(rf"(?<![A-Za-z0-9]){t}(?![A-Za-z0-9])", intent_text)}
+    if not intent_types:
+        return []
+    digs = " ".join(str(r.get("G") or "") for r in rows
+                    if _is_observe_command(str(r.get("G") or "")))
+    return sorted(t for t in intent_types
+                  if not re.search(rf"(?<![A-Za-z0-9]){t}(?![A-Za-z0-9])", digs))
+
+
+def extract(xlsx_path: str, prov_path: str, intent_text: str = "") -> dict:
     """逐 check_point 产确定性信号 + case 级 V 段覆盖判断。返回 dict（见模块 docstring 模型）。
 
     每个 check_point 字段：
@@ -400,9 +357,9 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
         count_kind = _count_assertion_kind(expect, cp_src_kind)
         is_distribution_assertion = count_kind == "range"
         count_tautology_suspect = count_kind == "unbounded"
-        # 本断言所在 case 此刻是否已配分布算法(rr/wrr)——写死命中落点/固定计数只在分布上下文判可疑
-        # （ga 优先级/一致性哈希/会话保持是确定性映射，固定落点合法，不在此误杀）。
-        _dist_ctx = any(m in _DISTRIBUTION_METHODS for m in _detect_lb_methods(config_so_far))
+        # 本断言所在 case 此刻是否已配分布算法——写死命中落点/固定计数只在分布上下文判可疑
+        # （确定性映射类算法固定落点合法，不在此误杀；分类见文法数据 algorithm_classes）。
+        _dist_ctx = any(m in _dg.distribution_methods() for m in _detect_lb_methods(config_so_far))
         count_hardcoded_suspect = (count_kind == "hardcoded") and _dist_ctx
         # D：写死单次命中落点 IP——分布算法下 dig found 一个字面成员 IP＝断言"这一发必中它"，但命中哪个
         # 由运行时轮转起点定(同 absolute_position 不可证伪)。寄存器关系(cp_h)/分布区间/命中归属锚点/
@@ -428,30 +385,30 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
         reasons = []
         if layer_mismatch:
             reasons.append(
-                f"断言标称 layer=V 却是配置存在性检查（observe=配置查询 show、expect 命中前序配置命令"
-                f"「{matched_cfg}」）——实为 G 段、不验业务行为，对覆盖贡献为 0（秩亏/伪 V）")
+                f"Assertion claims layer=V but is a config-existence check (observe = config-query show; expect matches the "
+                f"prior config command '{matched_cfg}') — actually G-layer, verifies no business behavior, contributes 0 to coverage (rank-deficient / pseudo-V)")
         elif observe_kind == "config_query" and matched_cfg and layer != "V":
-            reasons.append("配置存在性检查（G 段健全性前置，不计入 V 段覆盖）")
+            reasons.append("Config-existence check (G-layer sanity precondition; not counted toward V coverage)")
         if spec_conflict_suspect:
             reasons.append(
-                f"断言期望「{expect[:30]}」是设备错误回显，但来源 kind=intent（仅凭脑图意图、无手册/先例溯源）"
-                "——疑似脑图预期与手册/实机冲突（断言设备会报错，却无手册依据、实机未必如此）；"
-                "grade 应核 source_ref 后判 CUT 并标根因「用例预期冲突」")
+                f"Expected value '{expect[:30]}' is a device error echo, but source kind=intent (mindmap only; no manual/precedent provenance) "
+                "— suspected intent-vs-reality conflict (asserts the device will reject, without manual grounds; the real device may not). "
+                "Verify source_ref, then treat as CUT with root cause 'intent expectation conflict'")
         if query_object_invalid:
-            reasons.append("观测步回显语法错误/无有效回显（dangling，对齐 589432）")
+            reasons.append("Observation step echo has syntax error / no valid echo (dangling observation)")
         if count_tautology_suspect:
-            reasons.append("命中计数断言用无界 \\d+（任意数字都通过=恒真、不验分布）——分布类(rr/wrr)应改成"
-                           "守恒区间断言：各后端累计命中∈[N/k±容差]，用 dist 声明确定性展开")
+            reasons.append("Hit-count assertion uses unbounded \\d+ (any number passes = always-true, verifies no distribution) — "
+                           "distribution classes (rr/wrr) need conserving interval assertions: each backend's cumulative hits ∈ [N/k±tolerance], expanded deterministically via the dist declaration")
         if count_hardcoded_suspect:
-            reasons.append("命中计数断言写死固定数（如 Hit:\\s+1）——分布算法(rr/wrr)下某后端命中数随运行时"
-                           "轮转/健康检查变，写死=偶对偶错(observe-then-assert)；应改分布区间(dist)或寄存器关系断言")
+            reasons.append("Hit-count assertion hardcodes a fixed number (e.g. Hit:\\s+1) — under distribution algorithms (rr/wrr) a backend's "
+                           "hit count varies with runtime rotation/health checks; hardcoding = right-by-luck (observe-then-assert). Use a distribution interval (dist) or a register relation assertion")
         if asserts_literal_hit_ip:
-            reasons.append("分布算法(rr/wrr)下 dig 断言写死单个成员 IP——'这一发必中它'由运行时轮转起点定、"
-                           "不可证伪(同 absolute_position 偶对偶错)；正确形态是 H 捕获比较(captured_relation)"
-                           "或分布区间(dist)，不是写死命中落点")
+            reasons.append("Under distribution algorithms (rr/wrr) the dig assertion hardcodes a single member IP — 'this query must hit it' is decided "
+                           "by the runtime rotation start and is unfalsifiable (right-by-luck, same as absolute_position). Correct forms are H capture-compare (captured_relation) "
+                           "or a distribution interval (dist), never a hardcoded landing IP")
         if is_distribution_assertion:
-            reasons.append("分布区间断言（distribution_derived/有界计数区间）：分布类算法的合法 V 覆盖，"
-                           "期望由算法语义离线推导+守恒可验，勿因没写死单次命中数判 CUT；只在区间退化恒真时才 CUT")
+            reasons.append("Distribution interval assertion (distribution_derived / bounded count interval): legitimate V coverage for distribution classes; "
+                           "expectations derive offline from algorithm semantics and are conservation-checkable. Do not CUT for lacking a hardcoded per-query hit; CUT only when the interval degenerates to always-true")
 
         check_points.append({
             "idx": len(check_points),
@@ -491,9 +448,9 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
     # case 级预期冲突：任一断言是「kind=intent 错误回显」（断言设备报错却无手册依据）→ 疑似脑图预期冲突。
     spec_conflict_suspect = any(c["spec_conflict_suspect"] for c in check_points)
 
-    # —— case 级：分布类算法（rr/wrr）覆盖 ——
+    # —— case 级：分布类算法覆盖（原理②秩亏 + ③出处缺失的分布上下文）——
     lb_methods = _detect_lb_methods(config_so_far)
-    has_distribution_method = any(m in _DISTRIBUTION_METHODS for m in lb_methods)
+    has_distribution_method = any(m in _dg.distribution_methods() for m in lb_methods)
     distribution_assertion_count = sum(1 for c in check_points if c["is_distribution_assertion"])
     has_distribution_assertion = distribution_assertion_count > 0
     count_tautology_count = sum(1 for c in check_points if c["count_tautology_suspect"])
@@ -509,30 +466,41 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
     distribution_coverage_gap_suspect = (
         has_distribution_method and not has_distribution_assertion and not has_register_relation)
 
-    # —— case 级：新增 pool 命中归属锚定（结构信号，与算法类型/claim 类型无关）——
+    # —— case 级：原理④引用图（对象文法来自 JSON，新增同类检查=加数据条目零代码）——
+    # 锚定链：中途新增接入解析链的对象，其派生值集合从未被断言引用（结构信号，不判对错）。
     first_cp_row = check_points[0]["row_line"] if check_points else None
-    unanchored_new_pools = _unanchored_new_pools(config_so_far, config_line_rows, first_cp_row, check_points)
+    all_expects = [c["expect"] for c in check_points if c.get("expect")]
+    unanchored_new_pools: list = []
+    for chain in _dg.anchoring_chains():
+        found = _dg.unanchored_bound_objects(chain, config_so_far, config_line_rows,
+                                             first_cp_row, all_expects, _ip_literal_pattern)
+        if chain["id"] == "new_pool_member_anchoring":
+            unanchored_new_pools = found
     new_member_unanchored_suspect = bool(unanchored_new_pools)
     has_membership_anchor = any(c["is_membership_anchor"] for c in check_points)
 
-    # —— case 级：cname 池成员的本地域名闭合（引用图提示；设备静默接受、离线才查得到）——
-    cname_members_not_local = _cname_members_without_local_host(config_so_far)
+    # 引用闭合：被引用对象无对应定义命令（悬空引用；设备静默接受、离线才查得到）。
+    # 文案是判例层——运行时从 footprint 观察取，不写死在代码（P2-3）。
+    cname_members_not_local: list = []
+    cname_member_not_local_host_note = ""
+    for closure in _dg.reference_closures():
+        found = _dg.dangling_references(closure, config_so_far)
+        if closure["id"] == "cname_member_needs_local_host":
+            cname_members_not_local = found
+            if found:
+                cname_member_not_local_host_note = _closure_case_law_note(closure, found)
     cname_member_not_local_host_suspect = bool(cname_members_not_local)
-    cname_member_not_local_host_note = (
-        ("配置把 " + "、".join(cname_members_not_local) + " 作为 cname 池成员引用,但本案没有"
-         "对应的 `sdns host name` 把它配成本地域名。两类意图受此影响:①A/AAAA 查询要最终解析出"
-         " IP——re-query 需要成员自身是本地域名,否则 dig 只返回 CNAME 记录串、解析链断头;"
-         "②域名状态门控类(service down 后不返回别名/按域名状态选池)——域名状态只对本地域名"
-         "存在(远端域名恒可用,手册),成员不配本地域名则门控无对象、别名恒返回。设备对这两种"
-         "情况都静默接受配置、不报任何错。只有「委托外部 DNS 且仅验证 CNAME 记录字符串返回」"
-         "的意图下,现状才合法。对照脑图意图判断属于哪类。")
-        if cname_members_not_local else "")
+
+    # —— case 级:意图记录类型覆盖(原理②意图侧;条件字段——intent_text 非空才输出,
+    # 默认调用输出结构与旧版逐比特一致,等价性反扫兼容)——
+    intent_gap: list = _intent_record_type_gap(intent_text, rows) if intent_text else []
 
     suspect_count = (sum(1 for c in check_points if c["suspect"])
                      + (1 if weak_v_coverage_suspect else 0)
                      + (1 if distribution_coverage_gap_suspect else 0)
                      + (1 if new_member_unanchored_suspect else 0)
-                     + (1 if cname_member_not_local_host_suspect else 0))
+                     + (1 if cname_member_not_local_host_suspect else 0)
+                     + (1 if intent_gap else 0))
 
     return {
         "status": "success",
@@ -562,6 +530,15 @@ def extract(xlsx_path: str, prov_path: str) -> dict:
         "cname_member_not_local_host_note": cname_member_not_local_host_note,
         "suspect_count": suspect_count,
         "check_points": check_points,
+        **({"intent_record_type_gap": intent_gap,
+            "intent_record_type_gap_suspect": True,
+            "intent_record_type_gap_note": (
+                "The intent text mentions DNS record type(s) " + ", ".join(intent_gap)
+                + " but no dig observation on the sheet ever queries them. If the intent truly requires verifying "
+                  "that type's resolution behavior, this is a coverage gap (add the dig observation and assertion; "
+                  "removing coverage to dodge a failure is forbidden). If the intent is a negative/exclusion context "
+                  "(e.g. 'does not support X'), ignore this hint and say so in your return.")}
+           if intent_gap else {}),
     }
 
 

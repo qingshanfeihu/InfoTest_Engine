@@ -353,11 +353,16 @@ def test_cname_member_with_local_host_clean(ge, monkeypatch):
     assert r["cname_member_not_local_host_suspect"] is False
 
 
-def test_cname_inline_variant_and_bare_name_line(ge):
-    # 一行式变体命中;仅 name 创建行不误报成员
-    assert ge._cname_members_without_local_host(
-        ["sdns host name www.a.com 60", "sdns pool cname cname_pool cname.a.com"]) == ["cname.a.com"]
-    assert ge._cname_members_without_local_host(["sdns pool cname name cnp"]) == []
+def test_cname_inline_variant_and_bare_name_line():
+    # 一行式变体命中;仅 name 创建行不误报成员(P2 后走文法数据驱动的通用引用闭合检测)
+    from main.case_compiler import domain_grammar as dg
+    closure = next(c for c in dg.reference_closures()
+                   if c["id"] == "cname_member_needs_local_host")
+    assert dg.dangling_references(
+        closure,
+        ["sdns host name www.a.com 60", "sdns pool cname cname_pool cname.a.com"],
+    ) == ["cname.a.com"]
+    assert dg.dangling_references(closure, ["sdns pool cname name cnp"]) == []
 
 
 def test_cname_suspect_not_rework_eligible():
@@ -365,3 +370,40 @@ def test_cname_suspect_not_rework_eligible():
     只走 fail 路径注入(compile_phase._PROBE_NO_REWORK)。防告警疲劳+派发风暴。"""
     from main.ist_core.compile_engine.nodes.compile_phase import _PROBE_NO_REWORK
     assert "cname_member_not_local_host_suspect" in _PROBE_NO_REWORK
+
+
+# ── P2 三层架构:文法数据加载 + 判例 note(2026-07-08) ─────────────────────────────
+
+def test_domain_grammar_loads_and_shapes():
+    """文法数据文件是检测器的事实源:必须存在、pattern 可编译、关键类目齐全。"""
+    from main.case_compiler import domain_grammar as dg
+    g = dg.load_grammar()
+    assert dg.GRAMMAR_PATH.is_file()
+    # 每条 statement 必须带 provenance(出处标注是文法层红线)且 pattern 已编译
+    for sid, s in g["statements"].items():
+        assert s.get("provenance"), f"{sid} 缺出处"
+        assert dg.stmt_re(sid).pattern == s["pattern"]
+    assert dg.verbs("mutating") == ("clear", "no", "reset", "flush")
+    assert set(dg.distribution_methods()) == {"rr", "wrr", "grr", "gwrr"}
+    assert "not support" in dg.rejection_hints()
+    assert any(c["id"] == "cname_member_needs_local_host" for c in dg.reference_closures())
+    assert any(c["id"] == "new_pool_member_anchoring" for c in dg.anchoring_chains())
+
+
+def test_observe_ops_verbs_come_from_grammar():
+    """observe_ops 动词表与文法数据同源(单一事实源,防两套词表漂移)。"""
+    from main.case_compiler import domain_grammar as dg
+    from main.case_compiler.observe_ops import MUTATING_VERBS
+    assert MUTATING_VERBS == dg.verbs("mutating")
+
+
+def test_closure_note_falls_back_without_footprint(ge, monkeypatch, tmp_path):
+    """判例层文案:footprint 节点缺失时只剩零领域兜底句(坑叙事不写死在代码)。"""
+    import main.knowledge_paths as kp
+    monkeypatch.setattr(kp, "KNOWLEDGE_FOOTPRINTS_NODES", tmp_path)
+    from main.case_compiler import domain_grammar as dg
+    closure = next(c for c in dg.reference_closures()
+                   if c["id"] == "cname_member_needs_local_host")
+    note = ge._closure_case_law_note(closure, ["cname.a.com"])
+    assert "cname.a.com" in note and "kb_footprint" in note
+    assert "本地域名" not in note  # 领域断言只能来自判例,兜底句零领域知识

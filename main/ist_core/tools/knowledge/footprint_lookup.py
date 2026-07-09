@@ -114,35 +114,47 @@ def _format_node(data: dict, brief: bool = False) -> str:
     if brief:        # 深展开后代:命令+枚举取值即够,省 rules/behaviors/issues(leaf 直查才详给)
         return "\n".join(lines)
 
+    # 判例化渲染(2026-07-08):观察级字段(validity/observed_under)+ 两级提示——
+    # ①conflicts_with 人工强化(冲突横幅,A/B 实证能打开实验设计空间);
+    # ②观察组自动组头(同节点 ≥2 个互异语境的观察=行为可能条件相关;纯计数触发,
+    #   不做机械矛盾判定——矛盾由读者 LLM 识别,与"冲突显式化 +24pp"同机制)。
     rules = data.get("decision_rules", [])
+    behaviors = data.get("behaviors", [])
+
+    def _fmt_obs(e: dict) -> str:
+        v = e.get("validity", "")
+        ou = e.get("observed_under", "")
+        tag = "|".join(x for x in (v, ou and f"语境:{ou}") if x)
+        body = e.get("decision") or e.get("content") or e.get("condition", "")
+        return (f"[{tag}] " if tag else "") + body
+
+    by_key = {r.get("fact_key"): r for r in rules if r.get("fact_key")}
+    in_conflict: set[str] = set()
+    conflict_pairs: list[tuple[dict, dict]] = []
+    for r in rules:
+        cw = r.get("conflicts_with")
+        if cw and cw in by_key and r.get("fact_key") not in in_conflict:
+            conflict_pairs.append((r, by_key[cw]))
+            in_conflict.add(r.get("fact_key", ""))
+            in_conflict.add(cw)
+
+    # 观察组:rules+behaviors 里带语境、且未进冲突横幅的条目;互异语境 ≥2 才成组
+    obs_entries = [e for e in (rules + behaviors)
+                   if (e.get("observed_under") or "").strip()
+                   and e.get("fact_key") not in in_conflict]
+    obs_ctxs = {(e.get("observed_under") or "").strip() for e in obs_entries}
+    obs_group = obs_entries if len(obs_ctxs) >= 2 else []
+    in_group = {id(e) for e in obs_group}
+
     if rules:
-        # 判例化渲染(2026-07-08):互斥观察显式报冲突(冲突显式化实测可提升下游判断准确率——
-        # RAG 冲突文献 +24pp;pe1 570/608 实证:无条件规则被拉取后框死实验设计空间)。
-        # conflicts_with 由策展时声明;冲突组置顶保证可见,组内各观察带语境与 validity。
-        by_key = {r.get("fact_key"): r for r in rules if r.get("fact_key")}
-        in_conflict: set[str] = set()
-        conflict_pairs: list[tuple[dict, dict]] = []
-        for r in rules:
-            cw = r.get("conflicts_with")
-            if cw and cw in by_key and r.get("fact_key") not in in_conflict:
-                conflict_pairs.append((r, by_key[cw]))
-                in_conflict.add(r.get("fact_key", ""))
-                in_conflict.add(cw)
-
-        def _fmt_obs(r: dict) -> str:
-            v = r.get("validity", "")
-            ou = r.get("observed_under", "")
-            tag = "|".join(x for x in (v, ou and f"语境:{ou}") if x)
-            body = r.get("decision") or r.get("condition", "")
-            return (f"[{tag}] " if tag else "") + body
-
         lines.append(f"\nDecision rules ({len(rules)}):")
         for a, b in conflict_pairs:
             lines.append("  ⚠ 条件冲突(同一行为在不同语境下观测相反,分辨条件未钉死——"
                          "这正是定向设备实验该仲裁的,别把任一侧当无条件事实):")
             lines.append(f"     A. {_fmt_obs(a)}")
             lines.append(f"     B. {_fmt_obs(b)}")
-        rest = [r for r in rules if r.get("fact_key") not in in_conflict]
+        rest = [r for r in rules
+                if r.get("fact_key") not in in_conflict and id(r) not in in_group]
         for r in rest[:5]:
             cond = r.get("condition", "")[:140]
             dec = r.get("decision", "")
@@ -155,11 +167,18 @@ def _format_node(data: dict, brief: bool = False) -> str:
             else:
                 lines.append(f"  - {cond}{suffix}")
 
-    behaviors = data.get("behaviors", [])
-    if behaviors:
-        lines.append(f"\nBehaviors ({len(behaviors)}):")
-        for b in behaviors[:3]:
-            lines.append(f"  - {b.get('content', '')[:140]}")
+    if obs_group:
+        lines.append(f"\nObservations ({len(obs_group)}, 多语境观察组):")
+        lines.append("  ⚠ 同主题多语境观察,行为可能条件相关——对照你的配置形态取用;"
+                     "观察间矛盾处,设备实验可仲裁。标注 uncertain 的来自未通过轮,待实证升级:")
+        for e in obs_group:      # 观察组免配额:全量渲染(截断会隐藏语境分支)
+            lines.append(f"  - {_fmt_obs(e)}")
+
+    rest_behaviors = [b for b in behaviors if id(b) not in in_group]
+    if rest_behaviors:
+        lines.append(f"\nBehaviors ({len(rest_behaviors)}):")
+        for b in rest_behaviors[:3]:
+            lines.append(f"  - {_fmt_obs(b)[:200]}")
 
     issues = data.get("known_issues", [])
     if issues:

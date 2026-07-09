@@ -69,8 +69,13 @@ def test_promotion_only_on_pass(case_dir, tmp_path, monkeypatch):
     CL._promote_behavior_candidates(_A, _Led())
     nodes = list(fp_dir.rglob("*.json"))
     assert nodes, "PASS 候选应晋升入库"
-    body = json.dumps(json.loads(nodes[0].read_text(encoding="utf-8")), ensure_ascii=False)
-    assert "多行" in body and "device_run" not in body.replace("device_verified", "")
+    node = json.loads(nodes[0].read_text(encoding="utf-8"))
+    body = json.dumps(node, ensure_ascii=False)
+    assert "多行" in body
+    # K 锚持久化(理论 §5.1,2026-07-09):晋升条目 evidence.device_run 携 (autoid, run_ts);
+    # 台账无 build 时如实缺位不造值
+    run = node["behaviors"][0]["evidence"]["device_run"]
+    assert run == {"autoid": _A, "run_ts": 5.0}
 
     # fail 台账 → 不晋升(重建干净 footprint)
     import shutil

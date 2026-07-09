@@ -1,0 +1,110 @@
+{
+  "_meta": {
+    "description": "领域对象文法(三层架构的文法层,2026-07-08 P2)。产品 CLI 的对象定义/引用形态、算法分类、动词/语义词表——原理层检测器(grade_extract 5 检测器/observe_ops 算子代数)吃本文件产事实。文法随产品手册版本演进:更新=编辑本文件,不改代码。新增 dangling-reference 类闭合检查=在 reference_closures 加条目(零代码);锚定链拓扑变化(非 bind→member→resolve 两跳)才需要动检测器。每条带 provenance。",
+    "closed_on": "产品手册/CLI 语法版本",
+    "updated": "2026-07-08"
+  },
+  "statements": {
+    "service_ip_define": {
+      "pattern": "sdns\\s+service\\s+ip\\s+\"?(?P<name>[\\w.-]+)\"?\\s+(?P<value>[0-9a-fA-F:.]+)",
+      "roles": {"name": "service 名", "value": "service 的 IP"},
+      "provenance": "形态取证自 mirror 金标准卷(knowledge/framework/mirror/smoke_test/sdns/**)与先例卷;语义=定义 service 对象并绑定 IP"
+    },
+    "pool_service_member": {
+      "pattern": "sdns\\s+pool\\s+service\\s+\"?(?P<from>[\\w.-]+)\"?\\s+\"?(?P<to>[\\w.-]+)\"?",
+      "roles": {"from": "pool 名", "to": "成员 service 名"},
+      "provenance": "同上;语义=把 service 挂为 pool 成员(pool→成员IP 映射由本条+service_ip_define 两跳确定文法拼出,是配置静态事实非猜测)"
+    },
+    "host_pool_bind": {
+      "pattern": "sdns\\s+host\\s+pool\\s+\"?[\\w.-]+\"?\\s+\"?(?P<name>[\\w.-]+)\"?",
+      "roles": {"name": "被绑定到 host 的 pool 名"},
+      "provenance": "同上;语义=pool 接入 host 解析链(锚定检测的『接入事件』,行号语义在检测器)"
+    },
+    "host_name_define": {
+      "pattern": "sdns\\s+host\\s+name\\s+\"?(?P<name>[\\w.-]+)\"?",
+      "roles": {"name": "本地域名"},
+      "provenance": "手册:域名状态(可用性门控)仅对本地域名存在,远端域名恒可用;A/AAAA re-query 需成员域名为本地域名才解析出 IP(2026-07-08 设备实证)"
+    },
+    "cname_member_ref": {
+      "pattern": "sdns\\s+pool\\s+cname\\s+member\\s+\"?[\\w.-]+\"?\\s+\"?(?P<name>[\\w.-]+)\"?",
+      "roles": {"name": "cname 池成员域名"},
+      "provenance": "形态取证自先例卷;语义=引用一个域名作为 cname 池成员(引用,不定义)"
+    },
+    "cname_member_ref_inline": {
+      "pattern": "sdns\\s+pool\\s+cname\\s+\"?(?!(?:name|member|method)\\b)[\\w-]+\"?\\s+\"?(?P<name>[\\w-]+(?:\\.[\\w-]+)+)\\.?\"?\\s*$",
+      "roles": {"name": "cname 池成员域名(一行式变体)"},
+      "provenance": "先例卷观测到 `sdns pool cname <池名> <域名>` 一行式;第二参含点才当成员域名(池名惯例无点),首参为 name/member/method 子命令词的不是此形态(lookahead 排除,等价迁移自原 guard 代码)"
+    },
+    "method_algorithm_line": {
+      "pattern": "\\bmethod\\b\\s+\\S+\\s+\"?(?P<name>[a-z]+)\"?",
+      "roles": {"name": "负载均衡算法 token(与 algorithm_classes 分类表对照)"},
+      "provenance": "形态取证自 mirror 金标准卷 method 配置行(`… method <对象> <算法>`);_detect_lb_methods 用它抽当前生效算法"
+    }
+  },
+  "reference_closures": [
+    {
+      "id": "cname_member_needs_local_host",
+      "references": ["cname_member_ref", "cname_member_ref_inline"],
+      "defines": ["host_name_define"],
+      "normalize": "dns_name",
+      "skip_leading_verbs": ["no", "clear", "show"],
+      "footprint_node": "sdns.pool.cname",
+      "silently_accepted": true,
+      "provenance": "2026-07-08 设备实证(A/B 定向实验仲裁,035570 上机 PASS/ANSWER:0)+手册『CNAME和MX类型的pool支持根据域名状态选择cname或mx』:成员未配本地域名→GA 视其恒可用/解析链在成员处断头;设备对该形态静默接受零报错,只有离线引用图能查到"
+    }
+  ],
+  "anchoring_chains": [
+    {
+      "id": "new_pool_member_anchoring",
+      "bind": "host_pool_bind",
+      "member_edge": "pool_service_member",
+      "resolve": "service_ip_define",
+      "provenance": "对应 EXCEL_FUNCTIONS.md『命中归属锚点』①层:中途新增接入解析链的 pool,其成员 IP 集合应被 check_point 引用锚定(是否要紧由 grade 结合意图判,不单独下终判)"
+    }
+  ],
+  "verb_classes": {
+    "mutating": {
+      "verbs": ["clear", "no", "reset", "flush"],
+      "provenance": "论文 §3.2 算子代数:瞬时态动词操作运行时状态/连接表、不改静态配置;case 含此类命令时意图通常要测其运行时行为效果(应有 V 段断言覆盖)"
+    },
+    "observe_leading": {
+      "verbs": ["show", "dig", "display", "get", "list", "nslookup", "ping", "curl"],
+      "provenance": "命令开头的算子词(动词),剥掉后剩命令『对象』;object_tokens 分词用"
+    },
+    "behavior_probes": {
+      "verbs": ["dig", "curl", "nslookup", "ping"],
+      "provenance": "客户端请求/解析类观测=业务行为观测(V 性质,论文 §3.2)"
+    },
+    "config_query_probes": {
+      "verbs": ["show", "display"],
+      "provenance": "配置/状态查询动词:不带 runtime_state_words 时=配置存在性查询(G 性质)"
+    },
+    "runtime_state_words": {
+      "words": ["stat", "statistic", "statistics", "session", "sessions", "counter", "counters", "count"],
+      "provenance": "show+这些词=运行时状态/统计观测(V 性质);纯 show 配置=配置存在性查询(G 性质)。刻意不含 list/get:\\blist\\b 会经连字符词边界误匹配 access-list/get-config 这类配置命令(对抗 review LOW 修复)"
+    }
+  },
+  "algorithm_classes": {
+    "distribution": {
+      "methods": ["rr", "wrr", "grr", "gwrr"],
+      "provenance": "手册:均摊/加权轮询=分布类(发 N 次→各后端累计命中∈统计区间,守恒 Σ==N);ga/hi/topology/rtt 等=确定性映射(命中由优先级/探测/哈希定,固定落点合法)——分布上下文才判写死落点/固定计数可疑,防误杀确定性映射(GA-CUT 回归教训)"
+    }
+  },
+  "dns_record_types": {
+    "words": ["A", "AAAA", "CNAME", "MX", "NS", "PTR", "TXT", "SOA", "SRV"],
+    "provenance": "DNS 协议记录类型闭集(RFC 1035/3596 等)。意图↔卷面记录类型覆盖比对用(原理②秩亏的意图侧):意图文本提及的类型若在卷面 dig 观测中零出现=覆盖缺口嫌疑(2026-07-09 selfheal2 035644 实证:worker 在 frozen override 压力下删掉会 fail 的 AAAA 断言,意图『请求A或AAAA』的 AAAA 半边被静默砍掉,假 PASS 交付+毒先例写回)"
+  },
+  "count_field_words": {
+    "words": ["hit", "命中", "计数", "counter", "count", "statistic"],
+    "provenance": "计数断言锚定的统计字段词(中英混合来自实际卷面观测)"
+  },
+  "rejection_semantics": {
+    "hints": [
+      "not support", "not supported", "unsupported", "not allow", "not allowed",
+      "not permitted", "invalid", "illegal", "reject", "refus", "denied",
+      "syntax error",
+      "不支持", "不允许", "不被支持", "拒绝", "非法", "无效"
+    ],
+    "provenance": "预期拒绝/不支持语义词表(draft 写的人类预期措辞,spec_conflict 探针专用)。刻意不复用 device_errors.has_cli_error(面向真实设备统一裁决句,对人写措辞几乎全失配,589432 教训);刻意不含『不存在/not found』——那是合法的删除验证预期,非预期冲突"
+  }
+}

@@ -39,6 +39,13 @@ class RawFact:
     # device_verified 分支(命令必须真实出现在该 PASS 卷面上),不再要求手册命中。
     device_evidence: dict = field(default_factory=dict)
 
+    # 观察级字段(2026-07-08 判例化,自愈环):validity=verified(默认,PASS 实证)|
+    # uncertain(fail/escalated 轮的设备观察——最有信息量的 episode 此前被"fail 候选
+    # 永不入库"整体丢弃,pe1 570/608 实证正解卡在知识断层外);observed_under=观测语境
+    # 短句(配置形态)。渲染层按语境并列同主题观察、自动组头提示,矛盾由读者 LLM 识别。
+    validity: str = "verified"
+    observed_under: str = ""
+
     
     source_thread: str = ""
 

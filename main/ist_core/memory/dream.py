@@ -106,7 +106,10 @@ def _load_existing_facts(footprint_dir: Path) -> dict[str, dict[str, list]]:
         for b in d.get("behaviors", []):
             key = b.get("fact_key")
             if key:
-                kinds["behavior"].append((key, b.get("content", "")))
+                # uncertain 观察带标进 consolidate 清单——dream LLM 合并时不得把
+                # 未实证观察揉进 verified 表述(自愈环,2026-07-08)
+                pre = "[uncertain] " if b.get("validity") == "uncertain" else ""
+                kinds["behavior"].append((key, pre + b.get("content", "")))
         for i in d.get("known_issues", []):
             iid = i.get("issue_id")
             if iid:

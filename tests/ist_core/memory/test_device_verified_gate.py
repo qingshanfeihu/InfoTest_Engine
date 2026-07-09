@@ -68,3 +68,21 @@ def test_device_evidence_never_falls_back_to_manual(ledger):
     f.evidence_file = "10.5_cli__part1.md"
     f.evidence_quote = "sdns"
     assert M._evidence_supports(f) is False
+
+
+def test_evidence_persists_device_run_anchor():
+    """K 锚持久化(理论 §5.1):device_evidence 的 (autoid, run_ts, build) 落进
+    条目 evidence.device_run;缺位诚实缺位(uncertain 只有 autoid 谱系锚)。"""
+    f = _fact()
+    f.device_evidence = {"autoid": "203031750000000777", "run_ts": 123.0,
+                         "build": "10.5.0.583"}
+    ev = M._evidence(f)
+    assert ev["device_run"] == {"autoid": "203031750000000777", "run_ts": 123.0,
+                                "build": "10.5.0.583"}
+    f2 = _fact()
+    f2.device_evidence = {"autoid": "203031750000000777", "run_ts": None}
+    ev2 = M._evidence(f2)
+    assert ev2["device_run"] == {"autoid": "203031750000000777"}
+    f3 = _fact()
+    f3.device_evidence = {}
+    assert "device_run" not in M._evidence(f3)

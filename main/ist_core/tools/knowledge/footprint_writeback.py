@@ -66,6 +66,8 @@ def compile_footprint_writeback(autoid: str, provenance_path: str,
                         continue
                     if str(rec.get("autoid")) == (autoid or "").strip() and str(rec.get("verdict")) == "pass":
                         device_run_ref = {"autoid": str(rec["autoid"]), "run_ts": rec.get("run_ts")}
+                        if rec.get("build"):   # K 锚 build 位透传(理论 §5.1)
+                            device_run_ref["build"] = str(rec["build"])
         except Exception:  # noqa: BLE001
             device_run_ref = None
 

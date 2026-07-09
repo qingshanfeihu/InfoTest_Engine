@@ -390,16 +390,23 @@ class MemoryStore:
         for cmd in cli[:5]:
             lines.append(f"  cmd: {cmd.get('command', '')}")
 
+        # uncertain 观察必须带标推送,与 footprint/index._format_footprint 同规(自愈环)
+        def _obs_tag(e: dict) -> str:
+            v = e.get("validity", "")
+            ou = e.get("observed_under", "")
+            tag = "|".join(x for x in (v, ou and f"语境:{ou[:60]}") if x)
+            return f"[{tag}] " if tag else ""
+
         for r in data.get("decision_rules", [])[:4]:
             cond = r.get("condition", "")[:100]
             dec = r.get("decision", "")
             if dec:
-                lines.append(f"  rule: {cond} → {dec}")
+                lines.append(f"  rule: {_obs_tag(r)}{cond} → {dec}")
             else:
-                lines.append(f"  rule: {cond}")
+                lines.append(f"  rule: {_obs_tag(r)}{cond}")
 
         for b in data.get("behaviors", [])[:3]:
-            lines.append(f"  behavior: {b.get('content', '')[:100]}")
+            lines.append(f"  behavior: {_obs_tag(b)}{b.get('content', '')[:100]}")
 
         for iss in data.get("known_issues", [])[:4]:
             lines.append(f"  issue: {iss.get('issue_id', '')} {iss.get('title', '')[:60]}")

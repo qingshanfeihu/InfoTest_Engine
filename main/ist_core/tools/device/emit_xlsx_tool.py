@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -66,7 +67,7 @@ def _parse_autoids_arg(autoids: str | list[str] | None) -> tuple[list[str] | Non
             return None, None
         aid_list = [str(a).strip() for a in autoids if str(a).strip()]
         if not aid_list:
-            return [], "error: autoids 列表无有效 id（元素全空）"
+            return [], "error: autoids list has no valid id (all elements empty)"
         return aid_list, None
     s = str(autoids).strip()
     if not s:
@@ -74,12 +75,13 @@ def _parse_autoids_arg(autoids: str | list[str] | None) -> tuple[list[str] | Non
     try:
         parsed = json.loads(s) if s.startswith("[") else [x.strip() for x in s.split(",") if x.strip()]
     except json.JSONDecodeError as e:
-        return [], f"error: autoids JSON 解析失败: {e}"
+        return [], f"error: autoids JSON parse failed: {e}"
     if not isinstance(parsed, list):
-        return [], "error: autoids 须为 JSON 数组或逗号分隔的 id 列表"
+        return [], "error: autoids must be a JSON array or a comma-separated id list"
     aid_list = [str(a).strip() for a in parsed if str(a).strip()]
     if not aid_list:
-        return [], "error: autoids 解析为空(传非空 JSON 数组、逗号分隔字符串,或直接传 list)"
+        return [], ("error: autoids resolved to empty (pass a non-empty JSON array, a "
+                    "comma-separated string, or a native list)")
     return aid_list, None
 
 
@@ -127,11 +129,11 @@ def _steps_to_caseir(autoid: str, steps: list, *, title: str = ""):
     seen_vars: set[str] = set()   # 前序步骤捕获过的变量名(H/save_as)
     for i, s in enumerate(steps):
         if not isinstance(s, dict):
-            return None, f"step[{i}] 不是 dict"
+            return None, f"step[{i}] is not a dict"
         e = str(s.get("E", "")).strip()
         f = str(s.get("F", "")).strip()
         if not e or not f:
-            return None, f"step[{i}] 缺 E 或 F"
+            return None, f"step[{i}] is missing E or F"
         # 归一化(correct-by-construction):test_env 步的 F=触发机主机名,框架按 getattr(env, F)
         # 精确分派且**不转小写**(实证 test_xlsx.py)。draft 偶尔写成混合大小写 → AttributeError、
         # 触发步骤不执行、无回显。这里强制降为小写(合法 test_env 主机名来自网络事实源,均为小写),
@@ -166,8 +168,8 @@ def _steps_to_caseir(autoid: str, steps: list, *, title: str = ""):
         ist_steps.append(Step(stmt_type=2 + i, description=str(s.get("desc", "") or ""),
                               rows=[row]))
     if not has_cp:
-        return None, (f"case {autoid} 没有任何 check_point 步骤——上机必 fail"
-                      f"(pass 需 success>0)。加一个 found 断言。")
+        return None, (f"case {autoid} has no check_point step at all — it is bound to fail "
+                      f"on-device (pass requires success>0). Add a found assertion.")
     case = CaseIR(autoid=autoid, priority="P1",
                   title=(title or f"agent_{autoid}"), steps=ist_steps)
     return case, has_cp
@@ -215,9 +217,9 @@ def _gate_unreachable_ips(autoid: str, steps: list, init: str = "") -> str | Non
                 bad.append(ip)
     if not bad:
         return None
-    return (f"case {autoid} 用了 {len(bad)} 个**环境不可达 IP**: {', '.join(bad)}\n"
-            f"这些 IP 不在本测试床任何子网内,上机 dig/连接必失败(Hit=0、断言全 fail)。\n"
-            f"改用真实可达 IP 重写——后端 service/pool 用真实服务器 IP,VIP/listener 用段内未占用 IP:\n\n"
+    return (f"case {autoid} uses {len(bad)} **environment-unreachable IP(s)**: {', '.join(bad)}\n"
+            f"These IPs are not in any subnet of this testbed; on-device dig/connections are bound to fail (Hit=0, all assertions fail).\n"
+            f"Rewrite with real reachable IPs — use real server IPs for backend service/pool, and unused in-segment IPs for VIP/listener:\n\n"
             f"{facts.summary_for_agent()}")
 
 
@@ -256,12 +258,12 @@ def _gate_destructive_commands(autoid: str, steps: list, init: str = "") -> str 
     if not bad:
         return None
     lines = "; ".join(f"step[{i}]={cmd!r}" for i, cmd in bad)
-    return (f"case {autoid} 含 {len(bad)} 条**破坏性设备生命周期命令**: {lines}\n"
-            f"禁止:这会真重启/关停共享设备,且框架重启后无法重连(必 fail)。\n"
-            f"若意图是测「配置保存/持久化」,改用不重启的 clear→恢复 范式:\n"
-            f"  配置 → write memory(或 write file/all/net 存盘)→ clear sdns all(清运行配置)\n"
-            f"  → config memory(或 config file/all/net 从存盘恢复)→ show → 断言配置在不在。\n"
-            f"先例参考:smoke_test/sdns/log_backup(已验证的存盘→清→恢复→断言写法)。")
+    return (f"case {autoid} contains {len(bad)} **destructive device-lifecycle command(s)**: {lines}\n"
+            f"Forbidden: this would really reboot/shut down a shared device, and the framework cannot reconnect after a reboot (bound to fail).\n"
+            f"If the intent is to test \"config save/persistence\", use the no-reboot clear→restore paradigm:\n"
+            f"  configure → write memory (or write file/all/net to save) → clear sdns all (clear running config)\n"
+            f"  → config memory (or config file/all/net to restore from storage) → show → assert whether the config is present.\n"
+            f"Precedent: smoke_test/sdns/log_backup (verified save→clear→restore→assert pattern).")
 
 
 _SAVE_RE = _re_dev.compile(r"\bwrite\s+(memory|mem|file|all|net)\b", _re_dev.IGNORECASE)
@@ -343,8 +345,10 @@ def _gate_save_restore_pairing(autoid: str, steps: list, init: str = "",
     if first_listener is not None:
         for c in cmds[:first_listener]:
             if _save_family(c):
-                errs.append(f"基线污染:配 listener 之前出现保存命令 {c!r}——config 会恢复配 listener "
-                            f"之前的旧快照,not_found 假通过。删掉它(基线不该预存盘)。")
+                errs.append(f"baseline pollution: save command {c!r} appears before the listener is "
+                            f"configured — config would restore the old snapshot taken before the "
+                            f"listener config, and not_found passes falsely. Delete it (the baseline "
+                            f"should not be pre-saved).")
                 break
 
     # P0b 紧邻配对
@@ -356,25 +360,31 @@ def _gate_save_restore_pairing(autoid: str, steps: list, init: str = "",
         rf = _restore_family(c)
         if rf:
             if last_save is None:
-                errs.append(f"恢复 config {rf} 之前没有任何 write 保存命令(恢复了从没存过的存储)。")
+                errs.append(f"restore config {rf} has no preceding write save command "
+                            f"(restoring a storage that was never saved).")
             elif last_save != rf:
-                errs.append(f"恢复 config {rf} 与其前最近的保存 write {last_save} 不同族——读的不是刚存的那份。"
-                            f"改成 config {last_save},或把保存改成 write {rf}(二者必须同族)。")
+                errs.append(f"restore config {rf} and its nearest preceding save write {last_save} are "
+                            f"of different families — it does not read the copy just saved. Change it "
+                            f"to config {last_save}, or change the save to write {rf} (the two must be "
+                            f"the same family).")
 
     # P1a 清除步(配 listener 与首个恢复之间)
     first_restore_idx = restores[0][0]
     lo = first_listener if first_listener is not None else 0
     if not any(_CLEAR_RE.search(c) for c in cmds[lo:first_restore_idx]):
-        errs.append("缺清除步:配 listener 与 config 恢复之间没有 no sdns listener / clear sdns——"
-                    "恢复成空操作、not_found 永真、测试空转。在保存后、恢复前加清除步。")
+        errs.append("missing clear step: there is no no sdns listener / clear sdns between the "
+                    "listener config and the config restore — the restore becomes a no-op, "
+                    "not_found is always true, and the test idles. Add a clear step after the "
+                    "save and before the restore.")
 
     # P1b 参数完整(file/all/net 变体)
     for c in cmds:
         fam = _save_family(c) or _restore_family(c)
         if fam in _SAVE_REMOTE and not _param_tail(c, fam):
             verb = "write" if _save_family(c) else "config"
-            errs.append(f"命令缺参数:{c!r}——{fam} 变体需带参数(如 {verb} {fam} <文件名/目标>),"
-                        f"按手册 cli_*_Chapter*.md + cli_*_Appendix*.md 补全,裸命令设备会拒。")
+            errs.append(f"command missing argument: {c!r} — the {fam} variant needs an argument "
+                        f"(like {verb} {fam} <filename/target>); complete it per the manual "
+                        f"cli_*_Chapter*.md + cli_*_Appendix*.md, the device rejects the bare command.")
 
     # P1c 意图变体(manifest 透传;缺失 no-op)
     if expected_save_variant:
@@ -389,15 +399,18 @@ def _gate_save_restore_pairing(autoid: str, steps: list, init: str = "",
                 used = ls
                 break
         if used and used != ev:
-            errs.append(f"意图变体不符:本用例应测 write {ev} 的持久化,实际保存却用了 write {used}"
-                        f"(意图被偷换、成了别的变体的重复)。保存改回 write {ev}、恢复用 config {ev}。")
+            errs.append(f"intent variant mismatch: this case should test persistence of write {ev}, "
+                        f"but the save actually used write {used} (the intent got swapped and this "
+                        f"duplicates another variant). Change the save back to write {ev} and "
+                        f"restore with config {ev}.")
 
     if not errs:
         return None
     body = "\n".join(f"  - {e}" for e in errs)
-    return (f"case {autoid} 持久化测试(config 恢复类)结构错误:\n{body}\n"
-            f"正确范式:配 listener → show/found → write <意图变体> → no/clear listener → "
-            f"config <同变体> → show → 断言。参考先例 smoke_test/sdns/log_backup。")
+    return (f"case {autoid} persistence test (config-restore class) structural errors:\n{body}\n"
+            f"Correct paradigm: configure listener → show/found → write <intent variant> → "
+            f"no/clear listener → config <same variant> → show → assert. "
+            f"See precedent smoke_test/sdns/log_backup.")
 
 
 def _gate_unreachable_listener(autoid: str, steps: list, init: str = "") -> str | None:
@@ -453,25 +466,33 @@ def _gate_unreachable_listener(autoid: str, steps: list, init: str = "") -> str 
     if not hit and not bad_target:
         return None
     listener = facts.listener_ips()
-    lines = [f"case {autoid} 触发可达性不合法:"]
+    lines = [f"case {autoid} trigger reachability is illegal:"]
     if hit:
-        lines.append(f"- listener/VIP 或 dig/curl 目标落在「触发够不着」的 APV 接口段: {', '.join(hit)}")
+        lines.append(f"- listener/VIP or dig/curl target falls in an APV interface segment the trigger hosts cannot reach: {', '.join(hit)}")
     if bad_target:
-        lines.append(f"- dig/curl 目标 IP 不是测试床的 ★ 可达 listener(也非已知后端): {', '.join(bad_target)}(多半凭空编)")
-    lines.append(f"dig/curl 目标必须取 ★ 可达 listener IP(与配置的 listener 一致): {', '.join(listener)}")
+        lines.append(f"- dig/curl target IP is not a ★ reachable listener of the testbed (nor a known backend): {', '.join(bad_target)} (most likely made up)")
+    lines.append(f"dig/curl targets must use a ★ reachable listener IP (consistent with the configured listener): {', '.join(listener)}")
     return "\n".join(lines) + "\n\n" + facts.summary_for_agent()
 
 
 
+# 反馈文案 2026-07-09 英文化(LLM-facing 语言分层),英文 pattern 与原中文并列保序——
+# 分类判定语义不变(中文 pattern 保留兼容历史串)。
 _EMIT_REASON_PATTERNS = (
     ("组合子无效", "blocks_invalid"),
+    ("invalid blocks combinator", "blocks_invalid"),
     ("provenance 解析失败", "prov_parse"),
+    ("provenance parse failed", "prov_parse"),
     ("provenance steps 数", "prov_shape"),
     ("必传 provenance", "prov_missing"),
     ("G 列为 None", "payload_empty"),
+    ("column G is None", "payload_empty"),
     ("解析失败", "parse"),
+    ("parse failed", "parse"),
     ("违反结构约束", "structural"),
+    ("violates structural constraints", "structural"),
     ("违反用户决策", "user_decision"),
+    ("violates user decision", "user_decision"),
     ("frozen", "frozen"),
     ("冻结", "frozen"),
     ("lint", "lint"),
@@ -504,6 +525,45 @@ def _emit_stat(autoid: str, out: str, channel: str) -> None:
         logger.debug("emit_stats 记账失败(忽略)", exc_info=True)
 
 
+_ASSERT_METHODS = {"found", "not_found", "abs_found", "found_times"}
+
+
+def _coverage_profile(rows: list[dict]) -> tuple[set, set]:
+    """卷面观测覆盖档案：(观测动词类集, 观测命令中出现的 DNS 记录类型集)。
+
+    单调门(理论 §2.4 守恒律的可判定投影)的比较基元——只看**观测维度**是否存在,
+    不看断言文本(修法合法地改断言;非法的是把观测维度整个删掉)。
+    行形状与 steps 入参 / _load_case_rows 回读同构({E,F,G,...}),两侧共用。
+    """
+    from main.case_compiler.observe_ops import observe_kind
+    from main.case_compiler import domain_grammar as _dg
+    kinds: set = set()
+    types: set = set()
+    try:
+        rec_types = tuple(_dg.dns_record_types())
+    except Exception:  # noqa: BLE001
+        rec_types = ()
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if str(r.get("F") or "").strip().lower() in _ASSERT_METHODS:
+            continue  # 断言行的 G 是 pattern,不是命令
+        g = str(r.get("G") or "")
+        for line in g.splitlines():
+            k = observe_kind(line)
+            if not k:
+                continue
+            kinds.add(k)
+            if k != "behavior":
+                continue  # 记录类型维度只在行为观测(dig 等)里有意义
+            for t in rec_types:
+                # 大小写敏感:记录类型惯例大写(dig … AAAA);小写匹配会误命中
+                # 主机名里的独立字母(test-a.com 的 a 撞类型 A),新旧卷不对称时假拦
+                if re.search(rf"(?<![A-Za-z0-9]){t}(?![A-Za-z0-9])", line):
+                    types.add(t)
+    return kinds, types
+
+
 def _with_emit_stats(fn):
     import functools
 
@@ -534,83 +594,114 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                  provenance_json: str = "", expected_save_variant: str = "",
                  steps: list | str | None = None, steps_path: str = "",
                  override_frozen_reason: str = "",
+                 coverage_reduction_reason: str = "",
                  provenance: dict | list | str | None = None,
                  provenance_path: str = "",
                  blocks: list | None = None) -> str:
-    """从步骤列表产出结构正确的 case.xlsx(克隆框架原生模板,你不用管模板结构/列对齐)。
+    """Produce a structurally correct case.xlsx from a step list (clones the framework-native template; you never deal with template structure/column alignment).
 
-    **何时用**:单条 case 的语义设计(配置/触发/断言)已成型,要落成可上机的 xlsx。
-    **何时不用**:多 case 合并打包 → ``compile_emit_merged``;还没想清断言形态/期望值
-    出处就别 emit——被结构门打回的每一版都白烧一轮。
-    **用这个,别用 run_python 手搓 openpyxl**——手搓总在 27 行说明区/C=0/C=1/E-F-G 列对齐上
-    出错,导致框架跳过你的 case 行(零 check_point、空真 pass)。本工具保证结构 100% 合法。
+    **When to use**: the semantic design of a single case (config/trigger/assertions) is settled
+    and you want to land it as a runnable xlsx.
+    **When not to use**: merging multiple cases into one package → ``compile_emit_merged``; and
+    don't emit before the assertion form / expected-value provenance is thought through — every
+    version rejected by the structural gates burns a round for nothing.
+    **Use this instead of hand-rolling openpyxl via run_python** — hand-rolled sheets always get
+    the 27-row description area / C=0/C=1 / E-F-G column alignment wrong, so the framework skips
+    your case rows (zero check_point, vacuously true pass). This tool guarantees a 100% legal
+    structure.
 
-    你只决定**内容**:文件级前置命令 + 每个步骤的 操作对象/方法/数据。**首选 blocks
-    组合子通道**(原生数组;五种组合子语法在 EXCEL_FUNCTIONS.md 开头,emit 前读它)——
-    你只做语义决策,底层表示(捕获三步式/寄存器/列对齐)由工具展开,悬空断言这类形态
-    在组合子语言下写不出来;表达不了的边角形态才退回 ``steps`` 原生数组通道(列语义见下)。
+    You only decide the **content**: file-level preconfig commands + each step's
+    object/method/data. **Prefer the blocks combinator channel** (native array; the five
+    combinator syntaxes are at the top of EXCEL_FUNCTIONS.md — read it before emitting) — you
+    make only semantic decisions, and the low-level representation (capture three-step
+    form/registers/column alignment) is expanded by the tool; shapes like dangling assertions
+    cannot be written in the combinator language. Only fall back to the ``steps`` native-array
+    channel (column semantics below) for corner shapes blocks cannot express.
 
-    列语义(每个 step 一个 dict):
-    - ``E`` 操作对象: 被测设备标识 / check_point(断言) / test_env(测试机) / time(等待)
-    - ``F`` 方法: 被测设备→cmd_config(单条)|cmds_config(多条\\n分隔);
-      check_point→found(正则DOTALL)|not_found|abs_found(字面)|found_times(需I列次数);
-      test_env→网络事实源中的主机名; time→sleep
-    - ``G`` 数据(**数据类型=字面文本/正则字符串,不是变量、不是 Python 表达式、不是数值**):
-      配置步骤=CLI命令原文;check_point=要在上一步输出里**文本查找**的期望文本/正则。
-      框架拿 G **原样**匹配——写一个变量名(如 init_ip)它就去找字面 "init_ip" 这几个字符,永远找不到。
-    - ``H`` save_as(可选)/``I`` input_var(可选): 捕获+比较——存一次观测输出、之后比同/不同
-      (会话保持/亲和性/轮转的正确形态)。完整用法(必需的三步式结构、为什么带 H 的步不更新 result)
-      在 knowledge/data/compile_ref/EXCEL_FUNCTIONS.md 的「H 格」那节。
-    - ``desc``(可选): 步骤描述
+    Column semantics (one dict per step):
+    - ``E`` object to operate: device-under-test id / check_point (assertion) / test_env (test host) / time (wait)
+    - ``F`` method: device→cmd_config (single) | cmds_config (multiple, \\n-separated);
+      check_point→found (regex DOTALL) | not_found | abs_found (literal) | found_times (needs count in column I);
+      test_env→a host name from the network facts source; time→sleep
+    - ``G`` data (**data type = literal text / regex string — not a variable, not a Python expression, not a number**):
+      config steps = raw CLI command text; check_point = the expected text/regex to **text-search** in the previous step's output.
+      The framework matches G **verbatim** — write a variable name (e.g. init_ip) and it searches for the literal characters "init_ip", never found.
+    - ``H`` save_as (optional) / ``I`` input_var (optional): capture + compare — store one observation output, later compare same/different
+      (the correct form for session persistence/affinity/rotation). Full usage (the required three-step structure, why a step with H does not update result)
+      is in the "H column" section of knowledge/data/compile_ref/EXCEL_FUNCTIONS.md.
+    - ``desc`` (optional): step description
 
-    check_point 自动校验**上一个非 check_point 步骤的输出**,所以断言前要先有产出输出的步骤
-    (show/dig)。每个 case 至少一个会通过的 check_point(否则上机必 fail)。
+    check_point automatically checks **the output of the previous non-check_point step**, so an
+    output-producing step (show/dig) must come before the assertion. Every case needs at least
+    one check_point that will pass (otherwise it is bound to fail on-device).
 
     Args:
         autoid: case autoid for the first case row column A.
-        steps_json: (兼容通道)JSON array string。**优先用 ``steps`` 原生数组**——字符串通道
-            经供应商 function-calling 序列化会在 JSON 后拖尾脏字符(实证单轮 73% 解析失败),
-            数组通道没有这层暴露面。
-        blocks: **最优先**。语义组合子的原生数组,5 种 kind——CONFIG(cmds 命令列表,每条一个元素)/ OBSERVE_ASSERT(host+cmd+asserts 断言列表,op 取 found、not_found、abs_found)/ CAPTURE_COMPARE(host+capture_cmd+relation 取 same 或 differs,寄存器自动分配)/ OBSERVE_ONLY(host+cmd)/ SLEEP(seconds)。你只做语义决策,捕获比较三步式、寄存器、E-F-H 列由工具展开——悬空断言、字面反斜杠n、未定义寄存器在这个语言下写不出来。传 blocks 时 provenance 按组合子粒度一对一(数量相等),展开由工具同步。
-        steps: 备选。步骤 dict 的原生数组(不是 JSON 字符串),每元素含 E/F/G 与可选 H/I/desc;需要 blocks 表达不了的形态时才用。
-        steps_path: 备选文件通道。workspace 内 JSON 文件路径(如 workspace/outputs/<autoid>/steps.json,
-            内容为步骤数组——workspace 只有 outputs/ 子目录可写);steps 数组反复拖尾/超长时,
-            先 fs_write 落文件再传路径,绕开参数序列化。
-        override_frozen_reason: 该 case 被上机跨轮对照冻结(连续两轮同签名 fail=同法已证无效)时
-            必传——一句话说明这次换了什么法(改了哪类断言/配置/触发)。不传则拒绝重编;
-            这不是要你走形式,是防拿同一套写法原样再撞一轮。
+        steps_json: (compat channel) JSON array string. **Prefer the ``steps`` native array** —
+            vendor function-calling serialization leaves trailing garbage after long string
+            arguments (measured 73% parse failures in a single round); the array channel has
+            no such exposure.
+        blocks: **Top priority.** Native array of semantic combinators, 5 kinds — CONFIG (cmds command list, one command per element) / OBSERVE_ASSERT (host+cmd+asserts assertion list, op one of found, not_found, abs_found) / CAPTURE_COMPARE (host+capture_cmd+relation one of same or differs, registers auto-allocated) / OBSERVE_ONLY (host+cmd) / SLEEP (seconds). You make only semantic decisions; the capture-compare three-step form, registers, and E-F-H columns are expanded by the tool — dangling assertions, literal backslash-n and undefined registers cannot be written in this language. With blocks, provenance is one-to-one at combinator granularity (equal counts); expansion is synchronized by the tool.
+        steps: Fallback. Native array of step dicts (not a JSON string), each with E/F/G and optional H/I/desc; use only for shapes blocks cannot express.
+        steps_path: Fallback file channel. Path to a JSON file inside workspace (e.g.
+            workspace/outputs/<autoid>/steps.json, content is the steps array — only the
+            outputs/ subdir of workspace is writable); when the steps array repeatedly gets
+            trailing garbage / grows too long, fs_write the file first and pass its path to
+            bypass argument serialization.
+        override_frozen_reason: Required when the case is frozen by cross-round on-device
+            comparison (two consecutive rounds failed with the same signature = the same
+            approach is proven ineffective) — one sentence on what you changed this time
+            (which kind of assertion/config/trigger). Without it, re-emitting is refused;
+            this is not a formality — it prevents slamming the exact same write-up into
+            another round.
+        coverage_reduction_reason: Required only when a **recompile** removes an observation
+            dimension the previous volume had (an observation-verb class or a DNS record type
+            that appeared in the old volume's observe commands but not in the new one).
+            Fixing a failing case must not silently shrink what it observes — a measured
+            failure mode is deleting the assertion that fails (e.g. dropping the AAAA probe
+            when the intent says "A or AAAA"), which turns a real failure into a fake PASS.
+            If the reduction is genuinely intended (e.g. the user re-scoped the case), state
+            in one sentence which dimension you dropped and why; the gate then lets it
+            through and records the declaration.
         init_commands: file-level preconfig (C=1) commands, newline separated; empty uses project default.
         out_name: output subdir under workspace/outputs; empty uses autoid.
-        strict_structural: v2 编译链置 True 时启用结构约束门（命令∈手册allowlist + 断言非悬空，
-            correct-by-construction）；v1 默认 False 行为不变。违反结构约束直接打回带原因。
-        provenance: 首选原生对象通道,必传。三层 Provenance IR(dict,含 steps 数组,每步标 layer 取 G/E/V 之一,source 含 kind 与 ref)——它是审批免重检索、上机四层归因、PASS 写回知识库的唯一依据,缺失则拒绝产出。字符串通道经供应商序列化实证拖尾失败,对象通道没有这层暴露面。
-        provenance_json: 兼容通道,同上但为 JSON 字符串,优先用 provenance。
-        provenance_path: 备选文件通道(workspace 内 JSON 文件路径,如 workspace/outputs/<autoid>/prov.json)。
-            provenance 原生对象反复被供应商吞掉/null 化时,先 fs_write 落文件再传路径。
-        expected_save_variant: 仅配置保存/持久化类用例传（memory|file|all|net）。脑图要求"执行
-            write all 后..."就传 "all"。持久化门据此校验你用的保存命令没被换族(write all 不能写成
-            write memory)。非持久化用例留空。
+        strict_structural: set True on the v2 compile chain to enable the structural constraint
+            gate (commands ∈ manual allowlist + non-dangling assertions,
+            correct-by-construction); v1 default False keeps behavior unchanged. Structural
+            violations are rejected with reasons.
+        provenance: Preferred native-object channel, required. Three-layer Provenance IR (dict with a steps array, each step tagged layer one of G/E/V, source with kind and ref) — it is the sole basis for approval without re-retrieval, four-layer on-device attribution, and PASS write-back to the knowledge base; missing means the output is refused. The string channel is measured to fail from serialization trailing garbage; the object channel has no such exposure.
+        provenance_json: compat channel, same as above but a JSON string; prefer provenance.
+        provenance_path: fallback file channel (path to a JSON file inside workspace, e.g.
+            workspace/outputs/<autoid>/prov.json). When the native provenance object keeps
+            getting swallowed/nulled by the vendor, fs_write the file first and pass its path.
+        expected_save_variant: pass only for config-save/persistence cases (memory|file|all|net).
+            If the mindmap says "after running write all ...", pass "all". The persistence gate
+            uses it to verify your save command's family was not swapped (write all must not
+            become write memory). Leave empty for non-persistence cases.
 
     Returns:
-        产出路径 + round-trip 行数统计。编译到此结束；上机验证由独立 ist-verify 流程触发。
+        Output path + round-trip row stats. Compilation ends here; on-device verification is
+        triggered by the separate ist-verify flow.
     """
     autoid = (autoid or "").strip()
     if not autoid:
-        return "error: 必须指定 autoid"
+        return "error: autoid is required"
     # autoid 短号格式门(A 层机械):需求系统 autoid 为 18 位数字(20303…);纯数字却不足 15 位
     # 必是完整号的尾段缩写(实证 deepseek 重编把 brief 里的短号 778012 原样烧进 xlsx ID 列 →
     # 需求关联/框架报告 ID 断链)。非纯数字 id(测试/特殊场景)不受限——宁漏勿杀。
     if autoid.isdigit() and len(autoid) < 15:
-        return (f"error: autoid '{autoid}' 疑似短号(纯数字但不足 15 位)。请传完整需求系统 autoid"
-                f"(18 位,如 203031753342778012)——短号烧进 xlsx 会导致需求关联与框架报告 ID 断链。")
+        return (f"error: autoid '{autoid}' looks like a truncated short id (all digits but fewer "
+                f"than 15). Pass the full requirements-system autoid (18 digits, e.g. "
+                f"203031753342778012) — a short id baked into the xlsx breaks requirement "
+                f"linkage and framework-report ID chains.")
     # 组合子通道(V4 步骤2,最优先):worker 只做语义决策,展开器保证底层表示——
     # 悬空断言/未定义寄存器/带H步后直接断言/字面\n 在组合子语言下不可表达
     # (实证:34 已验证卷反解 5 组合子 round-trip 33/34 字节级等价,唯一失败卷=上机 fail 卷)。
     # 展开产物仍走下游全部机械门作自检(应零触发,触发=展开器 bug)。
     if blocks not in (None, []):
         if not isinstance(blocks, list):
-            return (f"error: case {autoid} blocks 必须是原生数组(语义组合子列表),"
-                    "不要序列化成字符串——收到 " + type(blocks).__name__)
+            return (f"error: case {autoid} blocks must be a native array (a list of semantic "
+                    "combinators), not serialized into a string — got " + type(blocks).__name__)
         from main.case_compiler.blocks import expand_blocks
         _prov_steps = None
         _prov_obj: dict | None = None
@@ -624,11 +715,12 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                     _prov_obj = _pj0
                     _prov_steps = _pj0.get("steps")
             except Exception:  # noqa: BLE001
-                return (f"error: case {autoid} blocks 模式下 provenance_json 解析失败——"
-                        "改传 provenance 原生对象(steps 数与 blocks 数相等,一个组合子一条)。")
+                return (f"error: case {autoid} in blocks mode provenance_json parse failed — "
+                        "pass the native provenance object instead (steps count equal to blocks "
+                        "count, one entry per combinator).")
         _bsteps, _bprov, _berr = expand_blocks(blocks, _prov_steps)
         if _berr:
-            return f"error: case {autoid} 组合子无效——{_berr}"
+            return f"error: case {autoid} invalid blocks combinator — {_berr}"
         steps = _bsteps
         if _prov_obj is not None and _bprov is not None:
             _prov_obj["steps"] = _bprov
@@ -661,12 +753,12 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
             p = p.resolve()
             ws = (root / "workspace").resolve()
             if not p.is_relative_to(ws):
-                return f"error: steps_path 必须在 workspace/ 内: {sp}"
+                return f"error: steps_path must be inside workspace/: {sp}"
             if not p.is_file():
-                return f"error: steps_path 文件不存在: {sp}(先 fs_write 落文件再传路径)"
+                return f"error: steps_path file does not exist: {sp} (fs_write the file first, then pass its path)"
             _src = p.read_text(encoding="utf-8")
         except Exception as e:  # noqa: BLE001
-            return f"error: steps_path 读取失败: {e}"
+            return f"error: steps_path read failed: {e}"
     else:
         if isinstance(steps_json, list):
             _payload = steps_json
@@ -678,16 +770,20 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
             # 211027 空载荷原样重试 30+ 次——旧版只有 steps_json 解析分支有连败升级,
             # 这个分支直接 return,worker 在同一堵墙上撞到 fork 预算耗尽)。
             _streak = _emit_fail_streak_bump(autoid)
-            _msg = (f"error: case {autoid} 步骤载荷为空——blocks/steps/steps_path/steps_json "
-                    "四个通道都没传有效内容(你的数组参数可能被供应商序列化整个丢弃了)。"
-                    "首选 blocks 语义组合子(原生数组);组合子表达不了的形态用 steps 原生数组。")
+            _msg = (f"error: case {autoid} step payload is empty — none of the four channels "
+                    "blocks/steps/steps_path/steps_json carried valid content (your array "
+                    "argument may have been dropped entirely by vendor serialization). Prefer "
+                    "blocks semantic combinators (native array); use the steps native array "
+                    "for shapes blocks cannot express.")
             if _streak >= 2:
-                _msg += ("\n→ 已连续空载荷:别原样重试。先 fs_write 把步骤数组写到 "
-                         f"workspace/outputs/{autoid}/steps.json,再传 steps_path=该路径"
-                         "——文件通道不经过参数序列化,吞不掉。")
+                _msg += ("\n→ Consecutive empty payloads: do not retry as-is. First fs_write "
+                         f"the steps array to workspace/outputs/{autoid}/steps.json, then pass "
+                         "steps_path=that path — the file channel bypasses argument "
+                         "serialization and cannot be swallowed.")
             if _streak >= 3:
-                _msg += (f"\n⚠ 已连续 {_streak} 次空载荷。若 steps_path 也传不进,停止重试,"
-                         "把本报错原样写进你的返回交 orchestrator 重派。")
+                _msg += (f"\n⚠ {_streak} consecutive empty payloads. If steps_path also fails "
+                         "to get through, stop retrying and copy this error verbatim into your "
+                         "reply for the orchestrator to re-dispatch.")
             return _msg
         try:
             _payload = json.loads(_src)
@@ -700,20 +796,22 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
             head = repr(_src[:120])
             tail = repr(_src[-120:]) if len(_src) > 240 else ""
             streak = _emit_fail_streak_bump(autoid)
-            msg = (f"error: steps_json 解析失败: {e}\n"
-                   f"实际收到的参数(len={len(_src)}) 开头: {head}"
-                   + (f"\n结尾: {tail}" if tail else ""))
+            msg = (f"error: steps_json parse failed: {e}\n"
+                   f"argument actually received (len={len(_src)}) head: {head}"
+                   + (f"\ntail: {tail}" if tail else ""))
             if streak >= 2:
-                msg += ("\n→ 换通道:改传 steps 原生数组(不是 JSON 字符串),"
-                        "或先 fs_write 把步骤数组写到 workspace/outputs/<autoid>/steps.json"
-                        " 再传 steps_path(workspace 只有 outputs/ 可写)——"
-                        "都没有字符串拖尾这层暴露面。")
+                msg += ("\n→ Switch channel: pass steps as a native array (not a JSON string), "
+                        "or first fs_write the steps array to "
+                        "workspace/outputs/<autoid>/steps.json and pass steps_path (only "
+                        "outputs/ under workspace is writable) — neither has the "
+                        "trailing-garbage exposure of the string channel.")
             if streak >= 3:
-                msg += (f"\n⚠ 该 case 已连续 {streak} 次解析失败——别再原样重试;"
-                        "若换通道仍失败,停止重试,把这段报错原样写进你的返回交 orchestrator 处理。")
+                msg += (f"\n⚠ This case has failed parsing {streak} times in a row — stop "
+                        "retrying as-is; if switching channels still fails, stop and copy this "
+                        "error verbatim into your reply for the orchestrator to handle.")
             return msg
     if not isinstance(_payload, list) or not _payload:
-        return "error: steps 必须是非空数组(每元素为含 E/F/G 的 dict)"
+        return "error: steps must be a non-empty array (each element a dict with E/F/G)"
     _emit_fail_streak_clear(autoid)
     steps = _payload
 
@@ -732,11 +830,15 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                 except Exception:  # noqa: BLE001
                     pass
                 _sig = " | ".join((_fz.get("signatures") or [])[:2])
-                return (f"error: case {autoid} 已被上机跨轮对照冻结(连续两轮同签名 fail,同法已证无效"
-                        + (f";签名: {_sig}" if _sig else "") +
-                        ")。重编须传 override_frozen_reason=一句话说明这次换了什么法"
-                        "(改了哪类断言/配置/触发);若判断是环境阻塞,先按 ist-verify 的止损指引"
-                        "核实环境,不要原样再撞。")
+                return (f"error: case {autoid} is frozen by cross-round on-device comparison "
+                        "(two consecutive rounds failed with the same signature — the same "
+                        "approach is proven ineffective"
+                        + (f"; signatures: {_sig}" if _sig else "") +
+                        "). Re-emitting requires override_frozen_reason = one sentence on what "
+                        "you changed this time (which kind of assertion/config/trigger); if you "
+                        "judge it an environment blockage, verify the environment per "
+                        "ist-verify's stop-loss guidance first — do not slam into it again "
+                        "unchanged.")
             try:
                 _fz = json.loads(_fz_path.read_text(encoding="utf-8"))
             except Exception:  # noqa: BLE001
@@ -746,6 +848,11 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
             _hist.append({"reason": _ov, "ts": _t1.time()})
             _fz["overrides"] = _hist
             _fz_path.write_text(json.dumps(_fz, ensure_ascii=False, indent=2), encoding="utf-8")
+            try:
+                from main.ist_core.memory.footprint.signals import emit_signal
+                emit_signal("override_frozen", autoid, source="compile_emit", reason=_ov[:200])
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001
         logger.debug("frozen 门校验异常(放行)", exc_info=True)
 
@@ -763,9 +870,11 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
             _need = {"dist": "dist" in _fvals, "member": "member" in _fvals,
                      "captured_relation": _has_h}
             if _form in _need and not _need[_form]:
-                return (f"error: case {autoid} 违反用户决策——用户拍板的断言形态是 {_form},"
-                        f"产物步骤里没有(F 列出现: {sorted(set(_fvals))},含 H 捕获: {_has_h})。"
-                        "按 user_decision.json 的形态重写断言,不许换更省事的形态。")
+                return (f"error: case {autoid} violates user decision — the user-approved "
+                        f"assertion form is {_form}, which is absent from the produced steps "
+                        f"(F values present: {sorted(set(_fvals))}, has H capture: {_has_h}). "
+                        "Rewrite the assertion in the form recorded in user_decision.json; "
+                        "substituting an easier form is not allowed.")
             _kinds = _ud.get("claim_kinds_preserved") or []
             # 有序轨迹判定按台账的 ordering_sensitive 布尔(工具落盘的机读事实),不枚举
             # kind 名——orchestrator 会自创 kind(实证 rotation_order_after_delete 绕过
@@ -785,12 +894,16 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                              if isinstance(s, dict) and str(s.get("F", "") or "").strip() == "member"
                              and isinstance(s.get("member"), dict)]
                 if not (True in _presents and False in _presents):
-                    return (f"error: case {autoid} 保留了有序轨迹类 claim(user_decision 的"
-                            " claim_kinds_preserved 与台账 ordering_sensitive 标记)——产物必须有"
-                            "顺序锚:按时间顺序一段 not_found(目标 pool 成员集,member 声明"
-                            " present=false)接一段 found(present=true)。只有分布/参与统计证不了"
-                            "顺序,属语义降级,拒绝落盘;若该顺序语义已被证伪不可验,把欠定原样"
-                            "上报 orchestrator 回用户改预期,并同步更新 user_decision.json。")
+                    return (f"error: case {autoid} preserves an ordered-trajectory claim "
+                            "(user_decision's claim_kinds_preserved plus the ledger's "
+                            "ordering_sensitive mark) — the product must carry an ordering "
+                            "anchor: in time order, a not_found segment (target pool member "
+                            "set, member declared present=false) followed by a found segment "
+                            "(present=true). Distribution/participation statistics alone "
+                            "cannot prove ordering — that is a semantic downgrade, refused. If "
+                            "the ordering semantics has been proven unverifiable, report the "
+                            "underdetermination as-is to the orchestrator for the user to "
+                            "revise expectations, and update user_decision.json accordingly.")
     except Exception:  # noqa: BLE001
         logger.debug("user_decision 门校验异常(放行)", exc_info=True)
 
@@ -809,23 +922,25 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
         try:
             _p = _p.resolve()
             if not _p.is_relative_to((_root / "workspace").resolve()):
-                return f"error: provenance_path 必须在 workspace/ 内: {_pp}"
+                return f"error: provenance_path must be inside workspace/: {_pp}"
             if not _p.is_file():
-                return f"error: provenance_path 文件不存在: {_pp}(先 fs_write 落文件再传路径)"
+                return f"error: provenance_path file does not exist: {_pp} (fs_write the file first, then pass its path)"
             provenance_json = _p.read_text(encoding="utf-8")
         except Exception as _e:  # noqa: BLE001
-            return f"error: provenance_path 读取失败: {_e}"
+            return f"error: provenance_path read failed: {_e}"
 
     # provenance 必传门(V4 步骤0,2026-07-04):主路 worker 34 卷 provenance=0 的实证——
     # 它断掉则 grade 免检索/四层归因/上机写回全部无依据(V3 名存实亡的机械根因)。
     # prompt 层约束在长上下文下必被遗忘(2026-07-02 零 grade 合并同型事故),故 A 层强制。
     if not (provenance_json and provenance_json.strip()):
         if (os.environ.get("IST_PROVENANCE_OPTIONAL") or "").strip() != "1":
-            return (f"error: case {autoid} 缺 provenance——请随 steps 一并传 provenance(原生对象,"
-                    "含 steps 数组,每步 {layer: G|E|V, source: {kind, ref}};与卷面步骤逐位对齐)。"
-                    "它是审批免重检索、上机四层归因、PASS 写回知识库的唯一依据。"
-                    "layer 含义:G=命令骨架(来源 footprint/手册) E=环境绑定(来源拓扑) "
-                    "V=断言语义(来源先例/手册/用户决策)。")
+            return (f"error: case {autoid} missing provenance — pass provenance along with steps "
+                    "(native object with a steps array, each step {layer: G|E|V, source: {kind, ref}}; aligned one-to-one with the sheet steps). "
+                    "It is the sole basis for approval without re-retrieval, four-layer "
+                    "on-device attribution, and PASS write-back to the knowledge base. "
+                    "layer meaning: G=command skeleton (from footprint/manual), E=environment "
+                    "binding (from topology), V=assertion semantics (from "
+                    "precedent/manual/user decision).")
 
     # provenance_json 前缀抢救:供应商在长字符串参数后拖尾(同 steps_json 的坑,2026-07-03
     # 实测 mimo 单轮 3 个 case 各摔 5 次)——JSON 本体合法、尾部粘了杂散 token 时,取第一个
@@ -848,7 +963,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
         expand_distribution_steps, expand_provenance_steps_with_plan)
     steps, _dist_plan, _dist_err = expand_distribution_steps(steps)
     if _dist_err:
-        return f"error: case {autoid} 分布区间断言声明无效：{_dist_err}"
+        return f"error: case {autoid} distribution-interval assertion declaration is invalid: {_dist_err}"
     # provenance 与 steps 同步展开（dist 桶标 V/distribution_derived），保持逐位对齐免旁挂跳过。
     if provenance_json and provenance_json.strip():
         try:
@@ -865,14 +980,14 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     from main.case_compiler.membership_assertion import expand_membership_steps
     steps, _member_err = expand_membership_steps(steps)
     if _member_err:
-        return f"error: case {autoid} 命中归属断言声明无效：{_member_err}"
+        return f"error: case {autoid} hit-membership assertion declaration is invalid: {_member_err}"
 
     try:
         from main.case_compiler.case_ir import FileIR, Row
         from main.case_compiler.xlsx_emit import emit_xlsx
         from main.case_compiler.config import get_config
     except Exception as e:  # noqa: BLE001
-        return f"error: 加载编译器模块失败: {e}"
+        return f"error: failed to load compiler modules: {e}"
 
     # 文件级前置
     init_g = init_commands.strip() if init_commands.strip() else get_config().default_init_g()
@@ -954,10 +1069,56 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                  cases=[case, _build_sentinel()], module="ist_smoke")
     root = Path(__file__).resolve().parents[4]
     out = root / "workspace" / "outputs" / sub / "case.xlsx"
+
+    # 单调门(A 层,理论 §2.4 守恒律的可判定投影):重编不得静默删观测维度。
+    # 实证:035644/644 在 frozen override 压力下删掉会 fail 的 AAAA 断言——意图「A 或 AAAA」
+    # 的 AAAA 半边被砍,真 fail 变假 PASS 还写回毒先例。比较基元=观测动词类+DNS 记录类型
+    # 集合(不看断言文本——修法合法改断言,非法的是删观测维度)。旧卷在写盘前即天然基线;
+    # 显式声明 coverage_reduction_reason 放行并记信号(用户改需求缩范围是合法路径)。
+    if out.is_file():
+        try:
+            from main.ist_core.tools.device.precedent_tools import _load_case_rows
+            _old_rows = _load_case_rows(str(out))
+            _old_kinds, _old_types = _coverage_profile(_old_rows)
+            _new_kinds, _new_types = _coverage_profile(steps)
+            _rm_kinds = sorted(_old_kinds - _new_kinds)
+            _rm_types = sorted(_old_types - _new_types)
+            if _rm_kinds or _rm_types:
+                _rm_desc = "; ".join(
+                    ([f"observation verb class(es) removed: {', '.join(_rm_kinds)}"] if _rm_kinds else [])
+                    + ([f"DNS record type(s) no longer probed: {', '.join(_rm_types)}"] if _rm_types else []))
+                _cr = (coverage_reduction_reason or "").strip()
+                if not _cr:
+                    try:
+                        from main.ist_core.memory.footprint.signals import emit_signal
+                        emit_signal("monotonicity_violation", autoid, source="compile_emit",
+                                    removed_kinds=_rm_kinds, removed_types=_rm_types)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return ("error: monotonicity gate — this recompile removes observation "
+                            f"coverage the previous volume had ({_rm_desc}). A fix may change "
+                            "assertion text/values freely, but deleting an observation "
+                            "dimension usually means deleting the probe that fails — that "
+                            "turns a real failure into a fake PASS (measured: an AAAA probe "
+                            "dropped under frozen-override pressure while the intent said "
+                            "'A or AAAA'). Keep the observation and fix its expectation, or, "
+                            "if the reduction is genuinely intended, re-emit with "
+                            "coverage_reduction_reason = one sentence on which dimension you "
+                            "dropped and why.")
+                try:
+                    from main.ist_core.memory.footprint.signals import emit_signal
+                    emit_signal("monotonicity_violation", autoid, source="compile_emit",
+                                removed_kinds=_rm_kinds, removed_types=_rm_types,
+                                declared=True, reason=_cr[:200])
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001
+            logger.debug("单调门比对异常(放行)", exc_info=True)
+
     try:
         stats = emit_xlsx(fir, out)
     except Exception as e:  # noqa: BLE001
-        return f"error: emit 失败: {e}"
+        return f"error: emit failed: {e}"
 
     # v3：旁挂三层 Provenance IR。worker 主路必带；它是 grade 核来源的唯一依据。
     # ★关键：**绝不静默留旧 provenance**——重做没带/带坏，旧 case.provenance.json 残留就让 grade
@@ -971,47 +1132,54 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
         if prov is None:
             try:
                 json.loads(provenance_json)
-                _bad = "JSON 可解析但结构不符(需 {autoid, steps:[{layer,source:{kind,ref}},…]})"
+                _bad = "JSON parses but the structure does not conform (need {autoid, steps:[{layer,source:{kind,ref}},…]})"
             except Exception as _je:  # noqa: BLE001
-                _bad = f"JSON 本体坏: {_je}"
-            return (f"error: case {autoid} provenance 解析失败——{_bad}；开头 80 字符: "
-                    f"{provenance_json.strip()[:80]!r}。"
-                    "改用 provenance **原生对象参数**(直接传 dict,不要序列化成字符串塞 "
-                    "provenance_json)——字符串通道会拖尾/双转义,对象通道没有这层暴露面。")
+                _bad = f"the JSON itself is broken: {_je}"
+            return (f"error: case {autoid} provenance parse failed — {_bad}; first 80 chars: "
+                    f"{provenance_json.strip()[:80]!r}. "
+                    "Pass provenance as a **native object argument** instead (a dict directly, "
+                    "not serialized into a string stuffed into provenance_json) — the string "
+                    "channel suffers trailing garbage/double escaping; the object channel has "
+                    "no such exposure.")
         if not backfill_efg(prov, steps):
             n_prov = len(getattr(prov, "steps", []) or [])
-            return (f"error: case {autoid} provenance 步数({n_prov}) 与 emit steps 数({len(steps)}) 不一致。"
-                    "每个 step 须对应一个 provenance 条目（只标 layer+source，E/F/G 由 emit 回填）；"
-                    "dist 声明步只占 1 条（emit 自动展开）。补齐/删多后重新 emit。")
+            return (f"error: case {autoid} provenance step count ({n_prov}) does not match emit steps count ({len(steps)}). "
+                    "Each step needs exactly one provenance entry (tag only layer+source; E/F/G are backfilled by emit); "
+                    "a dist declaration step takes exactly 1 entry (emit expands it automatically). Fill in / remove extras and emit again.")
         # 不瞎写硬契约（仅 strict_structural 链强制）：device_runtime ⟺ <RUNTIME> 占位双向自洽。
         # 抓"标弃权却编数"和"占位却谎称有源"，把诚实弃权从建议变成可拒绝的结构约束。
         if strict_structural:
             from main.case_compiler.provenance_ir import check_runtime_consistency
             rt_problems = check_runtime_consistency(prov)
             if rt_problems:
-                return ("error: case {} 违反不瞎写契约（device_runtime ⟺ <RUNTIME> 占位须自洽）：\n  - ".format(autoid)
+                return ("error: case {} violates the no-fabrication contract (device_runtime ⟺ <RUNTIME> placeholder must be self-consistent):\n  - ".format(autoid)
                         + "\n  - ".join(rt_problems)
-                        + "\n\n离线不可知的期望值标 <RUNTIME> 占位 + source.kind=device_runtime；"
-                          "可离线定值的填真值 + 标 footprint/precedent/manual/intent。修正后重新 emit。")
+                        + "\n\nFor expected values unknowable offline, mark the <RUNTIME> placeholder + source.kind=device_runtime; "
+                          "for values determinable offline, fill the real value + mark footprint/precedent/manual/intent. Fix and emit again.")
         try:
             prov_target.write_text(prov.to_json(), encoding="utf-8")
             gn = len(prov.layer_steps("G")); en = len(prov.layer_steps("E")); vn = len(prov.layer_steps("V"))
-            prov_note = f"\nprovenance 已旁挂: G={gn} E={en} V={vn} 步（供 grade/verify/writeback 复用）。"
+            prov_note = f"\nprovenance side-mounted: G={gn} E={en} V={vn} steps (reused by grade/verify/writeback)."
         except Exception as e:  # noqa: BLE001
-            prov_note = f"\n⚠ provenance 写入失败: {e}（xlsx 正常产出）。"
+            prov_note = f"\n⚠ provenance write failed: {e} (the xlsx itself was produced normally)."
     elif prov_target.exists():
         # 本次未带 provenance（重做忘带 / v1 旧链）：删掉残留旧文件，避免 grade 拿上一版来源误判。
         try:
             prov_target.unlink()
-            prov_note = ("\n⚠ 本次未提供 provenance_json，已删除残留的旧 case.provenance.json"
-                         "（避免 grade 按 stale 来源核对放水）。重做请随 steps 一并重交 provenance。")
+            prov_note = ("\n⚠ No provenance_json was provided this time; the stale old "
+                         "case.provenance.json was deleted (so grade will not be lenient by "
+                         "checking against stale sources). On redo, re-submit provenance along "
+                         "with steps.")
         except Exception as e:  # noqa: BLE001
-            prov_note = f"\n⚠ 存在旧 provenance 但删除失败: {e}（建议手动清理，防 grade 误用 stale 来源）。"
+            prov_note = (f"\n⚠ An old provenance exists but deletion failed: {e} (clean it up "
+                         "manually to keep grade from misusing stale sources).")
 
     _fix_note = ""
     if _fixed_literal_n:
-        _fix_note = (f"\n⚠ 已自动把 {_fixed_literal_n} 处命令载荷里的字面反斜杠n纠正为真实换行"
-                     "(命令语境它只可能是想换行写错了;JSON 字符串里写单反斜杠 n 即可,双反斜杠成字面字符)。")
+        _fix_note = (f"\n⚠ Auto-corrected {_fixed_literal_n} literal backslash-n occurrence(s) "
+                     "in command payloads to real newlines (in command context it can only be "
+                     "a miswritten newline; in a JSON string a single backslash n is enough — "
+                     "a double backslash becomes literal characters).")
 
     # lint 凭证:合并门判据=「过全部机械门」。实证依据(942 对时点配对):LLM grade
     # verdict 判别力仅 3pp(PASS 56% vs CUT 53%),LLM 审 LLM 不构成质量门,机械 lint +
@@ -1037,53 +1205,67 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
         logger.debug("lint 凭证落盘失败(合并门会如实报缺)", exc_info=True)
 
     return (f"=== compile_emit ===\n"
-            f"已产出结构正确的 xlsx(克隆框架模板): {out}\n"
-            f"case={autoid}  steps={len(case.steps)}  check_points=有\n"
-            f"round-trip 统计: {stats}{prov_note}{_fix_note}\n"
-            f"编译到此结束；上机验证由独立 ist-verify 流程触发。")
+            f"produced structurally-correct xlsx (cloned from the framework template): {out}\n"
+            f"case={autoid}  steps={len(case.steps)}  check_points=present\n"
+            f"round-trip stats: {stats}{prov_note}{_fix_note}\n"
+            f"Compilation ends here; on-device verification is triggered by the separate ist-verify flow.")
 
 
 @tool(parse_docstring=True)
 def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: str = "", autoids: str | list[str] = "") -> str:
-    """把**多个 case 合并成一个 xlsx**(每脑图一个 excel 的打包工具)。
+    """Merge **multiple cases into one xlsx** (the packaging tool for one excel per mindmap).
 
-    **首选用法(main-orchestrated):只传 ``autoids``。** 各 worker 已用 compile_emit 把 case
-    落到 workspace/outputs/<autoid>/case.xlsx,本工具自己从这些成品 xlsx **回读 steps** 合并——
-    你**不用、也不该**自己提供 steps/init(那些数据 worker 早写进 xlsx 了,你手里没有、凑也凑不全)。
-    传 autoid 列表即可。``cases_json`` 仅 V6 引擎 closing 节点内部用(gate-free 归档通道),手工编排别走它。
+    **Preferred usage (main-orchestrated): pass only ``autoids``.** Each worker has already
+    landed its case at workspace/outputs/<autoid>/case.xlsx via compile_emit; this tool
+    **reads the steps back** from those finished xlsx files by itself and merges them — you
+    **need not and must not** supply steps/init yourself (the workers baked that data into the
+    xlsx long ago; you don't have it and cannot piece it together). Just pass the autoid list.
+    ``cases_json`` is only for internal use by the V6 engine closing node (gate-free archive
+    channel); do not take it in manual orchestration.
 
-    用于批量编译收尾:把同一脑图里已逐个生成好的 N 个 case 合并进一个 case.xlsx,
-    末尾自动垫一个哨兵 case(框架延迟执行契约)——这样前 N 个真 case 全部正常执行。
-    合并不是简单拼接:它保证 case 顺序、列对齐、哨兵垫底,结构 100% 合法。
+    For batch-compile wrap-up: merges the N cases already generated one by one from the same
+    mindmap into a single case.xlsx, automatically padding a sentinel case at the end
+    (framework deferred-execution contract) — so the first N real cases all execute normally.
+    Merging is not simple concatenation: it guarantees case order, column alignment, and the
+    sentinel at the bottom; the structure is 100% legal.
 
-    **每个 case 自带它自己的前置配置**(``init``):框架每跑一个 case 前会清设备配置,
-    所以每个 case 必须自包含。把这个 case 的完整基线配置放进它自己的 ``init``
-    (会被 emit 成该 case 的首个 APV_0 配置步骤),test 动作 + 断言放进 ``steps``。
-    不同 case 基线不同时(如各自不同的 pool/算法),各写各的 init——绝不能共用一份。
+    **Each case carries its own preconfig** (``init``): the framework clears device config
+    before running every case, so each case must be self-contained. Put this case's full
+    baseline config into its own ``init`` (emitted as the case's first APV_0 config step), and
+    the test actions + assertions into ``steps``. When cases have different baselines (e.g.
+    each with its own pool/algorithm), each writes its own init — never share one.
 
-    ``shared_init`` 只用于**所有 case 真正共享、且每 case 前都要重跑**的文件级前置
-    (C=1)。多数情况留空,基线走每个 case 自己的 ``init``。
+    ``shared_init`` is only for file-level preconfig (C=1) that **all cases truly share and
+    that must rerun before every case**. Usually leave it empty; baselines go into each case's
+    own ``init``.
 
-    零硬编码:本工具不产任何命令,init/steps 全部由你(查过手册/先例的子 agent)提供。
+    Zero hardcoding: this tool produces no commands; init/steps all come from you (the
+    sub-agent that has consulted manuals/precedents).
 
     Args:
-        autoids: **首选传这个**。autoid 列表(JSON 数组字符串如 ["203...","203..."],或逗号分隔)。
-            工具对每个 autoid 读 workspace/outputs/<autoid>/case.xlsx、用 _load_case_rows 回读
-            steps(init 作为首个 APV_0 步已含其中)合并。传了 autoids 就忽略 cases_json。
-        cases_json: (V6 引擎 closing 内部用)JSON 数组字符串,每项 case dict 含键:autoid、
-            steps(每步 {E,F,G,H?,I?,desc?},至少一个 check_point)、init(可空)、title(可选)。
-            **手工编排不要用它**——你多半凑不全 steps,改传 autoids 让工具自己回读。
-        shared_init: 所有 case 共享的文件级前置(C=1),换行分隔;通常留空。
-        out_name: 输出子目录名(workspace/outputs/<out_name>/case.xlsx);如脑图名 dongkl。
+        autoids: **Pass this first.** autoid list (JSON array string like ["203...","203..."],
+            or comma separated). For each autoid the tool reads
+            workspace/outputs/<autoid>/case.xlsx and merges the steps read back via
+            _load_case_rows (init is already included as the first APV_0 step). When autoids
+            is given, cases_json is ignored.
+        cases_json: (V6 engine closing internal use) JSON array string, each item a case dict
+            with keys autoid, steps (each step {E,F,G,H?,I?,desc?}, at least one check_point),
+            init (may be empty), title (optional). **Do not use it in manual orchestration** —
+            you most likely cannot assemble the full steps; pass autoids and let the tool read
+            them back itself.
+        shared_init: file-level preconfig (C=1) shared by all cases, newline separated; usually empty.
+        out_name: output subdir name (workspace/outputs/<out_name>/case.xlsx); e.g. the mindmap name dongkl.
 
     Returns:
-        产出路径 + round-trip 对账(case 数应=输入数+1哨兵)。编译到此结束；
-        上机验证由独立 ist-verify 流程触发。
+        Output path + round-trip reconciliation (case count should = input count + 1 sentinel).
+        Compilation ends here; on-device verification is triggered by the separate ist-verify flow.
 
     Note:
-        autoids 路径带 lint 凭证机械门:每个 autoid 需在当前 case.xlsx 上过 compile_emit 的
-        全部机械门(过门时自动落 .grade_credential.json,精确签名 xlsx_mtime)。缺凭证/过期
-        凭证 → 拒绝合并并列出 case 清单。cases_json 路径(V6 引擎 closing 归档)不走此门。
+        The autoids path carries the lint-credential mechanical gate: each autoid must have
+        passed all of compile_emit's mechanical gates on the current case.xlsx (passing the
+        gates auto-lands .grade_credential.json with the exact xlsx_mtime signature). Missing
+        or stale credential → the merge is refused with the case list. The cases_json path
+        (V6 engine closing archive) does not go through this gate.
     """
     # 首选:从 autoids 回读各成品 case.xlsx(不用自己提供 steps;
     # _load_case_rows 回读,init 作为首步已含回读结果)。
@@ -1100,7 +1282,8 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
             aid = str(aid).strip()
             xp = root / "workspace" / "outputs" / aid / "case.xlsx"
             if not xp.is_file():
-                return f"error: autoid {aid} 的 case.xlsx 不存在({xp});该 case 可能没编译成功,先补编/重派 worker"
+                return (f"error: case.xlsx for autoid {aid} does not exist ({xp}); the case may "
+                        "not have compiled successfully — compile it first / re-dispatch the worker")
             # lint 凭证机械门(A 层):每个 case 必须在**当前这份** case.xlsx 上过 emit 的全部
             # 机械门——compile_emit 过门时自动落盘 .grade_credential.json(source=lint、精确
             # 签名 xlsx_mtime)。凭证缺失=没经 gated emit;xlsx_mtime 不匹配=重编后没重新 emit。
@@ -1122,19 +1305,19 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
             try:
                 rows = _load_case_rows(str(xp))  # 含 init 首步 APV_0 + 全步骤(E/F/G/H/I/desc),遇哨兵停
             except Exception as e:  # noqa: BLE001
-                return f"error: 回读 {aid} 的 case.xlsx 失败: {e}"
+                return f"error: failed to read back case.xlsx for {aid}: {e}"
             if not rows:
-                return f"error: {aid} 回读 steps 为空(case.xlsx 数据区空?)"
+                return f"error: {aid} read back empty steps (case.xlsx data area empty?)"
             cases.append({"autoid": aid, "steps": rows})  # init 已在 steps 首行,不另传(传了会重复)
         if no_grade or stale_grade:
             parts = []
             if no_grade:
-                parts.append(f"缺 lint 凭证(没经 gated compile_emit): {', '.join(no_grade)}")
+                parts.append(f"missing lint credential (did not go through gated compile_emit): {', '.join(no_grade)}")
             if stale_grade:
-                parts.append(f"重编后未重新 emit(凭证对应的不是当前 case.xlsx): {', '.join(stale_grade)}")
-            return ("error: 合并被 lint 凭证门拒绝——以下 case 没有在当前 case.xlsx 上过 emit 的全部机械门:\n"
+                parts.append(f"re-compiled but not re-emitted (the credential does not match the current case.xlsx): {', '.join(stale_grade)}")
+            return ("error: merge rejected by the lint-credential gate — the following cases have not passed all of emit's mechanical gates on their current case.xlsx:\n"
                     + "\n".join(parts)
-                    + "\n对每个列出的 case 重新走 compile_emit(过全部机械门即自动落 lint 凭证)后再合并。")
+                    + "\nRun compile_emit again for each listed case (passing all mechanical gates auto-lands the lint credential), then merge.")
         # 成品卷 lint(最后防线):凭证全绿也可能是 lint 挂点上线前落的旧凭证,或卷面在
         # 凭证之后又被直改。合并是终卷产出的最后一道必经之路,对每卷再跑必崩/必假 lint——
         # 一个必崩 case 会让整份 pytest 39 秒崩掉、其余 33 个全不跑(2026-07-04 两轮实证)。
@@ -1146,17 +1329,18 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
             if not lr.ok:
                 lint_bad.append(f"{aid}: " + "; ".join(f"[{it.code}]" for it in lr.violations))
         if lint_bad:
-            return ("error: 合并被成品卷 lint 拒绝——以下 case 存在机械可判的必崩/必假形态"
-                    "(一个必崩 case 会崩掉整份 pytest,其余全不跑):\n  "
+            return ("error: merge rejected by finished-sheet lint — the following cases carry "
+                    "mechanically decidable must-crash/always-fail shapes (one must-crash case "
+                    "crashes the whole pytest file and none of the rest run):\n  "
                     + "\n  ".join(lint_bad)
-                    + "\n修正后重新 compile_emit 再合并(违例详情见对应 emit 返回)。")
+                    + "\nFix them, run compile_emit again, then merge (violation details are in the corresponding emit returns).")
     else:
         try:
             cases = json.loads(cases_json)
             if not isinstance(cases, list) or not cases:
-                return "error: 需传 autoids(首选,工具自己回读)或非空 cases_json"
+                return "error: pass autoids (preferred; the tool reads the sheets back itself) or a non-empty cases_json"
         except Exception as e:  # noqa: BLE001
-            return f"error: cases_json 解析失败: {e}"
+            return f"error: cases_json parse failed: {e}"
 
     try:
         from main.case_compiler.case_ir import FileIR, Row
@@ -1165,22 +1349,22 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         from main.case_compiler.distribution_assertion import expand_distribution_steps
         from main.case_compiler.membership_assertion import expand_membership_steps
     except Exception as e:  # noqa: BLE001
-        return f"error: 加载编译器模块失败: {e}"
+        return f"error: failed to load compiler modules: {e}"
 
     case_irs = []
     seen_autoids = set()
     for idx, c in enumerate(cases):
         if not isinstance(c, dict):
-            return f"error: cases[{idx}] 不是 dict"
+            return f"error: cases[{idx}] is not a dict"
         autoid = str(c.get("autoid", "")).strip()
         if not autoid:
-            return f"error: cases[{idx}] 缺 autoid"
+            return f"error: cases[{idx}] is missing autoid"
         if autoid in seen_autoids:
-            return f"error: autoid {autoid} 重复(autoid 是主键,不可重复;标题可重名)"
+            return f"error: autoid {autoid} is duplicated (autoid is the primary key and must be unique; titles may repeat)"
         seen_autoids.add(autoid)
         steps = c.get("steps")
         if not isinstance(steps, list) or not steps:
-            return f"error: cases[{idx}] (autoid={autoid}) steps 必须是非空列表"
+            return f"error: cases[{idx}] (autoid={autoid}) steps must be a non-empty list"
 
         # 丢弃 G 空的命令步(零信息量占位)。历史 merge 产物常带「初始化配置/G 空」占位行;
         # openpyxl 把空串单元格**落盘成 None**,再经回读-重写链条后框架 str(None)="None"
@@ -1189,18 +1373,18 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
                  and str(s.get("E", "")).strip() in ("APV_0", "test_env")
                  and not str(s.get("G") or "").strip())]
         if not steps:
-            return f"error: cases[{idx}] (autoid={autoid}) 过滤空命令步后 steps 为空"
+            return f"error: cases[{idx}] (autoid={autoid}) steps became empty after dropping empty command steps"
 
         # 分布区间断言展开（每 case 独立；merged 不带 provenance，只展开 steps）
         steps, _dist_plan, _dist_err = expand_distribution_steps(steps)
         if _dist_err:
-            return f"error: cases[{idx}] (autoid={autoid}) 分布区间断言声明无效：{_dist_err}"
+            return f"error: cases[{idx}] (autoid={autoid}) distribution-interval assertion declaration is invalid: {_dist_err}"
 
         # 命中归属锚点展开（同上，1:1，仅 cases_json 兜底路径会遇到未展开的声明；
         # autoids 首选路径回读的是已成品 xlsx，member 早已在单 case emit 时展开过）。
         steps, _member_err = expand_membership_steps(steps)
         if _member_err:
-            return f"error: cases[{idx}] (autoid={autoid}) 命中归属断言声明无效：{_member_err}"
+            return f"error: cases[{idx}] (autoid={autoid}) hit-membership assertion declaration is invalid: {_member_err}"
 
         # 每个 case 的自包含前置 → 该 case 的首个 APV_0 配置步骤(不是文件级 C=1)。
         # 框架每 case 前清配置,故基线必须在 case 内,且不同 case 各写各的。
@@ -1251,7 +1435,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
     try:
         stats = emit_xlsx(fir, out)
     except Exception as e:  # noqa: BLE001
-        return f"error: emit 失败: {e}"
+        return f"error: emit failed: {e}"
 
     # 回填重放(2026-07-05 生命周期洞修复):重合并从 per-case 卷重建,会静默丢掉
     # 此前 compile_runtime_fill 写进旧合并卷的值。fill 侧已把成功回填按内容键
@@ -1288,7 +1472,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
     return (f"=== compile_emit_merged ===\n"
             f"已合并 {len(case_irs)} 个真 case + 1 哨兵 → {out}\n"
             f"autoids: {autoids}\n"
-            f"round-trip 统计: {stats}"
+            f"round-trip stats: {stats}"
             f"{replay_note}\n"
-            f"(case_count 应={len(case_irs)}+1哨兵={len(case_irs)+1})\n"
-            f"编译到此结束；上机验证由独立 ist-verify 流程触发。")
+            f"(case_count expected={len(case_irs)}+1 sentinel={len(case_irs)+1})\n"
+            f"Compilation ends here; on-device verification is triggered by the separate ist-verify flow.")

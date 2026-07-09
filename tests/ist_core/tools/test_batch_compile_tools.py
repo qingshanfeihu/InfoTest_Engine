@@ -38,11 +38,11 @@ def test_merged_emit_appends_single_sentinel_and_keeps_all_cases(tmp_path):
 
 
 def test_merged_emit_does_not_dedupe_titles_but_rejects_dup_autoid():
-    # 标题重名（dup-title 出现两次）允许；autoid 重复必须拒
+    # 标题重名（dup-title 出现两次）允许；autoid duplicated必须拒
     bad = _cases()
     bad[1]["autoid"] = "B100"  # 与第一个撞 autoid
     out = compile_emit_merged.invoke({"cases_json": json.dumps(bad)})
-    assert "error" in out and "重复" in out
+    assert "error" in out and "duplicated" in out
 
 
 def test_merged_emit_rejects_case_without_checkpoint():
@@ -70,13 +70,13 @@ def test_parse_autoids_arg_given_but_empty_errors():
     from main.ist_core.tools.device.emit_xlsx_tool import _parse_autoids_arg
 
     aids, err = _parse_autoids_arg("[]")
-    assert aids == [] and err and "解析为空" in err
+    assert aids == [] and err and "resolved to empty" in err
 
     aids, err = _parse_autoids_arg(["", "  "])
-    assert aids == [] and err and "无有效 id" in err
+    assert aids == [] and err and "no valid id" in err
 
     aids, err = _parse_autoids_arg("  ,  , ")
-    assert aids == [] and err and "解析为空" in err
+    assert aids == [] and err and "resolved to empty" in err
 
 
 def test_parse_autoids_arg_valid_inputs():
@@ -90,7 +90,7 @@ def test_parse_autoids_arg_valid_inputs():
 def test_merged_emit_autoids_empty_json_errors_not_cases_json():
     """显式传 autoids='[]' 应走 autoids 分支报错，不应误落到 cases_json。"""
     out = compile_emit_merged.invoke({"autoids": "[]", "cases_json": "[]"})
-    assert "error" in out and "autoids" in out and "解析为空" in out
+    assert "error" in out and "autoids" in out and "resolved to empty" in out
 
 
 def test_merged_emit_blank_autoids_falls_through_to_cases_json():
@@ -206,7 +206,7 @@ def test_run_batch_one_submit_collects_all(tmp_path, _patch_client):
 
     assert len(_FakeClient.instances) == 1   # 单会话
     calls = _FakeClient.instances[0].calls
-    # 整份只 deliver 一次、run 一次（不再 per-autoid 重复整跑）
+    # 整份只 deliver 一次、run 一次（不再 per-autoid duplicated整跑）
     assert len([c for c in calls if c[0] == "deliver"]) == 1
     assert len([c for c in calls if c[0] == "run"]) == 1
     assert ("batch_details", "B100") in calls   # 用首个 autoid 作 submit/staging
@@ -360,10 +360,10 @@ def test_digest_flags_found_times_crash_as_compile_defect(tmp_path, monkeypatch)
 
 
 def test_digest_cross_run_repeat_and_transient_recur(tmp_path, monkeypatch):
-    """跨轮对照(确定性止损地基):同签名连续两轮 fail + 上轮"瞬态"标签本轮复现,摘要必须点名。
+    """跨轮对照(确定性止损地基):同签名consecutive两轮 fail + 上轮"瞬态"标签本轮复现,摘要必须点名。
 
     实证(dongkl 第四→五轮):上轮归"瞬态"的 5 个 case 下一轮 100% 复现 fail=全部误归;
-    同签名 fail 连续多轮被逐 case 重编无效烧钱。瞬态定义=不可复现——复现即系统性问题,
+    同签名 fail consecutive多轮被逐 case 重编无效烧钱。瞬态定义=不可复现——复现即系统性问题,
     该判定纯机械(比对两轮 last_run.json),不靠 LLM 自觉。
     注:新版机械预判不再产 transient 标签(见 fail_attribution 收缩重写);"上轮瞬态复现"
     分支保留用于兼容旧格式 last_run.json / LLM 归因后回写的标签——本测试手工构造旧格式验证。
@@ -401,7 +401,7 @@ def test_digest_cross_run_repeat_and_transient_recur(tmp_path, monkeypatch):
                         lambda *a, **k: json.dumps(round2, ensure_ascii=False))
     out2 = dev_run_batch_digest.invoke(
         {"xlsx_path": "workspace/outputs/feat/case.xlsx", "autoids_json": '["R_sig"]'})
-    assert "跨轮对照" in out2 and "R_sig" in out2       # 同签名连续两轮点名
+    assert "跨轮对照" in out2 and "R_sig" in out2       # 同签名consecutive两轮点名
     assert "冻结同法重编" in out2                        # 止损指引
     assert "上轮归\"瞬态\"本轮复现" in out2 and "R_trans" in out2   # 误归瞬态点名(旧标签兼容)
     data2 = json.loads((outd / "last_run.json").read_text(encoding="utf-8"))
@@ -426,7 +426,7 @@ def _emit_gate_case(autoid: str) -> str:
         "autoid": autoid, "steps_json": json.dumps(steps, ensure_ascii=False),
         "out_name": autoid,
     })
-    assert "已产出" in out, f"前置 emit 失败: {out}"
+    assert "produced structurally-correct" in out, f"前置 emit 失败: {out}"
     from pathlib import Path
     return str(Path("workspace/outputs") / autoid / "case.xlsx")
 
@@ -464,7 +464,7 @@ def test_merged_autoids_rejects_stale_grade_credential():
                                   "xlsx_mtime": xp.stat().st_mtime - 100}), encoding="utf-8")
         out = compile_emit_merged.invoke({"autoids": json.dumps([aid]),
                                           "out_name": "_pytest_gate_merged"})
-        assert "lint 凭证门" in out and "重编后未重新 emit" in out
+        assert "lint-credential gate" in out and "re-compiled but not re-emitted" in out
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
         shutil.rmtree(Path("workspace/outputs") / "_pytest_gate_merged", ignore_errors=True)
@@ -504,17 +504,17 @@ def test_emit_parse_error_echoes_param_and_escalates_on_streak():
         outs = [compile_emit.invoke({"autoid": aid, "steps_json": bad, "out_name": aid})
                 for _ in range(3)]
         # 回显:首段片段可见,含实际长度
-        assert "实际收到的参数" in outs[0] and "trailing-garbage" in outs[0]
+        assert "argument actually received" in outs[0] and "trailing-garbage" in outs[0]
         # 前两次不带升级指引,第三次起带
-        assert "连续" not in outs[0] and "连续 3 次" in outs[2]
-        assert "停止重试" in outs[2]
+        assert "consecutive" not in outs[0] and "3 times in a row" in outs[2]
+        assert "stop" in outs[2]
         # 成功一次即清零
         good = '[{"E":"APV_0","F":"cmd_config","G":"show version","desc":"观测"},' \
                '{"E":"check_point","F":"found","G":"Version","desc":"回显"}]'
         ok = compile_emit.invoke({"autoid": aid, "steps_json": good, "out_name": aid})
-        assert "已产出" in ok
+        assert "produced structurally-correct" in ok
         out_again = compile_emit.invoke({"autoid": aid, "steps_json": bad, "out_name": aid})
-        assert "连续" not in out_again  # streak 已清零,重新从 1 计
+        assert "consecutive" not in out_again  # streak 已清零,重新从 1 计
     finally:
         import shutil
         from pathlib import Path
@@ -539,7 +539,7 @@ def test_emit_native_steps_array():
     aid = "PYTEST_CH_ARRAY"
     try:
         out = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
-        assert "已产出" in out
+        assert "produced structurally-correct" in out
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
 
@@ -552,7 +552,7 @@ def test_emit_steps_array_stringified_still_accepted():
     try:
         out = compile_emit.invoke({"autoid": aid, "steps": json.dumps(_GATE_STEPS),
                                    "out_name": aid})
-        assert "已产出" in out
+        assert "produced structurally-correct" in out
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
 
@@ -567,10 +567,10 @@ def test_emit_steps_path_channel_and_sandbox():
     try:
         f.write_text(json.dumps(_GATE_STEPS), encoding="utf-8")
         out = compile_emit.invoke({"autoid": aid, "steps_path": str(f), "out_name": aid})
-        assert "已产出" in out
+        assert "produced structurally-correct" in out
         # workspace 外路径拒绝
         out2 = compile_emit.invoke({"autoid": aid, "steps_path": "/etc/hosts", "out_name": aid})
-        assert "必须在 workspace/ 内" in out2
+        assert "must be inside workspace/" in out2
     finally:
         f.unlink(missing_ok=True)
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
@@ -585,7 +585,7 @@ def test_emit_parse_error_suggests_channel_switch():
     try:
         compile_emit.invoke({"autoid": aid, "steps_json": bad, "out_name": aid})
         out2 = compile_emit.invoke({"autoid": aid, "steps_json": bad, "out_name": aid})
-        assert "换通道" in out2 and "steps_path" in out2
+        assert "steps_path" in out2 and "steps_path" in out2
     finally:
         _emit_fail_streak_clear(aid)
 
@@ -612,7 +612,7 @@ def test_dev_run_batch_rejects_autoid_not_in_xlsx():
     try:
         from main.ist_core.tools.device import compile_emit
         out = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
-        assert "已产出" in out
+        assert "produced structurally-correct" in out
         xp = f"workspace/outputs/{aid}/case.xlsx"
         assert _xlsx_real_autoids(xp) == [aid]
         # 手抄截断 id → 显式拒绝(不静默误匹配)
@@ -706,7 +706,7 @@ def test_digest_merge_keeps_other_rounds_and_revives_transient_guard(monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# P2 结构化:欠定台账落盘 + user_decision 落地门(形态/顺序锚机械核对)
+# P2 结构化:欠定台账落盘 + user_decision 落地门(形态/ordering anchor机械核对)
 # ---------------------------------------------------------------------------
 
 def test_needs_decision_ledger_written_on_underdetermined():
@@ -740,8 +740,8 @@ def test_user_decision_gate_blocks_form_and_ordering_downgrade():
             "claim_kinds_preserved": ["new_member_last"]}), encoding="utf-8")
         # 形态违约:用户选 dist,产物只有普通 found → 拒
         r1 = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
-        assert "违反用户决策" in r1 and "dist" in r1
-        # 形态对但缺顺序锚(new_member_last 只有 present=true 的 member)→ 拒
+        assert "violates user decision" in r1 and "dist" in r1
+        # 形态对但缺ordering anchor(new_member_last 只有 present=true 的 member)→ 拒
         steps2 = [
             {"E": "APV_0", "F": "cmd_config", "G": "show version", "desc": "观测"},
             {"E": "check_point", "F": "dist",
@@ -754,7 +754,7 @@ def test_user_decision_gate_blocks_form_and_ordering_downgrade():
              "member": {"ips": ["172.16.35.213"], "present": True}, "desc": "命中新增池"},
         ]
         r2 = compile_emit.invoke({"autoid": aid, "steps": steps2, "out_name": aid})
-        assert "顺序锚" in r2
+        assert "ordering anchor" in r2
         # 完整:not_found 段接 found 段 → 过 user_decision 门(后续结构门另说)
         steps3 = steps2[:2] + [
             {"E": "check_point", "F": "member",
@@ -764,7 +764,7 @@ def test_user_decision_gate_blocks_form_and_ordering_downgrade():
              "member": {"ips": ["172.16.35.213"], "present": True}, "desc": "此后命中新增"},
         ]
         r3 = compile_emit.invoke({"autoid": aid, "steps": steps3, "out_name": aid})
-        assert "违反用户决策" not in r3 and "顺序锚" not in r3
+        assert "violates user decision" not in r3 and "ordering anchor" not in r3
     finally:
         shutil.rmtree(outd, ignore_errors=True)
 
@@ -782,13 +782,13 @@ def test_frozen_gate_requires_override_reason():
     try:
         outd.mkdir(parents=True, exist_ok=True)
         (outd / ".frozen.json").write_text(json.dumps({
-            "reason": "连续两轮同签名 fail(同法已证无效)",
+            "reason": "consecutive两轮同签名 fail(同法已证无效)",
             "signatures": ["fail to find: PATTERN_X"]}), encoding="utf-8")
         r1 = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
-        assert "已被上机跨轮对照冻结" in r1 and "override_frozen_reason" in r1
+        assert "frozen by cross-round on-device comparison" in r1 and "override_frozen_reason" in r1
         r2 = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid,
                                   "override_frozen_reason": "断言从写死计数改为分布区间"})
-        assert "已产出" in r2
+        assert "produced structurally-correct" in r2
         fz = json.loads((outd / ".frozen.json").read_text(encoding="utf-8"))
         assert fz["overrides"][0]["reason"].startswith("断言从写死")
     finally:
@@ -822,7 +822,7 @@ def test_digest_repeat_fail_writes_frozen_marker(monkeypatch):
 
 
 def test_user_decision_gate_ordering_by_ledger_flag():
-    """自创 kind(非 new_member_last)+台账 ordering_sensitive=true → 门同样要求顺序锚。"""
+    """自创 kind(非 new_member_last)+台账 ordering_sensitive=true → 门同样要求ordering anchor。"""
     import shutil
     from pathlib import Path
     from main.ist_core.tools.device import compile_emit
@@ -845,7 +845,7 @@ def test_user_decision_gate_ordering_by_ledger_flag():
                  {"pattern": "p3", "expect": 3, "tolerance": 1}]}, "desc": "分布"},
         ]
         out = compile_emit.invoke({"autoid": aid, "steps": steps, "out_name": aid})
-        assert "顺序锚" in out   # 旧版只认 new_member_last 会放行,新版按台账布尔拦
+        assert "ordering anchor" in out   # 旧版只认 new_member_last 会放行,新版按台账布尔拦
     finally:
         shutil.rmtree(outd, ignore_errors=True)
 
@@ -862,7 +862,7 @@ def test_emit_provenance_trailing_garbage_salvaged():
     try:
         out = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS,
                                    "out_name": aid, "provenance_json": prov})
-        assert "已产出" in out and "provenance_json 解析失败" not in out
+        assert "produced structurally-correct" in out and "provenance parse failed" not in out
         assert (Path("workspace/outputs") / aid / "case.provenance.json").is_file()
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)

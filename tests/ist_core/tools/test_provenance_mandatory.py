@@ -46,7 +46,7 @@ def test_emit_rejects_missing_provenance(_mandatory):
 def test_emit_accepts_native_provenance_object(_mandatory):
     out = compile_emit.invoke({"autoid": AID, "steps": _STEPS, "init_commands": _INIT,
                                "out_name": AID, "provenance": _PROV})
-    assert "已产出" in out, out
+    assert "produced structurally-correct" in out, out
     pv = Path("workspace/outputs") / AID / "case.provenance.json"
     assert pv.is_file()
     j = json.loads(pv.read_text(encoding="utf-8"))
@@ -57,4 +57,4 @@ def test_emit_optional_env_restores_old_behavior(_mandatory, monkeypatch):
     monkeypatch.setenv("IST_PROVENANCE_OPTIONAL", "1")
     out = compile_emit.invoke({"autoid": AID, "steps": _STEPS,
                                "init_commands": _INIT, "out_name": AID})
-    assert "已产出" in out
+    assert "produced structurally-correct" in out

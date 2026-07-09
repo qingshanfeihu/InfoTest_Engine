@@ -3,7 +3,7 @@
 设计依据（见计划 linear-imagining-galaxy.md 决策二）：并行的物理边界落在
 **工具内部实现**，不靠 prompt 自律——
 
-- ``compile_fanout``：draft / grade 是纯 LLM + 只读检索/本地写，不碰设备可变态，
+- ``compile_fanout``：worker/attributor fork 是纯 LLM + 只读检索/本地写，不碰设备可变态，
   用 ThreadPoolExecutor **并发** fan-out 多个 fork。并发安全已由 P0-S1 验证
   （execute_fork_skill 全局部变量 + LangGraph graph 无状态 + ChatOpenAI/httpx
   并发安全），同一缓存 runnable 可安全被多线程并发 invoke。
@@ -146,7 +146,7 @@ def _coerce_json_array(val, name: str):
     return arr, None
 
 
-# fanout 单项 output 内联上限(字符)。fork 的机读尾块(状态:/产物:/判定:)在输出**末尾**,
+# fanout 单项 output 内联上限(字符)。fork 的机读尾块(STATUS:/ARTIFACT:/VERDICT:)在输出**末尾**,
 # 截尾保留 → orchestrator 机读协议不受影响;全文落盘供深挖。
 _FANOUT_INLINE_MAX = 2000
 
@@ -248,7 +248,7 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
         编写类派发（worker/draft,key=autoid）每项另带 "produced": bool——工具直接探
         outputs/<autoid>/case.xlsx 是否在盘上,「产没产出」以它为准,不用读散文猜。
         单项 output 超内联上限时全文自动落 workspace（该项多出 "output_path"），内联只保留
-        **末尾**片段——fork 的机读尾块(状态:/产物:/判定:)在末尾,机读路径不受影响；
+        **末尾**片段——fork 的机读尾块(STATUS:/ARTIFACT:/VERDICT:)在末尾,机读路径不受影响；
         深挖全文 fs_read 该 output_path。
     """
     # briefs 通道优先级(与 compile_emit steps 三通道同款):原生数组 > briefs_path
@@ -740,8 +740,13 @@ def _xlsx_apv_lines(xlsx_path) -> dict[str, list[str]]:
     return out
 
 
-def _append_verified_runs(xlsx_path, results: list, cur_round: int, run_ts: float) -> None:
-    """运行台账(V6 支柱2a):逐 case 追加 runtime/logs/verified_runs.jsonl。"""
+def _append_verified_runs(xlsx_path, results: list, cur_round: int, run_ts: float,
+                          build: str = "") -> None:
+    """运行台账(V6 支柱2a):逐 case 追加 runtime/logs/verified_runs.jsonl。
+
+    build 字段=本次 run 提交用的目标 build(K 锚三元组 (build, run_ts, lineage) 的
+    build 位,理论 §5.1)——写回链经 device_run_ref 透传进 footprint 条目的
+    evidence.device_run,后续 build 锚差派生 stale 判定靠它;空串=当次未解析出。"""
     apv = _xlsx_apv_lines(xlsx_path)
     ledger = _project_root() / "runtime" / "logs" / "verified_runs.jsonl"
     ledger.parent.mkdir(parents=True, exist_ok=True)
@@ -755,6 +760,7 @@ def _append_verified_runs(xlsx_path, results: list, cur_round: int, run_ts: floa
                 "autoid": aid, "verdict": str(rec.get("verdict", "")),
                 "run_ts": run_ts, "round": cur_round,
                 "xlsx": str(xlsx_path), "xlsx_mtime": xstat.st_mtime,
+                "build": (build or "").strip(),
                 "apv_cmds": apv.get(aid, []),
             }, ensure_ascii=False) + "\n")
 
@@ -845,6 +851,18 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
             if ar.layer == "G":
                 from main.ist_core.tools.device.fail_attribution import caret_rejected_commands
                 cmds = caret_rejected_commands(detail, limit=2)
+                # 语法层可判定性接线(理论 §3.2,044572 实证):^ 是设备语法反射的入口——
+                # 在 ^ 位置追问 ?,"设备此处实际接受什么"是 O(1) 读表事实,落盘给归因/重编。
+                # 三分支判定(用例语法错/文档错/特性缺失)由 attributor 拿这份事实做,不再猜。
+                if cmds:
+                    try:
+                        from main.ist_core.tools.device.run_case import dev_help
+                        rec["_device_help"] = str(dev_help.func(cmds[0]))[:2000]
+                        from main.ist_core.memory.footprint.signals import emit_signal
+                        emit_signal("syntax_help_attached", aid,
+                                    source="dev_run_batch_digest", rejected_cmd=cmds[0])
+                    except Exception:  # noqa: BLE001 — 追问失败不阻断 digest
+                        pass
                 note = ("⚠配置被拒(^): " + " ; ".join(c[:60] for c in cmds)) if cmds else tail
                 rows.append((aid, "fail", "G(^)", "→G", note))
             else:
@@ -916,6 +934,13 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
                             "ts": _t0.time(),
                             **({"overrides": _prev_ov} if _prev_ov else {}),
                         }, ensure_ascii=False, indent=2), encoding="utf-8")
+                        try:
+                            from main.ist_core.memory.footprint.signals import emit_signal
+                            emit_signal("frozen", str(rec.get("autoid")),
+                                        source="dev_run_batch_digest",
+                                        signature=str(rec.get("_fail_sig") or "")[:120])
+                        except Exception:  # noqa: BLE001
+                            pass
                     except Exception:  # noqa: BLE001
                         logger.debug("frozen 标记落盘失败", exc_info=True)
         # 按 autoid merge 写盘(不整文件覆盖):分批跑同一卷时第二批曾覆盖丢第一批
@@ -958,7 +983,13 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
         # runtime/logs/verified_runs.jsonl——footprint 写回的 device_verified 第二权威源。
         # runtime/ 在 agent 文件沙箱黑名单,工具进程写、agent 伪造不了;追加失败不阻断 run。
         try:
-            _append_verified_runs(xlsx_path, results, cur_round, now_ts)
+            # build 锚:digest 入参可能为空,按 dev_run_batch 同款 cfg 兜底解析生效值
+            try:
+                from main.case_compiler.config import get_config as _gc
+                _eff_build = (build or _gc().build or "").strip()
+            except Exception:  # noqa: BLE001
+                _eff_build = (build or "").strip()
+            _append_verified_runs(xlsx_path, results, cur_round, now_ts, build=_eff_build)
         except Exception:  # noqa: BLE001
             logger.debug("verified_runs 台账追加失败(忽略)", exc_info=True)
         try:

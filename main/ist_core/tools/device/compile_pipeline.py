@@ -32,7 +32,7 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-def _grade_extract_facts(xp: Path, prov: Path) -> dict:
+def _grade_extract_facts(xp: Path, prov: Path, intent_text: str = "") -> dict:
     """确定性预跑 tools/device/grade_extract_script.py 的 extract(xp, prov)，产出机械信号。
 
     脚本是独立的按文件路径加载脚本（非包内可直接 import 的模块），用 importlib 加载。
@@ -50,7 +50,7 @@ def _grade_extract_facts(xp: Path, prov: Path) -> dict:
             return {}
         mod = _ilu.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        facts = mod.extract(str(xp), str(prov))
+        facts = mod.extract(str(xp), str(prov), intent_text=intent_text)
         return facts if isinstance(facts, dict) else {}
     except Exception:  # noqa: BLE001
         logger.debug("grade_extract 加载/执行失败: xp=%s", xp, exc_info=True)

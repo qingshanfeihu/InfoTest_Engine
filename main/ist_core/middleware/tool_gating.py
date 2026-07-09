@@ -17,7 +17,7 @@
 compact 后若激活证据被摘要抹掉:summarization 保留近段消息(近期 tool_call 大
 概率幸存);全被抹掉时组隐藏,skills-first 驱动重新 invoke_skill → 下一轮恢复。
 
-默认关(项目约定:新参数默认关,行为翻转先过 eval)。``IST_TOOL_GATING_ENABLED=1``
+默认开(dongkl 对照轮实测后翻默认:欠定问询/修复轮/交付确认零 gating 异常)。``IST_TOOL_GATING_ENABLED=0`` 关;历史上按「新参数默认关」约定起步,``=1``
 开启;34-case 对照轮验证不劣化后再翻默认。
 """
 
@@ -54,10 +54,10 @@ _SKILL_GROUPS: dict[str, set[str]] = {
     "config-automation": {"device"},
     "config-answer": {"device"},
     "config-answer-draft": {"device"},
-    "config-answer-verify": {"device"},
+    "config-answer-verifier": {"device"},
     # 纯分析/评审:基础组足够
     "test-list-review": set(),
-    "review-verification": set(),
+    "review-verifier": set(),
     "escalate-when-stuck": set(),
     # 旧下划线名(B1 连字符化前的历史对话/续聊线程里仍会出现,与新名同义)
     "ist_compile_engine": {"compile", "device"},

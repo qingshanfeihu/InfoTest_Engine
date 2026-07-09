@@ -36,7 +36,7 @@ def _clean():
 def test_autoassemble_from_refs(monkeypatch):
     monkeypatch.delenv("IST_PROVENANCE_OPTIONAL", raising=False)
     out = compile_emit.func(_A, blocks=_BLOCKS)
-    assert "已产出" in out, out[:300]
+    assert "produced structurally-correct" in out, out[:300]
     prov = json.loads((_ROOT / "workspace" / "outputs" / _A / "case.provenance.json")
                       .read_text(encoding="utf-8"))
     steps = prov["steps"]
@@ -54,7 +54,7 @@ def test_explicit_provenance_wins(monkeypatch):
         {"layer": "V", "source": {"kind": "intent", "ref": ""}},
         {"layer": "E", "source": {"kind": "emit_auto", "ref": ""}}]}
     out = compile_emit.func(_A, blocks=_BLOCKS, provenance=explicit)
-    assert "已产出" in out, out[:300]
+    assert "produced structurally-correct" in out, out[:300]
     prov = json.loads((_ROOT / "workspace" / "outputs" / _A / "case.provenance.json")
                       .read_text(encoding="utf-8"))
     assert prov["steps"][0]["source"]["kind"] == "manual"   # 显式优先,非 footprint

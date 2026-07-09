@@ -144,13 +144,14 @@ class StructuralResult:
         self.violations.append(StructuralViolation(code, detail, step_index))
 
     def render(self, autoid: str) -> str:
-        lines = [f"case {autoid} 违反结构约束（correct-by-construction 门，与 grade 独立）："]
+        lines = [f"case {autoid} violates structural constraints (correct-by-construction gate, independent of grade):"]
         for v in self.violations:
             loc = f"step[{v.step_index}] " if v.step_index >= 0 else ""
             lines.append(f"  - [{v.code}] {loc}{v.detail}")
         lines.append(
-            "\n这些是与意图无关的**结构**错误（命令合法性 / 断言是否悬空），"
-            "确定性可判、必须改对——不是骨架选择问题。修正后重新 emit。"
+            "\nThese are intent-independent **structural** errors (command legality / whether an "
+            "assertion is dangling) — deterministically decidable and they must be fixed; they are "
+            "not skeleton-choice issues. Fix them and emit again."
         )
         return "\n".join(lines)
 
@@ -193,6 +194,16 @@ def _load_allowlist_prefixes() -> tuple[set[str], set[str]]:
         from main.ist_core.memory.footprint import get_footprint_index
         idx = get_footprint_index()
         for fid in idx.list_nodes():
+            # 纯 uncertain 节点(仅 fail 轮观察新建:无已验证命令/规则,behaviors 全
+            # uncertain)不进 allowlist——本 allowlist 的语义承诺是"已验证命令头",
+            # fail 轮观察不该扩它(自愈环入库端上线后的完备性,2026-07-08 评审项)。
+            data = idx._nodes.get(fid) or {}
+            behaviors = data.get("behaviors", [])
+            if (not data.get("cli", {}).get("commands")
+                    and not data.get("decision_rules")
+                    and behaviors
+                    and all(b.get("validity") == "uncertain" for b in behaviors)):
+                continue
             full.add(fid)
             roots.add(fid.split(".")[0])
     except Exception as exc:  # noqa: BLE001
@@ -220,8 +231,9 @@ def _check_command_allowlist(steps: list, init: str, result: StructuralResult) -
         if module not in roots:
             result.add(
                 "cmd_not_in_allowlist",
-                f"命令 {cmd!r} 的模块 {module!r} 不在手册命令树任何模块中"
-                f"（已知模块: {', '.join(sorted(roots))}）——疑似越界/幻觉命令。",
+                f"command {cmd!r}: its module {module!r} is not in any module of the manual "
+                f"command tree (known modules: {', '.join(sorted(roots))}) — likely an "
+                f"out-of-scope/hallucinated command.",
                 idx,
             )
 
@@ -305,11 +317,15 @@ def _check_dangling_assertions(steps: list, result: StructuralResult) -> None:
             if not i_col and not result_is_observe:
                 result.add(
                     "dangling_assertion",
-                    "该断言取的 result 无有效观测回显 → 框架 result=None、found(None) 抛 TypeError "
-                    "**崩溃整份文件**(该 case 之后全不跑)。成因:断言紧前最近的「不带 H 步」是配置步"
-                    "(cmds_config 返回 None)、或前面的观测步都带了 H(save_as 不更新 result)。"
-                    "修法:断言**紧前**放一个**不带 H** 的观测步(dig/show)让其回显成为 result;"
-                    "捕获比较用三步式 dig(H=v1) → dig(无H) → check_point(H=v1)。",
+                    "this assertion reads the framework result but no valid observation echo is "
+                    "held there → framework result=None, found(None) raises TypeError and "
+                    "**crashes the entire file** (no case after this one runs). Cause: the "
+                    "nearest preceding step without H is a config step (cmds_config returns "
+                    "None), or every earlier observation step carries H (save_as does not update "
+                    "result). Fix: put an observation step **without H** (dig/show) "
+                    "**immediately before** the assertion so its echo becomes result; for "
+                    "capture-compare use the three-step form dig(H=v1) → dig(no H) → "
+                    "check_point(H=v1).",
                     i,
                 )
             # check_point 不改变 result（它消费 result，不产出新回显）
@@ -353,11 +369,15 @@ def _check_dead_capture(steps: list, result: StructuralResult) -> None:
         if reg not in referenced:
             result.add(
                 "dead_capture",
-                f"寄存器 '{reg}' 被 save_as 捕获但**无任何 check_point 引用**（既不作 expect 的 H、"
-                f"也不作被查文本的 I）= 写了永不读的寄存器、废动作/残缺断言。典型：dig 带 H 捕获进 "
-                f"'{reg}' 却用 found 读 result(紧前常是 show 配置回显→断错缓冲)，没 abs_found(H='{reg}') "
-                f"消费它 → 既没验到该 dig 行为、断言又读错缓冲。修法：用 check_point abs_found 引用 "
-                f"'{reg}'（三步式 dig(H={reg})→dig(无H)→check_point(H={reg})），或删掉这个没用的捕获。",
+                f"register '{reg}' is captured via save_as but is **never referenced by any "
+                f"check_point** (neither as the H for expect nor as the I for the text under "
+                f"test) = a register written but never read — a dead action / incomplete "
+                f"assertion. Typical: dig captures into '{reg}' with H yet the check_point reads "
+                f"result via found (the immediately preceding step is often a show config echo → "
+                f"asserting against the wrong buffer), with no abs_found(H='{reg}') consuming it "
+                f"→ the dig behavior is never verified and the assertion reads the wrong buffer. "
+                f"Fix: reference '{reg}' with check_point abs_found (three-step form "
+                f"dig(H={reg})→dig(no H)→check_point(H={reg})), or delete the useless capture.",
                 idx,
             )
 
@@ -399,8 +419,10 @@ def _check_no_found_times(steps: list, result: StructuralResult) -> None:
         if str(s.get("E", "")).strip() == "check_point" and str(s.get("F", "")).strip() == "found_times":
             result.add(
                 "found_times_unsupported",
-                "found_times 框架 xlsx 流不支持(分派只传 2 参、缺 times)→ TypeError 崩整份文件。"
-                "改用 found(出现即可)/abs_found(字面匹配);'恰好 N 次'语义本框架表达不了。",
+                "found_times is not supported by the framework xlsx flow (dispatch passes only "
+                "2 args, times is missing) → TypeError crashes the entire file. Use found "
+                "(presence is enough) / abs_found (literal match) instead; the 'exactly N "
+                "times' semantics cannot be expressed in this framework.",
                 i,
             )
 
@@ -446,11 +468,14 @@ def _check_no_manual_ip_cleanup(steps: list, result: StructuralResult) -> None:
             # ssh_server.cmd 记账、soft_close 时 delete_ip/delete_route 恢复。
             result.add(
                 "manual_ip_cleanup",
-                "变更测试环境主机 IP/路由(ip addr / ip route 的 add/del)——框架对 add "
-                "自动记账(不去重)并在下一 case 开头 delete 恢复:自行 del 或跨 case 重复 "
-                "add 都会让恢复失败,**崩整份文件或以 RTNETLINK 残留污染后续 case 的回显"
-                "(成批假 fail)**。删掉这个步骤——主机网络状态由框架管理;要多源就用"
-                "拓扑既有的多台触发机,要新路径先查拓扑既有可达性。",
+                "this step changes test-env host IPs/routes (add/del via ip addr / ip route) — "
+                "the framework auto-books every add (without dedup) and restores by delete at "
+                "the start of the next case: deleting on your own, or repeating the same add "
+                "across cases, makes that restore fail, **crashing the entire file or polluting "
+                "later cases' echo with RTNETLINK residue (batches of fake fails)**. Delete "
+                "this step — host network state is managed by the framework; for multiple "
+                "sources use the topology's existing trigger hosts, and for a new path check "
+                "the topology's existing reachability first.",
                 i,
             )
 
@@ -474,9 +499,11 @@ def _check_dispatch_targets(steps: list, result: StructuralResult) -> None:
         if _es and e not in _es:
             result.add(
                 "unknown_dispatch_target",
-                f"E={e!r} 不在框架 devices 表(合法: {', '.join(sorted(_es))})——"
-                "框架对未知 E **静默跳过整步**(不执行、无日志异常),后续断言拿错缓冲跑。"
-                "对照 EXCEL_FUNCTIONS.md 的 E 表改对。",
+                f"E={e!r} is not in the framework devices table (valid: "
+                f"{', '.join(sorted(_es))}) — for an unknown E the framework **silently skips "
+                "the whole step** (not executed, no log, no exception), and later assertions "
+                "run against the wrong buffer. Fix it against the E table in "
+                "EXCEL_FUNCTIONS.md.",
                 i,
             )
             continue
@@ -487,9 +514,10 @@ def _check_dispatch_targets(steps: list, result: StructuralResult) -> None:
         if f_norm not in allowed:
             result.add(
                 "unknown_dispatch_method",
-                f"F={f!r} 不是 E={e} 对象的合法方法(合法: {', '.join(sorted(allowed))})——"
-                "框架 getattr 无默认值,方法名拼错 **AttributeError 崩整份文件**。"
-                "对照 EXCEL_FUNCTIONS.md 该 E 的 F 说明改对。",
+                f"F={f!r} is not a valid method of the E={e} object (valid: "
+                f"{', '.join(sorted(allowed))}) — the framework getattr has no default, so a "
+                "misspelled method name raises **AttributeError and crashes the entire file**. "
+                "Fix it against the F description for this E in EXCEL_FUNCTIONS.md.",
                 i,
             )
 
@@ -520,24 +548,31 @@ def _check_command_payload_sanity(steps: list, result: StructuralResult) -> None
         if g_raw is None or g.strip().lower() == "none":
             result.add(
                 "empty_command_payload",
-                "命令步 G 列为 None/字面\"None\"——框架 str 化后原样发送,设备收到 \"None\" 必被"
-                " ^ 拒。补上真实命令或删掉该步(纯空串占位步无害,不在此列)。",
+                "command step column G is None/literal \"None\" — the framework str()-ifies it "
+                "and sends it as-is; the device receives \"None\" and always rejects it with "
+                "^. Fill in a real command or delete the step (a pure empty-string placeholder "
+                "step is harmless and not covered here).",
                 i,
             )
         elif str(s.get("F", "")).strip() == "cmd_config" and ("\n" in g.strip() or "\r" in g.strip()):
             result.add(
                 "cmd_config_multiline",
-                "cmd_config 的 G 含换行——框架对 cmd_config 先 replace 删光换行"
-                "(test_xlsx.py:307 single_line_parameter),多条命令**无分隔直接粘连**成"
-                "一条发送,设备必 ^ 拒。多条命令改用 cmds_config(逐行发送)。",
+                "cmd_config's G contains newlines — the framework first replace()-strips all "
+                "newlines for cmd_config (test_xlsx.py:307 single_line_parameter), so multiple "
+                "commands get **concatenated with no separator** and sent as one line; the "
+                "device always rejects it with ^. Use cmds_config for multiple commands (sent "
+                "line by line).",
                 i,
             )
         elif "\\n" in g:
             result.add(
                 "literal_backslash_n",
-                "命令 G 列含**字面** \\\\n(反斜杠+n 两个字符,不是换行符)——多条命令会被拼成"
-                "一行发送,设备在第二条命令处必 ^ 拒。多命令用**真实换行**分隔(JSON 里写 \\n "
-                "转义会由解析还原为换行;若你在字符串里写了 \\\\\\\\n 就成了字面反斜杠,改掉)。",
+                "command column G contains a **literal** \\\\n (backslash + n, two characters, "
+                "not a newline) — multiple commands get joined into one line and sent; the "
+                "device always rejects at the second command with ^. Separate multiple commands "
+                "with **real newlines** (the \\n escape written in JSON is restored to a "
+                "newline by parsing; if you wrote \\\\\\\\n in the string it became a literal "
+                "backslash — fix it).",
                 i,
             )
 
@@ -656,22 +691,28 @@ def _check_line_anchor_assertions(steps: list, result: StructuralResult) -> None
                                             or g.endswith("\\Z")):
             result.add(
                 "line_anchor_never_matches",
-                f"断言 {f} 的模式以结尾锚收尾——无 MULTILINE 下 $/\\Z 只匹配字符串末尾,"
-                "而窗口末尾永远是设备提示符(read_until(prompt)),数据行的结尾锚永不匹配:"
-                + ("该断言**恒真**(永远找不到=永远通过),什么都没验证。"
-                   if f == "not_found" else "该断言**恒 fail**。")
-                + "去掉结尾锚,或用 \\n 界定数据行边界。",
+                f"assertion {f}'s pattern ends with an end anchor — without MULTILINE, $/\\Z "
+                "only matches the end of the string, and the window always ends with the "
+                "device prompt (read_until(prompt)), so an end anchor on a data line never "
+                "matches: "
+                + ("this assertion is **always-true** (never found = always passes) and "
+                   "verifies nothing."
+                   if f == "not_found" else "this assertion is **always-fail**.")
+                + " Remove the end anchor, or use \\n to delimit the data-line boundary.",
                 i,
             )
             continue
         if f in ("found", "not_found") and (g.startswith("^") or g.startswith("\\A")):
             result.add(
                 "line_anchor_never_matches",
-                f"断言 {f} 的模式以 {g[:2]!r} 开头——框架 found/not_found 是 DOTALL"
-                "、**无 MULTILINE**,行首锚只匹配字符串开头(开头是命令回显行),"
-                + ("该断言**恒真**(永远找不到=永远通过),什么都没验证。"
-                   if f == "not_found" else "该断言**恒 fail**。")
-                + "要匹配数据行,用 \\n 前缀锚定换行后,或去掉锚(全文搜索)。",
+                f"assertion {f}'s pattern starts with {g[:2]!r} — framework found/not_found is "
+                "DOTALL with **no MULTILINE**, so a line-start anchor only matches the "
+                "beginning of the string (which is the command echo line): "
+                + ("this assertion is **always-true** (never found = always passes) and "
+                   "verifies nothing."
+                   if f == "not_found" else "this assertion is **always-fail**.")
+                + " To match a data line, anchor after a newline with a \\n prefix, or drop "
+                "the anchor (full-text search).",
                 i,
             )
 
@@ -723,12 +764,16 @@ def _check_assertion_matches_command_echo(steps: list, result: StructuralResult)
             if hit:
                 result.add(
                     "assertion_matches_command_echo",
-                    f"断言 {f} 的模式在其被测窗口的**命令原文**上就能匹配({src[:60]!r}…)——"
-                    "窗口开头永远是命令回显,该断言"
-                    + ("**恒 fail**(想验「输出无 X」但 X 在命令里)。"
+                    f"assertion {f}'s pattern already matches the **command text itself** of "
+                    f"the step sourcing its window ({src[:60]!r}…) — the window always starts "
+                    "with the command echo, so this assertion is "
+                    + ("**always-fail** (it tries to verify \"output contains no X\" but X is "
+                       "in the command)."
                        if f == "not_found" else
-                       "**恒真假 PASS**(不论设备输出什么都通过,什么都没验证)。")
-                    + "改成匹配数据行的形态,与命令原文区分开。",
+                       "**always-true fake PASS** (it passes no matter what the device "
+                       "outputs, verifying nothing).")
+                    + " Rewrite it to match a data line, distinguishable from the command "
+                    "text.",
                     i,
                 )
             continue
@@ -752,9 +797,10 @@ def _check_has_assertion(steps: list, result: StructuralResult) -> None:
     if steps:
         result.add(
             "no_assertion_in_case",
-            "该 case 没有任何 check_point 步——框架结算对 success==0 判 FAIL"
-            "(check_point.py:126),纯配置/纯观测卷上机恒 fail。补至少一条断言;"
-            "只想执行不验证的步不构成测试用例。",
+            "this case has no check_point step at all — framework settlement judges "
+            "success==0 as FAIL (check_point.py:126), so a config-only/observation-only sheet "
+            "is always-fail on the device. Add at least one assertion; steps that only execute "
+            "without verifying do not constitute a test case.",
             0,
         )
 
@@ -776,9 +822,11 @@ def _check_empty_assertion_pattern(steps: list, result: StructuralResult) -> Non
             continue
         result.add(
             "empty_assertion_pattern",
-            "check_point 的 G/H/I 全空——没有模式、没有寄存器引用,框架无物可比"
-            "(会回退拿观测命令文本乱搜,044605 实证白烧一轮上机)。给 G 写模式,或"
-            "引用已捕获的 H 寄存器;运行时才定的值写 <RUNTIME> 占位等回填,别留空。",
+            "check_point has G/H/I all empty — no pattern, no register reference, the "
+            "framework has nothing to compare (it falls back to searching with the observation "
+            "command text; 044605 evidence: one on-device round wasted). Write a pattern in G, "
+            "or reference an already-captured H register; for values only known at runtime "
+            "write the <RUNTIME> placeholder for later backfill — do not leave it empty.",
             i,
         )
 
@@ -799,8 +847,9 @@ def _check_assertion_regex_compiles(steps: list, result: StructuralResult) -> No
         except re.error as exc:
             result.add(
                 "assertion_regex_invalid",
-                f"断言正则无法编译({exc}): {g[:80]!r} —— 框架 re.compile 处抛异常,"
-                "整份文件崩溃。修正正则语法(常见:未闭合的字符类 [^ 应写 [^\\n])。",
+                f"assertion regex fails to compile ({exc}): {g[:80]!r} — the framework raises "
+                "at re.compile and the entire file crashes. Fix the regex syntax (common: an "
+                "unclosed character class, [^ should be [^\\n]).",
                 i,
             )
 
@@ -818,9 +867,10 @@ def _check_short_mode_assertions(steps: list, result: StructuralResult) -> None:
             if last_obs_short and _SHORT_INCOMPATIBLE_RE.search(g):
                 result.add(
                     "short_mode_status_assertion",
-                    "断言要匹配 dig 的 status/HEADER/SECTION 文本,但它消费的观测步用了 "
-                    "+short(输出只有记录值,无这些段)——恒 fail。去掉该 dig 的 +short,"
-                    "或改断言为记录值形态。",
+                    "the assertion matches dig status/HEADER/SECTION text, but the observation "
+                    "step it consumes used +short (output has only record values, none of "
+                    "those sections) — always-fail. Remove +short from that dig, or rewrite "
+                    "the assertion in record-value form.",
                     i,
                 )
             continue
@@ -849,8 +899,9 @@ def _check_capture_refs_defined(steps: list, result: StructuralResult) -> None:
                 if ref and ref not in defined:
                     result.add(
                         "undefined_capture_ref",
-                        f"断言引用寄存器 {ref!r},但之前没有任何步骤用 H={ref} 捕获过——"
-                        "框架取到 None,断言失真。补捕获步或改引用名。",
+                        f"the assertion references register {ref!r}, but no earlier step "
+                        f"captured it with H={ref} — the framework reads None and the "
+                        "assertion is distorted. Add a capture step or fix the reference name.",
                         i,
                     )
         else:
@@ -860,9 +911,10 @@ def _check_capture_refs_defined(steps: list, result: StructuralResult) -> None:
                 if base not in defined and base not in _valid_es():
                     result.add(
                         "undefined_capture_ref",
-                        f"步骤 I={i_col!r} 引用的变量没有被之前任何步骤用 H 捕获过——"
-                        "框架对非断言步的未定义 I **raise NameError,崩整份文件**。"
-                        "先用 H 捕获,或改引用名。",
+                        f"step I={i_col!r} references a variable that no earlier step captured "
+                        "with H — for an undefined I on a non-assertion step the framework "
+                        "**raises NameError and crashes the entire file**. Capture it with H "
+                        "first, or fix the reference name.",
                         i,
                     )
                 g = str(s.get("G", "") or "")
@@ -874,40 +926,46 @@ def _check_capture_refs_defined(steps: list, result: StructuralResult) -> None:
                     _fields = [fx for _, fx, _, _ in Formatter().parse(g) if fx is not None]
                     _bad_named = [fx for fx in _fields if fx not in ("", "0")]
                     if _bad_named:
-                        _fmt_err = (f"G 含命名/多位置占位 {{{_bad_named[0]}}} ——框架只传一个"
-                                    "值,format 抛 KeyError/IndexError")
+                        _fmt_err = (f"G contains a named/multi-position placeholder "
+                                    f"{{{_bad_named[0]}}} — the framework passes only one "
+                                    "value, format raises KeyError/IndexError")
                     elif len(set(_fields)) > 1:
                         # {} 与 {0} 混用 → ValueError(cannot switch numbering)
-                        _fmt_err = "G 混用自动 {} 与手动 {0} 占位——format 抛 ValueError"
+                        _fmt_err = "G mixes automatic {} and manual {0} placeholders — format raises ValueError"
                     elif _fields.count("") > 1:
                         # 纯 {0} 重复引用合法({0} {0}.format(单值) 不抛);纯 {} 多个才 IndexError
-                        _fmt_err = f"G 含 {len(_fields)} 个自动占位符——框架只传一个值,format 抛 IndexError"
+                        _fmt_err = (f"G contains {len(_fields)} automatic placeholders — the "
+                                    "framework passes only one value, format raises IndexError")
                 except ValueError:
-                    _fmt_err = ("G 含未配对的 {{ 或 }}(JSON 载荷等字面大括号)——I 注入时框架"
-                                " format 抛 ValueError;字面大括号写成 {{{{ }}}}")
+                    _fmt_err = ("G contains an unpaired {{ or }} (literal braces, e.g. a JSON "
+                                "payload) — on I injection the framework format raises "
+                                "ValueError; write literal braces as {{{{ }}}}")
                 if _fmt_err:
                     result.add(
                         "injection_format_crash",
-                        f"步骤带 I={i_col!r} 时 G 经框架 str.format 注入:{_fmt_err},"
-                        "**崩整份文件**。",
+                        f"with I={i_col!r} this step's G goes through framework str.format "
+                        f"injection: {_fmt_err}, **crashing the entire file**.",
                         i,
                     )
                 elif "{}" not in g:
                     result.add(
                         "injection_without_placeholder",
-                        f"步骤带 I={i_col!r} 但 G 里没有 {{}} 占位符——框架把变量 format 进"
-                        " G 的 {},没有占位注入就静默不发生,这一步跑的还是原文。"
-                        "在 G 里要用变量值的位置写 {}。",
+                        f"the step carries I={i_col!r} but G has no {{}} placeholder — the "
+                        "framework formats the variable into G's {}; with no placeholder the "
+                        "injection silently does not happen and the step still runs the "
+                        "original text. Write {} in G where the variable value should go.",
                         i,
                     )
             if h:
                 if h in _framework_reserved_names():
                     result.add(
                         "register_shadows_framework_name",
-                        f"H={h!r} 与框架执行器的名字冲突(test_xlsx.py 执行帧的参数/局部变量"
-                        "或 devices 槽)——同名下后续 locals().get(H) 读回的是**框架对象而非"
-                        "你捕获的回显**(如 result/value/设备槽),断言/I 注入拿错值必错。"
-                        "换一个普通寄存器名(v1/ip1 这类)。",
+                        f"H={h!r} collides with a name in the framework executor's namespace "
+                        "(a parameter/local variable of the test_xlsx.py execution frame, or a "
+                        "devices slot) — under the same name, later locals().get(H) reads back "
+                        "the **framework object instead of your captured echo** (e.g. "
+                        "result/value/device slot), so assertions/I injection get the wrong "
+                        "value and must go wrong. Use an ordinary register name (like v1/ip1).",
                         i,
                     )
                 defined.add(h)
@@ -974,10 +1032,12 @@ def _check_parameter_splitting(steps: list, result: StructuralResult) -> None:
         if stray:
             result.add(
                 "comma_splits_parameters",
-                f"G 含引号外英文逗号,框架会把它切成 {len(segs)} 个参数——"
-                f"{stray[0]!r} 会错位传给主机方法的 prompt/timeout 形参,该步恒等满超时、"
-                "输出失真。逗号是命令一部分时给该段加引号,或改写命令避开逗号;"
-                "要传超时用 timeout=N 形态(框架具名参数)。",
+                f"G contains an unquoted comma, so the framework splits it into {len(segs)} "
+                f"positional parameters — {stray[0]!r} gets mispassed to the host method's "
+                "prompt/timeout parameter; the step always waits out the full timeout and the "
+                "output is distorted. If the comma is part of the command, quote that segment, "
+                "or rewrite the command to avoid commas; to pass a timeout use the timeout=N "
+                "form (framework named parameter).",
                 i,
             )
 
@@ -1003,9 +1063,11 @@ def _check_dns_label_limit(steps: list, result: StructuralResult) -> None:
             if too_long:
                 result.add(
                     "dns_label_over_63",
-                    f"域名 {dom[:60]}… 含超过 63 字符的标签(长 {len(too_long[0])})——"
-                    "违反 DNS 单标签上限,dig 侧 IDNA 直接拒绝、查询永远失败。"
-                    "长域名需求用多标签拼总长(每段≤63,如 www.<61字符>.<58字符>.com)。",
+                    f"domain {dom[:60]}… contains a label longer than 63 characters (length "
+                    f"{len(too_long[0])}) — this violates the DNS single-label limit; dig-side "
+                    "IDNA rejects it outright and the query can never be sent. For long-domain "
+                    "requirements, build the total length from multiple labels (each ≤63, e.g. "
+                    "www.<61-chars>.<58-chars>.com).",
                     i,
                 )
 
@@ -1024,13 +1086,15 @@ def lint_xlsx_case(xlsx_path) -> StructuralResult:
     try:
         autoid, steps = steps_from_xlsx(xlsx_path)
     except Exception as exc:  # noqa: BLE001
-        result.add("xlsx_unreadable", f"卷面无法读取: {exc}")
+        result.add("xlsx_unreadable", f"sheet is unreadable: {exc}")
         return result
     if autoid and not _AUTOID_RE.match(autoid):
         result.add(
             "autoid_malformed",
-            f"卷面 autoid {autoid!r} 不是 18 位数字——手抄截断 id 会静默生成垃圾目录并"
-            "混入终卷(实证曾致终卷 35 case)。以 last_run.json/manifest 的机读全名为准。",
+            f"sheet autoid {autoid!r} is not an 18-digit number — a hand-copied truncated id "
+            "silently creates a junk directory and sneaks into the final sheet (evidence: once "
+            "produced a 35-case final sheet). Use the machine-readable full id from "
+            "last_run.json/manifest.",
         )
     mand = check_crash_gates_mandatory(steps)
     if not mand.ok:
@@ -1066,6 +1130,7 @@ def _check_autoid_rows_runnable(xlsx_path, result: StructuralResult) -> None:
                 and not str(row[4].value or "").strip():
             result.add(
                 "autoid_row_not_runnable",
-                f"autoid 行({a})的 E 列为空——框架 ifrun 对此整 case **静默跳过**"
-                "(不执行、不计 fail、无日志)。autoid 必须与第一个步骤同行(E 列非空)。",
+                f"autoid row ({a}) has an empty column E — framework ifrun **silently skips** "
+                "the whole case for this (not executed, no fail counted, no log). The autoid "
+                "must share its row with the first step (column E non-empty).",
             )

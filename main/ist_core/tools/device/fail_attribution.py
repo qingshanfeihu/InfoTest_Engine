@@ -117,16 +117,16 @@ def attribute_fail(verdict_detail: str, *, failing_assertion_layer: str = "",
     """
     if has_device_syntax_caret(verdict_detail):
         cmds = caret_rejected_commands(verdict_detail, limit=1)
-        evid = f"被拒命令: {cmds[0]}" if cmds else "见 device_context 中 ^ 对齐行"
+        evid = f"rejected command: {cmds[0]}" if cmds else "see the ^-aligned line in device_context"
         return AttributionResult(
             "G",
-            f"设备语法拒绝(^)——{evid}。配置未被接受;同 case 后续解析/断言失败多为下游后果,先修此处",
+            f"Device syntax rejection (^) — {evid}. The config was not accepted; later resolution/assertion failures in the same case are mostly downstream consequences — fix this first.",
             reflow=True, target_layer="G")
     tl = failing_assertion_layer if failing_assertion_layer in ("G", "E", "V") else ""
     return AttributionResult(
         "undetermined",
-        "未预判——直接看 device_context 原文归因(设备会话/dig 输出/框架 traceback);"
-        "瞬态判定标准=换时间重跑即消失,连续两轮同签名 fail 不是瞬态",
+        "No pre-judgement — attribute from the raw device_context (device session / dig output / framework traceback). "
+        "Transient criterion: disappears on a later re-run; same-signature fails in two consecutive rounds are never transient.",
         reflow=True, target_layer=tl)
 
 

@@ -1,7 +1,7 @@
 """compile_user_decision 回归:锚从台账机械取,不经手抄(2026-07-05 工具化)。
 
 守:①ordering_sensitive claim 强制 member 形态+forbidden 带降级项;②显式 drop_ordering
-才放弃顺序锚;③min_requests 取台账最大;④改描述不落形态约束;⑤与 emit 出口门同语义。
+才放弃ordering anchor;③min_requests 取台账最大;④改描述不落形态约束;⑤与 emit 出口门同语义。
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def _ud():
 
 
 def test_ledger_facts_copied_not_judged():
-    # 工具只复制台账事实(顺序锚/最大 min_requests),不代判形态——form 显式传
+    # 工具只复制台账事实(ordering anchor/最大 min_requests),不代判形态——form 显式传
     _ledger([{"claim_kind": "new_member_last", "min_requests": 4, "ordering_sensitive": True},
              {"claim_kind": "weight_ratio", "min_requests": 46, "ordering_sensitive": False}])
     out = compile_user_decision.func(_A, "改过程", assertion_form="member")

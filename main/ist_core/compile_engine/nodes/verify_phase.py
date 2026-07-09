@@ -13,7 +13,7 @@ from main.ist_core.compile_engine.nodes import _shared as sh
 def _archive_round_config(aid: str, round_used: int) -> None:
     """重编覆盖前把本轮失败的 case.xlsx 归档到 outputs/<aid>/history/case.r{N}.xlsx。
 
-    每轮 worker 覆盖同一 case.xlsx,前几次配置会丢——升级末轮 worker 靠这些归档卷对比
+    每轮 worker 覆盖同一 case.xlsx,前几次配置会丢——重编轮(首败即升)worker 靠这些归档卷对比
     前几次到底怎么写错的(_build_brief 引用路径,worker fs_read 逐卷比对)。round_used=本轮
     已完成的写轮号(1-based:第 1 次失败存 r1)。best-effort,失败不阻断重编。
     """
@@ -132,6 +132,15 @@ def run_digest(state: dict) -> dict:
             if st != L.S_PASSED:
                 xp = sh.outputs_root() / aid / "case.xlsx"
                 led.lock_pass(aid, xp.stat().st_mtime if xp.is_file() else 0.0)
+                # PASS 即时写回(2026-07-08 selfheal1 实证):先例/footprint 立即可被
+                # 本批后续轮的兄弟 case 检索(570 R2 的正解形态当轮流动到 608 R3;
+                # 批末 writeback 时代正解在批内产生却互相不可见)。幂等+不阻断。
+                try:
+                    from main.ist_core.compile_engine.nodes.closing import writeback_one
+                    writeback_one(aid, str(last_run.relative_to(sh.project_root())), led)
+                except Exception:  # noqa: BLE001
+                    led.data["audit"]["notes"].append(
+                        {"autoid": aid, "event": "inline_writeback_fail"})
         elif st == L.S_PASSED:
             # LOCKED_PASS 在后续轮被判 fail:卷面没动(锁复核过)→ **运行时欠定**
             # (E6 双跑实证 778041 同卷两跑翻转)。标注独立分层:不回炉、不算编译失败,
@@ -196,7 +205,7 @@ def attribute(state: dict) -> dict:
                        "device_context": ctx[:20000],
                        # 逐轮归因结论/失败签名(2026-07-07,升级末轮 brief 全回显用):ledger 的
                        # attribution 只存最新会被覆盖,这里按轮留 attr 现值(机械/先例预判;fork
-                       # 归因以最新落 ledger),供 _build_brief 末轮遍历全历史喂 worker。纯附加。
+                       # 归因以最新落 ledger),供 _build_brief 重编轮遍历全历史喂 worker。纯附加。
                        "fix_direction": str(_a.get("fix_direction") or "")[:2000],
                        "layer": str(_a.get("layer") or ""),
                        "disposition": str(_a.get("disposition") or "")})
@@ -222,8 +231,30 @@ def attribute(state: dict) -> dict:
             # 声明(588691 round3 插 dig 正是走这条通道)。曾误改成「frozen 即终态」:
             # override 换法重编后文件不删,会把刚换法的 case 直接误判终态,机会通道全死。
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail="frozen")
-        elif disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
+        elif disp in ("frozen", "env_blocked"):
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
+        elif disp in ("product_defect", "defect_candidate") \
+                and int(c.get("rounds_used") or 0) >= max_rounds:
+            led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
+        elif disp in ("product_defect", "defect_candidate"):
+            # 缺陷判定的形态检验门(2026-07-09 selfheal1 五案手动上机取证):413/453 被
+            # attributor 一轮判死 defect_candidate,而历史 PASS 形态重跑当即通过——单一
+            # 形态的一次 fail 不足以定缺陷;真缺陷换形态仍复现(644 即是,多形态 ANSWER:0)。
+            # 轮次未耗尽时缺陷候选一律先转 reflow 换形态检验,候选记录保留在
+            # attribution/fail_evidence 里;换形态后同判仍成立才落 terminal(上一分支)。
+            _archive_round_config(aid, int(c.get("rounds_used") or 0))
+            c["evidence_excerpt"] = ctx[:4000]
+            c["redispatch_reason"] = "defect_candidate_pending_variation"
+            led.data["audit"]["notes"].append(
+                {"autoid": aid, "event": "defect_claim_deferred_for_variation",
+                 "round": round_no})
+            try:
+                from main.ist_core.memory.footprint.signals import emit_signal
+                emit_signal("defect_claim_deferred", aid, source="verify_phase.attribute",
+                            round=round_no)
+            except Exception:  # noqa: BLE001
+                pass
+            led.transition(aid, L.S_PENDING)
         elif (disp == "reflow" or layer == "G") and int(c.get("rounds_used") or 0) < max_rounds:
             _archive_round_config(aid, int(c.get("rounds_used") or 0))  # 覆盖前留本轮失败配置
             c["evidence_excerpt"] = ctx[:4000]
@@ -238,6 +269,12 @@ def attribute(state: dict) -> dict:
             led.transition(aid, L.S_ESCALATED,
                            last_detail="max_rounds_exhausted",
                            escalation_reason="max_rounds_exhausted")
+            try:
+                from main.ist_core.memory.footprint.signals import emit_signal
+                emit_signal("escalated", aid, source="verify_phase.attribute",
+                            reason="max_rounds_exhausted", round=round_no)
+            except Exception:  # noqa: BLE001
+                pass
         else:
             need_fork.append(aid)
 
@@ -271,8 +308,22 @@ def attribute(state: dict) -> dict:
             c = led.case(aid)
             c["attribution"] = attr
             disp = str(attr.get("disposition") or "")
-            if disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
+            if disp in ("frozen", "env_blocked"):
                 led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
+            elif disp in ("product_defect", "defect_candidate") \
+                    and int(c.get("rounds_used") or 0) >= max_rounds:
+                led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
+            elif disp in ("product_defect", "defect_candidate"):
+                # 形态检验门(与 fork 前路由同款,2026-07-09):缺陷候选在轮次未耗尽时
+                # 先换形态检验。实证 selfheal2 044572:上一批同命令同设备刚 PASS,本轮
+                # 语法变体被 ^ 拒,attributor 却引缺陷库判死——单形态一轮 fail 定不了缺陷。
+                _archive_round_config(aid, int(c.get("rounds_used") or 0))
+                c["evidence_excerpt"] = str(items2.get(aid, {}).get("device_context") or "")[:4000]
+                c["redispatch_reason"] = "defect_candidate_pending_variation"
+                led.data["audit"]["notes"].append(
+                    {"autoid": aid, "event": "defect_claim_deferred_for_variation",
+                     "round": round_no})
+                led.transition(aid, L.S_PENDING)
             elif disp in ("reflow", "fixed"):
                 _archive_round_config(aid, int(c.get("rounds_used") or 0))  # 覆盖前留本轮失败配置
                 c["evidence_excerpt"] = str(items2.get(aid, {}).get("device_context") or "")[:4000]

@@ -30,7 +30,7 @@ _STEPS = [
 @pytest.fixture()
 def emitted_case():
     out = compile_emit.invoke({"autoid": AID, "steps": _STEPS, "out_name": AID})
-    assert "已产出" in out
+    assert "produced structurally-correct" in out
     xp = Path("workspace/outputs") / AID / "case.xlsx"
     yield xp
     shutil.rmtree(xp.parent, ignore_errors=True)

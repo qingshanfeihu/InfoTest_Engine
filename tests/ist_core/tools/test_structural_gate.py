@@ -82,4 +82,4 @@ def test_render_is_human_readable():
     res = check_structural_constraints("c5", steps)
     text = res.render("c5")
     assert "c5" in text
-    assert "结构约束" in text
+    assert "structural constraints" in text

@@ -34,7 +34,7 @@ def test_caret_rejection_is_g_even_with_downstream_noise():
     r = attribute_fail(_CARET_CTX)
     assert r.layer == "G"
     assert r.reflow is True and r.target_layer == "G"
-    assert "^" in r.reason and "下游" in r.reason
+    assert "^" in r.reason and "downstream" in r.reason
     assert "sdns pool cname" in r.reason        # 被拒命令原文进 reason（给证据）
 
 
@@ -58,7 +58,7 @@ def test_no_caret_returns_undetermined_not_keyword_guess():
         r = attribute_fail(ctx)
         assert r.layer == "undetermined", ctx
         assert "device_context" in r.reason      # 指路看原文
-        assert "瞬态" in r.reason                # 给瞬态判定标准（复现≠瞬态），不替 LLM 下结论
+        assert "Transient" in r.reason           # 给瞬态判定标准（复现≠瞬态），不替 LLM 下结论
 
 
 def test_undetermined_carries_provenance_target_as_hint():

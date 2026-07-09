@@ -14,7 +14,10 @@ from main.ist_core.compile_engine.questions import (
     build_questions, load_ledgers, validate_questions, FORM_BY_KIND,
 )
 
-_TAIL_RE = re.compile(r"^状态：(produced|needs_user_decision|failed)", re.MULTILINE)
+# 尾块契约双格式(2026-07-09 语言分层迁移):新契约 STATUS:,旧中文格式兼容一个过渡期
+# (历史 fork 输出/续跑会话仍可能带旧格式)。md 侧随热路径英文化切新格式。
+_TAIL_RE = re.compile(r"^(?:STATUS:\s*|状态：)(produced|needs_user_decision|failed)",
+                      re.MULTILINE)
 _MAX_REWORK = 3
 # 不具备 rework 触发资格的 suspect(仍产 facts/note,走 fail 路径注入):2026-07-08 对 dongkl
 # 13 张真机 PASS 卷实测,cname 成员未本地定义在 12/13 上误火(委托外部 DNS 是 cname 用例常态,
@@ -108,12 +111,12 @@ def _intent_summary(aid: str, state: dict) -> str:
                   if str(x.get("autoid")) == aid), None)
         if not isinstance(c, dict):
             return ""
-        lines = [f"标题:{c.get('title', '')}  分组:{' / '.join(c.get('group_path') or [])}"]
+        lines = [f"title: {c.get('title', '')}  group: {' / '.join(c.get('group_path') or [])}"]
         for si in (c.get("step_intents") or [])[:8]:
             d = str(si.get("desc") or "").strip()
             e = str(si.get("expected") or "").strip()
             if d or e:
-                lines.append(f"- {d}" + (f" → 期望:{e}" if e else ""))
+                lines.append(f"- {d}" + (f" → expected: {e}" if e else ""))
         return "\n".join(lines)[:1200]
     except Exception:  # noqa: BLE001
         return ""
@@ -122,10 +125,10 @@ def _intent_summary(aid: str, state: dict) -> str:
 def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
     """机读信封(worker 契约零改动)+可选附件引用——数据按引用,不内联 manifest。
 
-    末轮增强(2026-07-07):前 max_rounds-1 次上机均 fail 的最后一次(与 worker_fanout 的
-    effort=max 同判据 rounds_used>=max_rounds-1),改喂全历史设备回显+逐轮归因+前几次配置卷
-    路径(数据按引用),让顶满思考深度的 worker 拿到前几次全貌、别重复错法;非末轮维持轻量
-    (只喂最新一轮证据)不膨胀上下文。
+    重编轮增强(2026-07-09 首败即升,取代 07-07 的"末轮才升"):任何重编轮(rounds_used>=1,
+    与 worker_fanout 的 effort=max 同判据)都喂全历史设备回显+逐轮归因+前几次配置卷路径
+    (数据按引用)——旧判据让 R2 普通思考白烧、用户决策后无深思考重生成机会;R1 首编维持
+    轻量(无失败历史可喂)。
 
     去劫持(2026-07-08,trace 019f3bc3 取证驱动):①意图摘要内联(不再只按引用);②归因方向
     降级为「上一轮假设」并要求先独立复核设备行为再采信;③末轮首要动作=先答「配置实现意图
@@ -158,11 +161,11 @@ def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
     parts = [json.dumps(envelope, ensure_ascii=False)]
     tail: list[str] = []   # 指令区,最后拼接
 
-    is_last = rounds_used >= max_rounds - 1
+    is_retry = rounds_used >= 1   # 首败即全历史(与 worker_fanout 的 effort=max 同判据)
     hist = [e for e in (case_led.get("fail_evidence") or []) if isinstance(e, dict)]
 
     # ── 数据区 ──────────────────────────────────────────────────────────
-    if is_last and hist:
+    if is_retry and hist:
         # 末轮全回显:思考深度已由 worker_fanout 升到 max,配套喂前几次全历史。
         docs = []
         for e in hist:
@@ -172,7 +175,7 @@ def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
             fd = str(e.get("fix_direction") or "")
             dc = str(e.get("device_context") or "")[:6000]
             docs.append(
-                f'<document label="第{rn}次上机"' + (f' attribution="归因:{sig}"' if sig else "") + ">\n"
+                f'<document label="on-device run #{rn}"' + (f' attribution="{sig}"' if sig else "") + ">\n"
                 + (f"<fix_direction>{fd[:800]}</fix_direction>\n" if fd else "")
                 + f"<device_context>\n{dc}\n</device_context>\n</document>")
         parts.append("<device_evidence>\n" + "\n".join(docs) + "\n</device_evidence>")
@@ -180,27 +183,41 @@ def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
         prev = sorted(hist_dir.glob("case.r*.xlsx")) if hist_dir.is_dir() else []
         if prev:
             listing = "\n".join(f"- {p.relative_to(sh.project_root())}" for p in prev)
-            parts.append("<prior_config_rolls note=\"前几次配置卷,fs_read 逐卷对比\">\n"
+            parts.append("<prior_config_rolls note=\"previous config sheets; fs_read and diff them\">\n"
                          + listing + "\n</prior_config_rolls>")
         tail.append(
-            f"<round_task>\n最后一次编写(前 {rounds_used} 次上机均失败,思考深度已升至 max)。\n"
-            "先不看逐轮归因的方向,对上面每一轮设备回显独立回答:配置实现意图了吗——"
-            "dig/show 观测到的形态是不是意图要的那类东西(意图要 IP,观测就得是 A/AAAA 记录"
-            "而不是 CNAME 串;意图要状态翻转,观测就得真翻转)。形态不对而断言又没写错,"
-            "根因通常在配置结构(缺对象定义/引用断头/绑定关系错),沿前几轮方向继续修语法"
-            "只会把同一个失败修得更精致。之后再逐轮评估归因哪些成立、哪些已被回显证伪。"
+            f"<round_task>\nRecompile round (all {rounds_used} previous on-device runs failed; thinking depth raised to max"
+            + ("; this is the FINAL attempt" if rounds_used >= max_rounds - 1 else "") + ").\n"
+            "Before trusting any per-round attribution direction, answer independently against each round's device echo above: did the config realize the intent — "
+            "is the observed form the kind the intent asks for (intent wants IPs → observation must be A/AAAA records, "
+            "not a CNAME string; intent wants a state flip → the state must actually flip). When the form is wrong and the "
+            "assertion is not, the root cause usually lives in config structure (missing object definition / dangling reference / "
+            "wrong binding) — polishing syntax along previous rounds' direction only refines the same failure. "
+            "Only then evaluate which attributions still hold and which the echoes have falsified."
             "\n</round_task>")
     else:
         ev = case_led.get("evidence_excerpt")
         if ev:
-            parts.append("<device_evidence note=\"上机设备证据原文节选\">\n"
+            parts.append("<device_evidence note=\"verbatim excerpt of on-device evidence\">\n"
                          + str(ev)[:4000] + "\n</device_evidence>")
+
+    if str(case_led.get("redispatch_reason") or "") == "defect_candidate_pending_variation":
+        # 形态检验轮(2026-07-09 五案手动上机取证):413/453 曾被一轮判死 defect_candidate,
+        # 历史形态重跑当即 PASS——单一形态的一次 fail 定不了缺陷,真缺陷换形态仍复现(644)。
+        tail.append(
+            "<round_task>\nLast round's attribution suspects a product defect, but one failure of one config form "
+            "cannot establish a defect — form mismatches are far more common than product defects. This round: implement "
+            "the same intent with a DIFFERENT config form, then verify on-device. Different form = different mechanism/object "
+            "structure (first retrieve same-intent precedents via compile_precedent and compare against historical PASS forms; "
+            "if the device rejected a command that the intent does not literally require, switch to an equivalent mechanism "
+            "and do not send it again) — not parameter tweaks of the previous form. Only if the same behavior reproduces "
+            "under a different form does the defect claim stand; if it passes, it was a form problem, not a defect.\n</round_task>")
 
     # fail 重编时注入上一轮卷面的引用结构事实(与设备回显对照才有诊断力,见 _linker_fact_note)
     if case_led.get("fail_evidence"):
         _fact = _linker_fact_note(aid)
         if _fact:
-            parts.append("<structural_facts note=\"上一轮卷面引用结构,机械提取,与设备回显对照判断\">\n"
+            parts.append("<structural_facts note=\"reference structure of last round's sheet, mechanically extracted; judge against device echoes\">\n"
                          + _fact + "\n</structural_facts>")
 
     fix = case_led.get("attribution", {}).get("fix_direction") if isinstance(
@@ -209,16 +226,17 @@ def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
         # 归因方向是假设不是结论——归因也会看错主次(035413 三轮:方向全盯配置语法,
         # dig 恒返回 CNAME 串而非 IP 的功能失效没人碰)。先独立复核,再决定采不采信。
         parts.append(
-            "<prior_hypothesis note=\"上一轮归因假设,可能已被设备证伪,先独立复核再采信\">\n"
-            "下面是上一轮归因给的修法方向。它是假设不是结论——先自己对设备回显回答"
-            "「配置实现意图了吗:dig/show 观测到的形态是不是意图要的那类东西」,"
-            "答案与这个方向一致再沿用;不一致时以你对意图和回显的判断为准,并在返回里说明分歧:\n"
+            "<prior_hypothesis note=\"last round's attribution hypothesis; may already be falsified by the device — re-verify independently before adopting\">\n"
+            "Below is the fix direction from last round's attribution. It is a hypothesis, not a conclusion — first answer "
+            "for yourself against the device echoes: did the config realize the intent (is the observed dig/show form the kind "
+            "the intent asks for)? Adopt the direction only if your answer agrees with it; otherwise your own judgement of "
+            "intent vs. echoes prevails — state the disagreement in your return:\n"
             f"{str(fix)[:1500]}\n</prior_hypothesis>")
 
     # 意图(需求原件摘要;紧邻指令区=注意力最高位,首轮/重编轮都给,意图是不变量)
     intent = _intent_summary(aid, state)
     if intent:
-        parts.append("<intent note=\"这条 case 的意图,需求原件摘要,全文在 manifest_path\">\n"
+        parts.append("<intent note=\"this case's intent, summarized from the source requirement; full text at manifest_path\">\n"
                      + intent + "\n</intent>")
 
     return "\n".join(parts + tail)
@@ -228,8 +246,8 @@ def _dispatch_one(executor, aid: str, brief: str, t0: float,
                   effort: str = "") -> tuple[str, str]:
     """派单个 worker,按盘上事实+机读尾块判终态。返回 (终态, 详情)。
 
-    effort（可选,空|max）：升级重编的最后一次(rounds_used 已达上限前一步)传 max,把
-    思考深度顶满——对标用户「最后一次跑把 thinking 强度改 max」。
+    effort（可选,空|max）：重编轮(rounds_used>=1)一律传 max 顶满思考深度
+    (2026-07-09 首败即升;R1 首编传空走全局默认)。
     """
     out = executor.call("compile-worker", brief, tag=f"engine:{aid[-6:]}", effort=effort)
     xlsx = sh.outputs_root() / aid / "case.xlsx"
@@ -272,9 +290,11 @@ def worker_fanout(state: dict) -> dict:
         probe_fired: set[str] = set()   # 已提示过的 suspect——同信号只触发一次 rework(防原地打转)
         final, detail = L.S_ESCALATED, "未执行"
         while rework <= _MAX_REWORK:
-            # 最后一次(前 max_rounds-1 轮已 fail):思考深度顶满 max,并让 brief 带上全历史证据。
-            # rounds_used 是本 case 已跑过的写轮,达 max_rounds-1 即"这是最后一次机会"。
-            eff = "max" if int(c.get("rounds_used") or 0) >= max_rounds - 1 else ""
+            # 首败即升深度(2026-07-09 用户裁决):重编轮(rounds_used>=1)一律 max 思考+全
+            # 历史 brief——旧判据"末轮才升"(>=max_rounds-1)让 R2 普通思考白烧、ask_user 第
+            # 三轮才触发、用户答完已无重生成机会(dongkl 批 11 个升级人工:轮次耗尽 9+归因
+            # 缺失 2 即此)。R1 保持 high(首编无失败历史,max 无增益)。
+            eff = "max" if int(c.get("rounds_used") or 0) >= 1 else ""
             with limiter:
                 final, detail = _dispatch_one(
                     executor, aid, _build_brief(aid, state, c, out_name), t0, effort=eff)
@@ -288,7 +308,8 @@ def worker_fanout(state: dict) -> dict:
                     from main.ist_core.tools.device.compile_pipeline import _grade_extract_facts
                     _case_dir = sh.outputs_root() / aid
                     facts = _grade_extract_facts(
-                        _case_dir / "case.xlsx", _case_dir / "case.provenance.json") or {}
+                        _case_dir / "case.xlsx", _case_dir / "case.provenance.json",
+                        intent_text=_intent_summary(aid, state)) or {}
                     sus = [k for k, v in facts.items() if k.endswith("_suspect") and v
                            and k not in _PROBE_NO_REWORK]
                     # 同一 suspect 只触发一次 rework:卷面判断类信号在同卷上是稳态的,
@@ -299,6 +320,14 @@ def worker_fanout(state: dict) -> dict:
                 if sus and rework < _MAX_REWORK:
                     rework += 1
                     probe_fired.update(sus)
+                    if "intent_record_type_gap_suspect" in sus:
+                        try:
+                            from main.ist_core.memory.footprint.signals import emit_signal
+                            emit_signal("intent_gap_flagged", aid,
+                                        source="worker_fanout.probe",
+                                        gap=str(facts.get("intent_record_type_gap") or []))
+                        except Exception:  # noqa: BLE001
+                            pass
                     # suspect 名之外,带上对应 *_note 的事实说明(有则),worker 才知道具体哪里、为什么
                     notes = [str(facts.get(k[: -len("_suspect")] + "_note") or "").strip()
                              for k in sus]
@@ -377,7 +406,17 @@ def ask_decision(state: dict) -> dict:
         decision = next((d for d in ("改过程", "改预期", "改描述") if d in ans), "")
         if non_interactive or not decision:
             led.transition(aid, L.S_AWAITING_USER, last_detail="用户未答/非交互")
+            try:
+                from main.ist_core.memory.footprint.signals import emit_signal
+                emit_signal("awaiting_user", aid, source="ask_decision")
+            except Exception:  # noqa: BLE001
+                pass
             continue
+        try:
+            from main.ist_core.memory.footprint.signals import emit_signal
+            emit_signal("user_decided", aid, source="ask_decision", decision=decision)
+        except Exception:  # noqa: BLE001
+            pass
         drop = q["_ordering"] and decision == "改预期"   # 选项文本已显式写明放弃
         form = q["_form"] if decision == "改过程" else (
             "captured_relation" if decision == "改预期" else "")

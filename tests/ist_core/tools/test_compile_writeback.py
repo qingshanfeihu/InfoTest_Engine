@@ -32,7 +32,7 @@ def verified_case(tmp_path):
          "asserts": [{"op": "found", "pattern": r"\b172\.16\.35\.213\b"}]},
     ]
     out = compile_emit.invoke({"autoid": AID, "blocks": blocks, "out_name": AID})
-    assert "已产出" in out
+    assert "produced structurally-correct" in out
     lr = Path("workspace/outputs") / AID / "last_run.json"
     lr.write_text(json.dumps([{"autoid": AID, "verdict": "pass"}]), encoding="utf-8")
     yield lr

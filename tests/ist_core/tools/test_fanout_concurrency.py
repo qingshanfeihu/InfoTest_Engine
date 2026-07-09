@@ -128,7 +128,7 @@ def test_fanout_briefs_path_18_case_batch(tmp_path, monkeypatch):
     seen: list[str] = []
     def fake(skill, brief):
         seen.append(brief[:12])
-        return f"ok:{brief[:8]}\n状态：produced"
+        return f"ok:{brief[:8]}\nSTATUS: produced"
     _fake_fork(monkeypatch, fake)
 
     out = bt.compile_fanout.invoke({"skill": "ist-compile-draft",
@@ -181,14 +181,14 @@ def test_fanout_large_output_offloaded_tail_kept(tmp_path, monkeypatch):
     # 出参保护:超长 output 全文落盘,内联只留末尾——机读尾块(末两行)必须完整保留。
     root = _sandbox(tmp_path, monkeypatch)
     aid = "203031753342777001"
-    big = "分析过程" * 20000 + "\n状态：produced\n产物：workspace/outputs/x/case.xlsx"
+    big = "分析过程" * 20000 + "\nSTATUS: produced\nARTIFACT: workspace/outputs/x/case.xlsx"
     _fake_fork(monkeypatch, lambda skill, brief: big)
     out = bt.compile_fanout.invoke({"skill": "ist-compile-draft",
                                     "briefs_json": [{"key": aid, "brief": "b"}]})
     item = _json.loads(out)[0]
     assert len(item["output"]) < bt._FANOUT_INLINE_MAX + 300
-    assert item["output"].rstrip().endswith("产物：workspace/outputs/x/case.xlsx")
-    assert "状态：produced" in item["output"]
+    assert item["output"].rstrip().endswith("ARTIFACT: workspace/outputs/x/case.xlsx")
+    assert "STATUS: produced" in item["output"]
     fp = root / item["output_path"]
     assert fp.is_file() and fp.read_text(encoding="utf-8") == big
     # autoid key → 落在该 case 的 outputs/<autoid>/ 下(与凭证/冻结标记同目录)
@@ -197,10 +197,10 @@ def test_fanout_large_output_offloaded_tail_kept(tmp_path, monkeypatch):
 
 def test_fanout_small_output_untouched(tmp_path, monkeypatch):
     _sandbox(tmp_path, monkeypatch)
-    _fake_fork(monkeypatch, lambda skill, brief: "短输出\n状态：produced")
+    _fake_fork(monkeypatch, lambda skill, brief: "短输出\nSTATUS: produced")
     out = bt.compile_fanout.invoke({"skill": "s", "briefs_json": [{"key": "k1", "brief": "b"}]})
     item = _json.loads(out)[0]
-    assert item["output"] == "短输出\n状态：produced"
+    assert item["output"] == "短输出\nSTATUS: produced"
     assert "output_path" not in item
 
 
@@ -239,7 +239,7 @@ def test_fanout_empty_briefs_is_error_not_silent_success(tmp_path, monkeypatch):
 def test_fanout_return_size_bounded_at_scale(tmp_path, monkeypatch):
     # N 不变性:20 个 fork 各回 50k 字符,总返回必须有界(旧版 ≈1M 字符撑爆 orchestrator)。
     _sandbox(tmp_path, monkeypatch)
-    _fake_fork(monkeypatch, lambda skill, brief: "x" * 50_000 + "\n状态：produced")
+    _fake_fork(monkeypatch, lambda skill, brief: "x" * 50_000 + "\nSTATUS: produced")
     briefs = [{"key": f"k{i}", "brief": "b"} for i in range(20)]
     out = bt.compile_fanout.invoke({"skill": "s", "briefs_json": briefs})
     res = _json.loads(out)

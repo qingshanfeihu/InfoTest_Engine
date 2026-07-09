@@ -28,7 +28,7 @@ def test_dist_expands_and_passes_strict_gate():
                              "init_commands": "sdns on", "out_name": "t_dist",
                              "strict_structural": True})
     assert not r.split("\n")[0].startswith("error"), r
-    assert "check_points=有" in r            # 3 条展开断言均落地、非悬空
+    assert "check_points=present" in r            # 3 条展开断言均落地、非悬空
     assert "dangling_assertion" not in r
 
 
@@ -62,7 +62,7 @@ def test_dist_provenance_expands_in_tandem():
     r = compile_emit.invoke({"autoid": "t_dist_prov", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_dist_prov",
                              "strict_structural": True, "provenance_json": json.dumps(prov)})
-    assert "provenance 已旁挂" in r, r
+    assert "provenance side-mounted" in r, r
     # dist 1 步 → 展开成 2 条 distribution_derived V，与展开后 steps 逐位对齐
     p = _ROOT / "workspace" / "outputs" / "t_dist_prov" / "case.provenance.json"
     d = json.loads(p.read_text(encoding="utf-8"))

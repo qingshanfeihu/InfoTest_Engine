@@ -73,6 +73,8 @@ memory/.dream/
 !/knowledge/data/
 /knowledge/data/*
 !/knowledge/data/compile_ref/
+# theory_eval 金标准数据集(人工标注,理论评估基线)——丢失=评估基座丢失,入库
+!/knowledge/data/theory_eval/
 
 # --- Claude Code:团队质量资产入库(评审 agents/防泄漏 hooks/run-tests skill/
 #     团队 hook 配置 settings.json);会话本地态不入 ---

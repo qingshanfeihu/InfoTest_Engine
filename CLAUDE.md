@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 所有回复必须使用中文。
 
+**语言分层（2026-07-09 用户裁决，全仓纪律）**：LLM-facing 一律英文——skill/agent md 正文与 description、brief 信封与指令、probe/门违例反馈、grade_extract note、归因 reason、fork 机读契约；user-facing 一律中文——TUI 显示、ask_user 问询、delivery_report 等交付物、docs/ 文档、给用户的解释；代码注释中文（给维护者）。**例外必须保留中文**：when_to_use 的 Trigger keywords（匹配用户中文输入）、交付给用户的报告模板内容、有代码消费的既有机读令牌（如 `VERDICT:`/`[未在文档直接命中]`——改前先 grep 代码消费）。
+
 ## 项目目标
 
 本项目展示名为 **InfoTest Engine**，agent 核心展示名为 **IST-Core**。代码包路径为 `main.ist_core`；LangGraph graph id 与 node 名保留 `qa_agent` 指针以兼容已有外部 API；环境变量统一 `IST_*` 前缀（vendor 专有 key 如 `OPENAI_*` / `DEEPSEEK_*` / `MINERU_*` 不变）。
@@ -125,7 +127,7 @@ main/ist_core/tools/
 
 user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 
-**资产封装标准**（2026-07-05 对标官方 Agent Skills 规范收口，全景见 `docs/AUDIT_skill_standard_alignment.md`）：skill 名一律小写连字符（旧下划线名经 `loader.resolve_skill_dirname` 别名互通，TUI slash 本就互通）；SKILL.md frontmatter 必带 name/description/context（fork 另带 agent），user-invocable 必带 when_to_use；agent 定义（`agents/*.md`）统一 `<role>→<task>→<rules>` XML 骨架（rules 收尾紧邻 brief），frontmatter 必带 tools 白名单；主 agent 系统提示五块 XML（`<role>/<rules>/<workflow>/<tool_guidance>/<env>`，`_prompt.py`）。机器门：`tests/ist_core/skills/test_skill_package_standard.py` + `tests/ist_core/agents/test_prompt_structure.py`（承重锚点保真）。**工具渐进披露**（`middleware/tool_gating.py`，`IST_TOOL_GATING_ENABLED=1` 开，默认关待对照轮翻默认）：基础组常驻，compile_*/submit_*/dev_* 按 invoke_skill 映射或既有使用激活，未知 skill fail-open——基础模式常驻工具 schema 67k→26k 字符。**动态子 agent**：`agent_define` 工具按同一骨架生成 `dyn-*` fork agent（tools ⊆ 注册表、inherit-parent-prompt 强制、runtime/ 落盘仅此一条有闸路径），invoke_skill 单发 / `compile_fanout(skill="dyn-…", briefs_path=…)` 批量派发。
+**资产封装标准**（2026-07-05 对标官方 Agent Skills 规范收口，全景见 `docs/AUDIT_skill_standard_alignment.md`）：skill 名一律小写连字符（旧下划线名经 `loader.resolve_skill_dirname` 别名互通，TUI slash 本就互通）；SKILL.md frontmatter 必带 name/description/context（fork 另带 agent），user-invocable 必带 when_to_use；agent 定义（`agents/*.md`）统一 `<role>→<task>→<rules>` XML 骨架（rules 收尾紧邻 brief），frontmatter 必带 tools 白名单；主 agent 系统提示五块 XML（`<role>/<rules>/<workflow>/<tool_guidance>/<env>`，`_prompt.py`）。机器门：`tests/ist_core/skills/test_skill_package_standard.py` + `tests/ist_core/agents/test_prompt_structure.py`（承重锚点保真）。**工具渐进披露**（`middleware/tool_gating.py`，默认开——dongkl 对照轮实测零 gating 异常后翻默认，`IST_TOOL_GATING_ENABLED=0` 关）：基础组常驻，compile_*/submit_*/dev_* 按 invoke_skill 映射或既有使用激活，未知 skill fail-open——基础模式常驻工具 schema 67k→26k 字符。**动态子 agent**：`agent_define` 工具按同一骨架生成 `dyn-*` fork agent（tools ⊆ 注册表、inherit-parent-prompt 强制、runtime/ 落盘仅此一条有闸路径），invoke_skill 单发 / `compile_fanout(skill="dyn-…", briefs_path=…)` 批量派发。
 
 ### skill/agent prompt 编写红线
 
@@ -168,6 +170,8 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 **V6 引擎主路（2026-07-06 起,`main/ist_core/compile_engine/`）**：编译闭环 = 一张 LangGraph StateGraph（8 节点三类:[mech] 直调工具 .func / [llm] 孔经 execute_fork_skill / [user] 孔经官方 interrupt+Command(resume)），main agent 只调薄工具 `compile_engine_run(mindmap, version)` 一次——编写→欠定问用户（interrupt 挂起+checkpoint,先问后落代码强制）→合并（凭证门+pass 卷面锁）→上机→归因（known_defects 短路/机械预判/LLM 只填 undetermined）→只重编 fail 子集（ledger 迁移合法性表:`passed→重编` 在数据层非法）→循环到不动点→真 PASS 双写回（先例+footprint 经 device_verified 第二权威源）→engine_report.json。**交付目录**（`workspace/outputs/<批名>/`）一处齐全：主卷 `case.xlsx`（通过）+ `unsuccessful_cases.xlsx`（未通过卷，2026-07-07 从旁边 `_unsuccessful/` 挪入主目录）+ 人话 `delivery_report.md`（抗截断，设备回显经 `_clean_device_echo` 剥时间戳前缀）+ `unsuccessful_cases.md` + `engine_report.json`/`engine_ledger.json`；`_cleanup_temp` 清 per-autoid/子集卷/manifest/last_run、保留上述交付物。断点续跑:同参数重调即从 checkpoint 继续,已跑设备轮不重烧（run_marker 幂等）。**编译只有 V6 这一条路**（2026-07-07 起,v5 main-orchestrated / `compile_pipeline` / grade 闸全删）。资产包 `skills/ist-compile-engine/SKILL.md`（engine frontmatter:graph 指针/phases/holes）,拓扑门断言图↔SKILL↔NODE_TYPES 三方一致;Studio 可视化经 langgraph.json 第三张图。
 
 **三层栈数据形态判定表（架构红线,新资产落地前先过此表）**：人定义的→md（frontmatter=YAML 元数据+XML 分节正文）;确定性流程→py（LangGraph 图,节点=纯函数）;机器间传的→JSON（盘上台账,按引用流,整份不进 LLM 上下文）;进 LLM 上下文的→XML 信封;会因场景而异的语义判断→skill（fork）;只有一条正确做法的→tool（py,引擎直调 .func）;**LLM 永远不当胶水**——胶水是图的条件边。机械闭集从 mirror 源码解析不手抄。
+
+**自愈合知识引擎（2026-07-08 P1+P2,回答"新坑是否还要人追加代码"）**：检测/知识按四层封闭——A 层目标系统文法门（17 门,闭合于框架版本）/ 原理层 5 通用检测器（零信息断言·秩亏·出处缺失·引用图·预期冲突,闭合于数学,`grade_extract_script.py` docstring 有映射表）/ 文法层（`knowledge/data/compile_ref/domain_grammar.json`：sdns 对象定义/引用形态、算法分类、动词/语义词表,每条带 provenance;加载器 `main/case_compiler/domain_grammar.py`,新增 dangling-reference 类检查=加 JSON 条目零代码）/ 判例层（footprint 观察,唯一无限增长层,全自动）。**自愈环**：fail/escalated 轮行为观察以 `validity=uncertain`+`observed_under` 语境入库（closing `_ingest_uncertain_observations`,`FOOTPRINT_UNCERTAIN_WRITEBACK=0` 关）→ 渲染层同节点多语境观察自动组头（纯计数触发,不做机械矛盾判定,`footprint_lookup`）→ worker 检索见观察组自主设备实验仲裁（A/B 实证 035570）→ PASS 实证 merger 升级分支就地转 verified（不降级）。坑叙事文案运行时从判例现取（`_closure_case_law_note`）,不写死在 .py。验收器：`tests/ist_core/memory/test_self_healing_loop.py`（自愈演练:响应新坑全程零 .py 变化）+ `scripts/debug/grade_extract_equiv_sweep.py`（改词面/文法后 511 卷事实输出逐卷 diff）。
 
 **编译与上机验证解耦**：编译（引擎）只产出 excel；上机走 `ist-verify`（唯一语义 oracle）。下面的机械门/结构化接口都由引擎节点（`.func`）与两个孔（`compile-worker`/`compile-attributor`）复用。
 
@@ -238,7 +242,7 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 
 ### 常用环境变量
 
-- **模型**（2026-07-06 两档收敛）：`IST_MODEL` 主档（全局，思考默认开、effort 默认 high——34-case 实跑对照 max 无更好表现只多烧 token，已降回）/ `IST_FLASH` 省钱档（explore/footprint 提取/dream 等轻任务，同样思考+high）；`IST_EFFORT=max` 全局升思考深度，fork 经 agents md frontmatter `effort:` 按点覆盖；**升级重编最后一次**（同 case 连 fail 到 `rounds_used≥max_rounds-1`）自动升 max 思考 + `_build_brief` 喂前几轮全历史设备回显/逐轮归因/前几次配置卷（`history/case.r{N}.xlsx`），footbar 挂「最大深度思考中」；旧 `IST_REVIEW/OPUS/SONNET/HAIKU_MODEL` 已合并（读取兼容保留）；`IST_THINKING=off` 仅调试逃生口
+- **模型**（2026-07-06 两档收敛）：`IST_MODEL` 主档（全局，思考默认开、effort 默认 high——34-case 实跑对照 max 无更好表现只多烧 token，已降回）/ `IST_FLASH` 省钱档（explore/footprint 提取/dream 等轻任务，同样思考+high）；`IST_EFFORT=max` 全局升思考深度，fork 经 agents md frontmatter `effort:` 按点覆盖；**首败即升深度**（2026-07-09 用户裁决：重编轮 `rounds_used≥1` 一律 max 思考 + `_build_brief` 喂全历史设备回显/逐轮归因/前几次配置卷 `history/case.r{N}.xlsx`——旧「末轮才升」让 R2 普通思考白烧、ask_user 第三轮触发时用户答案已无重生成机会，dongkl 批 11 升级人工实证），footbar 挂「最大深度思考中」；旧 `IST_REVIEW/OPUS/SONNET/HAIKU_MODEL` 已合并（读取兼容保留）；`IST_THINKING=off` 仅调试逃生口
 - **流式与守卫**（2026-07-07 fork 翻案）：主 agent + fork **默认流式**（`_resolve_streaming()`）。`ChatOpenAIWithReasoning._stream/_astream` 双守卫防挂死/截断：① **停滞守卫** `_chunk_has_substance`——保活空 chunk 骗得过 httpx 读超时、骗不过它，连续 `IST_LLM_STALL_TIMEOUT`（默认 180s）无实质增量即断流重发（深思考期 reasoning 持续增量不误杀）；② **finish_reason 终止校验**（`IST_LLM_VERIFY_FINISH=0` 关）——流结束却没见终止信号=网关中途断流，零内容安全重发、有内容告警（**抓不了 finish_reason=stop 自截断**，取证确认那类 stop 照来）。fork 06-28 曾强制非流式止血，守卫 07-05 上线后翻回流式（深思考 worker 靠"有真输出就续期"不被固定墙钟误杀）；`IST_LLM_STREAMING=0` 批量回落非流式（并发批量更稳）。
 - **fork 墙钟两层**（`resilience.ForkExecutor`）：单次墙钟 `IST_FORK_WALLCLOCK_S`（默认 600，看门狗硬死线、流式重置不了）+ 重试总墙钟 `IST_FORK_TRANSIENT_WALLCLOCK_S`（默认 1200）；**max 思考自动放宽**为 `IST_FORK_WALLCLOCK_MAX_S`（默认 1200）/ `IST_FORK_TRANSIENT_WALLCLOCK_MAX_S`（默认 2400）+ 单次 LLM `IST_LLM_TIMEOUT_MAX`（默认 600，仅非流式模式生效）。单次 LLM request_timeout `IST_LLM_TIMEOUT`（默认 300）。
 - **KMS**：`KMS_PRODUCT_FILES`、`KMS_OUTPUT_BUCKET`、`MINERU_BATCH_SIZE`、`KMS_UPDATE_TIMEOUT_SEC`

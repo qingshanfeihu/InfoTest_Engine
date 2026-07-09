@@ -340,35 +340,40 @@ def _load_precedent_annotations() -> dict:
 
 def _format_precedent_hits(hits: list, my_toks: set, intent: str) -> str:
     """把 hits 渲染成 draft 可读的先例文本（触发→断言链 + 警示 + env_facts）。"""
-    axis = "config+intent 融合" if (my_toks and intent) else ("intent 意图轴" if intent else "config 结构轴")
+    axis = "config+intent fused" if (my_toks and intent) else ("intent axis" if intent else "config structure axis")
     anns = _load_precedent_annotations()
-    out = [f"=== compile_precedent(按{axis}相似度排序;含完整触发→断言链)==="]
+    out = [f"=== compile_precedent (ranked by {axis} similarity; full trigger→assertion chains) ==="]
     for score, cfg_sim, intent_sim, fn, seq, autoid in hits:
         if my_toks and intent:
-            tag = f"配置{cfg_sim:.2f}+意图{intent_sim:.2f}"
+            tag = f"config {cfg_sim:.2f} + intent {intent_sim:.2f}"
         elif intent:
-            tag = f"意图{intent_sim:.2f}"
+            tag = f"intent {intent_sim:.2f}"
         else:
-            tag = f"相似度{cfg_sim:.2f}"
+            tag = f"similarity {cfg_sim:.2f}"
         fn_show = f"{fn}[{autoid}]" if autoid else fn
-        out.append(f"\n先例 {fn_show}({tag})的触发→断言链:")
+        out.append(f"\nPrecedent {fn_show} ({tag}) trigger→assertion chain:")
         ann = anns.get(str(autoid)) if autoid else None
         if ann and ann.get("note"):
-            out.append(f"  ⚠ 策展标注[{ann.get('flag', 'curated')}]: {str(ann['note'])[:260]}")
+            out.append(f"  ⚠ curation note [{ann.get('flag', 'curated')}]: {str(ann['note'])[:260]}")
         for e, f, g in seq:
             # 多行 cmds_config 用**真换行**展示(缩进续行),draft 照抄即得真 \n——
             # 切勿用 ⏎ 等替身字符:draft 会把字面替身抄进配置,框架按 \n 拆命令时整串变一条废命令。
             g_show = g[:300].replace("\n", "\n        ")
             out.append(f"  {e} {f}: {g_show}")
-    out.append("\n⚠ 照先例的**完整配置基线**写,别截断:先例里的启用/激活步(如 sdns on)、"
-               "数据中心/池法/监听器等基线步**一个都不能漏**——漏了设备服务起不来、dig 零解析、断言全 fail。"
-               "先例'怎么配(完整基线)+怎么触发(dig 类型/次数)+怎么断言'是配套的,照它整条链写。"
-               "期望值溯源到先例+手册;离线不可知的运行时值(dig 解析出的具体 IP 等)留 <RUNTIME>,别编。")
-    out.append("⚠ **命令格式逐字照抄最像的先例,只改值(IP/域名/名称),别改格式**:先例命令的"
-               "**引号、参数个数与顺序**是上机跑通的——它给某个参数加了双引号(如 `\"24\"`)你就照样加,"
-               "它没加你也别加;**绝不自己'规范化'引号、绝不发明先例没有的参数组合**(如先例只到掩码、"
-               "你别凭空加 query_type)。先例没覆盖的形态查 footprint/手册定格式,拿不准就留给上机 verify "
-               "用设备 `^` 报错/`show` 回显兜底校验——别自己猜一个会被设备拒的写法。")
+    out.append("\n⚠ Copy the precedent's **complete config baseline**, never truncate: enable/activation "
+               "steps and every baseline step in the precedent must all be present — miss one and the "
+               "device service never comes up, dig resolves nothing, every assertion fails. A precedent's "
+               "'how to configure (full baseline) + how to trigger (dig types/counts) + how to assert' is a "
+               "matched set; write the whole chain as it does. Source expected values from precedent+manual; "
+               "runtime values unknowable offline (concrete IPs a dig resolves, etc.) stay <RUNTIME>, never invented.")
+    out.append("⚠ **Copy the closest precedent's command format verbatim; change only values (IP/domain/name), "
+               "never the format**: the precedent's **quoting, parameter count and order** are what actually ran "
+               "on-device — if it double-quotes a parameter (e.g. `\"24\"`) you quote it too; if it does not, "
+               "neither do you; **never 'normalize' quoting yourself, never invent parameter combinations the "
+               "precedent does not have** (if the precedent stops at the mask, do not add query_type out of thin "
+               "air). For shapes no precedent covers, settle the format from footprint/manual; when unsure leave "
+               "it for on-device verify to backstop via the device `^` error / `show` echo — do not guess a "
+               "spelling the device will reject.")
     # 契约:先例 G 列可能混有不可达示例 IP(1.1.1.1 等历史脏数据)。在同一返回里附上本测试床
     # 真实可达集合,让你写 IP 时取真值,别照抄先例的示例 IP——emit 出口会按此校验,不可达必打回。
     try:
@@ -395,67 +400,82 @@ def precedent_best_and_text(my_config: str = "", intent: str = "", limit: int = 
 
 @tool(parse_docstring=True)
 def compile_precedent(my_config: str, limit: int = 3, intent: str = "") -> str:
-    """【先例检索】给你这个用例的配置/意图,返回最像的已验证先例当参考。
+    """Precedent retrieval: given this case's config/intent, return the most similar verified precedents as reference.
 
-    排序看**客观事实**两轴(融合):
-    - config 轴:已验证先例配置命令 与 你的 my_config 命令词的重叠度(Jaccard);
-    - intent 轴(可选):你的 intent 需求描述 与 该先例对应脑图意图链(intent_path)的文本重叠度。
-    不判"测试模式"、不给断言形态派分、不掺领域偏好——纯结构/语义距离。越像的排越前。
+    Ranking uses **objective facts** on two (fused) axes:
+    - config axis: token overlap (Jaccard) between verified precedent config commands and your my_config;
+    - intent axis (optional): text overlap between your intent description and the precedent's
+      mindmap intent chain (intent_path).
+    No "test mode" judgement, no assertion-form scoring, no domain preference — pure
+    structural/semantic distance. The most similar rank first.
 
-    **意图轴治"分布外猜不出 config 就检索不到"**:需求只一句话、还没想好配什么命令时,
-    传 intent(原始需求/作者意图原文),靠意图链也能找到骨架先例。my_config 为空但 intent
-    非空时,改用纯意图轴检索(不再报错)。两者都传则融合排序。
+    **The intent axis cures "out-of-distribution cases unreachable when config can't be
+    guessed"**: when the requirement is one sentence and no commands are settled yet, pass
+    intent (the raw requirement / author intent verbatim) and skeleton precedents are still
+    reachable through the intent chain. With my_config empty but intent non-empty, retrieval
+    switches to the pure intent axis (no longer an error). With both, ranking is fused.
 
-    你拿到最像的先例后,**自己看它们的断言形态、自己归纳"这类配置该怎么验"**——
-    已验证先例清单是参考(Voyager:检索不冻结),你仍自走上机验证,期望值溯源到先例+手册,不凭空编。
+    Once you have the closest precedents, **inspect their assertion forms yourself and
+    generalize "how this class of config gets verified"** — the verified-precedent list is a
+    reference (retrieval never freezes your choices); you still verify on-device, and
+    expected values trace to precedent+manual, never invented.
 
     Args:
-        my_config: 你这个用例的关键配置命令(多行),用于按结构相似度找最像的先例。可留空(走纯意图轴)。
-        limit: 返回先例数(默认3)。
-        intent: 原始用例需求/作者意图原文(可选)。传了则启用意图轴,分布外 case 也能凭意图检索到骨架。
+        my_config: this case's key config commands (multi-line), for structural-similarity
+            retrieval. May be empty (pure intent axis).
+        limit: number of precedents to return (default 3).
+        intent: raw case requirement / author intent verbatim (optional). Enables the intent
+            axis so out-of-distribution cases can still retrieve a skeleton.
 
     Returns:
-        最像的已验证先例 + 它们的完整断言形态(配置→断言的真实写法)。你自己判断哪个适用。
+        The most similar verified precedents + their full assertion forms (the real
+        config→assertion write-ups). You judge which applies.
     """
     # 消融实验 Arm-E(基线裸生成):不提供先例约束(G 段),模拟业界默认的无先例自由生成。
     # 生产默认 Arm-L 不进此分支。
     from main.ist_core.tools._shared.ablation import is_baseline
     if is_baseline():
-        return ("=== compile_precedent(基线臂:不提供先例) ===\n"
-                "本臂不检索已验证先例(对照实验 Arm-E)。请直接依据需求与通用知识生成,"
-                "不依赖同类先例的触发→断言形态。")
+        return ("=== compile_precedent (baseline arm: no precedents provided) ===\n"
+                "This arm does not retrieve verified precedents (ablation Arm-E). Generate "
+                "directly from the requirement and general knowledge, without relying on "
+                "similar precedents' trigger→assertion forms.")
     hits, my_toks, intent_clean = _retrieve_precedent_hits(my_config, intent, limit)
     # 向后兼容:config 与 intent 都空才报错;只要有一轴可用就检索（intent 轴治分布外）。
     if not my_toks and not intent_clean:
-        return ("error: my_config 与 intent 均为空——请传入你这个用例的关键配置命令"
-                "(配置对象/动作那几行),或传 intent(原始需求描述)走意图轴检索。")
+        return ("error: both my_config and intent are empty — pass this case's key config "
+                "commands (the object/action lines), or pass intent (the raw requirement) "
+                "for intent-axis retrieval.")
     if not hits:
-        return ("=== compile_precedent ===\n你的配置/意图在先例库里没有结构相近的先例(分布外/新类型)。\n"
-                "→ 没有现成范式可抄,你得自己查手册推断该测什么 + 上机验证;f() 会因无锚点给低置信,"
-                "做不出就诚实上报(escalate-when-stuck)。")
+        return ("=== compile_precedent ===\nNo structurally similar precedent for your config/intent "
+                "(out-of-distribution / new type).\n"
+                "→ No ready-made paradigm to copy: derive what to test from the manual yourself and "
+                "verify on-device; if it cannot be done, report honestly (escalate-when-stuck).")
     return _format_precedent_hits(hits, my_toks, intent_clean)
 
 
 @tool(parse_docstring=True)
 def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "") -> str:
-    """把一个**上机真 PASS** 的成品卷写回先例库(mirror + 意图索引),让后续编译检索到它。
+    """Write a **true on-device PASS** volume back into the precedent store (mirror + intent index) so later compilations can retrieve it.
 
-    闭环自演化(V4 步骤4,定理3.22):扩大先例库推高检索命中率 ρ_k,把 G/E 段错误驱向
-    本征下限。实证反面:写回链路长期未生效,V 轮 worker 把上一轮已验证过的坑(cname
-    语法/触发机网段/精确计数)原样重踩了一遍。
+    Closed-loop self-evolution: growing the precedent store raises retrieval hit rate,
+    driving G/E-segment errors toward their intrinsic floor. Measured counterexample: with
+    the writeback chain broken, next-round workers re-stepped on pits the previous round had
+    already verified through.
 
-    机械门:①last_run.json 里该 autoid 的 verdict 必须是 pass(上机 oracle,不信转述);
-    ②卷面凭证必须新鲜(写回的就是上机跑过的那份,不是之后又改过的)。本工具只做
-    先例库通道;footprint 事实写回(merge_fact)留 V4.1 按 router 正路接。
+    Mechanical gates: ① the autoid's verdict in last_run.json must be pass (on-device
+    oracle, no retellings trusted); ② the volume credential must be fresh (what is written
+    back is exactly what ran on-device, not something edited afterwards). This tool is the
+    precedent-store channel only; footprint fact writeback goes through the router path.
 
     Args:
-        autoid: 上机 PASS 的 case 完整 autoid。
-        last_run_path: 记录该次上机结果的 last_run.json 路径(dev_run_batch_digest 落盘)。
-        intent_path: 意图路径(如「79993 域名算法改造 > rr算法 > sdns host 选择服务池rr算法」);
-            空则从卷面同目录批次 manifest 尽力拼(拼不出用标题)。
+        autoid: the full autoid of the on-device-PASSed case.
+        last_run_path: path to the last_run.json recording that run (written by dev_run_batch_digest).
+        intent_path: intent path (e.g. "<feature> > <algorithm> > <case intent>"); when empty
+            it is best-effort assembled from the sibling batch manifest (falling back to the title).
 
     Returns:
-        写回结果(mirror 文件名 + 索引条目);门不过则 error 说明缺什么。
+        Writeback result (mirror filename + index entry); on gate failure an error stating
+        what is missing.
     """
     import json as _json
     import re as _re
@@ -464,31 +484,31 @@ def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "") ->
     # 安全:autoid 白名单(路径分量净化)——它拼进写 mirror 的文件名与读 outputs 的目录。
     # 未净化时 aid="../.." 可写穿沙箱(安全评审高危项:工具进程内直写不经 file_tools 四闸)。
     if not _re.fullmatch(r"[A-Za-z0-9_.\-]+", aid) or ".." in aid:
-        return f"error: autoid 非法(只允许字母数字._-,禁 ..): {aid!r}"
+        return f"error: illegal autoid (only alphanumerics ._- allowed, no ..): {aid!r}"
     src_dir = root / "workspace" / "outputs" / aid
     xp = src_dir / "case.xlsx"
     if not xp.is_file():
-        return f"error: {aid} 的 case.xlsx 不存在"
+        return f"error: case.xlsx for {aid} does not exist"
     # 门①:上机 oracle。last_run_path 收敛到 workspace 内(禁绝对路径读任意文件)。
     _ws = (root / "workspace").resolve()
     lrp = Path(last_run_path) if Path(last_run_path).is_absolute() else root / last_run_path
     try:
         if not lrp.resolve().is_relative_to(_ws):
-            return f"error: last_run_path 必须在 workspace/ 内: {last_run_path}"
+            return f"error: last_run_path must be inside workspace/: {last_run_path}"
     except Exception:  # noqa: BLE001
-        return f"error: last_run_path 无法解析: {last_run_path}"
+        return f"error: last_run_path cannot be resolved: {last_run_path}"
     if not lrp.is_file():
-        return f"error: last_run 不存在: {last_run_path}"
+        return f"error: last_run does not exist: {last_run_path}"
     try:
         recs = _json.loads(lrp.read_text(encoding="utf-8"))
         rec = next((r for r in recs if str(r.get("autoid")) == aid), None)
     except Exception as exc:  # noqa: BLE001
-        return f"error: last_run 解析失败: {exc}"
+        return f"error: last_run parse failed: {exc}"
     if rec is None:
-        return f"error: {aid} 不在该 last_run 里——传记录了这个 case 上机结果的那份"
+        return f"error: {aid} is not in this last_run — pass the one recording this case's run"
     if str(rec.get("verdict")) != "pass":
-        return (f"error: {aid} 该次上机 verdict={rec.get('verdict')}——只写回真 PASS 的卷,"
-                "fail/unknown 写回会污染先例库。")
+        return (f"error: {aid} ran with verdict={rec.get('verdict')} — only true-PASS volumes are "
+                "written back; writing back fail/unknown poisons the precedent store.")
     # <RUNTIME> 护栏(红线评审提示):含未回填运行时占位的卷进先例库,环境态值与
     # 溯源值对消费方不可分辨。真 PASS 卷本不该还带 <RUNTIME>(它会使断言失败),
     # 但直改/半回填的边角情况防一手——检出即拒,让先例库只收干净的确定性卷。
@@ -497,22 +517,24 @@ def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "") ->
         _wsx = _ox.load_workbook(xp).active
         for _r in _wsx.iter_rows(min_row=2):
             if "<RUNTIME>" in str(_r[6].value or ""):
-                return (f"error: {aid} 卷面仍含 <RUNTIME> 占位——运行时值未回填的卷不写回"
-                        "先例库(环境态会污染溯源)。先 compile_runtime_fill 回填并复验。")
+                return (f"error: {aid} volume still contains <RUNTIME> placeholders — volumes with "
+                        "unfilled runtime values are not written back (environment state would "
+                        "pollute provenance). compile_runtime_fill first, then re-verify.")
     except Exception:  # noqa: BLE001
         pass
     # 门②:凭证新鲜(写回的是上机那份,不是之后改过的)。凭证缺失=没走过 emit 门,
     # 拒绝而非静默跳过(红线评审弱门:缺凭证跳过新鲜校验会放进未经门的卷)。
     credf = src_dir / ".grade_credential.json"
     if not credf.is_file():
-        return (f"error: {aid} 无凭证(没走过 emit 门)——写回的必须是过门且上机验证的卷。")
+        return (f"error: {aid} has no credential (never passed the emit gate) — only gated and "
+                "on-device-verified volumes are written back.")
     try:
         cred = _json.loads(credf.read_text(encoding="utf-8"))
         if abs(float(cred.get("xlsx_mtime", -1)) - xp.stat().st_mtime) >= 1e-6:
-            return (f"error: {aid} 卷面在凭证之后被改过(mtime 不匹配)——上机验证的不是"
-                    "当前这份,先重走门再写回。")
+            return (f"error: {aid} volume was modified after its credential (mtime mismatch) — what "
+                    "was verified on-device is not this file; re-pass the gate first, then write back.")
     except Exception as exc:  # noqa: BLE001
-        return f"error: {aid} 凭证解析失败: {exc}"
+        return f"error: {aid} credential parse failed: {exc}"
     # 意图路径
     ip = (intent_path or "").strip()
     if not ip:
@@ -534,7 +556,7 @@ def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "") ->
         _MIRROR.mkdir(parents=True, exist_ok=True)
         _dst = (_MIRROR / fn).resolve()
         if not _dst.is_relative_to(_MIRROR.resolve()):   # 双保险:白名单已挡,这里兜底
-            return f"error: 写目标越出 mirror 目录(autoid 异常): {aid!r}"
+            return f"error: write target escapes the mirror dir (anomalous autoid): {aid!r}"
         _sh.copyfile(xp, _dst)
         # 索引更新走「容损读 + 原子写 + 进程内锁」——2026-07-05 实证:旧版裸
         # read+write_text 被杀进程截断成拼接损坏后,28 个 PASS 写回全挂在这一行。
@@ -543,10 +565,11 @@ def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "") ->
             idx[fn] = [ip]
             _write_intent_index_atomic(idx)
     except Exception as exc:  # noqa: BLE001
-        return f"error: 写回失败: {exc}"
+        return f"error: writeback failed: {exc}"
     # 失效进程内缓存:同 run 内后续 compile_precedent 立即能检索到(ρ_k 增长可观测)
     global _INTENT_INDEX_CACHE, _MIRROR_CORPUS_CACHE
     _INTENT_INDEX_CACHE = None
     _MIRROR_CORPUS_CACHE = None
-    return (f"已写回先例库: {fn}\n意图索引: {ip}\n"
-            f"后续编译的 compile_precedent 可立即检索到该已验证先例(进程内缓存已失效重建)。")
+    return (f"written back to the precedent store: {fn}\nintent index: {ip}\n"
+            f"compile_precedent in later compilations can retrieve this verified precedent "
+            f"immediately (in-process caches invalidated and rebuilt).")

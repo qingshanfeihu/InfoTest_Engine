@@ -70,9 +70,9 @@ def test_undetermined_carries_provenance_target_as_hint():
 
 def test_render():
     g = AttributionResult("G", "设备语法拒绝(^)", reflow=True, target_layer="G")
-    assert "[G]" in g.render() and "回流→G层" in g.render()
+    assert "[G]" in g.render() and "reflow → layer G" in g.render()
     u = AttributionResult("undetermined", "未预判", reflow=True, target_layer="")
-    assert "待归因" in u.render() or "回流与否待归因后定" in u.render()
+    assert "pending attribution" in u.render()
 
 
 # ── 文件级崩溃签名（确定性事实，保留）────────────────────────────────────
@@ -85,8 +85,8 @@ def test_file_crash_found_times_recognized():
     assert hit is not None
     name, guide = hit
     assert name == "found_times"
-    assert "重编" in guide and ("found" in guide or "abs_found" in guide)
-    assert "框架 bug" in guide  # 明确说明非框架 bug（这是 main 最易归因错处）
+    assert "recompile" in guide and ("found" in guide or "abs_found" in guide)
+    assert "not a framework bug" in guide  # 明确说明非框架 bug（这是 main 最易归因错处）
 
 
 def test_file_crash_unknown_signature_returns_none():

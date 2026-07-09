@@ -90,7 +90,7 @@ def test_fanout_gives_up_after_max_retries(monkeypatch):
     })
     res = json.loads(out)
     assert res[0]["ok"] is False
-    assert "限流重试耗尽" in res[0]["output"]
+    assert "rate-limit retries exhausted" in res[0]["output"]
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ def test_fanout_briefs_path_missing_file(tmp_path, monkeypatch):
     _sandbox(tmp_path, monkeypatch)
     out = bt.compile_fanout.invoke({"skill": "s",
                                     "briefs_path": "workspace/outputs/nope.json"})
-    assert "不存在" in _json.loads(out)["error"]
+    assert "does not exist" in _json.loads(out)["error"]
 
 
 def test_fanout_truncated_json_error_points_to_file_channel(tmp_path, monkeypatch):
@@ -233,7 +233,7 @@ def test_fanout_empty_briefs_is_error_not_silent_success(tmp_path, monkeypatch):
     # 双通道皆空=调用错误。旧行为返回 [] 会被 orchestrator 当"派发完成",清单静默丢失。
     _sandbox(tmp_path, monkeypatch)
     out = bt.compile_fanout.invoke({"skill": "s"})
-    assert "briefs 为空" in _json.loads(out)["error"]
+    assert "briefs empty" in _json.loads(out)["error"]
 
 
 def test_fanout_return_size_bounded_at_scale(tmp_path, monkeypatch):

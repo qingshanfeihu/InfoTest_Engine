@@ -39,7 +39,7 @@ def test_writeback_missing_provenance_skips_not_errors(tmp_path, monkeypatch):
     """provenance 路径不存在 → 如实"跳过写回"，不抛异常（归因退化，不该崩 verify 流程）。"""
     _setup_sandbox(tmp_path, monkeypatch)
     out = _wb("a1", "workspace/outputs/feat/nope.json", True)
-    assert "跳过写回" in out
+    assert "writeback skipped" in out
 
 
 def test_writeback_unparseable_provenance_skips(tmp_path, monkeypatch):
@@ -47,7 +47,7 @@ def test_writeback_unparseable_provenance_skips(tmp_path, monkeypatch):
     outd, _ = _setup_sandbox(tmp_path, monkeypatch)
     (outd / "case.provenance.json").write_text("{ not json", encoding="utf-8")
     out = _wb("a1", "workspace/outputs/feat/case.provenance.json", True)
-    assert "跳过写回" in out
+    assert "writeback skipped" in out
 
 
 def test_writeback_happy_path_returns_summary(tmp_path, monkeypatch):
@@ -60,8 +60,8 @@ def test_writeback_happy_path_returns_summary(tmp_path, monkeypatch):
     ]
     rel = _write_prov(outd, "a1", steps)
     out = _wb("a1", rel, True)
-    assert "footprint 写回 autoid=a1" in out
-    assert "真PASS" in out          # on_device_passed=True 标记
+    assert "footprint writeback autoid=a1" in out
+    assert "true-PASS" in out          # on_device_passed=True 标记
 
 
 def test_writeback_provisional_tag_when_not_on_device(tmp_path, monkeypatch):

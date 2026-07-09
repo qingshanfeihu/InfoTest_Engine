@@ -27,21 +27,21 @@ class HitRange:
 
     def as_pattern_hint(self) -> str:
         if self.lo == self.hi:
-            return f"Hit 恰为 {self.lo}"
+            return f"Hit exactly {self.lo}"
         return f"Hit ∈ [{self.lo}, {self.hi}]"
 
 
 def rr_hit_range(n_requests: int, n_pools: int, pool_participates: bool = True) -> HitRange:
     """理想 rr 下单池累计 Hit 的可验区间(起点未知)。"""
     if n_pools <= 0 or n_requests < 0:
-        return HitRange(0, max(0, n_requests), "low", "参数不合法,退化为全区间")
+        return HitRange(0, max(0, n_requests), "low", "invalid parameters; degraded to the full interval")
     if not pool_participates:
-        return HitRange(0, 0, "exact", "该池不含目标记录类型地址,不参与该类型查询轮转")
+        return HitRange(0, 0, "exact", "this pool holds no addresses of the target record type and does not participate in that query type's rotation")
     base, r = divmod(n_requests, n_pools)
     if r == 0:
-        return HitRange(base, base, "exact", f"{n_requests}次/{n_pools}池整除,与起点无关")
+        return HitRange(base, base, "exact", f"{n_requests} queries / {n_pools} pools divides evenly — independent of the starting point")
     return HitRange(base, base + 1, "high",
-                    f"{n_requests}次/{n_pools}池,余{r}——恰有{r}个池取上界,取哪几个由运行时起点决定")
+                    f"{n_requests} queries / {n_pools} pools, remainder {r} — exactly {r} pools take the upper bound; which ones is decided by the runtime starting point")
 
 
 def wrr_hit_range(n_requests: int, n_pools: int, weight: int = 0,
@@ -53,13 +53,14 @@ def wrr_hit_range(n_requests: int, n_pools: int, weight: int = 0,
     发若干轮)重跑,若各池命中≈权重比即恢复 weight_ratio 精确区间。当前保守是因为
     2026-07 两轮实测未观察到配比,缺陷单落实后更新此函数与 note。"""
     if not pool_participates:
-        return HitRange(0, 0, "exact", "该池不参与该类型查询")
+        return HitRange(0, 0, "exact", "this pool does not participate in that query type")
     if n_requests <= 0:
-        return HitRange(0, 0, "exact", "零请求")
+        return HitRange(0, 0, "exact", "zero requests")
     lo = 1 if (weight > 0 and n_requests >= n_pools) else 0
     return HitRange(lo, n_requests, "low",
-                    "wrr 实测配比与配置权重不符(疑似产品缺陷在案)——仅参与性可验,"
-                    "精确配比留缺陷候选核实,不要写权重比例断言")
+                    "measured wrr ratios deviate from configured weights (suspected product defect "
+                    "on record) — only participation is verifiable; leave exact ratios to the "
+                    "defect-candidate verification, do not write weight-ratio assertions")
 
 
 def rr_hit_range_segmented(n_requests: int, n_pools: int, uninterrupted: bool,
@@ -74,8 +75,10 @@ def rr_hit_range_segmented(n_requests: int, n_pools: int, uninterrupted: bool,
     """
     if not uninterrupted:
         base = HitRange(0 if n_requests == 0 else 1, n_requests, "low",
-                        "查询序列被 show/配置步分段——设备实测(2026-07-05 探针)分段后轮转态"
-                        "漂移,精确区间不成立。改法:每个连续段单独 show 单独断言(段内可用"
-                        "精确区间),或对累计只断言参与性。")
+                        "the query sequence is segmented by show/config steps — device replay "
+                        "shows the rotation state drifts across segments, so exact intervals do "
+                        "not hold. Fix: give each contiguous segment its own show + assertion "
+                        "(exact intervals are valid within a segment), or assert only "
+                        "participation over the cumulative count.")
         return base
     return rr_hit_range(n_requests, n_pools, pool_participates)

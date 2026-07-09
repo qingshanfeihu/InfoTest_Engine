@@ -59,7 +59,7 @@ def test_A_exact_leaf_hit(tmp_path, monkeypatch):
     r = _lookup("demo listener")
     assert "demo.listener" in r
     assert "demo listener <ip>" in r
-    assert "父节点" not in r and "模糊" not in r
+    assert "parent node" not in r and "fuzzy" not in r
 
 
 # B. 精确命中 branch，branch 自己也有命令 → 展开自身命令 + **深展开**子树后代命令文法。
@@ -76,7 +76,7 @@ def test_B_branch_with_own_commands(tmp_path, monkeypatch):
     assert "demo svc <x>" in r            # 自己的命令
     assert "demo svc method <a>" in r     # 后代**文法**已内联（不只 ID）
     assert "demo svc name <n>" in r       # 多个后代都展开文法
-    assert "子命令文法" in r              # 走深展开分支
+    assert "Subcommand grammar" in r      # 走深展开分支
 
 
 # B2. 深展开超 _KB_EXPAND_MAX_CHARS → 部分展开 + 剩余后代回退列名（护病态宽节点不爆上下文）
@@ -90,7 +90,7 @@ def test_B2_deep_expand_respects_char_cap(tmp_path, monkeypatch):
     ])
     r = _lookup("demo svc")
     assert "demo svc method <a>" in r          # 首个后代仍展开（防全截没）
-    assert "其余子命令未展开" in r              # 剩余回退列名提示
+    assert "remaining subcommands not expanded" in r   # 剩余回退列名提示
     assert "demo.svc.name" in r                # 未展开者以 ID 列出供再查
 
 
@@ -102,7 +102,7 @@ def test_C_empty_branch_expands_children(tmp_path, monkeypatch):
         _node("demo.svc.name", ["demo svc name <n>"]),
     ])
     r = _lookup("demo svc")
-    assert "父节点" in r
+    assert "parent node" in r
     assert "demo svc method <a>" in r
     assert "demo svc name <n>" in r
 
@@ -115,9 +115,9 @@ def test_D_trunk_recurses_to_grandchild(tmp_path, monkeypatch):
         _node("demo.svc.method", ["demo svc method <a>"]),
     ])
     r = _lookup("demo")
-    assert "父节点" in r                      # 走递归展开，不是模糊兜底
+    assert "parent node" in r                  # 走递归展开，不是模糊兜底
     assert "demo svc method <a>" in r          # 下潜到孙节点拿到命令
-    assert "模糊" not in r
+    assert "fuzzy" not in r
 
 
 # E. branch 整棵子树都无命令 → 如实说明，不做全树模糊（治：返回无关 token-兄弟）
@@ -129,9 +129,9 @@ def test_E_empty_subtree_no_misleading_fuzzy(tmp_path, monkeypatch):
         _node("demo.other", ["demo other command"]),
     ])
     r = _lookup("demo empty")
-    assert "未记录任何 CLI 命令" in r
+    assert "no CLI commands are recorded" in r
     assert "demo other command" not in r       # 不得模糊到无关节点
-    assert "模糊" not in r
+    assert "fuzzy" not in r
 
 
 # F. 查询不对应任何节点（自然措辞）→ 全树模糊，只收带命令叶子
@@ -141,7 +141,7 @@ def test_F_natural_phrase_fuzzy_fallback(tmp_path, monkeypatch):
     ])
     # "demo svc method rr" 不是节点（key demo.svc.method.rr 无），前缀也无 → None → 模糊
     r = _lookup("demo svc method rr")
-    assert "模糊匹配" in r
+    assert "fuzzy-matched" in r
     assert "demo svc method <a>" in r
 
 
@@ -151,7 +151,7 @@ def test_G_genuine_miss(tmp_path, monkeypatch):
         _node("demo.svc.method", ["demo svc method <a>"]),
     ])
     r = _lookup("zzz totally absent qqq")
-    assert "未找到" in r
+    assert "not found" in r
 
 
 # H. 带 no/show/clear 动词前缀的查询 → 剥动词回退到裸 feature_id 叶子。
@@ -169,7 +169,7 @@ def test_H_verb_prefixed_query_strips_to_bare_feature(tmp_path, monkeypatch):
               "clear sdns session persistence"):
         r = _lookup(q)
         assert "sdns.session.persistence" in r, q   # 精确命中裸 feature_id
-        assert "模糊" not in r and "父节点" not in r, q
+        assert "fuzzy" not in r and "parent node" not in r, q
 
 
 # I. feature_id 本就以 show/no/clear 起头的真节点(纯展示/清除命令,无配置对偶)→
@@ -182,10 +182,10 @@ def test_I_verb_led_feature_id_hit_as_is(tmp_path, monkeypatch):
     r = _lookup("show statistics sdns query")
     assert "show.statistics.sdns.query" in r
     assert "show statistics sdns query" in r
-    assert "模糊" not in r
+    assert "fuzzy" not in r
     r2 = _lookup("clear config all")
     assert "clear.config.all" in r2
-    assert "模糊" not in r2
+    assert "fuzzy" not in r2
 
 
 # J. 原样既无动词节点、剥动词后裸主体也不存在 → 仍回 None(交给上层模糊),不误命中。
@@ -195,7 +195,7 @@ def test_J_verb_prefix_strip_still_miss_falls_to_fuzzy(tmp_path, monkeypatch):
     ])
     # "no demo svc method rr": 原样 no.demo.* 无; 剥 no → demo.svc.method.rr 仍无节点/前缀 → 模糊
     r = _lookup("no demo svc method rr")
-    assert "模糊匹配" in r
+    assert "fuzzy-matched" in r
     assert "demo svc method <a>" in r
 
 
@@ -207,7 +207,7 @@ def test_child_count_excludes_empty_children(tmp_path, monkeypatch):
         _node("demo.svc.empty", []),           # 空子节点
     ])
     r = _lookup("demo svc")
-    assert "1 个带命令的节点" in r              # 只数 method，不数 empty
+    assert "1 command-bearing node" in r        # 只数 method，不数 empty
 
 
 # 递归去重：子树有环/重复引用不死循环

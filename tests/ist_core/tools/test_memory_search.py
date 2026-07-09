@@ -30,7 +30,7 @@ def test_cjk_bigram_hit_with_body(mem):
     out = ms.kb_memory_search.invoke({"query": "必崩"})
     assert "crash-gate.md" in out
     assert "found_times 会崩整份 pytest" in out   # top1 带正文
-    assert "不要 fs_read" in out                   # 沙箱口径提示
+    assert "do not fs_read" in out                 # 沙箱口径提示
 
 
 def test_ascii_token_hit(mem):
@@ -46,12 +46,12 @@ def test_rare_token_ranks_target_first(mem):
 
 def test_layer_filter(mem):
     out = ms.kb_memory_search.invoke({"query": "必崩", "layer": "working"})
-    assert "未命中" in out or "crash-gate" not in out
+    assert "No hits" in out or "crash-gate" not in out
 
 
 def test_no_hit_is_honest(mem):
     out = ms.kb_memory_search.invoke({"query": "量子纠缠"})
-    assert "未命中" in out
+    assert "No hits" in out
 
 
 def test_reconcile_removes_deleted(mem):

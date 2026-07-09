@@ -140,7 +140,8 @@ def _build(keyword: str, values: dict) -> tuple[str, str | None]:
     """构建命令字符串。返回 (command_string, error_or_none)。"""
     grammar = _load_grammar()
     if keyword not in grammar:
-        return "", f"命令 '{keyword}' 不在手册文法中。可用命令: {', '.join(sorted(grammar.keys())[:20])}..."
+        return "", (f"command '{keyword}' is not in the manual grammar. Available commands: "
+                    f"{', '.join(sorted(grammar.keys())[:20])}...")
 
     entry = grammar[keyword]
     params = entry["params"]
@@ -157,13 +158,15 @@ def _build(keyword: str, values: dict) -> tuple[str, str | None]:
     # 检查必选参数
     for p in params:
         if p["required"] and not any(a in values for a in param_aliases if param_aliases[a] == p["name"]):
-            return "", f"缺少必选参数 '{p['name']}'（{keyword}: {entry['file']}）。可用别名: {[a for a in param_aliases if param_aliases[a] == p['name']]}"
+            return "", (f"missing required parameter '{p['name']}' ({keyword}: {entry['file']}). "
+                        f"Accepted aliases: {[a for a in param_aliases if param_aliases[a] == p['name']]}")
 
     # 检查多余参数
     all_aliases = set(param_aliases.keys())
     for k in values:
         if k not in all_aliases:
-            return "", f"未知参数 '{k}'，{keyword} 的参数: {list(p['name'] for p in params)}（可接受别名: {sorted(all_aliases)}）"
+            return "", (f"unknown parameter '{k}'; parameters of {keyword}: "
+                        f"{list(p['name'] for p in params)} (accepted aliases: {sorted(all_aliases)})")
 
     used_keys = set()
     skipped = []
@@ -177,33 +180,36 @@ def _build(keyword: str, values: dict) -> tuple[str, str | None]:
         if found_key:
             if skipped:
                 unapplied = [k for k in values if k not in used_keys]
-                return "", (f"无法设置 '{unapplied[0]}'：前面的可选参数 {skipped} "
-                           f"未提供。CLI 参数按位置解析——要填后面的，必须先填前面的")
+                return "", (f"cannot set '{unapplied[0]}': the preceding optional parameters "
+                            f"{skipped} were not provided. CLI parameters are positional — to "
+                            f"fill a later one, every earlier one must be filled first")
             val = values[found_key]
             used_keys.add(found_key)
             # 枚举校验
             if p["enum"] and not any("_" in e or len(e) > 8 for e in p["enum"]):
                 if str(val).lower() not in p["enum"]:
-                    return "", f"参数 '{p['name']}' 的值 '{val}' 不在合法集合 {p['enum']} 中"
+                    return "", (f"value '{val}' for parameter '{p['name']}' is not in the "
+                                f"allowed set {p['enum']}")
             # 数值范围校验
             if "range" in p and isinstance(p["range"], tuple):
                 try:
                     n = int(str(val).replace(",", ""))
                     lo, hi = p["range"]
                     if n < lo or n > hi:
-                        return "", f"参数 '{p['name']}' 的值 {n} 超出范围 [{lo}, {hi}]"
+                        return "", f"value {n} for parameter '{p['name']}' is out of range [{lo}, {hi}]"
                 except (ValueError, TypeError):
                     pass
             parts.append(_format_value(val))
         elif p["required"]:
-            return "", f"缺少必选参数 '{p['name']}'"
+            return "", f"missing required parameter '{p['name']}'"
         else:
             skipped.append(p["name"])
 
     # 检查完全未使用的值
     unapplied = [k for k in values if k not in used_keys]
     if unapplied:
-        return "", f"未使用的参数: {unapplied}。检查参数名是否拼写正确，或前面是否有未填的可选参数"
+        return "", (f"unused parameters: {unapplied}. Check the parameter names for typos, or "
+                    f"whether an earlier optional parameter was left unfilled")
 
     return " ".join(parts), None
 
@@ -213,28 +219,33 @@ def _build(keyword: str, values: dict) -> tuple[str, str | None]:
 
 @tool(parse_docstring=True)
 def build_command(keyword: str, values_json: str = "{}") -> str:
-    """【确定性命令构建器】从手册文法生成 APV CLI 命令——LLM 只提供参数值，命令结构由工具保证。
+    """Deterministic command builder: generate an APV CLI command from the manual grammar —
+    the LLM supplies only parameter values; the command structure is guaranteed by the tool.
 
-    用法：grep 手册找到命令语法后，不自己写命令，用本工具生成。
+    Usage: after grepping the manual for a command's syntax, do not hand-write the command;
+    generate it with this tool.
 
     Args:
-        keyword: 命令关键字，如 "slb virtual http"、"slb real tcp"、"slb group method"。
-            必须是手册中真实存在的完整命令名（会与 660+ 命令的索引匹配）。
-        values_json: JSON 字符串，包含参数名→值的映射。
-            参数名从 grep 到的手册语法行中取（`_<name>_` 或 `[name]` 中的 name 部分）。
-            不需填可选参数——工具自动跳过未提供的可选参数。
+        keyword: Command keyword, e.g. "slb virtual http", "slb real tcp", "slb group method".
+            Must be a complete command name that actually exists in the manual (matched
+            against an index of 660+ commands).
+        values_json: JSON string mapping parameter name → value.
+            Take parameter names from the grepped manual syntax line (the name part inside
+            `_<name>_` or `[name]`). Optional parameters may be omitted — the tool skips
+            unprovided optional parameters automatically.
 
     Returns:
-        生成的命令字符串，或错误信息（参数缺失/类型错/枚举值非法）。
+        The generated command string, or an error message (missing parameter / bad type /
+        illegal enum value).
     """
     keyword = (keyword or "").strip()
     if not keyword:
-        return "error: 必须提供 keyword（如 'slb virtual http'）"
+        return "error: keyword is required (e.g. 'slb virtual http')"
 
     try:
         values = json.loads(values_json) if values_json and values_json.strip() else {}
     except json.JSONDecodeError as e:
-        return f"error: values_json 解析失败: {e}"
+        return f"error: failed to parse values_json: {e}"
 
     cmd, err = _build(keyword, values)
     if err:

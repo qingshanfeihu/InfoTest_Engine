@@ -18,20 +18,28 @@ from langchain_core.tools import tool
 def compile_footprint_writeback(autoid: str, provenance_path: str,
                                 on_device_passed: bool = True,
                                 manual_glob: str = "") -> str:
-    """把一个已验证 case 的 G 段命令文法写回 footprint 知识树（真 PASS 自演化）。
+    """Write a verified case's G-segment command grammar back into the footprint knowledge
+    tree (true-PASS self-evolution).
 
-    verify 步7 用：对上机**真 PASS**的 case（框架 pass 且断言真覆盖目标行为）调它，读该 case 的
-    provenance、把 G 段（cli_command）经 evidence 门写回 footprint。**只写 G 段**——V 段断言 /
-    E 段具体 IP / 回填的运行时值不写回（环境态会污染 footprint）。provenance 缺失/解析失败则跳过、不报错。
+    Used by verify step 7: call it for each case that **truly PASSed** on device (framework
+    pass and assertions genuinely cover the target behavior). It reads the case's provenance
+    and writes the G segment (cli_command) back through the evidence gate. **G segment only**
+    — V-segment assertions / E-segment concrete IPs / backfilled runtime values are never
+    written back (environment state would pollute the footprint). Missing or unparseable
+    provenance is skipped, not an error.
 
     Args:
-        autoid: 该 case 的 autoid（用于报告；实际写回来源是 provenance 内的逐步 layer/source）。
-        provenance_path: 该 case 的 `case.provenance.json` 路径（draft v3 旁挂产物）。
-        on_device_passed: True=上机真 PASS（provisional=False，正式写回）；False=仅结构门+grade 代理门（provisional=True）。
-        manual_glob: 可选，版本手册 glob，作 evidence_file 兜底供 merge 校验命中。
+        autoid: This case's autoid (for reporting; the actual writeback source is the
+            per-step layer/source inside the provenance).
+        provenance_path: Path to this case's `case.provenance.json` (draft v3 side product).
+        on_device_passed: True = truly PASSed on device (provisional=False, official
+            writeback); False = structural gates + grade proxy gate only (provisional=True).
+        manual_glob: Optional version-manual glob, used as an evidence_file fallback so merge
+            validation can hit.
 
     Returns:
-        写回汇总：写入 / 跳过条数 + 明细。provenance 缺失 / 无 G 段则如实报告、不报错。
+        Writeback summary: written / skipped counts plus details. Missing provenance or no
+        G segment is reported as-is, not an error.
     """
     from pathlib import Path
     from main.case_compiler.provenance_ir import parse_provenance
@@ -44,11 +52,11 @@ def compile_footprint_writeback(autoid: str, provenance_path: str,
         p = _resolve_inside_root(provenance_path, must_exist=True)
         text = Path(p).read_text(encoding="utf-8")
     except Exception as e:  # noqa: BLE001
-        return f"跳过写回：provenance 读取失败（{e}）——归因已退化，不写回。"
+        return f"writeback skipped: failed to read provenance ({e}) — attribution degraded, nothing written."
 
     prov = parse_provenance(text)
     if prov is None:
-        return f"跳过写回：provenance 解析失败（autoid={autoid}）——不写回。"
+        return f"writeback skipped: failed to parse provenance (autoid={autoid}) — nothing written."
 
     # device_verified 第二权威源(V6 支柱2a):上机真 PASS 时,从 verified_runs.jsonl
     # 台账定位该 autoid 最近一条 PASS 记录——手册 evidence 不中的运行时命令
@@ -78,13 +86,13 @@ def compile_footprint_writeback(autoid: str, provenance_path: str,
             device_run_ref=device_run_ref,
         )
     except Exception as e:  # noqa: BLE001
-        return f"写回异常（autoid={autoid}）：{e}"
+        return f"error: writeback failed (autoid={autoid}): {e}"
 
-    tag = "真PASS(正式)" if on_device_passed else "代理门(provisional)"
+    tag = "true-PASS (official)" if on_device_passed else "proxy-gate (provisional)"
     lines = [
-        f"footprint 写回 autoid={prov.autoid} [{tag}]："
-        f"G 段写入 {res.g_facts_written} / 跳过 {res.g_facts_skipped}"
-        + (f"(其中设备实证 {res.g_facts_device_verified})" if res.g_facts_device_verified else "")
+        f"footprint writeback autoid={prov.autoid} [{tag}]: "
+        f"G facts written {res.g_facts_written} / skipped {res.g_facts_skipped}"
+        + (f" ({res.g_facts_device_verified} device-verified)" if res.g_facts_device_verified else "")
     ]
     for d in res.details[:12]:
         lines.append(f"  {d}")

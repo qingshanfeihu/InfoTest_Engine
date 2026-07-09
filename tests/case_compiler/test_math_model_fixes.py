@@ -21,7 +21,7 @@ def test_precedent_best_structured_score_covers_config_only_axis(monkeypatch):
     # config-only 轴：my_config 有、intent 空 → tag="相似度X"
     best, text = pt.precedent_best_and_text(my_config="sdns host", intent="", limit=2)
     assert best > 0                         # 结构化分(cfg_sim=2/3)，旧正则会从"相似度X"抠成 0
-    assert "相似度" in text                  # 确认走的是 config-only 显示格式
+    assert "config structure axis" in text   # 确认走的是 config-only 显示格式
     # 回归证据：旧正则对"相似度X"任一分支都不匹配 → 会误判 0
     OLD_RE = re.compile(r"意图([\d.]+)|配置([\d.]+)\+意图([\d.]+)")
     assert OLD_RE.search(text) is None

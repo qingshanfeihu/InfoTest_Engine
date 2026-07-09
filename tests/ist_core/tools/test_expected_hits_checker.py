@@ -43,10 +43,10 @@ def test_wrr_participation_only():
 
 def test_tool_rejects_deterministic_algorithms():
     out = compile_expected_hits.invoke({"algorithm": "ga", "n_requests": 3, "n_pools": 3})
-    assert out.startswith("error") and "捕获比较" in out
+    assert out.startswith("error") and "capture-compare" in out
 
 
 def test_tool_low_confidence_warns():
     out = compile_expected_hits.invoke({"algorithm": "rr", "n_requests": 11, "n_pools": 3,
                                         "uninterrupted": False})
-    assert "置信=low" in out and "不要写精确区间" in out
+    assert "confidence=low" in out and "do not write an exact-interval" in out

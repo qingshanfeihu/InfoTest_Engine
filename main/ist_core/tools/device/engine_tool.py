@@ -45,18 +45,24 @@ def _bridge_ask(questions: list[dict]) -> dict:
 @tool(parse_docstring=True)
 def compile_engine_run(mindmap_path: str, product_version: str,
                        out_name: str = "", max_rounds: int = 3) -> str:
-    """跑 V6 编译引擎:脑图→逐case编写→欠定问用户→合并→上机→归因→定向重编→循环到
-    不动点→写回→交付报告。整条闭环由确定性状态机驱动,一次调用完成(中途欠定会弹
-    面板问用户);被打断后重调本工具(同 out_name)自动从断点续跑,不重复烧设备轮。
+    """Run the V6 compile engine: mindmap → per-case authoring → ask the user on underdetermined → merge → on-device run → attribution → targeted recompile → iterate to fixpoint → writeback → delivery report.
+
+    The whole loop is driven by a deterministic state machine in one call (underdetermined
+    cases pop a user panel mid-run); after an interruption, re-calling this tool with the
+    same out_name resumes from checkpoint without re-burning device rounds.
 
     Args:
-        mindmap_path: 脑图 txt 路径(如 workspace/inputs/automatic_case/dongkl.txt)。
-        product_version: 产品版本(如 10.5)——worker 查哪个手册的依据,没有就先问用户。
-        out_name: 批名(产物目录 workspace/outputs/<out_name>/);省略取脑图文件名。
-        max_rounds: 上机-重编循环上限(默认 3;到顶如实报告剩余)。
+        mindmap_path: mindmap txt path (e.g. workspace/inputs/automatic_case/dongkl.txt).
+        product_version: product version (e.g. 10.5) — decides which manual workers consult;
+            if absent, ask the user first.
+        out_name: batch name (deliverables at workspace/outputs/<out_name>/); defaults to
+            the mindmap filename.
+        max_rounds: on-device/recompile loop cap (default 3; on hitting the cap the
+            remainder is reported honestly).
 
     Returns:
-        结果摘要(完整报告落盘 delivery_report.md);机读全量在 workspace/outputs/<out_name>/engine_report.json。
+        Result summary (the full report lands in delivery_report.md); machine-readable
+        entirety in workspace/outputs/<out_name>/engine_report.json.
     """
     root = Path(__file__).resolve().parents[4]
     name = (out_name or "").strip() or Path(mindmap_path).stem
@@ -113,13 +119,14 @@ def _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)
         except Exception as exc:  # noqa: BLE001 — 引擎异常必须可读返回:进度在
             # checkpoint+ledger+盘上产物,修复后同参数重调即续跑,已完成的不重烧。
             logger.exception("compile_engine 异常")
-            return (f"error: 编译引擎异常中断——{type(exc).__name__}: {exc}\n"
-                    f"进度已保存(checkpoint+台账+已产出卷面),修复后同参数重调本工具续跑。")
+            return (f"error: compile engine aborted — {type(exc).__name__}: {exc}\n"
+                    f"Progress is saved (checkpoint + ledger + produced volumes); after fixing, "
+                    f"re-call this tool with the same arguments to resume.")
 
     # 报告摘要(机读全量在 engine_report.json)
     rp = root / "workspace" / "outputs" / name / "engine_report.json"
     if not rp.is_file():
-        return f"error: 引擎结束但无报告(state={json.dumps(result, ensure_ascii=False, default=str)[:300]})"
+        return f"error: engine finished without a report (state={json.dumps(result, ensure_ascii=False, default=str)[:300]})"
     rep = json.loads(rp.read_text(encoding="utf-8"))
     return _summarize_report(rep, str(rp.relative_to(root)), name)
 
@@ -127,13 +134,13 @@ def _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)
 def _summarize_report(rep: dict, report_ref: str, name: str) -> str:
     t = rep.get("totals", {})
     lines = [
-        f"编译引擎完成: {rep.get('outcome')}(轮次 {rep.get('rounds')})",
-        f"用例 {t.get('cases', 0)} 个:上机通过 {t.get('passed', 0)}"
-        f",待用户拍板 {t.get('awaiting_user', 0)}"
-        f",阻塞/缺陷标注 {t.get('failed_terminal', 0)}"
-        f",升级人工 {t.get('escalated', 0)}",
-        f"完整报告(已落盘): {rep.get('refs', {}).get('delivery_md') or '—'}",
-        f"机读报告: {report_ref}",
+        f"compile engine done: {rep.get('outcome')} (rounds {rep.get('rounds')})",
+        f"cases {t.get('cases', 0)}: on-device pass {t.get('passed', 0)}"
+        f", awaiting user {t.get('awaiting_user', 0)}"
+        f", blocked/defect-annotated {t.get('failed_terminal', 0)}"
+        f", escalated to human {t.get('escalated', 0)}",
+        f"full report (on disk): {rep.get('refs', {}).get('delivery_md') or '—'}",
+        f"machine-readable report: {report_ref}",
     ]
     # 非 pass 用例逐条附证据:main 复述曾凭上下文记忆重构设备回显(伪造配置会话、
     # 把「设备不支持」说成「执行成功」)——返回里给真原文摘录,复述才有据可引。
@@ -143,21 +150,21 @@ def _summarize_report(rep: dict, report_ref: str, name: str) -> str:
         if st not in ("escalated", "failed_terminal"):
             continue
         reason = cc.get("escalation_reason") or cc.get("detail") or st
-        tag = "升级人工" if st == "escalated" else "标注终态"
+        tag = "escalated to human" if st == "escalated" else "terminal-annotated"
         line = f"- [{tag}] …{aid[-6:]}: {reason}"
         ev = cc.get("fail_evidence") or []
         last = ev[-1] if ev and isinstance(ev[-1], dict) else {}
         ctx = str(last.get("device_context") or "").strip()
         if ctx:
-            line += f" | 末轮设备回显: {ctx[:200]}"
+            line += f" | last-round device echo: {ctx[:200]}"
         evid.append(line)
     if evid:
-        lines.append("非 pass 用例证据(复述设备行为只引用下面的原文摘录、"
-                     "engine_report 的 fail_evidence 或 last_run.json 的"
-                     " device_context,不要凭记忆重构回显):")
+        lines.append("Evidence for non-pass cases (when restating device behavior quote only "
+                     "the excerpts below, engine_report fail_evidence, or last_run.json "
+                     "device_context — never reconstruct echoes from memory):")
         lines.extend(evid)
-        lines.append(f"完整逐轮回显: {report_ref} 各 case 的 fail_evidence;"
-                     f"整卷原文 workspace/outputs/{name}/last_run.json")
+        lines.append(f"full per-round echoes: fail_evidence per case in {report_ref}; "
+                     f"whole-volume raw text at workspace/outputs/{name}/last_run.json")
     if rep.get("error"):
-        lines.append(f"中止原因: {rep['error']}")
+        lines.append(f"abort reason: {rep['error']}")
     return "\n".join(lines)

@@ -42,9 +42,11 @@ AttrLayer = Literal["G", "E", "V", "transient", "undetermined"]
 _CRASH_SIGNATURES = [
     # (traceback 子串小写, 断言名, 崩因 + 正解)
     ("found_times() missing", "found_times",
-     "found_times 框架 xlsx 流不支持（check_point 分派只传 2 参、缺 times）→ TypeError 崩整份文件、"
-     "后续 case 全不跑。正解：**重编**把该 case 的 found_times 改 found(出现即可)/abs_found(字面)——"
-     "'恰好 N 次'语义本框架表达不了；这是编译缺陷，非框架 bug、无需改框架。"),
+     "found_times is unsupported by the framework xlsx flow (check_point dispatch passes only "
+     "2 args, no times) → TypeError crashes the whole file, later cases never run. Correct fix: "
+     "**recompile** these cases' found_times into found (presence) / abs_found (literal) — "
+     "'exactly N times' cannot be expressed in this framework; a compilation defect, not a "
+     "framework bug, no framework change needed."),
 ]
 
 
@@ -71,10 +73,10 @@ class AttributionResult:
 
     def render(self) -> str:
         if self.layer == "undetermined":
-            flow = (f"回流目标候选:{self.target_layer}层(provenance)" if self.target_layer
-                    else "回流与否待归因后定")
+            flow = (f"reflow target candidate: layer {self.target_layer} (provenance)" if self.target_layer
+                    else "reflow decision pending attribution")
         else:
-            flow = f"回流→{self.target_layer}层" if self.reflow else "不回流"
+            flow = f"reflow → layer {self.target_layer}" if self.reflow else "no reflow"
         return f"[{self.layer}] {self.reason} | {flow}"
 
 
@@ -133,22 +135,26 @@ def attribute_fail(verdict_detail: str, *, failing_assertion_layer: str = "",
 @tool(parse_docstring=True)
 def compile_attribute(verdict_detail: str, failing_assertion_layer: str = "",
                       failing_assertion_source_kind: str = "") -> str:
-    """上机 fail 的机械预判（V3 步骤5）：只认设备语法拒绝 ``^``，其余交你归因。
+    """Mechanical pre-judgement of an on-device fail: only the device syntax rejection ``^`` is trusted; everything else is yours to attribute.
 
-    - 返回 layer="G"：device_context 里有设备 ``^`` 拒绝标记（协议级确定事实）——
-      配置/命令未被设备接受，先修它；同 case 后续解析/断言失败多为下游后果。
-    - 返回 layer="undetermined"：**没有做任何猜测**。你直接读 verdict_detail /
-      last_run.json 里该 case 的 device_context 原文，自行判 E(可达性/环境)、
-      V(断言期望值)、瞬态(换时间重跑即消失;连续两轮同签名 fail 不是瞬态)或产品缺陷。
+    - Returns layer="G": the device_context carries the device ``^`` rejection marker
+      (protocol-level deterministic fact) — the config/command was not accepted; fix it
+      first, since later parse/assertion failures in the same case are usually downstream
+      consequences.
+    - Returns layer="undetermined": **no guessing was done**. Read verdict_detail / that
+      case's device_context verbatim in last_run.json and judge E (reachability/environment),
+      V (assertion expectations), transient (vanishes on a later rerun; same-signature fails
+      two rounds in a row are NOT transient), or a product defect yourself.
 
     Args:
-        verdict_detail: 框架真实裁决明细（该 check_point 的报错原文 / dig 输出 / SSH 异常）。
-        failing_assertion_layer: 失败断言在 provenance 里的 layer（G/E/V，可空），
-            undetermined 时作为回流目标候选提示。
-        failing_assertion_source_kind: 失败断言来源 kind（可空，保留参数）。
+        verdict_detail: the framework's real ruling detail (that check_point's error text /
+            dig output / SSH exception).
+        failing_assertion_layer: the failing assertion's provenance layer (G/E/V, optional);
+            on undetermined it is surfaced as a reflow-target hint.
+        failing_assertion_source_kind: the failing assertion's source kind (optional, reserved).
 
     Returns:
-        JSON 字符串 {"layer","reason","reflow","target_layer","render"}。
+        JSON string {"layer","reason","reflow","target_layer","render"}.
     """
     r = attribute_fail(verdict_detail,
                        failing_assertion_layer=failing_assertion_layer,
@@ -165,35 +171,45 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
                        disposition: str, evidence: str,
                        fix_direction: str = "",
                        defect_candidate: dict | None = None) -> str:
-    """把你对某个 fail case 的归因**结论**落盘进 last_run.json(归因判断本身仍由你读原文做)。
+    """Land your attribution **conclusion** for one failed case into last_run.json (the judgement itself is still yours, made from the raw evidence).
 
-    **何时用**:读完设备证据原文、判层结论已成型时——落盘成功才算归因完成,散文结论引擎不读。
-    **何时不用**:证据不足以判层时别硬填一个层凑数——照常落盘,但 disposition=reflow 且
-    fix_direction 写"证据不足,需补充观测 X"(诚实的欠定比错误的确定有用)。
+    **When to use**: the raw device evidence has been read and the layer verdict has formed —
+    attribution only counts once landed; the engine does not read prose conclusions.
+    **When not to use**: if evidence is insufficient to pick a layer, do not force one — land
+    it anyway with disposition=reflow and fix_direction saying "insufficient evidence, need
+    observation X" (an honest underdetermination beats a wrong certainty).
 
-    为什么要落盘:结论只留在会话文本里会断链——下一轮 digest 的「上轮归瞬态本轮复现=误归」
-    护栏读的是落盘字段(不落盘该护栏是 dead code);「冻结同法重编」的"同法"判定也需要
-    上一轮的修法记录;缺陷候选不落盘则多轮验证后无法汇总成缺陷清单。
+    Why land it: conclusions living only in session text break the chain — the next round's
+    digest guard "attributed transient last round, recurred this round = misattribution"
+    reads the landed fields (without them that guard is dead code); the frozen-same-approach
+    check needs last round's fix record; defect candidates that never land cannot be rolled
+    up into a defect list after multi-round verification.
 
-    evidence 形态(门校验):必须是该 case device_context/causality 的**原文子串**——从你
-    摘引的原文里逐字复制一条,不转述不改写(多行片段易被参数转义失真,抄单行最稳)。
+    evidence shape (gate-checked): must be a **verbatim substring** of that case's
+    device_context/causality — copy one piece character-for-character, no retelling or
+    rewriting (multi-line snippets get mangled by parameter escaping; a single line is safest).
 
     Args:
-        xlsx_path: 本轮上机那份 case.xlsx 路径(工具据此定位同目录 last_run.json)。
-        autoid: 被归因 case 的完整 autoid(须在 last_run.json 中)。
-        layer: 归因层,五选一——G(设备语法拒绝)、E(环境/IP)、V(断言与行为不符)、
-            transient(瞬态,不可复现的偶发)、product_defect(疑似产品缺陷)。
-            拿不准就别调本工具(undetermined 是默认态,不用提交)。
-        disposition: 处置,五选一——reflow(带反馈重编)、frozen(冻结同法换方向)、
-            env_blocked(环境阻塞跑完为先)、defect_candidate(走缺陷候选单)、fixed(已修复待复跑)。
-        evidence: 支撑该结论的 device_context/causality **原文子串**(直接复制,勿转述)——
-            工具校验它确在该 case 的落盘原文里,防转述失真(曾实证独行 ^ 被转述丢失致误归)。
-        fix_direction: 修法方向(自由文本;reflow/frozen 时写清应改什么,下一轮判"同法"靠它)。
-        defect_candidate: disposition=defect_candidate 时的结构化候选单,含 repro(复现步骤)、
-            expected_with_source(期望+手册出处)、actual(实际+设备证据)、version,可含 ticket_id。
+        xlsx_path: the case.xlsx run this round (locates the sibling last_run.json).
+        autoid: the attributed case's full autoid (must exist in last_run.json).
+        layer: one of five — G (device syntax rejection), E (environment/IP), V (assertion vs
+            behavior mismatch), transient (non-reproducible), product_defect (suspected).
+            If unsure, do not call this tool (undetermined is the default state, no submission needed).
+        disposition: one of five — reflow (recompile with feedback), frozen (freeze the
+            approach, change direction), env_blocked (environment blocked, finish the run
+            first), defect_candidate (defect-candidate form), fixed (fixed, pending rerun).
+        evidence: the **verbatim substring** of device_context/causality supporting the
+            conclusion (copy, never retell) — validated against the case's landed raw text
+            (a standalone ^ line was measurably lost in retelling, causing misattribution).
+        fix_direction: fix direction (free text; for reflow/frozen state clearly what should
+            change — next round's "same approach?" check relies on it).
+        defect_candidate: structured candidate form when disposition=defect_candidate, with
+            repro (reproduction steps), expected_with_source (expectation + manual source),
+            actual (actual + device evidence), version, optionally ticket_id.
 
     Returns:
-        确认(写入路径+字段回显);autoid 不在 last_run/evidence 对不上原文时 error。
+        Confirmation (path written + field echo); error when the autoid is absent from
+        last_run or the evidence does not match the raw text.
     """
     from pathlib import Path
 
@@ -202,12 +218,12 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
     layer = (layer or "").strip()
     disposition = (disposition or "").strip()
     if layer not in _LAYERS:
-        return f"error: layer 必须是 {'/'.join(_LAYERS)},收到 {layer!r}"
+        return f"error: layer must be one of {'/'.join(_LAYERS)}, got {layer!r}"
     if disposition not in _DISPS:
-        return f"error: disposition 必须是 {'/'.join(_DISPS)},收到 {disposition!r}"
+        return f"error: disposition must be one of {'/'.join(_DISPS)}, got {disposition!r}"
     ev = (evidence or "").strip()
     if not ev:
-        return "error: evidence 必填——从 device_context/causality 原文直接复制支撑片段"
+        return "error: evidence is required — copy a supporting snippet verbatim from device_context/causality"
 
     try:
         from main.ist_core.tools.deepagent.file_tools import _resolve_inside_root
@@ -217,18 +233,18 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
     p = Path(xp) if xp else Path(xlsx_path)
     lr = p.parent / "last_run.json"
     if not lr.is_file():
-        return f"error: last_run.json 不存在: {lr}(先跑 dev_run_batch_digest)"
+        return f"error: last_run.json does not exist: {lr} (run dev_run_batch_digest first)"
     try:
         records = json.loads(lr.read_text(encoding="utf-8"))
         assert isinstance(records, list)
     except Exception as e:  # noqa: BLE001
-        return f"error: last_run.json 读取失败: {e}"
+        return f"error: failed to read last_run.json: {e}"
 
     aid = (autoid or "").strip()
     rec = next((r for r in records if isinstance(r, dict) and str(r.get("autoid")) == aid), None)
     if rec is None:
         have = [str(r.get("autoid")) for r in records if isinstance(r, dict)][:8]
-        return f"error: autoid {aid} 不在 last_run.json(有: {', '.join(have)}…)"
+        return f"error: autoid {aid} not in last_run.json (present: {', '.join(have)}…)"
 
     corpus = "\n".join(str(rec.get(k) or "") for k in
                        ("device_context", "causality", "detail_tail", "framework_traceback"))
@@ -243,10 +259,12 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
         return " ".join(s.split())
 
     if ev not in corpus and _norm(ev) not in _norm(corpus):
-        return ("error: evidence 不是该 case 落盘原文的子串——从 last_run.json 里该 autoid 的 "
-                "device_context/causality 原文**直接复制**,不要转述/改写(转述曾丢失独行 ^ 致误归)。"
-                "多行片段容易被参数转义搞失真:改抄**单行内**的关键片段即可(已做空白归一化,"
-                "跨行不必逐字节对齐)。")
+        return ("error: evidence is not a substring of this case's landed raw text — **copy it "
+                "directly** from that autoid's device_context/causality in last_run.json, never "
+                "retell or rewrite (retelling measurably lost a standalone ^ line and caused "
+                "misattribution). Multi-line snippets get mangled by parameter escaping: quote a "
+                "key fragment **within a single line** instead (whitespace is normalized, no "
+                "byte-exact cross-line alignment needed).")
 
     import time as _time
     entry = {
@@ -261,12 +279,12 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
         dc = defect_candidate if isinstance(defect_candidate, dict) else {}
         missing = [k for k in ("repro", "expected_with_source", "actual") if not str(dc.get(k, "")).strip()]
         if missing:
-            return f"error: defect_candidate 缺必填字段: {', '.join(missing)}"
+            return f"error: defect_candidate missing required fields: {', '.join(missing)}"
         entry["defect_candidate"] = dc
     rec["_attribution"] = entry
     try:
         lr.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:  # noqa: BLE001
-        return f"error: 写盘失败: {e}"
-    return (f"归因已落盘 {lr}\nautoid={aid} layer={layer} disposition={disposition}"
+        return f"error: write failed: {e}"
+    return (f"attribution landed at {lr}\nautoid={aid} layer={layer} disposition={disposition}"
             + (f" fix_direction={entry['fix_direction'][:60]}" if entry["fix_direction"] else ""))

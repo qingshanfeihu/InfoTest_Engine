@@ -34,10 +34,10 @@ def case_dir(tmp_path, monkeypatch):
 
 def test_candidate_requires_cmd_on_sheet(case_dir):
     out = submit_behavior_fact.func(_A, "show sdns magic", "多行回显")
-    assert "error" in out and "不在该 case 卷面" in out
+    assert "error" in out and "not among this case's APV commands" in out
     out2 = submit_behavior_fact.func(_A, "show statistics sdns pool p1",
                                      "该命令回显为多行结构,断言需跨行匹配")
-    assert "已登记" in out2
+    assert "registered" in out2
     cands = json.loads((case_dir / "behavior_candidates.json").read_text(encoding="utf-8"))
     assert len(cands) == 1
 

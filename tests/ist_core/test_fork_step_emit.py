@@ -93,7 +93,7 @@ def test_short_fork_result_skips_banner_and_metadata_grabs_device_output():
     # 预览应跳过前三者,抓**设备回显**(用户要看的是查到什么,不是命令本身)。
     out = ("=== dev_probe ===\n"
            "command: show sdns pool name\n"
-           "--- 设备回显(经跳转机)---\n"
+           "--- device echo (via jumphost) ---\n"
            "Pool: cname_pool  Members: 2  Status: up")
     r = loader._short_fork_result(out)
     assert r == "Pool: cname_pool Members: 2 Status: up"

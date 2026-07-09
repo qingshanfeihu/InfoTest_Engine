@@ -50,7 +50,7 @@ def verified_case(tmp_path):
 def test_writeback_pass_case(verified_case):
     r = compile_writeback.invoke({"autoid": AID, "last_run_path": str(verified_case),
                                   "intent_path": "测试 > 写回验证"})
-    assert "已写回" in r
+    assert "written back to the precedent store" in r
     assert (_MIRROR / f"verified_{AID}.xlsx").is_file()
     idx = json.loads(_INTENT_INDEX_PATH.read_text(encoding="utf-8"))
     assert idx.get(f"verified_{AID}.xlsx") == ["测试 > 写回验证"]
@@ -69,7 +69,7 @@ def test_writeback_rejects_stale_volume(verified_case):
     xp = Path("workspace/outputs") / AID / "case.xlsx"
     os.utime(xp)
     r = compile_writeback.invoke({"autoid": AID, "last_run_path": str(verified_case)})
-    assert r.startswith("error") and "改过" in r
+    assert r.startswith("error") and "modified after its credential" in r
 
 
 def test_writeback_rejects_path_traversal():

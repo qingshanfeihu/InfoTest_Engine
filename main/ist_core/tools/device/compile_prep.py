@@ -96,28 +96,33 @@ def _extract_cases(root: dict) -> list[dict]:
 
 @tool(parse_docstring=True)
 def compile_prep(mindmap_path: str, out_name: str = "") -> str:
-    """把一个脑图文件解析成批量编译 manifest(JSON 中间表示),供编排器按阶段调度。
+    """Parse one mindmap file into a batch-compile manifest (JSON intermediate representation) for stage-wise orchestration.
 
-    通读整个脑图,列出它包含的所有 case(autoid 主键)、各自的
-    标题/分组/步骤需求/期望(全是脑图原文需求),分组归类。
+    Reads the whole mindmap and lists every case it contains (autoid as primary key) with
+    title/grouping/step requirements/expectations (all verbatim mindmap requirements),
+    grouped by parent chain.
 
-    **本工具只产需求,不产命令**(零硬编码红线):manifest 里每个 case 的
-    init_commands/steps/assertions_provenance 都是 null——这些是 draft 子 agent 现场查
-    手册/先例后回填的,不是这里写死的。prep 只负责"这个脑图要编译哪些 case、每个 case
-    的原始需求是什么、怎么分组"。
+    **This tool produces requirements only, never commands** (zero-hardcoding red line):
+    each case's init_commands/steps/assertions_provenance in the manifest is null — those
+    are filled in by the authoring sub-agent after consulting manuals/precedents, never
+    written here. prep only answers "which cases does this mindmap compile, what is each
+    case's raw requirement, how are they grouped".
 
-    关键契约:
-    - autoid 是主键,标题重名**不去重**(yzg/zhaiyq 有大量同名 case,区别只在参数)。
-    - 分组(group_path)记录 case 在脑图里的父节点链,供编排器识别"组级共享基线"
-      (如 zhaiyq 把基线抽到组外前置节点,组内 case 都不重述)。
+    Key contracts:
+    - autoid is the primary key; duplicate titles are **not deduplicated** (many same-named
+      cases differ only in parameters).
+    - group_path records the case's parent-node chain in the mindmap, letting the
+      orchestrator recognize group-level shared baselines (some mindmaps hoist the baseline
+      into a preceding out-of-group node that in-group cases do not restate).
 
     Args:
-        mindmap_path: 脑图文件路径(workspace/inputs/automatic_case/*.txt,mind-map JSON 格式)。
-        out_name: manifest 落盘子目录名(workspace/outputs/<out_name>/manifest.json);
-            空则用脑图文件名(去扩展名)。
+        mindmap_path: mindmap file path (workspace/inputs/automatic_case/*.txt, mind-map JSON).
+        out_name: manifest output subdir (workspace/outputs/<out_name>/manifest.json);
+            empty uses the mindmap filename (sans extension).
 
     Returns:
-        manifest 落盘路径 + case 统计(总数/分组/重名标题数)。编排器据此按阶段 fan-out。
+        Manifest path + case statistics (total/groups/duplicate titles). The orchestrator
+        fans out by stage from it.
     """
     # 解析路径(走 agent 沙箱多根)
     p = None
@@ -133,20 +138,20 @@ def compile_prep(mindmap_path: str, out_name: str = "") -> str:
             cands += [root / mindmap_path]
         p = next((c for c in cands if c.is_file()), None)
     if p is None or not Path(p).is_file():
-        return f"error: 脑图文件不存在: {mindmap_path}"
+        return f"error: mindmap file does not exist: {mindmap_path}"
     p = Path(p)
 
     try:
         mm = _load_mindmap(p)
         if not isinstance(mm, list) or not mm:
-            return "error: 脑图 JSON 顶层应是非空数组 [root]"
+            return "error: mindmap JSON top level should be a non-empty array [root]"
         cases = _extract_cases(mm[0])
     except Exception as exc:  # noqa: BLE001
-        return f"error: 解析脑图失败: {exc}"
+        return f"error: mindmap parse failed: {exc}"
 
     if not cases:
-        return ("error: 脑图里没找到任何带 autoid 的 case 节点——确认这是用例脑图"
-                "(case 节点 data 里应有 autoid 字段)。")
+        return ("error: no case node with an autoid found in the mindmap — confirm this is a "
+                "test-case mindmap (case nodes should carry an autoid field in their data).")
 
     # autoid 唯一性检查(主键)
     seen, dups = set(), []
@@ -209,18 +214,15 @@ def compile_prep(mindmap_path: str, out_name: str = "") -> str:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    dup_note = f"\n⚠️ autoid 重复: {dups}" if dups else ""
+    dup_note = f"\n⚠️ duplicate autoids: {dups}" if dups else ""
     return (f"=== compile_prep ===\n"
-            f"manifest 已落盘: {out}\n"
-            f"脑图: {p.name}  case 总数: {len(cases)}\n"
-            f"分组({len(groups)}): {dict(list(groups.items())[:12])}\n"
-            f"意图族({len(families)}): "
+            f"manifest written: {out}\n"
+            f"mindmap: {p.name}  total cases: {len(cases)}\n"
+            f"groups ({len(groups)}): {dict(list(groups.items())[:12])}\n"
+            f"intent families ({len(families)}): "
             + "; ".join(f"{f['family']}×{f['size']}" for f in families[:8])
-            + f"\n≥4 成员的族先派族首(head)全力编写,族首过门后族内 brief 附其配置骨架"
-            f"(compile_skeleton 取),族内只做差异绑定——同族配置基线实测重合 45-51%,"
-            f"逐 case 重推导是重复支付。<4 成员的族按原流程逐个派。\n"
-            f"重名标题数: {len(dup_titles)}(autoid 是主键,标题重名不去重,各自独立编译)\n"
+            + f"\nduplicate titles: {len(dup_titles)} (autoid is the primary key; duplicate titles are not deduplicated, each compiles independently)\n"
             f"{dup_note}\n"
-            f"--- manifest 只含需求(标题/分组/步骤/期望),不含任何命令 ---\n"
-            f"每个 case 的 init_commands/steps/assertions_provenance 都是 null,\n"
-            f"由 draft 子 agent 现场查手册/先例后回填。下一步:编排器按 case 组 brief 派发 draft。")
+            f"--- the manifest holds requirements only (title/group/steps/expectations), no commands ---\n"
+            f"every case's init_commands/steps/assertions_provenance is null,\n"
+            f"filled in by the authoring sub-agent after consulting manuals/precedents. Next: the orchestrator dispatches briefs per case.")

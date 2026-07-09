@@ -140,9 +140,9 @@ def _coerce_json_array(val, name: str):
     try:
         arr = json.loads(s)
     except Exception as exc:  # noqa: BLE001
-        return None, f"{name} 解析失败: {exc}(建议直接传原生数组而非 JSON 字符串)"
+        return None, f"{name} parse failed: {exc} (pass a native array instead of a JSON string)"
     if not isinstance(arr, list):
-        return None, f"{name} 必须是数组"
+        return None, f"{name} must be an array"
     return arr, None
 
 
@@ -178,12 +178,12 @@ def _offload_large_outputs(items: list[dict], skill: str) -> None:
             f.write_text(out, encoding="utf-8")
             rel = f.relative_to(root)
             it["output_path"] = str(rel)
-            it["output"] = (f"[输出 {len(out)} 字符超内联上限,全文已落 {rel};"
-                            f"以下为末尾 {_FANOUT_INLINE_MAX} 字符(机读尾块在此)]\n…" + tail)
+            it["output"] = (f"[output of {len(out)} chars exceeds the inline cap; full text at {rel}; "
+                            f"below is the trailing {_FANOUT_INLINE_MAX} chars (machine-readable tail block here)]\n…" + tail)
         except Exception:  # noqa: BLE001
             logger.debug("fanout 输出落盘失败(仍截尾保护)", exc_info=True)
-            it["output"] = (f"[输出 {len(out)} 字符超内联上限,且落盘失败;"
-                            f"只保留末尾 {_FANOUT_INLINE_MAX} 字符]\n…" + tail)
+            it["output"] = (f"[output of {len(out)} chars exceeds the inline cap and writing to disk failed; "
+                            f"keeping only the trailing {_FANOUT_INLINE_MAX} chars]\n…" + tail)
 
 
 def _xlsx_real_autoids(xlsx_file: str) -> list[str]:
@@ -211,45 +211,54 @@ def _xlsx_real_autoids(xlsx_file: str) -> list[str]:
 @tool(parse_docstring=True)
 def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = "",
                    concurrency: int = 0, evidence_from_xlsx: str = "") -> str:
-    """并发派发**同一个 fork skill** 给多个 brief，收齐所有子 agent 的输出。
+    """Dispatch **one fork skill** concurrently across multiple briefs and collect every sub-agent's output.
 
-    用于批量编译里 worker / attributor 这类**可并行**阶段：每个 case 一个 brief，
-    一次性并发跑完（受并发度上限约束，超出的排队），返回每个 brief 的产物。
-    比逐个 invoke_skill 串行快 N 倍（N≈并发度），且各 fork 互相隔离、不串话。
+    For the parallelizable stages of batch compilation (worker / attributor): one brief per
+    case, all run concurrently (bounded by the concurrency cap; excess queue), returning each
+    brief's product. ~N× faster than serial invoke_skill (N≈concurrency), with forks fully
+    isolated from each other.
 
-    **只用于 worker / attributor**（纯 LLM + 检索/本地写，不碰设备可变态）。
-    **上机（run）绝不用本工具**——上机受框架全局锁 + 设备共享态约束，必须串行，
-    用 dev_run_batch。
+    **worker / attributor only** (pure LLM + retrieval/local writes; never touches mutable
+    device state). **Never use this for on-device runs** — runs are bound by the framework
+    global lock + shared device state and must be serial: use dev_run_batch.
 
-    每个 brief 就是你本来要传给 invoke_skill 的那段 brief 文本（需求+现状+规则+
-    指路+边界，不含具体命令答案——命令由子 agent 自己查）。
+    Each brief is exactly the text you would pass to invoke_skill (requirement + current
+    state + rules + pointers + boundaries; no concrete command answers — sub-agents look
+    commands up themselves).
 
-    briefs 载荷双通道(与 compile_emit 的 steps 同款设计):**大批次(>6 case)一律走
-    briefs_path 文件通道**——briefs 总量随 case 数增长,内联大数组会被供应商序列化
-    截断(2026-07-04 全量轮实证:18-case 内联截断 → 被迫逐个派发,并发全失)。
+    Dual payload channels for briefs (same design as compile_emit steps): **large batches
+    (>6 cases) must use the briefs_path file channel** — total brief volume grows with case
+    count, and large inline arrays get truncated by vendor serialization (measured: an
+    18-case inline batch truncated → forced one-by-one dispatch, concurrency lost).
 
     Args:
-        skill: 要并发派发的 fork skill 名（如 "compile-worker" / "compile-attributor"）。
-        briefs_json: 小批次通道:原生数组(JSON 数组字符串兼容)。每项是含 key 与 brief 两键的
-            dict——key 为标识(如 autoid,仅用于把输出对回到 case),brief 为完整 brief 文本。
-        briefs_path: **大批次首选**。workspace 内 JSON 文件路径(如
-            workspace/outputs/<批名>/briefs_wave1.json),内容为同 schema 的数组。先用
-            fs_write / run_python 把 briefs 数组落盘再传路径——brief 正文不经任何
-            内联参数,零截断暴露面。briefs_json 传了原生数组时以数组优先。
-        concurrency: 并发度。**默认 0=auto**（按待编译数自适应：min(16, max(4, N))）；
-            传正整数显式指定；env IST_FANOUT_CONCURRENCY 硬覆盖。夹紧到 16 防 429。
-        evidence_from_xlsx: 可选。上机后的重编派发传那份 xlsx 路径——工具自动从同目录
-            last_run.json 把每个 key(=autoid) 的 device_context/causality **原文**附进对应
-            brief 尾部,消除手抄转述损耗（曾实证独行 ^ 被转述丢失致误归）。
+        skill: fork skill to dispatch (e.g. "compile-worker" / "compile-attributor").
+        briefs_json: small-batch channel: native array (JSON-array string accepted). Each item
+            is a dict with key and brief — key is an identifier (e.g. autoid, only used to map
+            outputs back to cases), brief is the full brief text.
+        briefs_path: **preferred for large batches**. Path to a JSON file inside workspace
+            (e.g. workspace/outputs/<batch>/briefs_wave1.json) holding the same-schema array.
+            fs_write / run_python the array to disk first, then pass the path — brief bodies
+            bypass inline parameters entirely, zero truncation exposure. A native briefs_json
+            array takes precedence if both are given.
+        concurrency: concurrency degree. **Default 0=auto** (adaptive to pending count:
+            min(16, max(4, N))); pass a positive integer to pin; env IST_FANOUT_CONCURRENCY
+            hard-overrides. Clamped to 16 against 429s.
+        evidence_from_xlsx: optional. For post-run recompile dispatch pass that xlsx path —
+            the tool auto-attaches each key's (=autoid) device_context/causality **verbatim**
+            from the sibling last_run.json to the brief tail, eliminating transcription loss
+            (a standalone ^ line was measurably lost in retelling, causing misattribution).
 
     Returns:
-        JSON 数组字符串。每项 {"key": ..., "ok": bool, "output": "<子agent输出或错误>"}，
-        顺序与输入一致。某个 fork 失败不影响其它（该项 ok=false），你据此决定重做哪些。
-        编写类派发（worker/draft,key=autoid）每项另带 "produced": bool——工具直接探
-        outputs/<autoid>/case.xlsx 是否在盘上,「产没产出」以它为准,不用读散文猜。
-        单项 output 超内联上限时全文自动落 workspace（该项多出 "output_path"），内联只保留
-        **末尾**片段——fork 的机读尾块(STATUS:/ARTIFACT:/VERDICT:)在末尾,机读路径不受影响；
-        深挖全文 fs_read 该 output_path。
+        JSON array string. Each item {"key": ..., "ok": bool, "output": "<sub-agent output or
+        error>"}, in input order. One fork failing does not affect the others (that item gets
+        ok=false); decide what to redo from this. Authoring dispatches (worker/draft,
+        key=autoid) also carry "produced": bool — the tool directly checks whether
+        outputs/<autoid>/case.xlsx exists on disk; trust it for "was anything produced", not
+        prose. When an item's output exceeds the inline cap the full text lands in workspace
+        (the item gains "output_path") and only the **tail** stays inline — the fork's
+        machine-readable tail block (STATUS:/ARTIFACT:/VERDICT:) sits at the end, so machine
+        parsing is unaffected; fs_read the output_path to dig into the full text.
     """
     # briefs 通道优先级(与 compile_emit steps 三通道同款):原生数组 > briefs_path
     # (workspace 文件) > 字符串。文件通道是大批次的主路——briefs 总量 O(N×|brief|),
@@ -265,30 +274,31 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
             p = p.resolve()
             ws = (root / "workspace").resolve()
             if not p.is_relative_to(ws):
-                return json.dumps({"error": f"briefs_path 必须在 workspace/ 内: {sp}"},
+                return json.dumps({"error": f"briefs_path must be inside workspace/: {sp}"},
                                   ensure_ascii=False)
             if not p.is_file():
-                return json.dumps({"error": f"briefs_path 文件不存在: {sp}"
-                                            "(先 fs_write 落文件再传路径)"}, ensure_ascii=False)
+                return json.dumps({"error": f"briefs_path file does not exist: {sp}"
+                                            " (fs_write the file first, then pass its path)"}, ensure_ascii=False)
             items = json.loads(p.read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001
-            return json.dumps({"error": f"briefs_path 读取/解析失败: {exc}"}, ensure_ascii=False)
+            return json.dumps({"error": f"briefs_path read/parse failed: {exc}"}, ensure_ascii=False)
         if not isinstance(items, list):
-            return json.dumps({"error": "briefs_path 文件内容必须是 JSON 数组"
-                                        "(每项 {key, brief})"}, ensure_ascii=False)
+            return json.dumps({"error": "briefs_path file content must be a JSON array"
+                                        " (each item {key, brief})"}, ensure_ascii=False)
     else:
         items, err = _coerce_json_array(briefs_json, "briefs_json")
         if err:
             return json.dumps({"error": err + (
-                " 大批次别内联:先把 briefs 数组写到 workspace 文件"
-                "(如 workspace/outputs/<批名>/briefs_wave1.json)再传 briefs_path"
-                "——文件通道没有截断暴露面。")}, ensure_ascii=False)
+                " Do not inline large batches: write the briefs array to a workspace file"
+                " (e.g. workspace/outputs/<batch>/briefs_wave1.json) and pass briefs_path"
+                " — the file channel has no truncation exposure.")}, ensure_ascii=False)
 
     if not items:
         # 空派发是调用错误,不静默成功——orchestrator 漏传参时返回 [] 会被当"派发完成",
         # 清单从此丢失(与"过程事实只存在于散文"同型:错误必须显式,不能靠人看出少了)。
-        return json.dumps({"error": "briefs 为空:briefs_json 与 briefs_path 都没传有效内容。"
-                                    "小批传原生数组,大批(>6)先落 workspace 文件再传 briefs_path。"},
+        return json.dumps({"error": "briefs empty: neither briefs_json nor briefs_path carried "
+                                    "valid content. Small batches: pass a native array; large "
+                                    "batches (>6): write a workspace file and pass briefs_path."},
                           ensure_ascii=False)
 
     norm: list[dict] = []
@@ -321,7 +331,7 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
                     ev = (r.get("device_context") or r.get("causality") or "").strip()
                     if ev:
                         block = ('<device_evidence source="last_run.json" '
-                                 'note="工具注入原文,未经转述">\n'
+                                 'note="verbatim, injected by the tool, not retold">\n'
                                  f"{ev[:6000]}\n</device_evidence>")
                         # 长数据置顶(官方长上下文实践):插在机读信封首行之后——信封保持
                         # 首行供卡片/解析读取,长证据紧随其后,指令留在消息末尾。
@@ -366,7 +376,7 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
                                    skill, item["key"], attempt + 1, sleep_s)
                     time.sleep(sleep_s)
         return {"key": item["key"], "ok": False,
-                "output": f"ERROR: 限流重试耗尽({_RATE_LIMIT_MAX_RETRIES}次): {last_exc}"}
+                "output": f"ERROR: rate-limit retries exhausted ({_RATE_LIMIT_MAX_RETRIES}x): {last_exc}"}
 
     results: dict[str, dict] = {}
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:
@@ -376,12 +386,12 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
             try:
                 r = fut.result(timeout=_FORK_TIMEOUT_S)
             except Exception as exc:  # noqa: BLE001
-                r = {"key": key, "ok": False, "output": f"ERROR: fork 超时/异常: {exc}"}
+                r = {"key": key, "ok": False, "output": f"ERROR: fork timeout/exception: {exc}"}
             results[key] = r
 
     # 保持输入顺序
     ordered = [results.get(it["key"], {"key": it["key"], "ok": False,
-                                       "output": "ERROR: 无结果"}) for it in norm]
+                                       "output": "ERROR: no result"}) for it in norm]
     ordered += skipped
     # 「产没产出」以落盘为准,工具直接探(编写类派发 key=autoid):worker 说产出了但盘上
     # 没有、或返回是调试残句但盘上有——散文与事实曾张冠李戴,produced 字段是机读事实源。
@@ -407,35 +417,44 @@ _RUN_TOTAL_CAP_S = 2400        # 整份总超时硬上限(40min)
 def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "",
                  build: str = "", max_s_each: int = _RUN_DEFAULT_MAX_S,
                  force_clean: bool = False) -> str:
-    """把**一个合并 xlsx 整份上机一次**，回每个 case 的 verdict + 框架真实裁决。
+    """Run **one merged xlsx on-device in a single submission**, returning every case's verdict + the framework's real ruling.
 
-    **整份单跑（O(N) 关键修复）**：框架 ``test_xlsx.py`` 把交付的整份 xlsx 当一个**套件整跑**
-    ——提交**一个** autoid 就会顺序执行文件里**所有** case，全部内层 case 的逐 check_point 日志
-    都落在该提交 autoid 的 staging 下。故本工具**只 deliver+run 一次**，再从该 staging 一把读回
-    所有 autoid 的裁决；绝不按 autoid 逐个重复整跑（旧实现 O(N²)、且大文件撞 600s 轮询上限拿不到
-    结果——"跑 20 分钟无结果"的根因）。
+    **Single whole-file run (the O(N) fix)**: the framework ``test_xlsx.py`` treats the
+    delivered xlsx as one **suite** — submitting **one** autoid executes **every** case in the
+    file sequentially, and all inner cases' per-check_point logs land under that submitted
+    autoid's staging. So this tool **delivers+runs exactly once**, then reads back all
+    autoids' verdicts from that staging; it never re-runs the whole file per autoid (the old
+    implementation was O(N²) and large files hit the 600s polling cap with no result — the
+    root cause of "ran 20 minutes, nothing back").
 
-    **串行硬约束仍在**：跳转机框架有全局运行锁、设备态全局共享，同一时刻只允许一个上机任务；
-    本工具一次只提交一份 xlsx，物理上不并发。
+    **The serial hard constraint still holds**: the jumphost framework has a global run lock
+    and device state is globally shared — one on-device task at a time; this tool submits one
+    xlsx per call, physically non-concurrent.
 
-    verdict 取每个 case 专属日志的逐 check_point 结果：``#### Fail Num`` 全无且 ``#### Success
-    Num`` >0 → pass；有 Fail → fail；无日志 → unknown（未执行到/被跳过）。含 ``<RUNTIME>`` 占位
-    的 case 首跑必 fail（框架找字面 "<RUNTIME>"），属预期待回填，由 ist-verify 回填后复跑。
+    verdict comes from each case's own log per check_point: no ``#### Fail Num`` and
+    ``#### Success Num`` >0 → pass; any Fail → fail; no log → unknown (not reached/skipped).
+    Cases containing ``<RUNTIME>`` placeholders always fail the first run (the framework
+    searches for the literal "<RUNTIME>") — expected, refilled by ist-verify and rerun.
 
     Args:
-        xlsx_path: 合并后的 case.xlsx 本地路径（含多个真 case + 尾部哨兵）。
-        autoids_json: **首选原生数组**(JSON 数组字符串兼容;省略=xlsx 全卷)。要取裁决的
-            autoid 列表——工具会对照 xlsx 实际 autoid 全集校验,不在卷内的显式报错
-            (防手抄截断 id 被日志文件名子串静默误匹配成 pass)。
-        module: staging 子模块（默认取 compiler config staging_module）。
-        build: 目标设备 build（默认取 compiler config build）。
-        max_s_each: 兼容旧签名——传入则按"整份预算下限"对待；整份总超时 = clamp(max(它, N×45s), …, 2400s)。
-        force_clean: 设备床上有残留 pytest 时,默认拒绝上机并报出残留进程(多份 pytest
-            并发互踩配置会产出大片无意义 fail);确认残留是弃跑后传 True 先清场再跑。
+        xlsx_path: local path of the merged case.xlsx (multiple real cases + trailing sentinel).
+        autoids_json: **prefer a native array** (JSON-array string accepted; omit = whole
+            volume). The autoids to fetch verdicts for — validated against the xlsx's actual
+            autoid set, with unknown ids rejected explicitly (guards against hand-copied
+            truncated ids silently substring-matching log filenames into fake passes).
+        module: staging submodule (default: compiler config staging_module).
+        build: target device build (default: compiler config build).
+        max_s_each: legacy signature compat — treated as the whole-file budget floor; total
+            timeout = clamp(max(it, N×45s), …, 2400s).
+        force_clean: when stale pytest processes linger on the device bed, the tool refuses to
+            run by default and reports them (concurrent pytest runs trample each other's
+            config, producing masses of meaningless fails); pass True only after confirming
+            the leftover run is abandoned, to clean up and rerun.
 
     Returns:
-        JSON 数组字符串，每项 {"autoid", "verdict", "task_id", "causality"(check_point
-        真实裁决行), "detail_tail", 非pass附 "device_context"}，按输入顺序。
+        JSON array string, each item {"autoid", "verdict", "task_id", "causality"
+        (check_point ruling lines), "detail_tail", plus "device_context" for non-pass},
+        in input order.
     """
     import re as _re
     from pathlib import Path
@@ -460,7 +479,7 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
             cands += [root / xlsx_path, root / "knowledge" / "data" / xlsx_path]
         p = next((c for c in cands if c.is_file()), None)
     if p is None or not Path(p).is_file():
-        return json.dumps({"error": f"xlsx 不存在: {xlsx_path}"}, ensure_ascii=False)
+        return json.dumps({"error": f"xlsx not found: {xlsx_path}"}, ensure_ascii=False)
     p = Path(p)
 
     # autoid 与 xlsx 实际卷内全集对账(A 层校验):空=全卷;不在卷内的显式报错——
@@ -469,16 +488,16 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
     real = _xlsx_real_autoids(str(p))
     if not autoids:
         if not real:
-            return json.dumps({"error": "未传 autoids 且 xlsx 数据区扫不出 autoid;请显式传原生数组"},
+            return json.dumps({"error": "no autoids given and none found in the xlsx data area; pass a native array explicitly"},
                               ensure_ascii=False)
         autoids = real
     elif real:
         unknown = [a for a in autoids if a not in real]
         if unknown:
             return json.dumps({"error": (
-                f"以下 autoid 不在该 xlsx 数据区(手抄错/截断?): {', '.join(unknown)}。"
-                f"卷内实际 {len(real)} 个: {', '.join(real[:6])}{'…' if len(real) > 6 else ''};"
-                "省略 autoids 参数即按全卷取裁决。")}, ensure_ascii=False)
+                f"autoids not in this xlsx data area (hand-copy error/truncated?): {', '.join(unknown)}. "
+                f"The volume actually holds {len(real)}: {', '.join(real[:6])}{'…' if len(real) > 6 else ''}; "
+                "omit the autoids parameter to fetch verdicts for the whole volume.")}, ensure_ascii=False)
 
     try:
         from main.case_compiler.config import get_config
@@ -486,7 +505,7 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
         module = (module or cfg.staging_module).strip()
         build = (build or cfg.build).strip()
     except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": f"读取 compiler config 失败: {exc}"}, ensure_ascii=False)
+        return json.dumps({"error": f"failed to read compiler config: {exc}"}, ensure_ascii=False)
 
     # 整份总超时随 case 数自适应（单 case 含 sleep/多 dig ~45s），夹紧到硬上限。
     try:
@@ -499,15 +518,16 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
     try:
         from main.case_compiler.device_mcp_client import FrameworkMCPClient
     except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": f"加载 FrameworkMCPClient 失败: {exc}"}, ensure_ascii=False)
+        return json.dumps({"error": f"failed to load FrameworkMCPClient: {exc}"}, ensure_ascii=False)
 
     # 进程内互斥:同一进程里已有一份上机在跑 → 立即拒绝,绝不排队叠加。
     # (2026-07-04 实证:orchestrator 同 turn 连发 2-3 次 digest,设备床多 pytest 互踩,
     # 三轮结果报废。上机是独占设备床的物理动作,重复调用没有任何正确语义。)
     if not _RUN_MUTEX.acquire(blocking=False):
         return json.dumps({"error": "run_in_progress", "busy": True, "message": (
-            "本进程已有一份上机在执行中——上机独占设备床,同一时刻只能有一份。"
-            "不要重复调用 dev_run_batch/digest,等当前这份返回结果即可。")},
+            "an on-device run is already executing in this process — runs own the device bed "
+            "exclusively, one at a time. Do not re-call dev_run_batch/digest; wait for the "
+            "current run to return.")},
             ensure_ascii=False)
 
     submit = autoids[0]   # 整份只用一个 autoid 提交，框架据它建 staging 并整跑全文件
@@ -529,7 +549,7 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                     env = _stack.enter_context(_pool.acquire(timeout=300))
                 except TimeoutError:
                     return json.dumps({"error": "device_busy", "busy": True,
-                                       "message": "所有自动化环境都忙，请稍后重试。"},
+                                       "message": "all automation environments are busy; retry later."},
                                       ensure_ascii=False)
                 except Exception:  # noqa: BLE001
                     logger.warning("环境池 acquire 异常，回退单环境", exc_info=True)
@@ -544,15 +564,17 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                 stale = _probe_stale_pytest(env)
             if stale:
                 return json.dumps({"error": "stale_run_on_device", "busy": True, "message": (
-                    "设备床上有残留的 pytest 进程在跑(上次跑批被打断后进程未死):\n"
+                    "stale pytest processes are still running on the device bed (an interrupted "
+                    "batch left them alive):\n"
                     + stale[:500]
-                    + "\n此时上机会两份并发互踩配置、结果全部失真。等它自然跑完,"
-                      "或确认它是弃跑后带 force_clean=True 重调本工具清场重跑。")},
+                    + "\nRunning now would have two suites trampling each other's config — all "
+                      "results distorted. Wait for it to finish naturally, or, once confirmed "
+                      "abandoned, re-call this tool with force_clean=True to clean up and rerun.")},
                     ensure_ascii=False)
             client = _stack.enter_context(FrameworkMCPClient(env))
             dres = client.deliver(module, submit, str(p))
             if dres.get("error"):
-                return json.dumps({"error": f"deliver 失败: {dres.get('error')}"}, ensure_ascii=False)
+                return json.dumps({"error": f"deliver failed: {dres.get('error')}"}, ensure_ascii=False)
             # run-identity 基线:deliver 时刻的跳板机 epoch。staging 目录跨 run 复用,
             # 上次被打断执行的旧日志会留存;收割时 mtime 早于此基线的日志判 stale,
             # 不产 verdict(2026-07-04 实证:收割旧执行日志 → 0/34、1/34 两轮假结果)。
@@ -616,7 +638,7 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                 pass
             if run.get("busy") or run.get("error") == "device_busy":
                 return json.dumps({"error": "device_busy", "busy": True,
-                                   "message": run.get("message") or "环境忙：正在验证上一个用例，请稍后重试。"},
+                                   "message": run.get("message") or "environment busy: a previous case is still being verified; retry later."},
                                   ensure_ascii=False)
             task_id = run.get("task_id", "")
             run_err = run.get("error")
@@ -635,8 +657,10 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                 if d == stale_mark:
                     out.append({"autoid": autoid, "verdict": "unknown", "task_id": run.get("task_id", ""),
                                 "causality": "", "detail_tail": (
-                                    "stale_log: 该 case 的 staging 日志早于本次 deliver——是上一次"
-                                    "执行的残留,本次没有跑到它(整卷可能中途崩溃/超时)。别按此日志归因。")})
+                                    "stale_log: this case's staging log predates this deliver — it is "
+                                    "residue of a previous execution; this run never reached the case "
+                                    "(the volume may have crashed/timed out midway). Do not attribute "
+                                    "from this log.")})
                     continue
                 succ = len(_re.findall(r"#### Success\s*Num", d))
                 fail = len(_re.findall(r"#### Fail\s*Num", d))
@@ -655,7 +679,7 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                 if verdict != "pass":
                     rec["device_context"] = client.fetch_device_context_under(submit, autoid)
                     if run_err and not d:
-                        rec["detail_tail"] = (f"(无 case 日志；run state={run_err})\n" + rec["detail_tail"])
+                        rec["detail_tail"] = (f"(no case log; run state={run_err})\n" + rec["detail_tail"])
                 out.append(rec)
             # 文件级崩溃可见性：有 unknown（某 case 把整份 pytest 搞崩、后续全不跑）→ 取框架 task 日志
             # 的 traceback 附到 unknown 上，让 agent 看到“崩在哪一行/什么异常”，而非只看到一堆无解释的 unknown。
@@ -666,7 +690,7 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                         if r["verdict"] == "unknown":
                             r["framework_traceback"] = tb
     except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": f"批量上机异常: {exc}", "partial": out}, ensure_ascii=False)
+        return json.dumps({"error": f"batch on-device run exception: {exc}", "partial": out}, ensure_ascii=False)
 
     return json.dumps(out, ensure_ascii=False)
 
@@ -769,50 +793,59 @@ def _append_verified_runs(xlsx_path, results: list, cur_round: int, run_ts: floa
 def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: str = "",
                          build: str = "", max_s_each: int = _RUN_DEFAULT_MAX_S,
                          force_clean: bool = False) -> str:
-    """整份 xlsx 上机单跑 + 逐 case 四层归因，回**精简可读**摘要（不被 offload）。
+    """Run the whole xlsx on-device once + per-case four-layer attribution, returning a **compact readable** digest (never offloaded).
 
-    与 ``dev_run_batch`` 同参、同上机方式（整份单跑 O(N)），但**替你把大结果就地消化**——
-    这是把 ist-verify 的确定性核（首跑 → 拆逐 case → 四层归因）提炼成一次调用：
+    Same params and run mode as ``dev_run_batch`` (single whole-file run, O(N)), but it
+    **digests the large result in-process for you** — the deterministic core of ist-verify
+    (first run → split per case → four-layer attribution) condensed into one call:
 
-    - 全量逐 case 明细（causality / device_context / framework_traceback）落
-      ``workspace/outputs/<feature>/last_run.json``（**缩进 JSON**：``fs_read`` 可分页、
-      ``fs_grep <autoid>`` 可定位、``run_python`` 可 ``json.load``）；
-    - 每个非 pass case 过确定性四层归因（与 ``compile_attribute`` 同款分类器，瞬态>E>G>默认V）；
-    - **只返回** summary 计数 + 逐 case 一行表 + 明细文件指针（几 KB → 不触发 offload）。
+    - full per-case detail (causality / device_context / framework_traceback) lands in
+      ``workspace/outputs/<feature>/last_run.json`` (**indented JSON**: pageable via
+      ``fs_read``, locatable via ``fs_grep <autoid>``, loadable via ``run_python``);
+    - every non-pass case goes through deterministic four-layer attribution (same classifier
+      as ``compile_attribute``: transient > E > G > default V);
+    - **only returns** summary counts + a one-line-per-case table + the detail file pointer
+      (a few KB → never triggers offload).
 
-    为什么要它：``dev_run_batch`` 原样返回的大 JSON 会被 middleware offload 成单块，agent
-    读得回、却难就地逐 case 解析（且 ``run_python``/``run_shell`` 够不到 offload 落点）。本工具在
-    **进程内**消化完，agent 拿到的是已分类的小摘要；要深挖某个 case 的完整 device_context，
-    再对 ``last_run.json`` ``fs_read`` / ``fs_grep <autoid>`` 即可（它在 workspace 内、全工具可用）。
+    Why it exists: the large JSON ``dev_run_batch`` returns verbatim gets offloaded by
+    middleware into a single blob — readable back, but hard to parse per case in place (and
+    ``run_python``/``run_shell`` cannot reach the offload location). This tool digests
+    **in-process**; you receive a small pre-classified summary, and to dig into one case's
+    full device_context, ``fs_read`` / ``fs_grep <autoid>`` the ``last_run.json`` (inside
+    workspace, reachable by every tool).
 
-    含 ``<RUNTIME>`` 占位的 case 首跑必 fail（框架找字面 "<RUNTIME>"），属预期待回填——
-    先看 digest 里它归到哪层，回填仍走 ``compile_runtime_slots`` / ``compile_runtime_fill``。
+    Cases containing ``<RUNTIME>`` placeholders always fail the first run (the framework
+    searches for the literal "<RUNTIME>") — expected, pending backfill: check which layer the
+    digest put them in first; backfill still goes through ``compile_runtime_slots`` /
+    ``compile_runtime_fill``.
 
-    **何时不用**：只想跑**单个** case 看它过不过 → ``dev_run_case``（轻量、免合并）；
-    要原样拿完整大 JSON 自己解析 → ``dev_run_batch``（但结果会被 offload，见上）。
+    **When not to use**: to run a **single** case → ``dev_run_case`` (light, no merge); to get
+    the full raw JSON and parse it yourself → ``dev_run_batch`` (but it gets offloaded, see above).
 
-    返回摘要形态（据此决定下一步，别再要求全量明细内联）::
+    Digest shape (decide next steps from this; do not ask for the full detail inline)::
 
         === dev_run_batch_digest ===
         <run_summary>
-        excel: <路径> | 总 case: N
-        真通过 P:n | fail F:m (G(^拒绝):g 待归因:u) | unknown:k
-        全量明细: <last_run.json 路径>
+        excel: <path> | total cases: N
+        true-pass P:n | fail F:m (G(^ rejected):g unattributed:u) | unknown:k
+        full detail: <last_run.json path>
         </run_summary>
-        <cross_run_alerts>…跨轮同签名/瞬态复现警报(有则)…</cross_run_alerts>
-        …裁决表/指引各自成节…
+        <cross_run_alerts>…same-signature-across-rounds / transient-recurrence alerts (if any)…</cross_run_alerts>
+        …verdict table / guidance in their own sections…
 
     Args:
-        xlsx_path: 合并后的 case.xlsx 本地路径。
-        autoids_json: **首选原生数组**(JSON 数组字符串兼容;省略=xlsx 全卷,推荐)。
-            工具对照 xlsx 实际 autoid 全集校验,不在卷内的显式报错。
-        module: staging 子模块（默认取 compiler config）。
-        build: 目标设备 build（默认取 compiler config）。
-        max_s_each: 整份预算下限（同 ``dev_run_batch``）。
+        xlsx_path: local path of the merged case.xlsx.
+        autoids_json: **prefer a native array** (JSON-array string accepted; omit = whole
+            volume, recommended). Validated against the xlsx's actual autoid set; unknown ids
+            rejected explicitly.
+        module: staging submodule (default: compiler config).
+        build: target device build (default: compiler config).
+        max_s_each: whole-file budget floor (same as ``dev_run_batch``).
 
     Returns:
-        人类可读摘要：summary 计数 + 逐 case 表（autoid | verdict | 归因层 | reflow | causality 尾）
-        + 全量明细文件路径。上机错误 / device_busy 原样透传。
+        Human-readable digest: summary counts + per-case table (autoid | verdict |
+        attribution layer | reflow | causality tail) + the full-detail file path. On-device
+        errors / device_busy pass through unchanged.
     """
     from pathlib import Path
     from main.ist_core.tools.device.fail_attribution import attribute_fail
@@ -839,9 +872,9 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
             rows.append((aid, "pass", "-", "-", tail))
         elif verdict == "unknown":
             tb = (rec.get("framework_traceback") or "").strip()
-            note = "崩溃/未跑到"
+            note = "crashed/not reached"
             if tb:
-                note += f"; tb尾: {tb.splitlines()[-1][:70]}"
+                note += f"; tb tail: {tb.splitlines()[-1][:70]}"
             rows.append((aid, "unknown", "?", "-", note))
         else:  # fail → 机械预判只认设备 ^ 拒绝；其余给原文不猜（见 fail_attribution）
             detail = rec.get("device_context") or rec.get("detail_tail") or causal
@@ -863,14 +896,14 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
                                     source="dev_run_batch_digest", rejected_cmd=cmds[0])
                     except Exception:  # noqa: BLE001 — 追问失败不阻断 digest
                         pass
-                note = ("⚠配置被拒(^): " + " ; ".join(c[:60] for c in cmds)) if cmds else tail
+                note = ("⚠ config rejected (^): " + " ; ".join(c[:60] for c in cmds)) if cmds else tail
                 rows.append((aid, "fail", "G(^)", "→G", note))
             else:
                 # fail 行表尾展示失败签名(fail to find 前缀),不是 causality 末 90 字——
                 # 后者常落在最后一条**成功**裁决行上,失败断言反而不可见(2026-07-03 取证)。
                 sigs = sorted(_fail_signatures((rec.get("causality") or "") + (detail or "")))
                 note = ("✗ " + " | ".join(s[:55] for s in sigs[:2])) if sigs else tail
-                rows.append((aid, "fail", "-", "待归因", note))
+                rows.append((aid, "fail", "-", "unattributed", note))
 
     # 全量明细落 workspace（缩进 JSON，全工具可用）——feature 目录 = xlsx 的父目录
     detail_disp = ""
@@ -929,7 +962,7 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
                             except Exception:  # noqa: BLE001
                                 pass
                         _fz_file.write_text(json.dumps({
-                            "reason": "连续两轮同签名 fail(同法已证无效)",
+                            "reason": "two consecutive rounds failed with the same signature (same approach proven ineffective)",
                             "signatures": sorted(sig_now & sig_prev)[:4],
                             "ts": _t0.time(),
                             **({"overrides": _prev_ov} if _prev_ov else {}),
@@ -997,7 +1030,7 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
         except Exception:  # noqa: BLE001
             detail_disp = str(out_file)
     except Exception as exc:  # noqa: BLE001
-        detail_disp = f"(明细落盘失败: {exc})"
+        detail_disp = f"(failed to write detail file: {exc})"
 
     # 文件级崩溃识别：unknown 常是"某 case 断言崩了整份 pytest → 崩溃点后全 unknown（级联）"。
     # 认已知崩溃签名（如 found_times），扫 xlsx 点名元凶 case，给**正确归因**——编译缺陷、
@@ -1013,41 +1046,46 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
         if hit:
             name, guide = hit
             culprits = _scan_xlsx_for_check_method(xlsx_path, name)
-            who = ("元凶 case: " + ", ".join(f"{a}(行{r})" for a, r in culprits[:8])
-                   ) if culprits else "（未在 xlsx 定位到，可能在合并前的单 case draft）"
+            who = ("culprit case(s): " + ", ".join(f"{a} (row {r})" for a, r in culprits[:8])
+                   ) if culprits else "(not located in the xlsx; may sit in a pre-merge single-case draft)"
             crash_note = (
-                f"⚠ 文件级崩溃(编译缺陷,非框架bug): {name} 断言崩了整份 pytest → 崩溃点之后 "
-                f"{cnt.get('unknown', 0)} 个 unknown 是**级联**(后续 case 根本没跑)、非各自失败。\n"
-                f"   崩因: {guide}\n   {who}\n"
-                f"   → 正确处置: **重编移除/替换这些 case 的 {name} 断言**(走 ist-compile 重编)；"
-                f"不是改框架、不是逐 case 排查、excel **确实要动**。"
+                f"⚠ file-level crash (compilation defect, not a framework bug): a {name} assertion "
+                f"crashed the whole pytest → the {cnt.get('unknown', 0)} unknowns after the crash "
+                f"point are a **cascade** (later cases never ran), not individual failures.\n"
+                f"   cause: {guide}\n   {who}\n"
+                f"   → correct disposition: **recompile to remove/replace these cases' {name} "
+                f"assertions**; not a framework fix, not per-case debugging — the excel **does need "
+                f"to change**."
             )
 
     # 交互面 XML 分节(2026-07-05):摘要/跨轮警报/崩溃分析/裁决表/指引各自成节——
     # 数据与指引不混排(归因抄证据曾从混排文本里抄出转义失真)。行内文本零改动,
     # 只加节标签;本返回仅 LLM 消费,机读事实源仍是 last_run.json。
     lines = ["=== dev_run_batch_digest ===", "<run_summary>"]
-    lines.append(f"excel: {xlsx_path} | 总 case: {len(results)}")
+    lines.append(f"excel: {xlsx_path} | total cases: {len(results)}")
     lines.append(
-        f"真通过 P:{cnt.get('pass', 0)} | fail F:{cnt.get('fail', 0)} "
-        f"(G(^拒绝):{layers['G']} 待归因:{layers['undetermined']}) "
+        f"true-pass P:{cnt.get('pass', 0)} | fail F:{cnt.get('fail', 0)} "
+        f"(G(^ rejected):{layers['G']} unattributed:{layers['undetermined']}) "
         f"| unknown:{cnt.get('unknown', 0)}"
     )
-    lines.append(f"全量明细: {detail_disp}")
+    lines.append(f"full detail: {detail_disp}")
     lines.append("</run_summary>")
     if repeat_ids or transient_recur_ids:
         lines.append("<cross_run_alerts>")
         if repeat_ids:
             lines.append(
-                f"⚠ 跨轮对照:连续两轮**同签名** fail({len(repeat_ids)}个): {', '.join(repeat_ids)}\n"
-                f"   → 非瞬态、且上轮修法无效。**冻结同法重编**(第三轮同法大概率再 fail)；按环境阻塞"
-                f"/疑似产品缺陷处置:先核实环境事实(该 IP/配置在设备上的真实状态),环境正常则走"
-                f" kb_bug_search 比对缺陷库、产出缺陷候选记录,而非继续重编。"
+                f"⚠ cross-run comparison: **same-signature** fail two rounds in a row ({len(repeat_ids)}): {', '.join(repeat_ids)}\n"
+                f"   → not transient, and last round's fix was ineffective. **Same-approach recompiles are "
+                f"frozen** (a third same-approach round will very likely fail again); treat as environment "
+                f"blockage / suspected product defect: verify the environment facts first (the real state of "
+                f"that IP/config on the device); if the environment is fine, go through kb_bug_search against "
+                f"the defect library and produce a defect-candidate record instead of recompiling again."
             )
         if transient_recur_ids:
             lines.append(
-                f"⚠ 上轮归\"瞬态\"本轮复现 fail({len(transient_recur_ids)}个): {', '.join(transient_recur_ids)}\n"
-                f"   → 瞬态=不可复现;复现即误归,按系统性问题重新归因(G/E/V/产品缺陷)。"
+                f"⚠ attributed \"transient\" last round, failed again this round ({len(transient_recur_ids)}): {', '.join(transient_recur_ids)}\n"
+                f"   → transient means non-reproducible; recurrence means misattribution — re-attribute as a "
+                f"systemic problem (G/E/V/product defect)."
             )
         lines.append("</cross_run_alerts>")
     if crash_note:
@@ -1055,17 +1093,21 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
         lines.append(crash_note)
         lines.append("</crash_analysis>")
     lines.append("<verdict_rows>")
-    lines.append("autoid | verdict | 归因层 | reflow | causality/note(尾)")
+    lines.append("autoid | verdict | attribution layer | reflow | causality/note (tail)")
     for r in rows:
         lines.append(" | ".join(str(x) for x in r))
     lines.append("</verdict_rows>")
     lines.append("<guidance>")
-    lines.append(f"深挖某 case: fs_read {detail_disp} 或 fs_grep <autoid> 该文件看完整 device_context。")
-    lines.append("归因说明: G(^)=设备语法拒绝(协议级确定事实,先修它——同 case 后续解析/断言失败多为下游后果); "
-                 "待归因=未做机械预判,读 last_run.json 里该 case 的 device_context 原文自行判 "
-                 "E(可达性/环境)/V(断言期望值)/瞬态(换时间重跑即消失;连续两轮同签名 fail 不是瞬态)/疑似产品缺陷。")
-    lines.append("归因第一步: 先对照 knowledge/data/auto_env/env_capabilities.json 的 known_defects——"
-                 "命中已知缺陷(DC-*)的 fail 是环境/产品边界,标注即可,别当编译问题重编。")
+    lines.append(f"To dig into one case: fs_read {detail_disp} or fs_grep <autoid> in that file for the full device_context.")
+    lines.append("Attribution notes: G(^) = device syntax rejection (protocol-level deterministic fact; fix it "
+                 "first — later parse/assertion failures in the same case are usually downstream consequences); "
+                 "unattributed = no mechanical pre-judgement was made — read that case's device_context verbatim "
+                 "in last_run.json and judge E (reachability/environment) / V (assertion expectations) / "
+                 "transient (vanishes on a later rerun; same-signature fails two rounds in a row are NOT "
+                 "transient) / suspected product defect yourself.")
+    lines.append("Attribution step one: check knowledge/data/auto_env/env_capabilities.json known_defects first — "
+                 "fails matching a known defect (DC-*) are environment/product boundary; annotate and move on, "
+                 "do not recompile them as compilation problems.")
     # 子集复测节流:迭代期整卷重跑,pass 的 case 每轮白跑一遍(dongkl 闭环实测:修 5-8 个
     # fail 反复整卷 34 跑了 7 轮,≈200 次多余 case 执行,每轮多等 5-9 分钟)。fail 占少数时,
     # 修复轮只跑 fail 子集卷;last_run.json 是按 autoid merge 的,子集结果回填不覆盖 pass
@@ -1076,11 +1118,13 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
     if 0 < len(fail_ids) <= max(3, len(results) // 2):
         lines.append("")
         lines.append(
-            f"节流提示: 本轮仅 {len(fail_ids)}/{len(results)} 个 fail——修复后**只跑 fail 子集**"
-            f"(整卷重跑会让 {len(results) - len(fail_ids)} 个已 pass 的 case 白跑一遍):\n"
+            f"Throttling hint: only {len(fail_ids)}/{len(results)} cases failed this round — after fixing, "
+            f"**run the fail subset only** (a whole-volume rerun makes the {len(results) - len(fail_ids)} "
+            f"already-passing cases run again for nothing):\n"
             f"   compile_emit_merged(autoids={json.dumps(fail_ids, ensure_ascii=False)}, "
-            f"out_name=\"<批名>_fails\") → 对子集卷 dev_run_batch_digest。\n"
-            f"   子集轮结果落子集卷目录(单卷冻结档 .frozen.json 按 autoid 落、跨轮对照仍有效);"
-            f"子集全过后**整卷跑一次**做交付确认(交付以整卷结果为准)。")
+            f"out_name=\"<batch>_fails\") → dev_run_batch_digest on the subset volume.\n"
+            f"   Subset results land in the subset volume dir (per-case .frozen.json still lands by autoid, "
+            f"cross-run comparison stays valid); once the subset all passes, **run the whole volume once** "
+            f"as delivery confirmation (delivery is judged on the whole-volume result).")
     lines.append("</guidance>")
     return "\n".join(lines)

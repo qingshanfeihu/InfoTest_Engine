@@ -28,7 +28,7 @@ def test_prep_case_counts(name, count, tmp_path):
         pytest.skip(f"{name}.txt 不在")
     out = compile_prep.invoke(
         {"mindmap_path": str(src), "out_name": f"_pytest_prep_{name}"})
-    assert f"case 总数: {count}" in out, out
+    assert f"total cases: {count}" in out, out
 
 
 @pytest.mark.skipif(not (_INPUTS / "dongkl.txt").exists(), reason="dongkl 不在")
@@ -64,4 +64,4 @@ def test_prep_keeps_duplicate_titles_unique_autoid():
 
 def test_prep_rejects_missing_file():
     out = compile_prep.invoke({"mindmap_path": "no/such/mindmap.txt"})
-    assert "error" in out and "不存在" in out
+    assert "error" in out and "does not exist" in out

@@ -65,10 +65,11 @@ def _enabled() -> bool:
 
 # 空结果标记：file_tools.py grep/glob 无命中返回 "(no matches)"；read 失败返回
 # path-not-found / empty 等。命中任一即视为"该工具调用无新信息"。
+# "not found" 覆盖英文化后的工具未命中串（如 kb_footprint 的 "... not found for ..."）。
 _EMPTY_MARKERS = (
     "(no matches)",
     "no matches",
-    "path not found",
+    "not found",
     "file empty",
     "(empty)",
     "未找到",

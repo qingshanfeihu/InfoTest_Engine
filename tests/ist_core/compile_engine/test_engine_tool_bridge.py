@@ -56,7 +56,7 @@ def test_summary_carries_escalation_evidence():
     assert "^ ERROR" in out, "必须内联末轮设备回显原文摘录"
     assert "r1 echo" not in out, "只内联末轮,逐轮全量走盘上引用"
     assert "workspace/outputs/b/last_run.json" in out
-    assert "凭记忆重构" in out
+    assert "never reconstruct echoes from memory" in out
 
 
 def test_summary_all_pass_has_no_evidence_section():

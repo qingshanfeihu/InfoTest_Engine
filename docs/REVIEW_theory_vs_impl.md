@@ -27,10 +27,20 @@
 14. **`.grade_credential.json` / `no_grade` 变量名**：活的 lint 凭证机制，文件名/变量名带 grade 历史包袱——改名是 cosmetic 且涉磁盘契约（存量凭证文件），不动。
 15. **`compile_pipeline.py` 文件名**：v5 包袱，但只剩 3 个自包含 helper（`_emit_progress`/`_grade_extract_facts`/`_project_root`）被引擎复用，文件头已如实声明遗留性质——迁移是纯搬家，价值低。
 
-## 三、立项（2 项，工作量级）
+## 三、立项（2 项，工作量级）——已收束（2026-07-09 次日批）
 
-16. **B5 残余面——工具返回串英文化**（LLM-facing 中文漏网大清单）：run_case（dev_probe/dev_help 返回）、fail_attribution（submit 门文案）、batch_tools（digest 指引段）、precedent_tools、checker_tool、engine_tool、compile_prep、knowledge 族（behavior/command_builder/footprint_lookup/footprint_writeback/memory_search）。当时按优先级只做了 emit/structural_gate/brief/notes 核心反馈链；这批是次级面（低频/短小），量大（约 200+ 行），独立批次做+测试锚点同步。
-17. **fork 工具结果预览的英文显示**：`_short_fork_result`（140 字首行预览）会把英文工具返回原样进 TUI 卡片 `↳` 行——属"原文引用"性质（同设备回显英文），暂判可接受；若要严格中文化需在预览层加翻译映射，随 16 一并裁决。
+16. ~~**B5 残余面——工具返回串英文化**~~ ✅ **已完成**：13 文件全量转换（device 族 7：run_case/batch_tools/fail_attribution/precedent_tools/checker_tool/engine_tool/compile_prep + knowledge 族 5：behavior/command_builder/footprint_lookup/footprint_writeback/memory_search + checkers/rr_hit 的 note 面）。@tool docstring、return 串、指引 append 段全英文化；同步消费方（loop_guard `_EMPTY_MARKERS` 空结果标记、`(no output)` 产消两侧、`.frozen.json` reason 字段）与 ~40 处测试锚。**保留面按纪律**：logger（开发者面）、模块/辅助函数 docstring 与注释（维护者面）、TUI progress 事件（用户面）、数据锚（`自动化ID` 表头、匹配中文手册的正则、footprint/memory 中文数据透传）、代码消费令牌（`[未在文档直接命中]`、ask_user 的「非交互」）。AST 级残余扫描零漏网；顺带清 compile_prep 的 compile_skeleton 死指针与日期引用。全量门 1389+279 绿。
+17. **fork 工具结果预览的英文显示**：维持原判——`↳` 预览属"原文引用"性质（同设备回显英文），不加翻译映射层。
+
+## 三·附：P3「C 类文案数据化」按理论裁定收束（2026-07-09）
+
+原立项：emit_xlsx_tool(~100 行)/precedent_tools(两大段说教)/batch_tools 的教学中文 → 判例引用渲染。按 K 理论四层封闭性重新裁定后**不再整批数据化**：
+
+- **A 层门违例文案 = 机制 + 一则实证例**，闭合于框架版本——新的同类坑出现时门已覆盖、文案无需编辑，自愈判据（响应新坑零代码）本就满足；数据化只添运行时间接层，零自愈增益。
+- **真正随判例漂移的部分已由 P2-3 完成数据化**：grade_extract 坑叙事运行时从判例现取（`_closure_case_law_note`）、先例策展标注是数据（precedent_annotations.json）、领域枚举走 domain_grammar.json。
+- 两大段先例说教（完整基线/格式逐字抄）陈述的是**稳定方法论**而非增长型判例，随本批英文化保留在代码。
+
+结论：#48 关闭；后续若出现「门文案需要按新判例改写」的实例，再以那个实例为据重开（届时才有数据支撑间接层的成本）。
 
 ## 四、对账结论
 

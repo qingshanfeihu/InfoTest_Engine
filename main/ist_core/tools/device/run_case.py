@@ -35,37 +35,44 @@ def dev_run_case(
     build: str = "",
     max_s: int = _DEFAULT_MAX_S,
 ) -> str:
-    """把一个 case.xlsx 下发到跳转机 pytest 框架并上机运行,返回 pass/fail + 设备日志尾。
+    """Deliver one case.xlsx to the jumphost pytest framework, run it on-device, return pass/fail + log tail.
 
-    这是**执行验证 oracle**:一个 case 上机 pass/fail 由设备 + 框架裁决,不是 agent 自评。
-    用于调查循环——合成/改写 case 后真机跑一次,据 fail 日志诊断(逻辑错/环境/产品缺陷/
-    用例描述错/手册描述错),改方案再跑,直到 pass 或确诊为产品缺陷。
+    This is the **execution oracle**: pass/fail is decided by the device + framework, not by
+    agent self-review. Use it in the investigation loop — after producing/rewriting a case,
+    run it for real, diagnose from the fail log (logic error / environment / product defect /
+    case-description error / manual error), adjust, and rerun until pass or a confirmed defect.
 
-    **何时用**:你已经产出/改好一个 case.xlsx,要知道它在真机上到底过不过。
-    **何时不用**:只想看一条 CLI 命令的回显或语法对不对 → 用 dev_ssh(更快,单命令)。
-    **前置**:断言期望值要先有出处(作者意图/已声明资源/框架先例),别凭空编;CLI 语法
-    拿不准先 grep ``knowledge/data/markdown/product/cli_*_Chapter*.md`` + ``cli_*_Appendix*.md`` 或 dev_ssh 探一下。
+    **When to use**: you have a produced/fixed case.xlsx and need its real on-device verdict.
+    **When not to use**: you only want one CLI command's echo or syntax check → dev_ssh
+    (faster, single command).
+    **Prerequisite**: assertion expected values need provenance first (author intent /
+    declared resources / framework precedents) — never invented; for uncertain CLI syntax,
+    grep ``knowledge/data/markdown/product/cli_*_Chapter*.md`` + ``cli_*_Appendix*.md`` or probe
+    with dev_ssh first.
 
-    框架流程(本工具内部完成,你只看结果):
-    1. deliver:把 xlsx 落到跳转机 staging 目录(框架自动 xlsx→python)。
-    2. run_and_wait:提交运行 + 轮询到 done。
-    3. 取 MySQL result:pass 条件 = fail==0 且 success>0(纯配置无断言必 fail)。
+    Framework flow (handled inside this tool; you only read the result):
+    1. deliver: land the xlsx in the jumphost staging dir (framework converts xlsx→python).
+    2. run_and_wait: submit the run + poll until done.
+    3. Fetch the MySQL result: pass requires fail==0 and success>0 (config-only cases with
+       no assertion always fail).
 
-    **verdict 语义(重要,别被 pytest 误导)**:返回的 verdict 来自框架 MySQL 里本 case
-    每个 check_point 的结果。日志里 ``=== 1 passed ===`` 只表示 test_xlsx.py 壳跑完没崩,
-    **不代表断言通过**;真正看 ``fail num is N`` 行——任一 N>0 则 verdict=fail。
-    本工具已把 fail num 行单独抽出高亮,据它诊断。
+    **verdict semantics (important — do not be misled by pytest)**: the returned verdict comes
+    from the framework MySQL results of every check_point in this case. ``=== 1 passed ===``
+    in the log only means the test_xlsx.py shell finished without crashing — **not that the
+    assertions passed**; the real signal is the ``fail num is N`` lines — any N>0 makes the
+    verdict fail. This tool extracts and highlights those lines for diagnosis.
 
     Args:
-        xlsx_path: 本地 case.xlsx 路径(通常在 workspace/outputs/<feature>/ 下)。
-        autoid: 要运行的用例 autoid(xlsx 内 A 列;单 case 跑指定那个)。
-        module: staging 子模块归属(默认取 compiler config 的 staging_module)。
-        build: 目标设备 build 串(默认取 compiler config 的 build,即当前在测固件)。
-        max_s: 上机轮询超时秒数(默认 600,夹紧到 1200)。
+        xlsx_path: local case.xlsx path (usually under workspace/outputs/<feature>/).
+        autoid: the case autoid to run (column A in the xlsx; runs that single case).
+        module: staging submodule (default: compiler config staging_module).
+        build: target device build string (default: compiler config build, i.e. the firmware under test).
+        max_s: on-device polling timeout in seconds (default 600, clamped to 1200).
 
     Returns:
-        结构化结果:autoid / verdict(pass|fail|error) / task_id / 设备日志尾。
-        verdict=fail 时日志尾是诊断的一手材料,据它判 fail 属哪类,绝不靠猜。
+        Structured result: autoid / verdict (pass|fail|error) / task_id / device log tail.
+        On verdict=fail the log tail is the primary diagnostic material — classify the fail
+        from it, never guess.
     """
     # 1. 校验 xlsx 存在。**走 agent 文件沙箱的同一套多根解析**——agent 写 `workspace/outputs/x`
     #    实际可能落在 knowledge/data/workspace/outputs/x(_agent_roots 优先级 knowledge/data>workspace)。
@@ -86,13 +93,13 @@ def dev_run_case(
             cands += [root / xlsx_path, root / "knowledge" / "data" / xlsx_path]
         p = next((c for c in cands if c.is_file()), None)
     if p is None or not Path(p).is_file():
-        return (f"error: xlsx 不存在: {xlsx_path}(已试 agent 沙箱多根解析 + "
-                f"knowledge/data 重定向均未命中;确认你 write_file 的真实落盘路径,"
-                f"用 fs_ls 看一下)")
+        return (f"error: xlsx not found: {xlsx_path} (tried agent-sandbox multi-root resolution "
+                f"and the knowledge/data redirect; confirm the real on-disk path you wrote "
+                f"to, e.g. with fs_ls)")
     p = Path(p)
     autoid = (autoid or "").strip()
     if not autoid:
-        return "error: 必须指定 autoid"
+        return "error: autoid is required"
 
     # 2. 解析默认 module / build(单一事实源:compiler config)
     try:
@@ -101,7 +108,7 @@ def dev_run_case(
         module = (module or cfg.staging_module).strip()
         build = (build or cfg.build).strip()
     except Exception as exc:  # noqa: BLE001
-        return f"error: 读取 compiler config 失败: {exc}"
+        return f"error: failed to read compiler config: {exc}"
 
     # 3. 夹紧超时
     try:
@@ -113,23 +120,23 @@ def dev_run_case(
     try:
         from main.case_compiler.device_mcp_client import FrameworkMCPClient
     except Exception as exc:  # noqa: BLE001
-        return f"error: 加载 FrameworkMCPClient 失败(paramiko?): {exc}"
+        return f"error: failed to load FrameworkMCPClient (paramiko?): {exc}"
 
     try:
         with FrameworkMCPClient() as client:
             dres = client.deliver(module, autoid, str(p))
             if dres.get("error"):
                 return (f"=== dev_run_case ===\nautoid={autoid}\nverdict: error\n"
-                        f"--- deliver 失败 ---\n{dres.get('error')}")
+                        f"--- deliver failed ---\n{dres.get('error')}")
             run = client.run_and_wait(module, autoid, build, [autoid], max_s=max_s)
             if run.get("busy") or run.get("error") == "device_busy":
                 # 设备正在验证上一个用例——显式 verdict=busy + 正在跑的 autoid/已跑时长，
                 # 让 agent 知道环境忙(而非编译错)，自行决定等待/稍后重试/上报。
                 return (f"=== dev_run_case ===\nautoid={autoid}\nverdict: busy\n"
-                        f"--- 环境忙 ---\n{run.get('message') or '正在验证上一个用例'}")
+                        f"--- environment busy ---\n{run.get('message') or 'a previous case is still being verified'}")
             if run.get("error"):
                 return (f"=== dev_run_case ===\nautoid={autoid}\nverdict: error\n"
-                        f"--- 提交/运行失败 ---\n{run.get('error')}")
+                        f"--- submit/run failed ---\n{run.get('error')}")
             verdict = (run.get("results") or {}).get(autoid) or run.get("result") or "unknown"
             task_id = run.get("task_id", "")
             log_tail = (run.get("log_tail") or "")[-1200:]
@@ -143,7 +150,7 @@ def dev_run_case(
     except RuntimeError as exc:  # 口令缺失等
         return f"error: {exc}"
     except Exception as exc:  # noqa: BLE001
-        return f"error: 上机运行异常: {exc}"
+        return f"error: on-device run exception: {exc}"
 
     # 从执行明细 + 日志尾抽 Success/Fail Num 因果行(框架对每个断言的真实裁决)。
     import re as _re
@@ -156,27 +163,29 @@ def dev_run_case(
     elif fail_lines:
         fail_signal = "\n".join(fail_lines[-8:])
     else:
-        fail_signal = ("(框架日志里没有任何 check_point 的 Success/Fail Num 行——"
-                       "说明这个 case 一个断言都没真正执行到,多半在配置阶段就出错了,"
-                       "或者根本没有有效的 check_point。看下面执行明细定位卡在哪一步。)")
+        fail_signal = ("(no check_point Success/Fail Num line in the framework log — "
+                       "not a single assertion of this case actually executed; most likely it "
+                       "broke during the config phase, or there is no valid check_point at "
+                       "all. Use the step-by-step detail below to locate where it stalled.)")
 
     return (
         f"=== dev_run_case ===\n"
         f"autoid={autoid}  module={module}  build={build}\n"
         f"verdict: {verdict}\n"
         f"task_id: {task_id}\n"
-        f"--- verdict 怎么来的(关键,别被 pytest 误导)---\n"
-        f"verdict 来自框架 MySQL 里本 case 每个 check_point 的结果,不是 pytest 那行。\n"
-        f"pass 条件 = 所有 check_point 的 `fail num is 0` 且 success>0。\n"
-        f"日志里 `=== 1 passed ===` 只表示 test_xlsx.py 这个壳跑完没崩,**不代表断言通过**;\n"
-        f"只要有任一 `fail num is N(N>0)`,verdict 就是 fail。\n"
-        f"--- 框架对每个 check_point 的真实裁决(Success/Fail Num)---\n"
+        f"--- where the verdict comes from (key — do not be misled by pytest) ---\n"
+        f"verdict comes from the framework MySQL results of every check_point, not the pytest line.\n"
+        f"pass requires every check_point to show `fail num is 0` with success>0.\n"
+        f"`=== 1 passed ===` only means the test_xlsx.py shell finished without crashing — "
+        f"**not that assertions passed**;\n"
+        f"any `fail num is N` with N>0 makes the verdict fail.\n"
+        f"--- framework ruling per check_point (Success/Fail Num) ---\n"
         f"{fail_signal}\n"
-        f"--- 框架逐步骤执行明细(每条命令实际发了什么、断言拿什么和什么比;ground truth)---\n"
-        f"{detail[-3500:] if detail else '(未取到执行明细)'}\n"
-        + (f"--- ⚠ 完整设备上下文(上机未过,据此改配置/填值)---\n{dev_ctx}\n" if dev_ctx else "")
-        + f"--- 任务日志尾 ---\n"
-        f"{log_tail or '(无日志)'}"
+        f"--- framework step-by-step detail (what each command actually sent, what each assertion compared; ground truth) ---\n"
+        f"{detail[-3500:] if detail else '(no execution detail retrieved)'}\n"
+        + (f"--- ⚠ full device context (case did not pass; fix config / fill values from this) ---\n{dev_ctx}\n" if dev_ctx else "")
+        + f"--- task log tail ---\n"
+        f"{log_tail or '(no log)'}"
     )
 
 
@@ -244,7 +253,7 @@ def _probe_uncacheable(result: str) -> bool:
             "another run in progress", "lock held",
             "--- error ---",                       # FastMCP restapi 传输失败段
             "connection refused", "authentication failed", "timed out",
-            "probe failed", "设备探针异常", "加载 frameworkmcpclient")):
+            "probe failed", "device probe exception", "load frameworkmcpclient")):
         return True
     # 裸 'error:' 行(老 _do_probe 加载/异常返回 / apv_ssh 'error: SSH ... failed' 传输失败)
     for line in r.splitlines():
@@ -272,15 +281,18 @@ def _annotate_if_empty_probe(text: str) -> str:
         # 裸提示符行（如 `XXX#` / `XXX>`）不算实质内容
         if len(s) <= 40 and (s.endswith("#") or s.endswith(">")) and " " not in s:
             continue
-        if s == "(无输出)":
+        if s == "(no output)":
             continue
         body.append(s)
     if body:
         return text
     return (f"{text}\n"
-            "（提示：回显为空不代表探针故障——编译期设备是**干净态**（每个 case 跑完框架即清配置），"
-            "统计/会话/状态类数据只在 case 执行中存在，编译期探它们恒空。本探针的有效域：命令语法验证"
-            "（无效命令有 ^ 报错）、持久配置查看。输出**格式**请查产品手册/规格文档或先例，别再重试探空。）")
+            "(note: an empty echo does not mean the probe failed — at compile time the device "
+            "is in a **clean state** (the framework wipes config after every case), so "
+            "statistics/session/state data exist only while a case is executing and always "
+            "probe empty here. This probe is valid for: command-syntax verification (invalid "
+            "commands get the ^ marker) and persistent-config inspection. For output **format**, "
+            "consult the product manual/spec or precedents — do not keep re-probing emptiness.)")
 
 
 def _do_probe(cmd: str) -> str:
@@ -316,14 +328,14 @@ def _do_probe(cmd: str) -> str:
     try:
         from main.case_compiler.device_mcp_client import FrameworkMCPClient
     except Exception as exc:  # noqa: BLE001
-        return f"error: 加载 FrameworkMCPClient 失败(paramiko?): {exc}"
+        return f"error: failed to load FrameworkMCPClient (paramiko?): {exc}"
     try:
         with FrameworkMCPClient() as client:
             res = client.probe_show(cmd, build=_build)
     except RuntimeError as exc:
         return f"error: {exc}"
     except Exception as exc:  # noqa: BLE001
-        return f"error: 设备探针异常: {exc}"
+        return f"error: device probe exception: {exc}"
     if isinstance(res, dict) and res.get("error"):
         return f"=== dev_probe ===\ncommand: {cmd}\nstatus: error\n{res.get('error')}"
     output = res.get("output") if isinstance(res, dict) else res
@@ -336,54 +348,63 @@ def _do_probe(cmd: str) -> str:
     return _annotate_if_empty_probe(
         f"=== dev_probe ===\n"
         f"command: {cmd}\n"
-        f"--- 设备回显(经跳转机)---\n"
-        f"{output if output else '(无输出)'}")
+        f"--- device echo (via jumphost) ---\n"
+        f"{output if output else '(no output)'}")
 
 
 @tool(parse_docstring=True)
 def dev_probe(command: str) -> str:
-    """经跳转机在被测 APV 设备上跑**单条只读 show/get 命令**,取真实设备回显。
+    """Run a **single read-only show/get command** on the APV device under test via the jumphost, returning the real device echo.
 
-    **本测试床网络拓扑(关键)**:APV 被测设备只能经跳转机访问,你本地/直连
-    (dev_ssh / dev_rest 直打 APV IP)**不通**——那不是设备掉线,是拓扑使然。
-    要看设备上某条命令的真实回显(探查配置生效没、show 输出长什么样、确认命令语法),
-    用本工具(它经跳转机到设备),不要用 dev_ssh 直连 APV。
+    **Testbed topology (key)**: the APV device is reachable only through the jumphost; local /
+    direct access (dev_ssh / dev_rest straight at the APV IP) **does not work** — that is the
+    topology, not a device outage. To see a command's real echo (whether config took effect,
+    what a show output looks like, confirming command syntax), use this tool (it goes via the
+    jumphost); do not dev_ssh straight to the APV.
 
-    限制:硬白名单,首 token 必须是 show 或 get(只读探针,不改设备状态)。
-    要改配置 + 跑断言看 pass/fail → 用 dev_run_case(整 case 上机)。
+    Restriction: hard allowlist — the first token must be show or get (read-only probe, never
+    mutates device state). To change config and run assertions for pass/fail → dev_run_case
+    (whole case on-device).
 
-    **关键策略——把"难直接断言的动态行为"转成"可文本查找的稳定输出"**:
-    当某行为用断言难以直接表达(运行时才知道的动态值、时序行为、跨步骤状态变化,
-    如"会话保持期内同IP/超时后不同IP""rr轮询分布""连接保持"),**别死磕去捕获那个动态值**——
-    设备通常有一条 show 命令能把该行为的**可观测特征**显示成稳定文本(配置生效与否、
-    统计计数、状态表条目)。先用本工具探出那条 show 命令、看它输出长什么样,
-    再把断言改成对那个稳定输出做 found/not_found。这把"xlsx 表达不了的动态比对"
-    降成"xlsx 能表达的文本查找"。
+    **Key strategy — turn "dynamic behavior that is hard to assert directly" into "stable
+    output that a text search can verify"**: when a behavior resists direct assertion
+    (runtime-only dynamic values, timing behavior, cross-step state changes — e.g. "same IP
+    within the persistence window / different IP after timeout", "rr rotation distribution",
+    "connection keep-alive"), **do not grind on capturing the dynamic value** — the device
+    usually has a show command that renders that behavior's **observable signature** as stable
+    text (config in effect, statistics counters, state-table entries). Probe that show command
+    first, see the shape of its output, then write the assertion as found/not_found over the
+    stable output. This lowers "a dynamic comparison the xlsx cannot express" into "a text
+    search the xlsx can express".
 
-    典型用法:
-    - 确认配置生效:``command="show sdns host status"``
-    - 看计数器分布:``command="show statistics sdns pool"``
-    - 核对命令语法返回:``command="show sdns listener"``
+    Typical uses:
+    - confirm config took effect: ``command="show sdns host status"``
+    - inspect counter distribution: ``command="show statistics sdns pool"``
+    - check a command's syntax response: ``command="show sdns listener"``
 
-    **设备语法错误**:被测 APV 对无法识别的命令/参数,在出错 token 下方回 `^` 标记。
-    框架 server 已把这种回显包装成清晰的 ``% Invalid input ...`` 文字说明(含命令回显行
-    与对齐)——遇到即说明该命令语法/参数无效,**换命令或修正语法,不要据此写断言**。
+    **Device syntax errors**: for unrecognized commands/parameters the APV echoes a ``^``
+    marker under the offending token. The framework server wraps that echo into a clear
+    ``% Invalid input ...`` explanation (with the command echo line and alignment) — seeing it
+    means the command syntax/parameter is invalid: **change the command or fix the syntax; never
+    write an assertion based on it**.
 
     Args:
-        command: 单条只读命令,首词必须 show 或 get(在被测 APV 上执行)。
+        command: a single read-only command; the first word must be show or get (runs on the APV under test).
 
     Returns:
-        设备真实回显(或错误说明)。据此理解设备行为、写/改断言——但断言期望值
-        仍须有出处(作者意图/规范/先例),不要"看这次输出是啥就照抄成期望"。
+        The real device echo (or an error explanation). Use it to understand device behavior
+        and write/fix assertions — but expected values still need provenance (author intent /
+        spec / precedent); never copy "whatever this output happens to show" as the expectation.
     """
     cmd = (command or "").strip()
     if not cmd:
         return "error: empty command"
     first = cmd.split()[0].lower() if cmd.split() else ""
     if first not in ("show", "get"):
-        return (f"error: probe 只允许 show/get 开头的只读命令,收到 {first!r}。"
-                "probe 是编译期理解行为格式用的,不做配置动作;配置/触发/断言写进 case 步骤,"
-                "行为效果由编译后独立的 ist-verify 上机流程验证。")
+        return (f"error: probe only accepts read-only commands starting with show/get, got {first!r}. "
+                "The probe exists to understand behavior/format at compile time and performs no "
+                "config action; config/trigger/assertions go into case steps, and behavioral "
+                "effect is verified by the separate ist-verify on-device flow.")
 
     # run 作用域 single-flight:同一 run 内同命令只真探一次,其余等结果(见上方设计注释)。
     key = " ".join(cmd.lower().split())
@@ -418,36 +439,42 @@ def dev_probe(command: str) -> str:
 
 @tool(parse_docstring=True)
 def dev_help(command: str) -> str:
-    """一条命令被设备拒绝（回显里出现 ``^`` 或 ``Failed to execute the command``）时，
-    追问设备这个位置到底期望什么，把说不清的 ``^`` 解释成人话。
+    """When the device rejects a command (``^`` or ``Failed to execute the command`` in the echo),
+    ask the device what it expects at that position — turning the wordless ``^`` into an explanation.
 
-    ``^`` 停在设备从左往右能认到的最后一个词的位置——解析到这里就走不下去了，后面它接不住。
-    ``^`` 本身没有任何文字，看不出为什么。诊断办法：把命令保留到 ``^`` 停住的地方、在那儿加一个
-    空格和问号，设备就会说出这个位置它期望接什么。本工具替你做这一步：找到设备能认到的最长
-    前缀，在那个位置问一次（只是问，不回车、不执行、不改配置，用 Ctrl-U 清行），把设备对该位置
-    的说明拿回来。
+    ``^`` stops under the last token the device could parse left-to-right — parsing cannot
+    continue past there. The ``^`` itself carries no text, so the reason is invisible. The
+    diagnostic move: keep the command up to where ``^`` stopped, add a space and a question
+    mark there, and the device states what it expects at that position. This tool does that
+    step for you: it finds the longest device-recognizable prefix, asks once at that position
+    (ask only — no Enter, nothing executed, no config change; the line is cleared with
+    Ctrl-U), and brings back the device's description.
 
-    举例：``sdns host pool "www.a.com" "poolA" ga`` 报 ``^``，是设备认到池名 ``"poolA"`` 就停住了。
-    本工具在那个位置问一次，得到“该位置期望一个 0 到 65535 的数字优先级，仅 method 为 wrr 或 ga
-    时生效”。于是清楚：这里要的是一个数字，你写了算法名 ``ga`` 所以走不下去。
+    Example: ``sdns host pool "www.a.com" "poolA" ga`` gets ``^`` — the device parsed up to the
+    pool name ``"poolA"`` and stopped. Asking at that position returns "expects a numeric
+    priority 0-65535, effective only when method is wrr or ga". Now it is clear: a number is
+    required there, and you wrote the algorithm name ``ga``.
 
-    何时用：在 dev_probe 或上机回显里看到 ``^`` 或 ``Failed to execute the command``，想知道为什么、
-    该怎么改。何时不用：命令能跑通、只是结果不对，那是语义或配置问题，看设备回显里的原因行，
-    或用 dev_run_case 把整个 case 上机。
+    When to use: you saw ``^`` or ``Failed to execute the command`` in a dev_probe or on-device
+    echo and need to know why and how to fix it. When not to use: the command runs but the
+    result is wrong — that is semantics or config; read the reason line in the device echo, or
+    run the whole case with dev_run_case.
 
-    另外，``Failed to execute the command`` 若伴随一句原因（比如“The SDNS host "x" does not
-    exist”），那是语义问题——引用了不存在的对象、缺前置配置，不是语法错。这时本工具会告诉你
-    命令语法其实完整，真正的原因以设备那句回显为准，补上前置对象即可。
+    Also: if ``Failed to execute the command`` comes with a reason line (e.g. "The SDNS host
+    \"x\" does not exist"), that is a semantic problem — a nonexistent object was referenced or
+    prerequisite config is missing, not a syntax error. In that case this tool reports the
+    syntax as complete; trust the device's reason line and create the prerequisite object.
 
     Args:
-        command: 那条被设备拒绝的命令（原样传入，含引号）。
+        command: the rejected command (pass it verbatim, including quotes).
 
     Returns:
-        设备能识别到的最长前缀 + 该位置期望什么 + 你接的哪个 token 不符合。据此改命令语法/换参数。
+        The longest device-recognizable prefix + what that position expects + which of your
+        tokens violated it. Fix the command syntax / switch the parameter accordingly.
     """
     cmd = (command or "").strip()
     if not cmd:
-        return "error: 空命令"
+        return "error: empty command"
     try:
         from main.case_compiler.config import get_config
         _build = get_config().build
@@ -457,39 +484,43 @@ def dev_help(command: str) -> str:
     try:
         from main.case_compiler.device_mcp_client import cli_qhelp
     except Exception as exc:  # noqa: BLE001
-        return f"error: 加载 cli_qhelp 失败(paramiko?): {exc}"
+        return f"error: failed to load cli_qhelp (paramiko?): {exc}"
 
     try:
         r = cli_qhelp(cmd, build=_build)
     except Exception as exc:  # noqa: BLE001
-        return f"error: dev_help 异常: {exc}"
+        return f"error: dev_help exception: {exc}"
 
     if not r.get("ok"):
-        return (f"=== dev_help ===\ncommand: {cmd}\nstatus: 无法追问\n"
-                f"{r.get('error', '未知原因')}\n"
-                f"（设备不可达时改用 dev_probe 看原始回显，或先例/手册查语法。）")
+        return (f"=== dev_help ===\ncommand: {cmd}\nstatus: query failed\n"
+                f"{r.get('error', 'unknown reason')}\n"
+                f"(if the device is unreachable, fall back to dev_probe for the raw echo, "
+                f"or look up the syntax in precedents/the manual.)")
 
     lines = [f"=== dev_help ===", f"command: {cmd}", f"mode: {r.get('mode')}"]
     if r.get("full_valid"):
-        lines.append("整条命令的语法设备都能解析，`^` 不是语法问题。")
+        lines.append("The device parses the whole command — `^` is not a syntax problem.")
         if r.get("expect"):
-            lines.append(f"这条命令之后，这个位置还可以接：{r['expect']}")
-        lines.append("若上机报 `Failed to execute the command`，多半是语义问题："
-                     "引用了不存在的对象、缺前置配置。以设备回显里那句原因为准，补齐前置项。")
+            lines.append(f"After this command, this position can additionally take: {r['expect']}")
+        lines.append("If on-device it reports `Failed to execute the command`, that is most "
+                     "likely semantics: a nonexistent object was referenced or prerequisite "
+                     "config is missing. Trust the reason line in the device echo and create "
+                     "the prerequisite first.")
     else:
-        vp = r.get("valid_prefix") or "(无)"
+        vp = r.get("valid_prefix") or "(none)"
         off = r.get("offending")
-        lines.append(f"设备从左往右能识别到的最长前缀（`^` 停在这之后，解析到此走不下去）：`{vp}`")
+        lines.append(f"Longest prefix the device parses left-to-right (`^` stops right after it): `{vp}`")
         if r.get("expect"):
-            lines.append(f"该位置设备期望接：{r['expect']}")
+            lines.append(f"At that position the device expects: {r['expect']}")
         if off is not None:
-            lines.append(f"你接的 `{off}` 不符合这个期望，这就是 `^` 停在这里的原因。")
-        lines.append("看清这个位置要的是一个取值还是一个固定关键字，据此改；"
-                     "说明里举的值只是示例，不要抄成断言。")
+            lines.append(f"Your token `{off}` does not meet that expectation — that is why `^` stopped there.")
+        lines.append("Check whether this position wants a value or a fixed keyword and fix "
+                     "accordingly; values quoted in the description are examples only — never "
+                     "copy them into assertions.")
     # 附各位置期望图（供自查更细的位置）
     mp = [m for m in (r.get("map") or []) if m.get("expect")]
     if mp:
-        lines.append("--- 各前缀位置的期望（自查用）---")
+        lines.append("--- expectations at each prefix position (for self-check) ---")
         for m in mp:
             lines.append(f"  `{m['prefix']}` ▸ {m['expect']}")
     return "\n".join(lines)
@@ -497,28 +528,30 @@ def dev_help(command: str) -> str:
 
 @tool(parse_docstring=True)
 def dev_init_device(jumphost: str, device_count: int = 0, device_index: int = -1) -> str:
-    """通过串口初始化被测设备：清除全部配置 + 重新配置接口 IP。
+    """Initialize the device under test over the serial console: wipe all config + reconfigure interface IPs.
 
-    在跳板机上执行，经串口（cu -s 9600 -l ttyS{n}）连接设备，执行 clear config all
-    后配置 port1（172.16.35.7{n}）、port2（172.16.34.7{n}）、port3（172.16.32.7{n}）
-    的 IPv4/IPv6 地址。
+    Runs on the jumphost, connects to the device over serial (cu -s 9600 -l ttyS{n}), issues
+    clear config all, then configures the IPv4/IPv6 addresses of port1 (172.16.35.7{n}),
+    port2 (172.16.34.7{n}) and port3 (172.16.32.7{n}).
 
-    **何时用**：设备配置混乱需要恢复出厂、新设备首次上架、或上机前需要干净基线。
-    **何时不用**：只想改某条配置 → 用 dev_run_case 跑 case 或 dev_probe 查状态。
+    **When to use**: device config is in disarray and needs a factory reset, a new device is
+    being racked for the first time, or a clean baseline is needed before an on-device run.
+    **When not to use**: you only want to change one piece of config → run a case via
+    dev_run_case or inspect state via dev_probe.
 
     Args:
-        jumphost: 跳板机 IP（如 10.4.127.103），必填。
-        device_count: 初始化设备数（1/2/3），0=从 conf 自动推断（默认全部）。
-        device_index: 指定初始化哪台（0=APV0, 1=APV1, 2=APV2），优先级高于 device_count。
+        jumphost: jumphost IP (e.g. 10.4.127.103), required.
+        device_count: number of devices to initialize (1/2/3); 0 = infer from conf (default all).
+        device_index: initialize one specific device (0=APV0, 1=APV1, 2=APV2); takes precedence over device_count.
 
     Returns:
-        每台设备的初始化结果（成功/失败 + 日志）。
+        Per-device initialization result (ok/failed + log).
     """
     try:
         from main.case_compiler.device_mcp_client import FrameworkMCPClient
         from main.case_compiler.config import Environment
     except Exception as exc:
-        return f"error: 加载模块失败: {exc}"
+        return f"error: failed to load modules: {exc}"
 
     env = Environment(id="adhoc", jumphost=jumphost)
 
@@ -528,7 +561,7 @@ def dev_init_device(jumphost: str, device_count: int = 0, device_index: int = -1
     except RuntimeError as exc:
         return f"error: {exc}"
     except Exception as exc:
-        return f"error: 设备初始化异常: {exc}"
+        return f"error: device initialization exception: {exc}"
 
     if isinstance(res, dict) and res.get("error"):
         return f"=== dev_init_device ===\nstatus: error\n{res.get('error')}"
@@ -540,11 +573,11 @@ def dev_init_device(jumphost: str, device_count: int = 0, device_index: int = -1
         ip = d.get("ssh_ip", "?")
         tty = d.get("tty", "?")
         if status == "ok":
-            lines.append(f"APV{idx} ({tty}, {ip}): 初始化成功")
+            lines.append(f"APV{idx} ({tty}, {ip}): initialized")
         else:
-            lines.append(f"APV{idx} ({tty}, {ip}): 失败 — {d.get('error', '?')}")
+            lines.append(f"APV{idx} ({tty}, {ip}): failed — {d.get('error', '?')}")
         for log_line in (d.get("log") or []):
             lines.append(f"  {log_line}")
 
-    lines.append(f"\n总计: {res.get('initialized', 0)} 成功 / {res.get('failed', 0)} 失败 / {res.get('total', 0)} 总数")
+    lines.append(f"\ntotal: {res.get('initialized', 0)} ok / {res.get('failed', 0)} failed / {res.get('total', 0)} devices")
     return "\n".join(lines)

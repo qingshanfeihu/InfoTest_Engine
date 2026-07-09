@@ -106,9 +106,9 @@ def test_self_healing_drill_zero_code_change(drill_env):
     node = next(n for n in nodes if n.get("behaviors"))
     assert node["footprint_meta"]["verified_count"] == 0
 
-    # ②b 拉式渲染(kb_footprint):单条观察带 uncertain|语境 前缀
+    # ②b 拉式渲染(kb_footprint):单条观察带 uncertain|context 前缀
     text = _format_node(node)
-    assert "uncertain" in text and "语境:" in text
+    assert "uncertain" in text and "context:" in text
 
     # ②c 推式渲染(reminder 注入通道)同样必须带标——漏标即冒充 verified
     from main.ist_core.memory.footprint.index import _format_footprint
@@ -125,8 +125,8 @@ def test_self_healing_drill_zero_code_change(drill_env):
     _ingest(outputs, _AID, [cand2])
     node = next(n for n in _load_nodes(fp_root) if len(n.get("behaviors", [])) == 2)
     text = _format_node(node)
-    assert "多语境观察" in text, "互异语境 ≥2 应自动出组头"
-    assert "设备实验可仲裁" in text
+    assert "multi-context observation" in text, "互异语境 ≥2 应自动出组头"
+    assert "device experiment can arbitrate" in text
     # 观察组免配额:两条语境都必须完整可见(截断会隐藏语境分支)
     assert cand2["note"] in text and _CAND["note"] in text
 

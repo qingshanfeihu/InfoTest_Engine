@@ -109,7 +109,7 @@ def test_run_batch_rejects_bad_autoids():
 def test_run_batch_rejects_missing_xlsx():
     out = dev_run_batch.invoke(
         {"xlsx_path": "does/not/exist.xlsx", "autoids_json": json.dumps(["A1"])})
-    assert "error" in out and "不存在" in out
+    assert "error" in out and "not found" in out
 
 
 # ---------------------------------------------------------------------------
@@ -310,12 +310,12 @@ def test_digest_classifies_counts_and_persists(tmp_path, monkeypatch):
         {"xlsx_path": "workspace/outputs/feat/case.xlsx", "autoids_json": '["A_pass"]'})
     # 计数 + 分层（P/F(G(^)/待归因)/unknown）——机械只认 ^，其余不猜
     assert "P:1" in out and "F:4" in out and "unknown:1" in out
-    assert "G(^拒绝):1 待归因:3" in out
+    assert "G(^ rejected):1 unattributed:3" in out
     # 逐 case：^ 拒绝点名被拒命令原文；其余标待归因（不再猜 E/V/瞬态）
-    assert "A_g | fail | G(^)" in out and "配置被拒" in out and "sdns pool cnome" in out
-    assert "A_e | fail | - | 待归因" in out
-    assert "A_v | fail | - | 待归因" in out
-    assert "A_t | fail | - | 待归因" in out
+    assert "A_g | fail | G(^)" in out and "config rejected" in out and "sdns pool cnome" in out
+    assert "A_e | fail | - | unattributed" in out
+    assert "A_v | fail | - | unattributed" in out
+    assert "A_t | fail | - | unattributed" in out
     assert "A_u | unknown" in out and "KeyError" in out
     # 全量明细落 workspace：缩进 JSON、可 json.load、6 条齐全
     lr = outd / "last_run.json"
@@ -353,9 +353,9 @@ def test_digest_flags_found_times_crash_as_compile_defect(tmp_path, monkeypatch)
                         lambda *a, **k: json.dumps(crashed, ensure_ascii=False))
     out = dev_run_batch_digest.invoke(
         {"xlsx_path": "workspace/outputs/feat/case.xlsx", "autoids_json": '["A"]'})
-    assert "文件级崩溃" in out and "编译缺陷" in out and "非框架bug" in out
-    assert "found_times" in out and "重编" in out
-    assert "级联" in out                       # 说清 unknown 是级联、非各自失败
+    assert "file-level crash" in out and "compilation defect" in out and "not a framework bug" in out
+    assert "found_times" in out and "recompile" in out
+    assert "cascade" in out                       # 说清 unknown 是级联、非各自失败
     assert "excel" in out                      # 明确 excel 要动（纠正"无需改excel"误判）
 
 
@@ -381,7 +381,7 @@ def test_digest_cross_run_repeat_and_transient_recur(tmp_path, monkeypatch):
                         lambda *a, **k: json.dumps(round1, ensure_ascii=False))
     out1 = dev_run_batch_digest.invoke(
         {"xlsx_path": "workspace/outputs/feat/case.xlsx", "autoids_json": '["R_sig"]'})
-    assert "跨轮对照" not in out1                       # 首轮无上一轮,不报
+    assert "cross-run comparison" not in out1                       # 首轮无上一轮,不报
     # 模拟旧格式/LLM 回写:R_trans 上轮被归瞬态(新版机械预判不产该标签,但旧数据存在)
     lr = outd / "last_run.json"
     data1 = json.loads(lr.read_text(encoding="utf-8"))
@@ -401,9 +401,9 @@ def test_digest_cross_run_repeat_and_transient_recur(tmp_path, monkeypatch):
                         lambda *a, **k: json.dumps(round2, ensure_ascii=False))
     out2 = dev_run_batch_digest.invoke(
         {"xlsx_path": "workspace/outputs/feat/case.xlsx", "autoids_json": '["R_sig"]'})
-    assert "跨轮对照" in out2 and "R_sig" in out2       # 同签名consecutive两轮点名
-    assert "冻结同法重编" in out2                        # 止损指引
-    assert "上轮归\"瞬态\"本轮复现" in out2 and "R_trans" in out2   # 误归瞬态点名(旧标签兼容)
+    assert "cross-run comparison" in out2 and "R_sig" in out2       # 同签名consecutive两轮点名
+    assert "Same-approach recompiles are frozen" in out2                        # 止损指引
+    assert "attributed \"transient\" last round, failed again this round" in out2 and "R_trans" in out2   # 误归瞬态点名(旧标签兼容)
     data2 = json.loads((outd / "last_run.json").read_text(encoding="utf-8"))
     sig_rec = next(r for r in data2 if r["autoid"] == "R_sig")
     assert sig_rec.get("_repeat_fail_same_signature") is True
@@ -600,7 +600,7 @@ def test_coerce_json_array_dual_channel():
     assert _coerce_json_array('["a","b"]', "x") == (["a", "b"], None)
     assert _coerce_json_array("", "x") == ([], None)
     arr, err = _coerce_json_array('["a"]push', "x")
-    assert arr is None and "原生数组" in err
+    assert arr is None and "native array" in err
 
 
 def test_dev_run_batch_rejects_autoid_not_in_xlsx():
@@ -617,10 +617,10 @@ def test_dev_run_batch_rejects_autoid_not_in_xlsx():
         assert _xlsx_real_autoids(xp) == [aid]
         # 手抄截断 id → 显式拒绝(不静默误匹配)
         res = dev_run_batch.invoke({"xlsx_path": xp, "autoids_json": ["778012"]})
-        assert "不在该 xlsx 数据区" in res and "778012" in res
+        assert "not in this xlsx data area" in res and "778012" in res
         # 原生数组直收:卷内 id 通过校验(会走到后续 config/设备段,不因参数被拒)
         res2 = dev_run_batch.invoke({"xlsx_path": xp, "autoids_json": '["778012"]'})
-        assert "不在该 xlsx 数据区" in res2  # 字符串通道同样校验
+        assert "not in this xlsx data area" in res2  # 字符串通道同样校验
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
 
@@ -648,14 +648,14 @@ def test_submit_attribution_evidence_gate_and_writeback(tmp_path, monkeypatch):
         r1 = submit_attribution.invoke({
             "xlsx_path": xp, "autoid": aid, "layer": "transient",
             "disposition": "env_blocked", "evidence": "连接超时了(转述)"})
-        assert "原文" in r1 and "error" in r1
+        assert "error" in r1 and "landed raw text" in r1
         # 原文子串 → 落盘
         r2 = submit_attribution.invoke({
             "xlsx_path": xp, "autoid": aid, "layer": "transient",
             "disposition": "env_blocked",
             "evidence": "ssh connection timed out",
             "fix_direction": "等环境恢复后原样复跑"})
-        assert "归因已落盘" in r2
+        assert "attribution landed" in r2
         rec = json.loads(lr.read_text(encoding="utf-8"))[0]
         assert rec["_attribution"]["layer"] == "transient"
         assert rec["_attribution"]["round"] == 2
@@ -665,7 +665,7 @@ def test_submit_attribution_evidence_gate_and_writeback(tmp_path, monkeypatch):
             "disposition": "defect_candidate",
             "evidence": "ssh connection timed out",
             "defect_candidate": {"repro": "x"}})
-        assert "缺必填字段" in r3
+        assert "missing required fields" in r3
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
 
@@ -696,7 +696,7 @@ def test_digest_merge_keeps_other_rounds_and_revives_transient_guard(monkeypatch
                             lambda *a, **k: json.dumps(round2, ensure_ascii=False))
         out = dev_run_batch_digest.invoke({"xlsx_path": str(outd / "case.xlsx"),
                                            "autoids_json": [aid]})
-        assert "上轮归\"瞬态\"本轮复现" in out and aid in out       # 护栏复活(读 _attribution)
+        assert "attributed \"transient\" last round, failed again this round" in out and aid in out       # 护栏复活(读 _attribution)
         data = {r["autoid"]: r for r in json.loads(lr.read_text(encoding="utf-8"))}
         assert other in data and data[other]["_round"] == 1        # merge 不丢别的记录
         assert data[aid]["_round"] == 2                            # round 自增
@@ -815,7 +815,7 @@ def test_digest_repeat_fail_writes_frozen_marker(monkeypatch):
                             lambda *a, **k: json.dumps(round2, ensure_ascii=False))
         out = dev_run_batch_digest.invoke({"xlsx_path": str(outd / "case.xlsx"),
                                            "autoids_json": [aid]})
-        assert "冻结同法重编" in out
+        assert "Same-approach recompiles are frozen" in out
         assert (outd / ".frozen.json").is_file()
     finally:
         shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)

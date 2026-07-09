@@ -23,42 +23,48 @@ logger = logging.getLogger(__name__)
 
 @tool(parse_docstring=True)
 def submit_behavior_fact(autoid: str, observe_cmd: str, content: str, note: str = "") -> str:
-    """登记一条设备行为知识候选(回显格式/计数器语义/断言技法类现象)。
+    """Register a device-behavior knowledge candidate (echo format / counter semantics /
+    assertion-technique observations).
 
-    候选不直接入库——上机真 PASS 由引擎晋升为 verified(设备实证门);fail/escalated
-    以 uncertain 级带语境入库,PASS 实证后自动升级。fail 轮观察最有信息量,照常登记。
-    观测命令必须真实出现在该 case 卷面上。
+    Candidates are not stored directly: on a true on-device PASS the engine promotes them to
+    verified (device-evidence gate); fail/escalated observations enter at uncertain level with
+    their context and auto-upgrade once a later PASS confirms them. Fail-round observations
+    carry the most information — register them as usual. The observation command must actually
+    appear on this case's sheet.
 
     Args:
-        autoid: 该 case 的 autoid(18 位)。
-        observe_cmd: 该行为锚定的观测命令(卷面原文,如某条 show/统计命令)——知识挂
-            在这条命令的 footprint 节点下。
-        content: 行为现象的陈述(是什么、依据什么回显;写事实不写指令)。
-        note: 可选补充。
+        autoid: This case's autoid (18 digits).
+        observe_cmd: The observation command this behavior anchors to (verbatim from the sheet,
+            e.g. a show/statistics command) — the knowledge attaches to this command's
+            footprint node.
+        content: Statement of the observed behavior (what it is and which echo supports it;
+            state facts, not instructions).
+        note: Optional supplement.
 
     Returns:
-        登记确认或校验失败原因。
+        Registration confirmation, or the validation failure reason.
     """
     aid = (autoid or "").strip()
     cmd = (observe_cmd or "").strip()
     body = (content or "").strip()
     if not aid or len(aid) != 18 or not aid.isdigit():
-        return f"error: autoid 必须是 18 位数字,收到 {autoid!r}"
+        return f"error: autoid must be an 18-digit number, got {autoid!r}"
     if not cmd or not body:
-        return "error: observe_cmd 与 content 必填"
+        return "error: observe_cmd and content are required"
 
     root = Path(__file__).resolve().parents[4]
     xlsx = root / "workspace" / "outputs" / aid / "case.xlsx"
     if not xlsx.is_file():
-        return f"error: 该 case 无卷面({xlsx.name} 不存在),行为无从锚定"
+        return f"error: this case has no sheet ({xlsx.name} missing), nothing to anchor the behavior to"
     try:
         from main.ist_core.tools.device.batch_tools import _xlsx_apv_lines
         cmds = _xlsx_apv_lines(xlsx).get(aid, [])
     except Exception as e:  # noqa: BLE001
-        return f"error: 卷面读取失败: {e}"
+        return f"error: failed to read the case sheet: {e}"
     if cmd not in cmds:
-        return (f"error: observe_cmd 不在该 case 卷面的 APV 命令里——行为知识必须锚定"
-                f"真实执行过的观测命令(卷面有 {len(cmds)} 条,原样复制其一)。")
+        return (f"error: observe_cmd is not among this case's APV commands on the sheet — "
+                f"behavior knowledge must anchor to an observation command that actually ran "
+                f"(the sheet has {len(cmds)} commands; copy one verbatim).")
 
     cand_path = xlsx.parent / "behavior_candidates.json"
     cands: list = []
@@ -71,5 +77,6 @@ def submit_behavior_fact(autoid: str, observe_cmd: str, content: str, note: str 
                                       and c.get("content") == body)]
     cands.append({"observe_cmd": cmd, "content": body, "note": (note or "").strip()})
     cand_path.write_text(json.dumps(cands, ensure_ascii=False, indent=2), encoding="utf-8")
-    return (f"行为候选已登记({len(cands)} 条)——该 case 上机真 PASS 后自动晋升入库,"
-            "fail 则不入库。")
+    return (f"Behavior candidate registered ({len(cands)} on file) — it is promoted into the "
+            "knowledge base automatically once this case truly PASSes on device; on fail it "
+            "is not stored.")

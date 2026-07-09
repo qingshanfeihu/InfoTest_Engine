@@ -66,7 +66,7 @@ def test_emit_without_provenance_writes_no_sidecar(tmp_path):
     ]
     r = compile_emit.invoke({"autoid": "t_noprov", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_noprov"})
-    assert "已产出" in r
+    assert "produced structurally-correct" in r
     assert "provenance" not in r
     root = Path(__file__).resolve().parents[2]
     assert not (root / "workspace" / "outputs" / "t_noprov" / "case.provenance.json").exists()
@@ -78,7 +78,7 @@ def test_emit_with_provenance_writes_sidecar():
     r = compile_emit.invoke({"autoid": "t1", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_prov",
                              "provenance_json": p.to_json()})
-    assert "provenance 已旁挂: G=2 E=0 V=1" in r
+    assert "provenance side-mounted: G=2 E=0 V=1" in r
     root = Path(__file__).resolve().parents[2]
     sidecar = root / "workspace" / "outputs" / "t_prov" / "case.provenance.json"
     assert sidecar.exists()
@@ -94,7 +94,7 @@ def test_emit_with_step_count_mismatch_skips_sidecar():
     r = compile_emit.invoke({"autoid": "t1", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_prov_mismatch",
                              "provenance_json": p.to_json()})
-    assert "不一致" in r
+    assert "does not match" in r
 
 
 def test_emit_backfills_efg_when_draft_omits_them():
@@ -106,7 +106,7 @@ def test_emit_backfills_efg_when_draft_omits_them():
     r = compile_emit.invoke({"autoid": "t1", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_prov_backfill",
                              "provenance_json": p.to_json()})
-    assert "已旁挂" in r
+    assert "side-mounted" in r
 
 
 # --- 不瞎写硬契约：device_runtime ⟺ <RUNTIME> 占位双向自洽 ---
@@ -134,13 +134,13 @@ def test_runtime_consistency_clean_concrete():
 def test_runtime_consistency_abstain_but_fabricated():
     # 标 device_runtime 却填具体值 = 假装弃权实则编数 → 抓
     probs = check_runtime_consistency(_prov_runtime("172.16.34.200", "device_runtime"))
-    assert len(probs) == 1 and "却填了具体值" in probs[0]
+    assert len(probs) == 1 and "yet a concrete value" in probs[0]
 
 
 def test_runtime_consistency_placeholder_but_lies_source():
     # 填占位却谎称 footprint 有源 → 抓
     probs = check_runtime_consistency(_prov_runtime(RUNTIME_PLACEHOLDER, "footprint"))
-    assert len(probs) == 1 and "来源必须标 device_runtime" in probs[0]
+    assert len(probs) == 1 and "source must be marked device_runtime" in probs[0]
 
 
 def test_emit_rejects_fabricated_runtime_value():
@@ -150,7 +150,7 @@ def test_emit_rejects_fabricated_runtime_value():
     r = compile_emit.invoke({"autoid": "t_rt", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_rt_bad",
                              "strict_structural": True, "provenance_json": p.to_json()})
-    assert r.startswith("error") and "不瞎写契约" in r
+    assert r.startswith("error") and "no-fabrication contract" in r
 
 
 def test_emit_accepts_honest_placeholder():
@@ -160,4 +160,4 @@ def test_emit_accepts_honest_placeholder():
     r = compile_emit.invoke({"autoid": "t_rt", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_rt_ok",
                              "strict_structural": True, "provenance_json": p.to_json()})
-    assert "已产出" in r and "provenance 已旁挂" in r
+    assert "produced structurally-correct" in r and "provenance side-mounted" in r

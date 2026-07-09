@@ -183,17 +183,17 @@ def check_runtime_consistency(provenance: CaseProvenance) -> list[str]:
         is_verified_kind = s.source.kind == "device_verified"
         if is_runtime_kind and not has_placeholder:
             problems.append(
-                f"step[{i}] 来源标 device_runtime（离线不可知）却填了具体值 {s.G!r}"
-                f"——离线不可知就不许编数，期望值应含 {RUNTIME_PLACEHOLDER} 占位。"
+                f"step[{i}] source is marked device_runtime (unknowable offline) yet a concrete value {s.G!r} was filled in"
+                f" — if the value is unknowable offline, fabricating one is forbidden; the expected value should contain the {RUNTIME_PLACEHOLDER} placeholder."
             )
         elif has_placeholder and not (is_runtime_kind or is_verified_kind):
             problems.append(
-                f"step[{i}] 期望值含 {RUNTIME_PLACEHOLDER} 占位却把来源标成 {s.source.kind!r}"
-                f"——占位即声明离线不可知，来源必须标 device_runtime。"
+                f"step[{i}] expected value contains the {RUNTIME_PLACEHOLDER} placeholder yet its source is marked {s.source.kind!r}"
+                f" — a placeholder declares the value unknowable offline, so the source must be marked device_runtime."
             )
         elif is_verified_kind and has_placeholder:
             problems.append(
-                f"step[{i}] 来源标 device_verified（声称已上机回填）却仍含 {RUNTIME_PLACEHOLDER} 占位"
-                f"——回填未完成就不许标 verified，未填的留 device_runtime。"
+                f"step[{i}] source is marked device_verified (claims on-device backfill done) yet still contains the {RUNTIME_PLACEHOLDER} placeholder"
+                f" — do not mark verified before the backfill is complete; leave unfilled slots as device_runtime."
             )
     return problems

@@ -308,6 +308,13 @@ def resolve_skill_dirname(name: str) -> str:
     n = (name or "").strip()
     if not n or (_SKILLS_DIR / n / "SKILL.md").exists():
         return n
+    # B4(2026-07-09):skill 与其 fork agent 统一同名——旧名经此表兜底
+    # (历史会话/dyn 脚本/长会话续聊仍可能带旧名)。
+    _renamed = {"config-answer-verify": "config-answer-verifier",
+                "review-verification": "review-verifier"}
+    if n in _renamed and (_SKILLS_DIR / _renamed[n] / "SKILL.md").exists():
+        logger.info("skill 名别名解析(改名兜底): %r → %r", n, _renamed[n])
+        return _renamed[n]
     for cand in (n.replace("_", "-"), n.replace("-", "_")):
         if cand != n and (_SKILLS_DIR / cand / "SKILL.md").exists():
             logger.info("skill 名别名解析: %r → %r(规范名为连字符,调用方可更新)", n, cand)
@@ -965,7 +972,12 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str, *,
     fork_id 非空时步骤同步双写结构化事件(.events.jsonl,TUI 卡片数据源)。"""
     from langchain_core.messages import HumanMessage
     inp = {"messages": [HumanMessage(content=rendered_body)]}
-    cfg = {"callbacks": [tally if tally is not None else _ForkUsageTally()]}   # fork usage 唯一采集点
+    _cbs = [tally if tally is not None else _ForkUsageTally()]   # fork usage 唯一采集点
+    from main.ist_core.observability import get_langfuse_handler   # Langfuse:fork 链路追踪
+    _lf = get_langfuse_handler()
+    if _lf:
+        _cbs.append(_lf)
+    cfg = {"callbacks": _cbs}
     stream = getattr(runnable, "stream", None)
     if not callable(stream) or not _fork_step_emit_enabled():
         # runnable 不支持流式 或 关了步骤显示(IST_FORK_STEP_EMIT=0)→ 退回阻塞 invoke,

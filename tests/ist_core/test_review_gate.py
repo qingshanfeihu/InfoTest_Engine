@@ -44,7 +44,7 @@ def _make_invoke_skill_msg() -> AIMessage:
 
 
 def _real_brief() -> str:
-    """合规的 review-verification brief（含证据字段且 ≥ 200 字）."""
+    """合规的 review-verifier brief（含证据字段且 ≥ 200 字）."""
     return (
         "test_case_file: knowledge/data/markdown/qa/121100_cookie.md\n"
         "bug_id: BUG-121100\n"
@@ -58,14 +58,14 @@ def _real_brief() -> str:
 
 
 def _make_verifier_call_msg(brief: str = None, tool_call_id: str = "task_1") -> AIMessage:
-    """主 agent 调 invoke_skill('review-verification') 的 AIMessage."""
+    """主 agent 调 invoke_skill('review-verifier') 的 AIMessage."""
     return AIMessage(
         content="提交给 verifier",
         tool_calls=[
             {
                 "name": "invoke_skill",
                 "args": {
-                    "skill": "review-verification",
+                    "skill": "review-verifier",
                     "brief": brief if brief is not None else _real_brief(),
                 },
                 "id": tool_call_id,
@@ -117,7 +117,7 @@ def test_gate_pending_when_verifier_not_called():
     assert "messages" in result
     inject = result["messages"][0]
     assert isinstance(inject, HumanMessage)
-    assert "review-verification" in inject.content
+    assert "review-verifier" in inject.content
     assert "重试 1/2" in inject.content
 
 

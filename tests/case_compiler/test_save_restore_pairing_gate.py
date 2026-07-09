@@ -63,7 +63,7 @@ def test_baseline_pollution_rejected():
         "config file test_config.cfg",
     )
     msg = gate("668015", steps)
-    assert msg is not None and "基线污染" in msg
+    assert msg is not None and "baseline pollution" in msg
 
 
 # ── P0b 紧邻配对(668015 维度二)──────────────────────────────────────
@@ -75,7 +75,7 @@ def test_adjacent_pairing_cross_family_rejected():
         "config memory",                        # 紧邻前一个 save 是 file,却用 memory 恢复
     )
     msg = gate("668015", steps)
-    assert msg is not None and "不同族" in msg
+    assert msg is not None and "different families" in msg
 
 
 # ── P1a 清除步缺失 ──────────────────────────────────────────────────
@@ -87,7 +87,7 @@ def test_missing_clear_step_rejected():
         "show sdns listener",
     )
     msg = gate("c", steps)
-    assert msg is not None and "清除步" in msg
+    assert msg is not None and "missing clear step" in msg
 
 
 # ── P1b 参数完整(668044 维度)────────────────────────────────────────
@@ -99,7 +99,7 @@ def test_bare_write_net_param_incomplete_rejected():
         "config net",
     )
     msg = gate("668044", steps)
-    assert msg is not None and "缺参数" in msg
+    assert msg is not None and "missing argument" in msg
 
 
 # ── P1c 意图变体(668030 维度;manifest 透传)────────────────────────────
@@ -114,7 +114,7 @@ def test_intent_variant_swap_rejected():
     )
     assert gate("668030", steps) is None                              # 不传 expected → no-op 放行
     msg = gate("668030", steps, expected_save_variant="all")          # 传了 → 抓出偷换
-    assert msg is not None and "意图变体" in msg
+    assert msg is not None and "intent variant" in msg
 
 
 def test_intent_variant_correct_passes():

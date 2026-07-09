@@ -299,7 +299,7 @@ def test_nested_fork_pops_stack_via_run_id(monkeypatch):
     FIFO 错位，旧逻辑栈永不弹出 → 主报告被错打 parent 折叠隐藏。
     """
     import main.ist_core.tui.reducer as reducer
-    monkeypatch.setattr(reducer, "_FORK_SKILLS_CACHE", {"review-verification"})
+    monkeypatch.setattr(reducer, "_FORK_SKILLS_CACHE", {"review-verifier"})
 
     r = MessageReducer()
     snaps = []
@@ -308,7 +308,7 @@ def test_nested_fork_pops_stack_via_run_id(monkeypatch):
     
     r.dispatch(_evt("tool_call", 1, tags={"name": "invoke_skill", "lc_tool_run_id": "RID_QIS"},
                     payload={"name": "invoke_skill",
-                             "input": {"skill": "review-verification", "brief": "x"}}))
+                             "input": {"skill": "review-verifier", "brief": "x"}}))
     
     r.dispatch(_evt("tool_call", 2, tags={"name": "qa_grep", "lc_tool_run_id": "RID_GREP"},
                     payload={"name": "qa_grep", "input": {"pattern": "foo"}}))
@@ -335,7 +335,7 @@ def test_fork_pairing_falls_back_to_fifo_without_run_id(monkeypatch):
     """向后兼容：事件不带 lc_tool_run_id（CLI / server / 旧日志）→ 回退 FIFO。
     单层 fork 下 FIFO 仍能正确弹栈（无嵌套错位时 top==pop(0)）。"""
     import main.ist_core.tui.reducer as reducer
-    monkeypatch.setattr(reducer, "_FORK_SKILLS_CACHE", {"review-verification"})
+    monkeypatch.setattr(reducer, "_FORK_SKILLS_CACHE", {"review-verifier"})
 
     r = MessageReducer()
     snaps = []
@@ -343,7 +343,7 @@ def test_fork_pairing_falls_back_to_fifo_without_run_id(monkeypatch):
 
     r.dispatch(_evt("tool_call", 1, tags={"name": "invoke_skill"},
                     payload={"name": "invoke_skill",
-                             "input": {"skill": "review-verification", "brief": "x"}}))
+                             "input": {"skill": "review-verifier", "brief": "x"}}))
     r.dispatch(_evt("tool_result", 2, tags={"name": "invoke_skill"},
                     payload={"name": "invoke_skill", "output": "VERDICT: PARTIAL\nLEVEL: P3"}))
     r.dispatch(_evt("llm_end", 3, payload={"name": "final_thought", "content": "MAIN REPORT"}))
@@ -358,7 +358,7 @@ def test_serial_multi_sheet_forks_each_pop_correctly(monkeypatch):
     （tool_result 弹栈）后 B 才开始。验证每个 fork 各自精确弹栈，其间和其后的
     main agent 报告 parent 正确（fork 内挂 parent、fork 间/后为空）。"""
     import main.ist_core.tui.reducer as reducer
-    monkeypatch.setattr(reducer, "_FORK_SKILLS_CACHE", {"review-verification"})
+    monkeypatch.setattr(reducer, "_FORK_SKILLS_CACHE", {"review-verifier"})
 
     r = MessageReducer()
     snaps = []
@@ -368,7 +368,7 @@ def test_serial_multi_sheet_forks_each_pop_correctly(monkeypatch):
         r.dispatch(_evt("tool_call", call_seq,
                         tags={"name": "invoke_skill", "lc_tool_run_id": rid},
                         payload={"name": "invoke_skill",
-                                 "input": {"skill": "review-verification", "brief": "x"}}))
+                                 "input": {"skill": "review-verifier", "brief": "x"}}))
         
         r.dispatch(_evt("llm_end", body_seq,
                         payload={"name": "final_thought", "content": "INNER"}))

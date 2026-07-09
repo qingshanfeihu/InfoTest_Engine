@@ -46,7 +46,7 @@ def _emit_fixture(out_name: str):
     r = compile_emit.invoke({"autoid": out_name, "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": out_name,
                              "provenance_json": prov.to_json()})
-    assert "已产出" in r, r
+    assert "produced structurally-correct" in r, r
     return _ROOT / "workspace" / "outputs" / out_name / "case.xlsx", prov
 
 

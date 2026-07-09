@@ -142,7 +142,7 @@ def _skill_eligible_for_listing(meta: dict[str, str]) -> bool:
     只过滤 disable-model-invocation: true（完全不可见，invoke_skill 也拒）。
 
     **user-invocable: false 仍进 listing**：这类是 fork 子流程（compile-worker/
-    compile-attributor、review-verification），由 inline 编排 skill（ist-compile-engine /
+    compile-attributor、review-verifier），由 inline 编排 skill（ist-compile-engine /
     ist-verify / test-list-review）的 body 引导**主 agent** 经 invoke_skill/compile_fanout
     派发——派发者就是主 agent 本身，故必须对模型可见，
     否则主 agent 按 body 指示调用时找不到。它们只是不进 TUI `/skill` 用户菜单（user-invocable

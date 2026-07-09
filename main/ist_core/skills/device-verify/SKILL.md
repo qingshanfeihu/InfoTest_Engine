@@ -1,13 +1,14 @@
 ---
 name: device-verify
-description: SSH 到实际 APV 设备执行 CLI 命令，支持只读验证和配置下发
+description: SSH into a real APV device to execute CLI commands; supports read-only verification and configuration deployment.
 context: inline
 user-invocable: true
 when_to_use: |
-  Use when 用户要求"到设备上验证"、"上机跑一下"、"SSH执行"、"确认配置生效"、
-  "下发配置"、"把命令跑一遍"，或生成了配置命令后要求实测验证。
+  Use when the user asks to verify on the device, run it on the device, execute over SSH,
+  confirm a configuration took effect, deploy configuration, or run the commands for real —
+  or when generated configuration commands need live verification.
   Trigger phrases: 上机, SSH执行, 设备验证, 下发配置, 跑命令, 确认生效, 实测
-  SKIP when: 设备不可达且用户不愿手动执行。
+  SKIP when: the device is unreachable and the user is unwilling to execute manually.
 allowed-tools:
   - fs_read
   - fs_grep(knowledge/data/markdown/product/*)
@@ -21,28 +22,30 @@ effort: medium
 
 # Device Verify
 
-SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/list/display）和**配置下发**（config 模式）两种场景。
+SSH into a real APV / network device to execute CLI commands. Two scenarios: **read-only verification** (show/list/display) and **configuration deployment** (config mode).
 
 ## Inputs
 
-- 待执行/验证的命令列表
-- 目标设备 IP（可从 `knowledge/data/auto_env/network_topology_rag.md` 获取）
-- SSH 凭据（默认 admin/admin，未提供时 ask_user 询问）
+- The list of commands to execute / verify
+- Target device IP (available from `knowledge/data/auto_env/network_topology_rag.md`)
+- SSH credentials (default admin/admin; ask_user when not provided)
 
 ## Principles
 
-- **执行优先用 dev_rest 而非 dev_ssh**：REST API 比 SSH 快得多（单次 HTTP 调用 vs shell 交互），且无需 enable/config 模式。SSH 仅作为 REST API 不可用时的降级方案
-- **高危命令一律拒绝**，不准下发，不准静默跳过（详见下方黑名单）
-- **CLI 手册优先于设备试错**：任何命令（含 show）必须先 grep `knowledge/data/markdown/product/cli_*_Chapter*.md` + `cli_*_Appendix*.md` 查语法。严禁在设备上用错误命令试探——设备不是命令发现工具，手册才是唯一权威
-- **禁止假设命令名**：设备运行 InfosecOS，不是 Cisco IOS。不要用 `show ip interface brief`、`show vlan`、`show interface` 等 Cisco 风格命令名，必须从 CLI 手册中查找 InfosecOS 的正确命令
-- 配置下发时，前一条失败不准继续执行后续命令
-- SSH 凭据不准硬编码，用 ask_user 或环境变量获取
-- 连接超时/失败最多重试 3 次，超过标注「设备不可达」
-- SSH 执行模板见 `main/ist_core/skills/device-verify/reference/ssh_template.md`，封装实现见 `main/ist_core/skills/device-verify/scripts/apv_ssh_client.py`
+- **Prefer dev_rest over dev_ssh for execution**: the REST API is much faster than SSH (a single HTTP call vs. an interactive shell) and needs no enable/config mode. SSH is only the fallback when the REST API is unavailable
+- **High-risk commands are always refused** — never deploy them, never silently skip them (see the blacklist below)
+- **The CLI manual outranks trial-and-error on the device**: every command (including show) must first be grepped in `knowledge/data/markdown/product/cli_*_Chapter*.md` + `cli_*_Appendix*.md` for its syntax. Never probe the device with wrong commands — the device is not a command-discovery tool; the manual is the only authority
+- **Never assume command names**: the device runs InfosecOS, not Cisco IOS. Do not use Cisco-style command names such as `show ip interface brief`, `show vlan`, `show interface`; look up the correct InfosecOS command in the CLI manual
+- During configuration deployment, if a command fails, do not continue with the remaining commands
+- Never hard-code SSH credentials; obtain them via ask_user or environment variables
+- On connection timeout/failure retry at most 3 times; beyond that, annotate 「设备不可达」 (device unreachable)
+- References (read directly, no indirection):
+  - SSH execution template: `main/ist_core/skills/device-verify/reference/ssh_template.md`
+  - Reference implementation: `main/ist_core/skills/device-verify/scripts/apv_ssh_client.py` — wraps `connect()` / `execute_show_commands()` / `execute_config_commands()`; env vars: `APV_DEVICE_IP` (default 172.16.34.70), `APV_USERNAME`, `APV_PASSWORD`, `APV_SSH_PORT`
 
-## 高危命令黑名单
+## High-risk command blacklist
 
-以下命令**任何情况下禁止执行**：
+The following commands must never be executed, under any circumstances:
 
 **设备级破坏**：`system reboot`、`system shutdown`
 
@@ -54,96 +57,111 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 
 **白名单（允许下发）**：SLB 全模块（slb *）、SDNS 全模块（sdns *）、分区（segment *）、SSL、HA 全模块（ha *）、系统安全子集（hostname/ntp/syslog/snmp/log/system *——危险命令如 system reboot/shutdown 由黑名单拦截）、删除/清除（no slb/clear slb/no sdns/clear sdns/no segment/clear segment/no ssl/clear ssl/no ha/clear ha 前缀均允许）、持久化（write memory/write segment）
 
+## Workflow checklist
+
+Copy this checklist at the start and tick items off as the corresponding steps complete:
+
+```
+Device Verify progress:
+- [ ] Step 1: Scenario determined + target device IP + credentials ready
+- [ ] Step 2: Every deploy command marked safe/blocked/uncertain against the blacklist (deploy only)
+- [ ] Step 3: Every command traced to its CLI-manual definition (full name + parameters)
+- [ ] Step 4: Commands executed (dev_rest → dev_ssh → manual fallback), outputs collected
+- [ ] Step 5: Device output vs. expectation compared item by item (read-only only)
+- [ ] Step 6: Effect confirmed via show; no write memory unless the user asked (deploy only)
+- [ ] Step 7: Four-section report delivered; no tool calls after output started
+```
+
 ## Steps
 
-### 1. 确定场景与目标设备
+### 1. Determine the scenario and target device
 
 **Execution**: Direct
 
-判定场景（只读验证 vs 配置下发）。从 `knowledge/data/auto_env/network_topology_rag.md` 确定目标设备 IP（APV0: 172.16.34.70 / APV1: 172.16.34.71 等）。未提供凭据时 ask_user。
+Decide the scenario (read-only verification vs. configuration deployment). Determine the target device IP from `knowledge/data/auto_env/network_topology_rag.md` (APV0: 172.16.34.70 / APV1: 172.16.34.71 etc.). If credentials were not provided, ask_user.
 
-**Success criteria**: 场景判定明确 + 目标设备 IP + 凭据就绪
+**Success criteria**: scenario decided + target device IP + credentials ready
 **Artifacts**: scenario, target_device_ip
 
-### 2. 高危命令预检 (when applicable: 配置下发)
+### 2. High-risk command pre-check (when applicable: configuration deployment)
 
 **Execution**: Direct
 
-对每条待下发命令，对照黑名单逐条检查。命中黑名单 → 拒绝并说明原因。命中白名单 → 通过。不确定 → ask_user 确认。
+Check every command to be deployed against the blacklist, one by one. Hits the blacklist → refuse and explain why. Hits the whitelist → pass. Uncertain → ask_user to confirm.
 
-**Rules**: 即使配置中包含高危命令也必须拒绝，不可静默跳过
-**Success criteria**: 每条命令标记 safe/blocked/uncertain
+**Rules**: even if the configuration contains a high-risk command, it must be refused — never silently skipped
+**Success criteria**: every command marked safe/blocked/uncertain
 **Artifacts**: command_safety_checklist
 
-### 3. 生成执行命令清单
+### 3. Build the execution command list
 
 **Execution**: Direct
 
-**⚠️ 强制步骤：所有命令（包括 show 和 config）必须先查 CLI 手册再执行。**
+**⚠️ Mandatory step: every command (show and config alike) must be looked up in the CLI manual before execution.**
 
-先 grep `knowledge/data/markdown/product/cli_*_Chapter*.md` + `cli_*_Appendix*.md` 确认命令的**完整名称和参数**。下表是已验证的正确命令——**必须使用表格中的精确命令，禁止简化**（如用 `show slb group` 代替 `show slb group method` 会遗漏关键信息）：
+First grep `knowledge/data/markdown/product/cli_*_Chapter*.md` + `cli_*_Appendix*.md` to confirm each command's **full name and parameters**. The table below lists verified correct commands — **use the exact commands from the table; never simplify them** (e.g. using `show slb group` instead of `show slb group method` loses key information):
 
-| 验证目标 | 正确命令（必须用完整形式） |
+| Verification target | Correct command (full form required) |
 |---------|-------------------------|
-| 虚拟服务 | `show slb virtual all` |
-| 后台服务组 | `show slb group method` |
-| 后台服务状态 | `show slb real all` |
-| 健康检查 | `show slb health` |
+| Virtual services | `show slb virtual all` |
+| Server groups | `show slb group method` |
+| Real server status | `show slb real all` |
+| Health checks | `show slb health` |
 | SDNS listener | `show sdns listener` |
 | SDNS host | `show sdns host name` |
-| 分区配置 | `show segment config` |
-| HA 状态 | `show ha status` |
-| 运行配置 | `show running` |
+| Segment config | `show segment config` |
+| HA status | `show ha status` |
+| Running config | `show running` |
 
-**禁止行为**：表格中 `show slb group method` 是完整的正确命令——不要写成 `show slb group`（缺 method）、`show slb virtual`（缺 all）、`show slb real`（缺 all）。如果你不确定某一行的完整命令，grep 手册确认后再执行。
+**Forbidden**: in the table, `show slb group method` is the complete correct command — do not write `show slb group` (missing method), `show slb virtual` (missing all), `show slb real` (missing all). If unsure about the full form of any row, grep the manual to confirm before executing.
 
-**配置下发**：先查 CLI 手册确认每条命令的完整语法和参数约束（同 config-answer 的 CLI 验证流程），再将 Step 2 标记为 safe 的命令按依赖排序。
+**Configuration deployment**: first confirm each command's full syntax and parameter constraints in the CLI manual (same CLI verification flow as config-answer), then order the commands marked safe in Step 2 by dependency.
 
-**Rules**: 禁止猜测命令，所有命令必须在 cli 手册中能找到
-**Success criteria**: 每条命令可追溯到 CLI 手册中的定义
-**Artifacts**: show_commands_with_expected（只读） / deploy_command_sequence（下发）
+**Rules**: never guess commands; every command must be found in the CLI manual
+**Success criteria**: every command traceable to its definition in the CLI manual
+**Artifacts**: show_commands_with_expected (read-only) / deploy_command_sequence (deployment)
 
-### 4. 执行命令
+### 4. Execute the commands
 
-**Execution**: Direct（dev_rest 优先 → dev_ssh 降级）或 [human]（ask_user 手动）
+**Execution**: Direct (dev_rest first → dev_ssh fallback) or [human] (manual via ask_user)
 
-**优先级**：`dev_rest` > `dev_ssh` > 手动执行
+**Priority**: `dev_rest` > `dev_ssh` > manual execution
 
-1. **首选 `dev_rest`**：REST API 最快（单次 HTTP round-trip），无 SSH 握手开销，支持 `\n` 交互式命令。show 和 config 命令统一 POST 即可，无需区分模式
-2. **降级 `dev_ssh`**：REST API 不可用（连接失败/401/设备不支持）时使用 SSH
-3. **兜底人工**：以上都不可用时 ask_user 请用户手动执行，参考 `main/ist_core/skills/device-verify/reference/ssh_template.md`
+1. **Prefer `dev_rest`**: the REST API is fastest (a single HTTP round-trip), no SSH handshake overhead, supports `\n` interactive commands. show and config commands are both a single POST — no mode switching needed
+2. **Fall back to `dev_ssh`**: use SSH when the REST API is unavailable (connection failure / 401 / unsupported device)
+3. **Last resort — human**: when neither works, ask_user to have the user execute manually, following `main/ist_core/skills/device-verify/reference/ssh_template.md`
 
-**Human checkpoint**: 配置下发前，确认用户已知晓将修改设备配置（列出目标设备 + 待下发命令清单）
+**Human checkpoint**: before configuration deployment, confirm the user knows the device configuration will be modified (list the target device + the commands to deploy)
 
-**Rules**: 配置下发时前一条失败不准继续；先 REST API 再 SSH 的顺序不可颠倒
-**Success criteria**: 所有命令执行完成，输出已收集（或遇到首个错误中止）
+**Rules**: during deployment, never continue past a failed command; the REST-API-before-SSH order must not be reversed
+**Success criteria**: all commands executed and outputs collected (or aborted at the first error)
 **Artifacts**: execution_results
 
-### 5. 对比分析 (when applicable: 只读验证)
+### 5. Compare and analyze (when applicable: read-only verification)
 
 **Execution**: Direct
 
-逐条对比设备输出与预期：值匹配？状态正常？不一致时分析原因（未下发/语法错误/旧配置冲突）。
+Compare device output against expectations item by item: values match? states normal? On mismatch, analyze the cause (not deployed / syntax error / stale config conflict).
 
-**Success criteria**: 每条对比有明确 match/mismatch 结论 + 差异分析
+**Success criteria**: every comparison has an explicit match/mismatch conclusion + difference analysis
 **Artifacts**: comparison_results
 
-### 6. 持久化与验证 (when applicable: 配置下发)
+### 6. Persistence and verification (when applicable: configuration deployment)
 
 **Execution**: Direct
 
-**默认不保存**：配置下发后**不**执行 `write memory`。除非用户明确要求"保存配置"或"持久化"，否则跳过。避免覆盖设备上已有的未保存配置。
+**Do not save by default**: after deployment, do **not** run `write memory`. Skip it unless the user explicitly asks to "save the configuration" or "persist". This avoids overwriting unsaved configuration already on the device.
 
-**验证下发结果**：执行对应 show 命令确认配置已生效。验证通过即完成任务，不需额外保存步骤。
+**Verify the deployment**: run the corresponding show commands to confirm the configuration took effect. Verification passing completes the task; no extra save step.
 
-**Success criteria**: 配置已生效确认 + 下发结果汇总完整（无需保存）
+**Success criteria**: configuration confirmed in effect + complete deployment summary (no save needed)
 **Artifacts**: deploy_summary
 
-### 7. 输出报告
+### 7. Output the report
 
 **Execution**: Direct
 
-按以下结构输出（输出时禁止再调任何工具）：
+Output in the following structure (no tool calls once output starts):
 
 ```
 ### 设备信息
@@ -166,5 +184,5 @@ SSH 到实际 APV/网络设备执行 CLI 命令，支持**只读验证**（show/
 - 建议：<修正建议或下一步>
 ```
 
-**Rules**: 最终输出时禁止再调工具
-**Success criteria**: 报告含完整四段结构（设备信息 + 执行结果表 + 详细分析 + 结论），所有异常项有根因分析
+**Rules**: no tool calls during the final output
+**Success criteria**: the report contains the full four-section structure (device info + execution result table + detailed analysis + conclusion), with root-cause analysis for every abnormal item

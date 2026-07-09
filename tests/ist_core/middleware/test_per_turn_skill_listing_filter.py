@@ -1,7 +1,7 @@
 """PerTurnSkillReminder listing 过滤。
 
 只过滤 disable-model-invocation: true（完全不可见，invoke_skill 也拒）。
-user-invocable: false 的 fork 子流程（compile-worker/compile-attributor、review-verification）
+user-invocable: false 的 fork 子流程（compile-worker/compile-attributor、review-verifier）
 仍进主 agent listing——它们由 inline 编排 skill 的 body 引导主 agent 经 invoke_skill
 派发，派发者就是主 agent，必须对模型可见；只是不进 TUI /skill 用户菜单。
 """
@@ -42,7 +42,7 @@ def test_load_skills_from_dir_includes_fork_subflows():
     names = {m["name"] for m in _load_skills_from_dir(skills_dir)}
     assert "test-list-review" in names
     assert "compile-worker" in names
-    assert "review-verification" in names
+    assert "review-verifier" in names
 
 
 # ── 渐进披露预算（P0）─────────────────────────────────────────────────

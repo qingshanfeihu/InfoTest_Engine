@@ -41,7 +41,7 @@ def _brief(case_led, max_rounds=3):
 
 def test_build_brief_non_last_is_lightweight():
     b = _brief({"rounds_used": 0, "evidence_excerpt": "ONLY-LATEST"})
-    assert "最后一次编写" not in b
+    assert "FINAL attempt" not in b
     assert "ONLY-LATEST" in b          # 非末轮仍喂最新一轮证据
 
 
@@ -53,15 +53,15 @@ def test_build_brief_last_attempt_full_history():
          "layer": "", "disposition": ""},
     ]
     b = _brief({"rounds_used": 2, "fail_evidence": hist})
-    for must in ("最后一次编写", "思考深度已升至 max", "ROUND0-DEV", "ROUND1-DEV",
-                 "FIX0", "第0次", "第1次", "归因:E/reflow"):
+    for must in ("FINAL attempt", "thinking depth raised to max", "ROUND0-DEV", "ROUND1-DEV",
+                 "FIX0", "on-device run #0", "on-device run #1", "E/reflow"):
         assert must in b, must
 
 
 def test_build_brief_last_attempt_needs_history():
     # rounds_used 达阈值但无 fail 历史 → 不触发全回显(回落轻量)
     b = _brief({"rounds_used": 2})
-    assert "最后一次编写" not in b
+    assert "FINAL attempt" not in b
 
 
 # ------------------------------------------------ B: _archive_round_config 逐轮归档
@@ -157,7 +157,7 @@ def test_clean_device_echo_strips_ts_and_collapses_blanks():
     clean = _clean_device_echo(raw)
     assert "2026-07-07 23:30" not in clean          # 时间戳前缀剥掉
     assert "sends command in config: sdns pool p1" in clean
-    assert "\n\n\n" not in clean                     # 连续空行折叠
+    assert "\n\n\n" not in clean                     # consecutive空行折叠
     assert "=== 头 ===" in clean                     # 非时间戳行保留
     assert _clean_device_echo(raw, limit=10) == clean[:10]   # limit 截断
     # 原始不动(喂 LLM 归因的 device_context 保留时间戳=causality 照妖镜)
@@ -184,6 +184,16 @@ def test_worker_skill_has_tail_examples_and_instructions_last():
     """worker SKILL:尾块 <examples> 存在;$ARGUMENTS(数据)在 <instructions>(指令)之前。"""
     from pathlib import Path
     body = (Path("main/ist_core/skills/compile-worker/SKILL.md")).read_text(encoding="utf-8")
-    assert "<examples>" in body and "状态：produced" in body and "状态：needs_user_decision" in body
+    assert "<examples>" in body and "STATUS: produced" in body and "STATUS: needs_user_decision" in body
     assert body.find("$ARGUMENTS") < body.find("<instructions>")
     assert body.rstrip().endswith("</instructions>")
+
+def test_build_brief_first_retry_gets_full_history():
+    """首败即深思考(2026-07-09):R2(rounds_used=1)就应带全历史 brief——旧逻辑末轮才给,
+    ask_user 第三轮触发时用户答案已无重生成机会(dongkl 批 11 升级人工实证)。"""
+    hist = [{"round": 1, "layer": "V", "disposition": "reflow",
+             "fix_direction": "FIX0", "device_context": "ROUND0-DEV"}]
+    b = _brief({"rounds_used": 1, "fail_evidence": hist})
+    assert "Recompile round" in b and "thinking depth raised to max" in b
+    assert "ROUND0-DEV" in b
+    assert "FINAL attempt" not in b     # R2 不是最后一次(max_rounds=3)

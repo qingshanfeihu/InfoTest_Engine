@@ -104,8 +104,8 @@ class FillResult:
     xlsx_path: str = ""
 
     def summary(self) -> str:
-        return (f"回填[{Path(self.xlsx_path).parent.name}]: 填{len(self.filled)} "
-                f"留空{len(self.left_blank)} 未命中{len(self.not_found)}")
+        return (f"Backfill[{Path(self.xlsx_path).parent.name}]: filled {len(self.filled)} "
+                f"left blank {len(self.left_blank)} unmatched {len(self.not_found)}")
 
 
 def apply_fills(xlsx_path: str | Path, fills: list[dict], *,
@@ -134,7 +134,7 @@ def apply_fills(xlsx_path: str | Path, fills: list[dict], *,
     dirty = False
     for item in fills:
         if not isinstance(item, dict):
-            result.details.append(f"✗ 非 dict fill 项已跳过: {item!r}")
+            result.details.append(f"✗ Skipped non-dict fill item: {item!r}")
             continue
         sid = str(item.get("slot_id", "")).strip()
         rv = item.get("runtime_value")
@@ -142,22 +142,22 @@ def apply_fills(xlsx_path: str | Path, fills: list[dict], *,
         slot = slot_map.get(sid)
         if slot is None:
             result.not_found.append(sid)
-            result.details.append(f"✗ {sid} 未命中（已填锁死 / slot_id 不存在）")
+            result.details.append(f"✗ {sid} unmatched (already filled and locked / slot_id does not exist)")
             continue
         if not rv.strip():
             result.left_blank.append(sid)
-            result.details.append(f"· {sid} 留空（调用方未给值＝抽不出，不猜）")
+            result.details.append(f"· {sid} left blank (caller gave no value = not extractable; never guess)")
             continue
         new_g = slot.current_g.replace(RUNTIME_PLACEHOLDER, rv)
         if RUNTIME_PLACEHOLDER in new_g:
             # 极端：rv 自身含占位符 → 拒填，避免假回填
             result.left_blank.append(sid)
-            result.details.append(f"· {sid} 留空（回填值仍含占位符，拒绝假回填）")
+            result.details.append(f"· {sid} left blank (backfill value still contains the placeholder; fake backfill rejected)")
             continue
         ws.cell(slot.row, _COL_G).value = new_g
         dirty = True
         result.filled.append(sid)
-        result.details.append(f"✓ {sid} 行{slot.row}: {slot.current_g[:30]} → {new_g[:40]}")
+        result.details.append(f"✓ {sid} row {slot.row}: {slot.current_g[:30]} → {new_g[:40]}")
         touched_autoids.setdefault(slot.autoid, []).append(
             (slot.current_g, new_g, str(item.get("evidence", ""))))
 
@@ -170,7 +170,7 @@ def apply_fills(xlsx_path: str | Path, fills: list[dict], *,
             try:
                 _sync_provenance(Path(project_root), autoid, changes, run_meta)
             except Exception as e:  # noqa: BLE001
-                result.details.append(f"⚠ provenance 同步失败 {autoid}: {e}")
+                result.details.append(f"⚠ provenance sync failed for {autoid}: {e}")
 
     logger.info(result.summary())
     return result

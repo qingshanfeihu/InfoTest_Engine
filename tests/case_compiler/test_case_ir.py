@@ -107,12 +107,12 @@ class TestValidateRow:
         r = Row(test_object="check_point", method="invalid_method", data="expected")
         errs = validate_row(r)
         assert len(errs) == 1
-        assert "不是合法断言类型" in errs[0]
+        assert "is not a valid assertion type" in errs[0]
 
     def test_found_times_needs_input_var(self):
         r = Row(test_object="check_point", method="found_times", data="expected")
         errs = validate_row(r)
-        assert any("found_times 需要 I 列" in e for e in errs)
+        assert any("found_times requires column I" in e for e in errs)
 
     def test_found_times_with_input_var_ok(self):
         r = Row(test_object="check_point", method="found_times", data="expected", input_var="3")
@@ -122,7 +122,7 @@ class TestValidateRow:
         r = Row(test_object="INVALID_OBJ", method="cmd_config")
         errs = validate_row(r)
         assert len(errs) == 1
-        assert "不是合法测试对象" in errs[0]
+        assert "is not a valid test object" in errs[0]
 
     def test_test_env_valid_host(self):
         r = Row(test_object="test_env", method="routera")
@@ -131,7 +131,7 @@ class TestValidateRow:
     def test_test_env_invalid_host(self):
         r = Row(test_object="test_env", method="unknown_host")
         errs = validate_row(r)
-        assert any("不是合法主机名" in e for e in errs)
+        assert any("is not a valid hostname" in e for e in errs)
 
     def test_time_valid_sleep(self):
         r = Row(test_object="time", method="sleep", data="5")
@@ -140,7 +140,7 @@ class TestValidateRow:
     def test_time_invalid_method(self):
         r = Row(test_object="time", method="wait", data="5")
         errs = validate_row(r)
-        assert any("F 必须为 sleep" in e for e in errs)
+        assert any("F must be sleep" in e for e in errs)
 
     def test_apv_0_cmd_config(self):
         r = Row(test_object="APV_0", method="cmd_config", data="sdns on")
@@ -155,7 +155,7 @@ class TestValidateCase:
             ]),
         ])
         errs = validate_case(c)
-        assert any("无 check_point" in e for e in errs)
+        assert any("no check_point" in e for e in errs)
 
     def test_valid_case_passes(self):
         c = CaseIR(autoid="t2", steps=[
@@ -177,7 +177,7 @@ class TestValidateCase:
             ]),
         ])
         errs = validate_case(c)
-        assert any("不是合法断言类型" in e for e in errs)
+        assert any("is not a valid assertion type" in e for e in errs)
 
 
 class TestEffectiveWhitelists:

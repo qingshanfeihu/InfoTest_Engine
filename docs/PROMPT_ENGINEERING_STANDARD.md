@@ -57,7 +57,7 @@
 | 成本 | —（百万级 token 时代） | ¥36.31 / ↑11.4M | **¥24.29 / ↑7.5M（-33%）** |
 | 设备轮次 | 4 | 4 | 4 |
 
-**行为级差异（LangSmith 逐字）**：R2 worker（035608）在归因假设＝"改断言迁就"时**拒绝跟随**——"prior hypothesis correct about the cause, and the intent conflicts with product behavior → `状态：failed`"，宁可上报不产假验证卷（dongkl 时代是盲从三轮）；并自发 `dev_probe` 核实状态语义。quote-first/同批交叉/hedged-defect 纪律全程在思维链中可见。
+**行为级差异（LangSmith 逐字）**：R2 worker（035608）在归因假设＝"改断言迁就"时**拒绝跟随**——"prior hypothesis correct about the cause, and the intent conflicts with product behavior → `STATUS: failed`"，宁可上报不产假验证卷（dongkl 时代是盲从三轮）；并自发 `dev_probe` 核实状态语义。quote-first/同批交叉/hedged-defect 纪律全程在思维链中可见。
 
 **暴露的新缺口（570/608 escalated 的根因）**：知识条件性断层——footprint 种子规则写成无条件式（"disable 不抑制别名池"），而 rerun2 035570 R2 实测的**条件行为**（成员配成本地域名时 disable→CNAME ANSWER:0）因"fail 候选永不入库"进不了知识库，正确配置形态对后续轮不可见。待办：定向设备实验钉死条件行为→修种子为条件式；评估"缺陷候选附带的行为观察"入库通道（带 defect-pending 标记而非丢弃）。
 

@@ -123,7 +123,15 @@ class _FakeApp:
         self.selection = SelectionState()
         self.notify_count = 0
         self.render_count = 0
+        self.repaint_count = 0
         self.terminal_writes: list[str] = []
+
+    def visible_screen(self):
+        # 单缓冲 fake:显示帧就是这块 screen(真实 App 里返回交换后的 _prev_screen)。
+        return self._curr_screen
+
+    def _repaint_full(self) -> None:
+        self.repaint_count += 1
 
     def notify_selection_change(self) -> None:
         self.notify_count += 1
@@ -239,22 +247,151 @@ def test_triple_click_selects_line():
     assert sel.anchor_span is not None and sel.anchor_span.kind == "line"
 
 
-def test_wheel_does_not_touch_selection():
+def test_wheel_routes_to_scroll_transcript():
+    """滚轮事件委托给 _scroll_transcript(-3/+3)。wheel 分支自身不直接改选区——
+    选区随内容的平移发生在 _scroll_transcript 内部(见
+    test_scroll_transcript_shifts_selection_and_captures_offscreen)。这里用桩
+    隔离出「wheel→scroll 委托」这一层路由。"""
     app = _make_ist_app()
-    
-    app._app.selection.anchor = type(app._app.selection.anchor or object())()
     from main.ist_core.ink.selection import Point
     app._app.selection.anchor = Point(col=2, row=0)
     app._app.selection.focus = Point(col=5, row=0)
-    
+
     calls = []
     app._scroll_transcript = lambda d: calls.append(d)
     app._handle_mouse(MouseEvent(type="wheel", button=0, x=0, y=0))
     app._handle_mouse(MouseEvent(type="wheel", button=1, x=0, y=0))
     assert calls == [-3, 3]
-    
+
     assert app._app.selection.anchor.col == 2
     assert app._app.selection.focus.col == 5
+
+
+# —— 选区随 transcript 滚动平移(修复:选中后滚轮/PageUp 选中内容随滚动漂移)——
+
+
+class _FakeRect:
+    def __init__(self, y: int, width: int, height: int):
+        self.x = 0
+        self.y = y
+        self.width = width
+        self.height = height
+
+
+class _FakeTranscriptNode:
+    def __init__(self, scroll_top: int, rect: "_FakeRect"):
+        self.scroll_top = scroll_top
+        self.rect = rect
+
+
+class _FakeTranscript:
+    """够 _scroll_transcript 用的最小 Transcript:带 scroll_top + rect 的 node,
+    以及复刻 Transcript.scroll_by 顶/底 clamp 语义的 scroll_by。"""
+
+    def __init__(self, scroll_top: int, rect_y: int, rect_height: int, content_rows: int):
+        self.node = _FakeTranscriptNode(scroll_top, _FakeRect(rect_y, 10, rect_height))
+        self._content_rows = content_rows
+
+    def scroll_by(self, delta: int) -> None:
+        max_top = max(0, self._content_rows - self.node.rect.height + 1)
+        self.node.scroll_top = max(0, min(max_top, self.node.scroll_top + delta))
+
+
+class _ScrollApp:
+    """滚动路径用的 fake InkApp:真实 Screen + SelectionState + _scroll_transcript
+    触及的三个钩子。单缓冲,visible_screen 直接返回这块 screen。"""
+
+    def __init__(self, screen: Screen):
+        self.selection = SelectionState()
+        self._curr_screen = screen
+        self._prev_screen = screen
+        self.notify_count = 0
+        self.repaint_count = 0
+
+    def visible_screen(self) -> Screen:
+        return self._prev_screen
+
+    def notify_selection_change(self) -> None:
+        self.notify_count += 1
+
+    def _repaint_full(self) -> None:
+        self.repaint_count += 1
+
+
+def _make_scroll_app(*, scroll_top: int = 10, rect_height: int = 5, content_rows: int = 100):
+    """IstInkApp(不跑 __init__) + 5 行不同内容(AAAA..EEEE)的 10×5 屏 + fake transcript。"""
+    from main.ist_core.ink.components.ist_app import IstInkApp
+
+    char_pool = CharPool()
+    style_pool = StylePool()
+    screen = Screen(10, 5, char_pool, style_pool)
+    for y, r in enumerate(["AAAA", "BBBB", "CCCC", "DDDD", "EEEE"]):
+        for x, ch in enumerate(r):
+            screen.set_cell(x, y, char_pool.intern(ch), style_pool.none, 0, CELL_NORMAL)
+    obj = IstInkApp.__new__(IstInkApp)
+    obj._app = _ScrollApp(screen)
+    obj._transcript = _FakeTranscript(scroll_top, 0, rect_height, content_rows)
+    return obj
+
+
+def test_scroll_transcript_shifts_selection_and_captures_offscreen():
+    from main.ist_core.ink.selection import Point
+
+    app = _make_scroll_app(scroll_top=10, rect_height=5)
+    sel = app._app.selection
+    sel.anchor = Point(col=0, row=1)
+    sel.focus = Point(col=3, row=3)
+
+    # 向下滚 2(内容上移):两端行号各减 2,anchor 上溢 clamp 到 row0,移出的 BBBB 抓入累加器
+    app._scroll_transcript(2)
+    assert selection_bounds(sel) == (Point(col=0, row=0), Point(col=3, row=1))
+    assert sel.scrolled_off_above == ["BBBB"]
+    assert app._app.repaint_count == 1
+    assert app._app.notify_count == 1
+
+
+def test_scroll_transcript_round_trip_restores_selection():
+    from main.ist_core.ink.selection import Point
+
+    app = _make_scroll_app(scroll_top=10, rect_height=5)
+    sel = app._app.selection
+    sel.anchor = Point(col=0, row=1)
+    sel.focus = Point(col=3, row=3)
+
+    app._scroll_transcript(2)    # 下滚 2
+    app._scroll_transcript(-2)   # 回滚 2 → 复原
+    assert selection_bounds(sel) == (Point(col=0, row=1), Point(col=3, row=3))
+    assert sel.scrolled_off_above == []
+
+
+def test_scroll_transcript_noop_when_clamped_at_top():
+    from main.ist_core.ink.selection import Point
+
+    app = _make_scroll_app(scroll_top=0, rect_height=5)  # 已在顶部
+    sel = app._app.selection
+    sel.anchor = Point(col=0, row=1)
+    sel.focus = Point(col=3, row=3)
+
+    app._scroll_transcript(-3)   # 继续上滚被 clamp,实际位移 0 → 不平移选区
+    assert selection_bounds(sel) == (Point(col=0, row=1), Point(col=3, row=3))
+    assert sel.scrolled_off_above == []
+    assert app._app.notify_count == 0
+    assert app._app.repaint_count == 1  # 仍重绘(残影自愈)
+
+
+def test_scroll_transcript_ignores_selection_below_viewport():
+    from main.ist_core.ink.selection import Point
+
+    # transcript 只占前 3 行,选区落在其下方(row4,如输入框/footer)——不随 transcript 滚
+    app = _make_scroll_app(scroll_top=10, rect_height=3)
+    sel = app._app.selection
+    sel.anchor = Point(col=0, row=4)
+    sel.focus = Point(col=3, row=4)
+
+    app._scroll_transcript(2)
+    assert selection_bounds(sel) == (Point(col=0, row=4), Point(col=3, row=4))
+    assert sel.scrolled_off_above == []
+    assert app._app.notify_count == 0
 
 
 def test_press_on_right_button_is_ignored():

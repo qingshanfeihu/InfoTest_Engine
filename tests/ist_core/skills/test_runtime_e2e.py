@@ -32,7 +32,7 @@ def test_official_explore_subagent_loads():
 
     spec = load_subagent("explore")
     assert spec is not None
-    assert spec["name"] == "Explore"
+    assert spec["name"] == "explore"
     assert spec["model"] == "haiku"
     
     assert "read-only research subagent" in spec["system_prompt"]
@@ -48,7 +48,7 @@ def test_official_explore_listed_in_subagents():
     from main.ist_core.skills.loader import list_subagents
 
     names = [s["name"] for s in list_subagents()]
-    assert "Explore" in names
+    assert "explore" in names
     assert "review-verifier" in names
 
 
@@ -75,7 +75,7 @@ def test_fork_skill_can_reference_official_explore():
 
 
 def test_review_verification_fork_runs_end_to_end(monkeypatch):
-    """端到端：invoke_skill('review-verification') → execute_fork_skill →
+    """端到端：invoke_skill('review-verifier') → execute_fork_skill →
     review-verifier subagent → 返回带 VERDICT/LEVEL 的报告。
 
     用 stub LLM 模拟 review-verifier 的行为（输出 VERDICT/LEVEL 行）。
@@ -143,7 +143,7 @@ def test_review_verification_fork_runs_end_to_end(monkeypatch):
     )
 
     result = invoke_skill.invoke({
-        "skill": "review-verification",
+        "skill": "review-verifier",
         "brief": test_brief,
     })
 
@@ -172,12 +172,12 @@ def test_skill_overrides_off_blocks_fork_skill_invocation(monkeypatch, tmp_path)
     monkeypatch.setattr(state_mod, "_SETTINGS_PATH", settings)
 
     
-    state_mod.set_skill_state("review-verification", "off")
+    state_mod.set_skill_state("review-verifier", "off")
 
     from main.ist_core.tools.skills import invoke_skill
 
     result = invoke_skill.invoke({
-        "skill": "review-verification",
+        "skill": "review-verifier",
         "brief": "test",
     })
 
@@ -193,7 +193,7 @@ def test_skill_overrides_on_allows_invocation(monkeypatch, tmp_path):
     monkeypatch.setattr(state_mod, "_SETTINGS_PATH", settings)
 
     
-    assert state_mod.get_skill_state("review-verification") == "on"
+    assert state_mod.get_skill_state("review-verifier") == "on"
 
     
     monkeypatch.setattr(
@@ -204,9 +204,9 @@ def test_skill_overrides_on_allows_invocation(monkeypatch, tmp_path):
     from main.ist_core.tools.skills import invoke_skill
 
     result = invoke_skill.invoke({
-        "skill": "review-verification",
+        "skill": "review-verifier",
         "brief": "test brief content",
     })
 
     assert "STUB:" in result
-    assert "review-verification" in result
+    assert "review-verifier" in result

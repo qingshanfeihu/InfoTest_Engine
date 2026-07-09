@@ -1,7 +1,7 @@
 """review_gate 节点：评审场景的硬闸。
 
 触发信号：主 agent 调过 invoke_skill('test-list-review')
-检测目标：invoke_skill(skill='review-verification') 是否被调过 +
+检测目标：invoke_skill(skill='review-verifier') 是否被调过 +
   返回的 ToolMessage content 含 VERDICT: + LEVEL: 行
 重路由：注入 HumanMessage 提示，state 走 pending → 回 qa_node 重试
 retry 上限 2，超限走 failed 写错误 final_answer
@@ -34,18 +34,18 @@ def review_gate(state: dict[str, Any]) -> dict[str, Any]:
     retry = (state.get("gate_retry_count") or 0) + 1
     if retry > 2:
         msg = (
-            "[gate] 已重试 2 次仍未调 invoke_skill(skill='review-verification') "
+            "[gate] 已重试 2 次仍未调 invoke_skill(skill='review-verifier') "
             "+ 返回 VERDICT/LEVEL，强制终止。请检查 SKILL.md 是否包含调用指令。"
         )
         logger.warning(msg)
         return {
             "gate_status": "failed",
-            "gate_missing_reason": "review-verification 未调用或缺 VERDICT 行",
+            "gate_missing_reason": "review-verifier 未调用或缺 VERDICT 行",
             "final_answer": msg,
         }
 
     inject_text = (
-        f"[review_gate] You MUST call invoke_skill(skill='review-verification', brief=<full draft>) "
+        f"[review_gate] You MUST call invoke_skill(skill='review-verifier', brief=<full draft>) "
         f"and wait for VERDICT + LEVEL lines before producing the final review. "
         f"Without an explicit VERDICT from the verifier, no review report is "
         f"allowed. After it returns, do NOT call any more tools or add findings. "
@@ -70,7 +70,7 @@ def _has_invoked_review_skill(msgs: list) -> bool:
     return False
 
 def _has_verifier_call_with_verdict(msgs: list) -> bool:
-    """检测 invoke_skill(skill='review-verification') + ToolMessage 含 VERDICT."""
+    """检测 invoke_skill(skill='review-verifier') + ToolMessage 含 VERDICT."""
     target_tool_use_id = None
     for m in reversed(msgs):
         if not isinstance(m, AIMessage):
@@ -79,7 +79,7 @@ def _has_verifier_call_with_verdict(msgs: list) -> bool:
             if tc.get("name") != "invoke_skill":
                 continue
             args = tc.get("args") or {}
-            if args.get("skill") != "review-verification":
+            if args.get("skill") != "review-verifier":
                 continue
             target_tool_use_id = tc.get("id")
             break

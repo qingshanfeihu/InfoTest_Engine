@@ -1,7 +1,7 @@
-"""测试 review-verification fork skill 集成（对齐 Anthropic 官方设计）。
+"""测试 review-verifier fork skill 集成（对齐 Anthropic 官方设计）。
 
 新架构：
-- skills/review-verification/SKILL.md     fork skill 任务定义（agent: review-verifier）
+- skills/review-verifier/SKILL.md     fork skill 任务定义（agent: review-verifier）
 - agents/review-verifier.md                subagent 容器（system_prompt + tools + model）
 - invoke_skill 检测 context: fork → 调 execute_fork_skill → spawn subagent
 """
@@ -12,17 +12,17 @@ import pytest
 
 
 def test_review_verification_skill_loadable():
-    """review-verification 的 SKILL.md frontmatter 完整可读。"""
+    """review-verifier 的 SKILL.md frontmatter 完整可读。"""
     from main.ist_core.skills.loader import read_skill_frontmatter
     from pathlib import Path
 
     skill_md = (
         Path(__file__).resolve().parents[3]
-        / "main" / "ist_core" / "skills" / "review-verification" / "SKILL.md"
+        / "main" / "ist_core" / "skills" / "review-verifier" / "SKILL.md"
     )
     fm = read_skill_frontmatter(skill_md)
     assert fm is not None
-    assert fm["name"] == "review-verification"
+    assert fm["name"] == "review-verifier"
     assert fm["context"] == "fork"
     assert fm["agent"] == "review-verifier"
 
@@ -70,7 +70,7 @@ def test_review_verifier_forbids_recursive_subagents():
 
 
 def test_main_agent_no_longer_registers_review_verification(monkeypatch):
-    """build_main_agent() 不再把 review-verification 注册为 deepagents subagent。
+    """build_main_agent() 不再把 review-verifier 注册为 deepagents subagent。
 
     新架构：fork skill 通过 invoke_skill 执行，不进 deepagents subagents 列表。
     """
@@ -111,7 +111,7 @@ def test_main_agent_no_longer_registers_review_verification(monkeypatch):
     assert "subagents" in captured
     subagent_names = [s["name"] for s in captured["subagents"]]
     assert "explore" in subagent_names
-    assert "review-verification" not in subagent_names
+    assert "review-verifier" not in subagent_names
     assert "review-verifier" not in subagent_names
 
 
@@ -132,10 +132,10 @@ def test_invoke_skill_routes_to_execute_fork_skill(monkeypatch):
     from main.ist_core.tools.skills import invoke_skill
 
     out = invoke_skill.invoke(
-        {"skill": "review-verification", "brief": "test brief"}
+        {"skill": "review-verifier", "brief": "test brief"}
     )
     assert out == "STUB FORK RESULT"
-    assert captured["skill"] == "review-verification"
+    assert captured["skill"] == "review-verifier"
     assert captured["brief"] == "test brief"
 
 
@@ -167,7 +167,7 @@ def test_execute_fork_skill_renders_arguments(monkeypatch):
 
     from main.ist_core.skills.loader import execute_fork_skill
 
-    result = execute_fork_skill("review-verification", brief="MY_BRIEF_CONTENT")
+    result = execute_fork_skill("review-verifier", brief="MY_BRIEF_CONTENT")
 
     
     assert "VERDICT: PASS" in result

@@ -23,7 +23,7 @@ from main.ist_core.tools.device.emit_xlsx_tool import _gate_destructive_commands
 def test_blocks_destructive(cmd):
     msg = gate("c", [{"E": "APV_0", "F": "cmd_config", "G": cmd}])
     assert msg is not None
-    assert "破坏性" in msg
+    assert "destructive" in msg
 
 
 def test_passes_clear_restore_pattern():

@@ -1,39 +1,39 @@
 ---
 name: escalate-when-stuck
-description: "当你已摆事实、查手册、探设备、试过把动态行为转成可断言的 show 输出等所有办法,仍无法产出一个框架真执行 check_point、非空真的 case.xlsx 时,调本 skill 走诚实上报出口,避免硬憋弱断言或假通过产物。触发场景—卡住、表达不了、做不出、只能弱断言、stuck。"
+description: "Honest escalation exit for a genuinely stuck compile task. Use after all legitimate means are exhausted (manual lookup, precedent search, device probing, converting dynamic behavior into assertable show output) and no case.xlsx with framework-executed, non-vacuous check_points can be produced — instead of forcing weak assertions or a fake-pass artifact. Trigger scenarios: 卡住, 表达不了, 做不出, 只能弱断言, stuck."
 context: inline
 user-invocable: true
 when_to_use: |
-  Use when 已穷尽正路(手册/先例/探设备/形态转换)仍产不出框架真执行且非空真的 case.xlsx,需要诚实上报而非硬憋弱断言。
-  Trigger keywords: 卡住, 表达不了, 做不出, 只能弱断言, stuck。
-  SKIP when: 还有未试过的正路手段;或只是单次工具报错(先按报错指引重试/换通道)。
+  Use when all legitimate paths (manual / precedents / device probing / form conversion) are exhausted and no framework-executed, non-vacuous case.xlsx can be produced — honest escalation is required instead of forcing weak assertions.
+  Trigger keywords: 卡住, 表达不了, 做不出, 只能弱断言, stuck.
+  SKIP when: there are untried legitimate means; or it is a single tool error (retry per the error guidance / switch channel first).
 effort: medium
 ---
 
-# 卡住了:诚实上报,不糊弄
+# Stuck: report honestly, never fudge
 
-走到这一步,说明这个用例用当前 xlsx DSL 能力 + 设备可观测手段**可能真的表达不了**——典型是"运行时动态值的跨步骤数值比对"(如第一次 dig 返回哪个 IP、后续跟它比),而设备又没有能把该行为转成稳定文本的 show 命令。
+Reaching this point means the case likely **cannot be expressed** with the current xlsx DSL capabilities plus device-observable means — typically "cross-step numeric comparison of runtime dynamic values" (e.g. which IP the first dig returned, then comparing later responses against it) when the device has no show command that turns that behavior into stable text.
 
-## 红线:绝不为"完成"而糊弄
+## Red line: never fudge for the sake of "completion"
 
-下面两件比诚实说"做不了"更糟,**禁止**:
-- 退而求其次写**弱断言**(只验证返回值在某集合内、只验证命令能回显域名),假装覆盖了真正要测的行为;
-- 手搓/凑一个结构能跑但**空真**(零真实 check_point、框架只跑 init 就过)的产物充数。
+Both of the following are worse than honestly saying "cannot be done", and are **forbidden**:
+- Falling back to a **weak assertion** (only verifying the response is within some set, or that the command echoes the domain) while pretending the target behavior is covered;
+- Hand-crafting an artifact that runs but is **vacuous** (zero real check_points; the framework only runs init and passes) to fill the quota.
 
-诚实地交一个"做不了 + 为什么 + 怎么办",远比交一个假通过有价值。
+An honest "cannot be done + why + what next" is worth far more than a fake pass.
 
-## 诚实出口(按顺序做)
+## Honest exit (do in order)
 
-1. **先再确认一次真没出路**:你真的用 `dev_probe` 探过设备有没有能观测该行为的 show 命令了吗?(会话保持→看保持状态表;分布→看统计计数;状态变化→看状态表条目。)很多"难直接断言的动态行为"其实有一条 show 命令能把它变成可文本查找的稳定输出。有,就回去用,别急着上报。
+1. **Confirm once more there is truly no way out**: have you actually used `dev_probe` to check whether the device has a show command that observes this behavior? (Session persistence → persistence state table; distribution → statistics counters; state change → status table entries.) Many "hard-to-assert dynamic behaviors" have a show command that converts them into stable, text-searchable output. If one exists, go back and use it — do not escalate yet.
 
-2. **写结构化卡点报告**(放进你的最终回复):
-   - 用例**要测什么行为**(作者意图原文);
-   - 你**试过哪些路**(查了哪段手册 / 探了哪些 show 命令及其真实输出 / 试了哪些断言形态及上机结果);
-   - **为什么表达不了**(具体到缺哪个能力:如 xlsx 无法提取输出字段做数值比对,且设备无对应 show 命令);
-   - 你判断的 **2-3 条可能明路**(如:需框架 DSL 增强某能力 / 需人确认设备有无某命令 / 可降级成验证某特征但会损失什么)。
+2. **Write a structured blocker report** (into your final reply):
+   - What behavior the case intends to test (author's original intent);
+   - Which paths you tried (which manual sections were read / which show commands were probed and their actual output / which assertion forms were attempted and their on-device results);
+   - Why it cannot be expressed (specific missing capability: e.g. the xlsx DSL cannot extract an output field for numeric comparison, and the device has no corresponding show command);
+   - Your 2-3 candidate ways forward (e.g. framework DSL needs a specific capability / a human must confirm whether the device has a certain command / a degraded verification is possible but loses X).
 
-3. **如实记录**:用 `remember` 记一条,**正文开头标注 `[未解决/needs-human]`**,内容是这个卡点 + 缺的能力,和"已验证教训"区分开,供下次同类用例和维护者参考。
+3. **Record it truthfully**: call `remember` with the body starting with `[未解决/needs-human]`, containing the blocker and the missing capability — kept distinct from "verified lessons", for the next same-type case and for maintainers.
 
-4. **请人决策(若可)**:如果你有 `ask_user` 工具,调它把"该选哪条明路 / 降级方案能否接受"抛给人,让人来定或给你一条明路。没有该工具(自主无人模式),就把上面的卡点报告作为最终交付,留待人看——**不要因为没人应答就回头去糊弄一个假通过**。
+4. **Ask for a decision (if possible)**: if the `ask_user` tool is available, use it to hand over "which way forward / is the degraded option acceptable". Without that tool (autonomous mode), deliver the blocker report above as the final output for humans to review — **do not fudge a fake pass because nobody answered**.
 
-> 判断"是不是真卡住"由你来定:还没真的查手册/探设备/试 show 观测,就不算卡住,回去继续;都试遍了仍表达不了,才走本出口。
+> Whether you are "truly stuck" is your call: if you have not actually read the manual / probed the device / tried show-based observation, you are not stuck — go back and continue. Only after all of that fails does this exit apply.

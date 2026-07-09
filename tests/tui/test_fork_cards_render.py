@@ -181,12 +181,12 @@ def test_render_expanded_appends_recent():
     # 完成/失败卡展开态同样显示 recent(收口后回看它干了什么)
     done = _render_fork_card({"kind": "fork", "skill": "compile-worker", "autoid": "x" * 12,
                               "status": "ok", "calls": 5, "elapsed_s": 60,
-                              "recent": ["compile_emit → 已产出"]}, now=now, expanded=True)
-    assert "compile_emit → 已产出" in done
+                              "recent": ["compile_emit → produced structurally-correct"]}, now=now, expanded=True)
+    assert "compile_emit → produced structurally-correct" in done
     # 折叠态不带
     done_c = _render_fork_card({"kind": "fork", "skill": "compile-worker", "autoid": "x" * 12,
                                 "status": "ok", "calls": 5, "elapsed_s": 60,
-                                "recent": ["compile_emit → 已产出"]}, now=now)
+                                "recent": ["compile_emit → produced structurally-correct"]}, now=now)
     assert "compile_emit" not in done_c
 
 

@@ -85,18 +85,18 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
         不拼 IR 结构。两种情况返回值都与 steps 逐位对齐(backfill_efg 契约)。
     """
     if not isinstance(blocks, list) or not blocks:
-        return None, None, "blocks 必须是非空数组"
+        return None, None, "blocks must be a non-empty array"
     if provenance_steps is not None and len(provenance_steps) != len(blocks):
-        return None, None, (f"provenance steps 数({len(provenance_steps)}) 必须等于 blocks 数"
-                            f"({len(blocks)})——**按组合子粒度**标注,不是按展开后的步数:"
-                            f"你有 {len(blocks)} 个组合子,provenance.steps 就写 {len(blocks)} 条"
-                            f"(每条 {{layer, source}} 对应一个组合子,展开成几行由工具管)。")
+        return None, None, (f"provenance steps count ({len(provenance_steps)}) must equal blocks count "
+                            f"({len(blocks)}) — annotate at **combinator granularity**, not expanded rows: "
+                            f"with {len(blocks)} combinators, provenance.steps holds {len(blocks)} entries "
+                            f"(each {{layer, source}} maps to one combinator; row expansion is the tool's job).")
     steps: list[dict] = []
     prov_out: list[dict] = []
     reg_n = 0
     for i, b in enumerate(blocks):
         if not isinstance(b, dict):
-            return None, None, _err(i, "?", "每个组合子必须是对象")
+            return None, None, _err(i, "?", "each combinator must be an object")
         kind = str(b.get("kind", "")).strip().upper()
         desc = str(b.get("desc", "") or "")
         pv = provenance_steps[i] if provenance_steps is not None else None
@@ -105,24 +105,24 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
         if kind == "CONFIG":
             cmds = b.get("cmds")
             if not isinstance(cmds, list) or not cmds or not all(isinstance(c, str) for c in cmds):
-                return None, None, _err(i, kind, "cmds 必须是非空命令字符串列表(每条命令一个元素)")
+                return None, None, _err(i, kind, "cmds must be a non-empty list of command strings (one command per element)")
             # 碎片检测(在 strip/滤空之前):>2 个原始元素多数 ≤2 字符=命令被逐字符拆成了
             # 列表(worker 把 "sdns on" 传成 ["s","d","n","s"," ","o","n"])。展开后每个
             # "命令"是单字,strict 门报"命令 's' 不在 allowlist"——在源头拦更清楚。
             _short = [c for c in cmds if len(c.strip()) <= 2]
             if len(cmds) > 2 and len(_short) > len(cmds) // 2:
                 return None, None, _err(i, kind,
-                    f"cmds 看起来被逐字符拆开了({len(_short)}/{len(cmds)} 个元素≤2字符)"
-                    "——每个数组元素应是**一整条命令**(如 \"sdns on\"),不是单个字符。"
-                    "把整条命令作为一个字符串元素。")
+                    f"cmds looks character-split ({len(_short)}/{len(cmds)} elements ≤2 chars) "
+                    "— each array element must be **one whole command** (e.g. \"sdns on\"), not single characters. "
+                    "Pass the whole command as one string element.")
             cmds = [c.strip() for c in cmds if c.strip()]
             if not cmds:
-                return None, None, _err(i, kind, "cmds 全为空——填真实命令(每条一个元素)")
+                return None, None, _err(i, kind, "cmds are all empty — provide real commands (one per element)")
             # 双机:CONFIG 可带 host 指定第二台(默认 APV_0)。2026-07-05 yzg 双机递归
             # 实证:旧版写死 APV_0,组合子语言表达不了 APV_1 配置,worker 被迫退 steps 通道。
             _dut = str(b.get("host") or "APV_0").strip()
             if _dut not in _DUT_HOSTS:
-                return None, None, _err(i, kind, f"CONFIG.host 只能是 {_DUT_HOSTS} 之一(被测设备),收到 {_dut!r}")
+                return None, None, _err(i, kind, f"CONFIG.host must be one of {_DUT_HOSTS} (the device under test); got {_dut!r}")
             if len(cmds) == 1:
                 steps.append({"E": _dut, "F": "cmd_config", "G": cmds[0], "desc": desc})
             else:
@@ -134,21 +134,21 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
             host = str(b.get("host", "") or "").strip()
             asserts = b.get("asserts")
             if not cmd or not host:
-                return None, None, _err(i, kind, "host 与 cmd 必填")
+                return None, None, _err(i, kind, "host and cmd are required")
             if not isinstance(asserts, list) or not asserts:
-                return None, None, _err(i, kind, "asserts 必须是非空断言列表;只观测不断言用 OBSERVE_ONLY")
+                return None, None, _err(i, kind, "asserts must be a non-empty assertion list; use OBSERVE_ONLY for observation without assertions")
             steps.append(_observe_step(host, cmd, desc))
             produced = 1
             block_auto.append({"layer": "G", "source": _parse_ref(b.get("cmd_ref") or b.get("ref"))})
             for j, a in enumerate(asserts):
                 if not isinstance(a, dict):
-                    return None, None, _err(i, kind, f"asserts[{j}] 必须是对象")
+                    return None, None, _err(i, kind, f"asserts[{j}] must be an object")
                 op = str(a.get("op", "") or "").strip()
                 pattern = a.get("pattern")
                 if op not in _ASSERT_OPS:
-                    return None, None, _err(i, kind, f"asserts[{j}].op 必须是 {_ASSERT_OPS} 之一,收到 {op!r}")
+                    return None, None, _err(i, kind, f"asserts[{j}].op must be one of {_ASSERT_OPS}; got {op!r}")
                 if not isinstance(pattern, str) or not pattern.strip():
-                    return None, None, _err(i, kind, f"asserts[{j}].pattern 必须是非空文本/正则")
+                    return None, None, _err(i, kind, f"asserts[{j}].pattern must be non-empty text/regex")
                 steps.append({"E": "check_point", "F": op, "G": pattern,
                               "desc": str(a.get("desc", "") or "")})
                 produced += 1
@@ -159,9 +159,9 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
             cmd = str(b.get("cmd", "") or "").strip() or cap
             relation = str(b.get("relation", "") or "").strip().lower()
             if not host or not cap:
-                return None, None, _err(i, kind, "host 与 capture_cmd 必填")
+                return None, None, _err(i, kind, "host and capture_cmd are required")
             if relation not in ("same", "differs"):
-                return None, None, _err(i, kind, f"relation 必须是 same(两次相同) 或 differs(两次不同),收到 {relation!r}")
+                return None, None, _err(i, kind, f"relation must be same (two observations equal) or differs (two observations differ); got {relation!r}")
             reg_n += 1
             reg = f"v{reg_n}"
             steps.append(_observe_step(host, cap, desc + "(第一次观测,捕获基线)", save_as=reg))
@@ -178,7 +178,7 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
             cmd = str(b.get("cmd", "") or "").strip()
             host = str(b.get("host", "") or "").strip()
             if not cmd or not host:
-                return None, None, _err(i, kind, "host 与 cmd 必填")
+                return None, None, _err(i, kind, "host and cmd are required")
             steps.append(_observe_step(host, cmd, desc))
             produced = 1
             block_auto.append({"layer": "G", "source": _parse_ref(b.get("ref"))})
@@ -186,19 +186,19 @@ def expand_blocks(blocks: list, provenance_steps: list | None = None
             try:
                 sec = int(b.get("seconds"))
             except (TypeError, ValueError):
-                return None, None, _err(i, kind, "seconds 必须是整数秒")
+                return None, None, _err(i, kind, "seconds must be an integer")
             if sec <= 0 or sec > 300:
-                return None, None, _err(i, kind, f"seconds 须在 1..300,收到 {sec}")
+                return None, None, _err(i, kind, f"seconds must be within 1..300; got {sec}")
             steps.append({"E": "time", "F": "sleep", "G": str(sec), "desc": desc})
             produced = 1
             block_auto.append({"layer": "E", "source": {"kind": "emit_auto", "ref": ""}})
         else:
             _keys = list(b.keys())
-            return None, None, _err(i, kind or "缺kind",
-                                    "每个组合子必须有 kind 字段,取 CONFIG/OBSERVE_ASSERT/"
-                                    f"CAPTURE_COMPARE/OBSERVE_ONLY/SLEEP 之一。本组合子的键={_keys}"
-                                    + ("——你可能漏了 kind,或用了别名。" if "kind" not in b
-                                       else f",kind 值={b.get('kind')!r} 不在允许集。"))
+            return None, None, _err(i, kind or "missing-kind",
+                                    "each combinator needs a kind field: one of CONFIG/OBSERVE_ASSERT/"
+                                    f"CAPTURE_COMPARE/OBSERVE_ONLY/SLEEP. This combinator's keys={_keys}"
+                                    + (" — you probably omitted kind, or used an alias." if "kind" not in b
+                                       else f"; kind value {b.get('kind')!r} is not in the allowed set."))
         if provenance_steps is not None:
             base = pv if isinstance(pv, dict) else {}
             for _ in range(produced):

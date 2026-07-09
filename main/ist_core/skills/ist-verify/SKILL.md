@@ -1,128 +1,126 @@
 ---
 name: ist-verify
-description: "把已编译好的成品 case.xlsx 上机跑一遍：采集设备真实裁决、回填留空的 RUNTIME 断言、对失败做四层归因（G/E/V/瞬态）并按层派 compile-worker 定向重编，真 PASS 的写回 footprint。只验已有 excel、不生成新用例。当用户说上机验证 / 上机复验 / verify 这个 case.xlsx / 上机跑一遍看结果 / 验证用例 / 跑通看看 / 按 G·E·V·瞬态归因 / 上机 PASS 写回 footprint，或想让已编译好的成品 excel 在设备上实跑确认时用本 skill。"
+description: "Runs an already-compiled case.xlsx on the device once: collects the framework's real verdicts, backfills empty RUNTIME assertions, attributes each failure across four layers (G/E/V/transient), dispatches compile-worker for targeted recompiles by layer, and writes true-PASS results back to footprint. Verifies existing excel only — never generates new cases. Use when the user says 上机验证 / 上机复验 / verify this case.xlsx / run it on-device and check / 验证用例, or wants an already-compiled excel confirmed on the real device."
 context: inline
 user-invocable: true
-source: hand
-version: "1"
 effort: medium
 when_to_use: |
-  用户要对已编译好的 excel / case.xlsx 做上机验证、上机复验、跑一遍看结果、确认能不能在设备上跑通；含四层归因 / 上机回填 / 闭环写回。
-  例："把这个 excel 上机验证"、"上机复验编译好的用例"、"上机跑一遍看结果"、"验证并按 G/E/V/瞬态归因"、"上机 PASS 的写回 footprint"。
-  触发词：上机验证, 上机复验, 上机跑, 验证excel, 验证用例, 跑一遍, 复验, 设备验证, 四层归因, 闭环写回。
-  跳过：要编译/生成新用例走 ist-compile-engine；只查一条 CLI 回显用 dev_probe；评审用例文件质量但不上机走 test-list-review。
+  Use when the user wants an already-compiled excel / case.xlsx verified on-device: first run, re-verify, "run it and see", confirm it passes on the device; includes four-layer attribution / runtime backfill / closed-loop writeback.
+  Examples: "把这个 excel 上机验证", "上机复验编译好的用例", "上机跑一遍看结果", "验证并按 G/E/V/瞬态归因", "上机 PASS 的写回 footprint".
+  Trigger keywords: 上机验证, 上机复验, 上机跑, 验证excel, 验证用例, 跑一遍, 复验, 设备验证, 四层归因, 闭环写回.
+  SKIP when: compiling/generating new cases (ist-compile-engine); looking up a single CLI echo (dev_probe); reviewing case file quality without device runs (test-list-review).
 ---
 
-# 上机验证：串行上机 + 四层归因 + 回流交接
+# On-device verification: serial run + four-layer attribution + reflow handoff
 
-把**已编译好的** excel 串行上机一遍，采集框架真实裁决，回填 `<RUNTIME>`，对每个 fail 四层归因、按层 reflow 派 `compile-worker` 定向重编，真 PASS 双写回。**只验一遍 + 交接修复**——不自己改 case（改归 `compile-worker`），也不自己套"验到全过"的迭代循环（迭代由上层：用户 / goal 循环驱动；本 skill 跑一遍即返回）。流程即下方 Steps 1-8;各工具的参数与返回形态以工具自身说明为准,不在此复述。
+Run the **already-compiled** excel on-device once, collect the framework's real verdicts, backfill `<RUNTIME>`, attribute every fail across four layers, dispatch `compile-worker` reflows by layer, and dual-writeback true PASSes. **One verification pass + handoff** — this skill never edits cases itself (that belongs to `compile-worker`) and never loops "verify until all pass" on its own (iteration is driven by the caller: user / goal loop; this skill runs once and returns). The flow is Steps 1-8 below; tool parameters and return shapes follow each tool's own doc — not restated here.
 
-归因落盘纪律贯穿全程:每个有结论的 fail 调 `submit_attribution`,evidence 必须是 device_context/causality **原文子串**(复制勿转述)——不落盘则下一轮「瞬态复现=误归」「冻结同法」护栏读不到你的结论。
+Attribution filing discipline applies throughout: for every fail with a conclusion, call `submit_attribution`; evidence must be a **verbatim substring** of device_context/causality (copy, never paraphrase) — unfiled conclusions are invisible to next round's "transient-recurrence = mis-attribution" and "freeze same-method" guards.
 
 ## Inputs
 
-- excel 路径或脑图名（→ `workspace/outputs/<脑图名>/case.xlsx`）+ autoid 列表。
-- **build/module 不用你确定、也别为它问用户**——`dev_run_batch` 不传时底层 `get_config()` 自带 dataclass 默认（module=`sdns`、build 为当前产品版本）兜底。只有用户**主动**给了特定 build 串时才把它传进 `dev_run_batch`；没给就直接不传，让它走默认。本地没有 `compiler_config.json` 是常态、不是缺失。
-- 各 case 的 `case.provenance.json`（draft v3 旁挂；缺失则归因退化到只看裁决明细、不写回）。
+- Excel path or mindmap name (→ `workspace/outputs/<mindmap>/case.xlsx`) + autoid list.
+- **Do not determine build/module yourself, and do not ask the user for them** — when not passed, `dev_run_batch` falls back to `get_config()` dataclass defaults (module=`sdns`, build=current product version). Pass a build string only when the user **volunteered** one. A missing local `compiler_config.json` is normal, not an error.
+- Each case's `case.provenance.json` (side-mounted since draft v3; if missing, attribution degrades to verdict-detail-only and no writeback).
 
 ## Principles
 
-- **裁决以框架逐 check_point 真实明细为准，不信 verdict 字符串**——字符串可能把环境失败写成 fail、掩盖真因。
-- **失败必看 `device_context`**：`dev_run_batch` 对非 pass case 返回它——含 ① 框架逐步执行 + 断言明细 + case 内异常 ② 设备配置会话原文（每条命令 + 设备真实响应，含 `^` 语法错 / `Failed to execute X because Y` → 哪条命令被拒/为什么）③ 触发端 RouterA/RouterB/clientc dig 真实输出（ANSWER SECTION / 实际解析 IP）。`unknown` 的 case 还附 `framework_traceback`（**文件级崩溃**真因：某 case 把整份 pytest 搞崩、后续全不跑 → 先修 traceback 指的那一个，别误判后续 case 本身错）。**改配置 / 填值 / 写 reflow brief 都基于它，不靠猜。**
-- **拿不准框架断言行为就读框架源码**（mirror 在盘上,只读）：断言语义在 `knowledge/framework/mirror/lib/check_point.py`、行分发/变量机制在 `lib/test_xlsx.py`——断言为何匹配/不匹配/崩，**以源码为准**（列语义速查在 `knowledge/data/compile_ref/EXCEL_FUNCTIONS.md`）。
-- **归因如实，不救场**：不把环境失败粉饰成通过，也不把断言失败甩锅给环境。
-- **诊断「给事实、不给结论」**：主料是 `last_run.json` 里的 `device_context` 原文,据它下判断;机械预判只认协议级事实(G(^) 语法拒/文件级崩溃签名——来源比你可靠,直接采信),其余 undetermined 由你读原文归因,语义类判断永远是你的（操作细则见步 5 Rules）。
-- **三层边界（这错归谁、怎么修）**：**机械崩溃**（`found_times` 必崩、`found(None)` 崩）= emit 结构门管，出现即**编译缺陷**、走重编，**不是**框架 bug；**可证伪性**（某断言对该算法类能不能被证伪，如「命中恰好 N 次」对 rr/wrr 随机起点不可验）用 `compile_check_verifiability` 工具判、欠定就改预期（重定向到命中归属 / 分布区间）；**语义充分性**（断言是否真覆盖脑图关心的行为）是你的判断。别把这三层混着一刀切。
-- **单环境内串行**：框架对**一套设备床**有全局锁，同一环境同一时刻只能跑一份 `dev_run_batch`（撞了回 `device_busy`）。
-- **多份 excel 跨环境并行**（启用环境池 `IST_ENV_POOL_ENABLED=1` 时）：一轮**并行发多个 `dev_run_batch`**（每个一份 excel），池会把它们**自动分到不同的空闲环境**（各自独立设备床，互不撞锁）→ N 机 N 路并行，总时长≈最慢一份而非求和。并发数超过就绪环境数时多出来的自动排队等空闲，绝不撞同一设备。**池未启用（单环境）时仍串行**：一份接一份，别并发（会 `device_busy`）。
+- **Verdicts come from the framework's per-check_point detail, never the verdict string** — the string can record an environment failure as fail and mask the real cause.
+- **Every failure requires reading `device_context`**: `dev_run_batch` returns it for non-pass cases — containing ① framework step-by-step execution + assertion detail + in-case exceptions ② the device config session verbatim (each command + real device response, incl. `^` syntax rejections / `Failed to execute X because Y` → which command was rejected and why) ③ trigger-side RouterA/RouterB/clientc dig output (ANSWER SECTION / actual resolved IPs). `unknown` cases also carry `framework_traceback` (**file-level crash** root cause: one case crashed the whole pytest and everything after it never ran → fix the case the traceback names, do not misjudge the subsequent cases). **Config changes / value fills / reflow briefs are all based on it — never on guesses.**
+- **When unsure about framework assertion behavior, read the framework source** (mirror on disk, read-only): assertion semantics in `knowledge/framework/mirror/lib/check_point.py`, row dispatch/variable mechanics in `lib/test_xlsx.py` — why an assertion matched/missed/crashed is decided **by the source** (column-semantics quick reference in `knowledge/data/compile_ref/EXCEL_FUNCTIONS.md`).
+- **Attribute honestly, never rescue**: do not dress an environment failure as a pass, and do not blame an assertion failure on the environment.
+- **Diagnosis gives facts, not verdicts**: the primary material is the raw `device_context` in `last_run.json`; judge from it. Mechanical pre-judgement only asserts protocol-level facts (G(^) syntax rejection / file-level crash signatures — more reliable than you, accept directly); everything else is undetermined and **you** attribute from the raw text. Semantic judgement is always yours (operational rules in Step 5).
+- **Three-layer boundary (whose bug, how to fix)**: **mechanical crashes** (`found_times` always-crash, `found(None)` crash) = emit structural gate's jurisdiction; their appearance means a **compile defect**, goes to recompile, **not** a framework bug. **Falsifiability** (whether an assertion can be falsified for the algorithm class, e.g. "hit exactly N times" is unverifiable under rr/wrr random start) is judged by `compile_check_verifiability`; underdetermined → change the expectation (redirect to membership anchoring / distribution interval). **Semantic sufficiency** (does the assertion truly cover the behavior the mindmap cares about) is your judgement. Never flatten these three into one.
+- **Serial within one environment**: the framework holds a global lock per device bed; one `dev_run_batch` at a time per environment (collisions return `device_busy`).
+- **Multiple excels in parallel across environments** (when the pool is enabled, `IST_ENV_POOL_ENABLED=1`): issue several `dev_run_batch` calls in one round (one excel each); the pool auto-assigns them to distinct idle environments (independent device beds, no lock contention) → N machines, N lanes; total time ≈ slowest one, not the sum. Excess concurrency queues automatically. **Pool disabled (single environment) stays serial**: one after another, never concurrent (`device_busy`).
 
 ## Steps
 
-### 1. 定位 excel + provenance
+### 1. Locate excel + provenance
 
 **Execution**: Direct
 
-确定 excel 路径、autoid 列表；记下各 case 的 `provenance.json` 路径（缺失则归因退化到只看裁决明细、不写回）。**build/module 别去翻、别问用户**——`dev_run_batch` 不传就走 `get_config()` 默认（见 Inputs）。
+Determine the excel path and autoid list; note each case's `provenance.json` path (missing → attribution degrades, no writeback). **Do not dig for build/module, do not ask the user** — omitted means `get_config()` defaults (see Inputs).
 
-**Success criteria**: 路径 + autoids 就绪（build/module 走默认，不阻塞）
+**Success criteria**: path + autoids ready (build/module on defaults, non-blocking)
 **Artifacts**: xlsx_path, autoids, provenance_paths
 
-### 2. 首跑上机
+### 2. First on-device run
 
 **Execution**: Direct
 
-`dev_run_batch_digest(xlsx_path=..., autoids_json='[...]')`——整份单跑一次，进程内消化大结果，回**精简摘要**（逐 case verdict + 归因层 + `found_times` 文件级崩溃点名元凶 case），全量明细（`device_context`/`causality`/`framework_traceback`）落 `workspace/outputs/<脑图名>/last_run.json`。深挖某个 fail 就 `fs_grep <autoid> last_run.json` 或 `run_python` 读它。build/module 不传走 `get_config()` 默认（见 Inputs）；别为它问用户。
+`dev_run_batch_digest(xlsx_path=..., autoids_json='[...]')` — one serial run of the whole sheet, large results digested in-process, returns a **concise summary** (per-case verdict + attribution layer + `found_times` file-level crash culprit named), full detail (`device_context`/`causality`/`framework_traceback`) lands in `workspace/outputs/<mindmap>/last_run.json`. To dig into a fail: `fs_grep <autoid> last_run.json` or `run_python` over it. Omit build/module for `get_config()` defaults (see Inputs); never ask the user for them.
 
-**Rules**: 含 `<RUNTIME>` 的 case 首跑必 fail（框架拿 G 找字面 "<RUNTIME>"）——这是预期"待回填"，**先别归因**。摘要里出现 `found_times` 文件级崩溃（点名了元凶 case）→ 那是**编译缺陷**（框架必崩），直接进步6走重编、不当各自失败逐个查。
-**Success criteria**: 拿到逐 case 真实裁决摘要 + `last_run.json` 全量明细
+**Rules**: cases containing `<RUNTIME>` must fail the first run (the framework greps the literal "<RUNTIME>") — that is the expected "awaiting backfill", **do not attribute yet**. If the summary flags a `found_times` file-level crash (culprit named) → that is a **compile defect** (framework always crashes), go straight to Step 6 recompile; do not investigate subsequent cases individually.
+**Success criteria**: per-case real verdict summary + `last_run.json` full detail
 **Artifacts**: digest_summary, last_run.json
 
-### 3. 回填 `<RUNTIME>`（锁死，不反复改）
+### 3. Backfill `<RUNTIME>` (fill-once, locked)
 
 **Execution**: Direct
 
-`compile_runtime_slots(xlsx_path)` 看待填槽位 + 各自 `observe_cmd`；从首跑设备真实输出里该槽位 `observe_cmd` 的输出中抽真实值 → `compile_runtime_fill(xlsx_path, fills_json=..., run_meta=...)`。
+`compile_runtime_slots(xlsx_path)` lists pending slots + each slot's `observe_cmd`; extract the real value from that command's output in the first run → `compile_runtime_fill(xlsx_path, fills_json=..., run_meta=...)`.
 
-**Rules**: 回填值**只能来自设备真实输出**，抽不出就留空、绝不猜；只动仍含 `<RUNTIME>` 的格子，填完即锁、后续不覆盖（一个槽位只填一次，填错也不被悄悄改掉）。
-**Success criteria**: 能填的填上并锁死，填不出的如实记"待人工补值"
-**Artifacts**: fills（已填 / 留空）
+**Rules**: backfill values **only from real device output**; if not extractable, leave empty — never guess. Touch only cells still containing `<RUNTIME>`; once filled they are locked (one fill per slot; even a wrong fill is not silently rewritten).
+**Success criteria**: fillable slots filled and locked; unfillable ones honestly recorded as "awaiting manual value"
+**Artifacts**: fills (filled / left empty)
 
-### 4. 复验 (when applicable: 步3 填过)
+### 4. Re-verify (when applicable: Step 3 filled something)
 
 **Execution**: Direct
 
-回填后再 `dev_run_batch_digest` 一次。回填的断言现应转 **pass**（设备值＝设备值）；仍 fail 的才是**真实断言失败**，进归因。仍留空的 `<RUNTIME>` 不算失败、不归因。
+Run `dev_run_batch_digest` again after backfill. Backfilled assertions should now **pass** (device value = device value); still-failing ones are **real assertion failures** → attribution. Slots still empty do not count as failures and are not attributed.
 
-**复验跑子集，交付跑整卷**：修复轮只合并 fail 的 case 再上机（框架每 case 前清空设备配置、case 间独立,子集与整卷单 case 行为一致——digest 摘要在 fail 占少数时给出带确切 autoid 列表的节流提示,照做）。全部转正后**整卷跑一次**作为交付确认。
+**Re-verify the subset, deliver on the full sheet**: repair rounds merge only the failing cases before running (the framework clears device config before each case; cases are independent — subset behavior equals full-sheet behavior per case; when fails are the minority the digest summary prints a throttling hint with the exact autoid list — follow it). After everything turns green, **run the full sheet once** as delivery confirmation.
 
-**Success criteria**: 区分出 真 PASS / 真实 fail / 待补值
+**Success criteria**: separated into true PASS / real fail / awaiting value
 **Artifacts**: rerun_results
 
-### 5. 四层归因
+### 5. Four-layer attribution
 
 **Execution**: Direct
 
-对复验后仍 fail 的 check_point（排除留空 `<RUNTIME>`）：先从 `last_run.json` 读该 case 的 `device_context` / `framework_traceback` 定位真因（`fs_grep <autoid> last_run.json`），从 provenance 取该步 `layer`，`compile_attribute(verdict_detail=<报错明细>, failing_assertion_layer=<层>)` → 拿机械预判。真 PASS 不归因，进步 7。
+For check_points still failing after re-verify (excluding empty `<RUNTIME>`): first read that case's `device_context` / `framework_traceback` from `last_run.json` (`fs_grep <autoid> last_run.json`), take the step's `layer` from provenance, then `compile_attribute(verdict_detail=<error detail>, failing_assertion_layer=<layer>)` → mechanical pre-judgement. True PASSes skip attribution and go to Step 7.
 
-**Rules**: 归因必基于 `last_run.json` 的 device_context/traceback，不凭印象。**机械预判只有两个确定性结论**：① `compile_attribute` 返回 **G(^)** = 设备语法拒绝标记（协议级事实，直接采信；它是上游根因——同 case 后续 dig 无解析、断言不中、超时多为下游后果，先修 G）；② `found_times` 等文件级崩溃签名 = 编译缺陷（不逐个 case 归因）。**其余一律返回 undetermined——工具不猜，你读 device_context 原文自行判**：E（可达性/环境）、V（断言期望值）、瞬态（判定标准=换时间重跑即消失；digest 摘要点名「连续两轮同签名 fail」的绝不是瞬态）、或疑似产品缺陷（逻辑对∧文档对∧环境正常仍复现 → `kb_bug_search` 比对后记缺陷候选）。
-**Success criteria**: 每个真实 fail 有四层归因结论（G错 / E错 / V错 / 瞬态）
+**Rules**: attribution must rest on `last_run.json`'s device_context/traceback, never on impressions. **Mechanical pre-judgement asserts exactly two certainties**: ① `compile_attribute` returns **G(^)** = device syntax-rejection marker (protocol-level fact, accept directly; it is the upstream root cause — the same case's later dig misses, assertion misses and timeouts are mostly downstream consequences; fix G first); ② file-level crash signatures like `found_times` = compile defect (no per-case attribution). **Everything else returns undetermined — the tool does not guess; you attribute from the raw device_context**: E (reachability/environment), V (assertion expectation), transient (criterion = disappears on a later re-run; anything the digest flags as "same-signature fail two rounds running" is never transient), or suspected product defect (logic right ∧ docs right ∧ environment normal, still reproduces → compare via `kb_bug_search`, record a defect candidate).
+**Success criteria**: every real fail has a four-layer conclusion (G / E / V / transient)
 **Artifacts**: attributions
 
-### 6. 回流交接（修复只走这一条路）
+### 6. Reflow handoff (repairs go through this path only)
 
-**Execution**: Direct（委派 fork）
+**Execution**: Direct (delegated fork)
 
-多个 fail case 要重编时，**一次并发 fan-out、别逐个串行**：给每个 fail case 建一条 brief（autoid + target_layer + 应改方向 + 「定向重做：针对问题改、保留正确部分」；device_context 用 `evidence_from_xlsx` 参数让工具自动注入原文,别手抄转述），调**一次** `compile_fanout(skill="compile-worker", briefs_json=[原生数组])`——N 个 worker 真并发,一次返回逐 case 产物。fan-out 返回后各 case 的新 `case.xlsx` 已在 `outputs/<autoid>/`，回步骤 2 再验（上机才是真门）。
+When several failed cases need recompiling, **fan out once concurrently — never one-by-one**: build one brief per fail case (autoid + target_layer + fix direction + "targeted redo: fix the problem, keep what is correct"; let the tool inject raw device_context via the `evidence_from_xlsx` parameter — do not hand-copy paraphrases), then call `compile_fanout(skill="compile-worker", briefs_json=[native array])` **once** — N workers run truly in parallel and return per-case artifacts together. After fan-out returns, each case's new `case.xlsx` is under `outputs/<autoid>/`; go back to Step 2 to verify (the device run is the real gate).
 
 **Rules**:
-- **唯一 sanctioned 重编路径**：`compile_fanout(skill="compile-worker", briefs)`（多 case 并发定向重编，靠上机复验兜底）。**除它外绝不**自己 ad-hoc 逐个手调 `compile_emit`/`compile_precedent`/`compile_prep` 去 churn——单步 ad-hoc 循环不收敛、会把单轮 tool_call 撞 recursion 上限（300）整轮崩（实测反例：churn 4 轮 excel 零改动）。`compile_fanout` 是**批量派发器**（不是被 churn 的单步），用它一次派完、不循环。
-- **绝不 `fs_edit` case.xlsx**——二进制，文本编辑改不动；改 case 一律走上面两条 reflow 路径。
-- **瞬态不回流**——标注"环境排查 / 换时间重跑"，它和编译质量无关。
-- **收敛止损（digest 的跨轮对照信号是硬事实）**：摘要点名「连续两轮同签名 fail」的 case → 上轮修法已被证伪，**这些 case 不进本轮 reflow brief**（第三轮同法大概率再 fail、白烧钱——实测同签名 case 连续两轮重编零转正）。改为：①先核实环境事实（dev_probe/dev_ssh 查该 IP/配置在设备上的真实状态——topology 写的和设备实况可能不符）；②环境确认正常仍复现 → 疑似**产品缺陷**：`kb_bug_search` 比对缺陷库，已知则关联、未知则在最终报告「疑似产品缺陷」区记缺陷候选（复现步骤=case 步骤、期望+文档出处、实际=device_context 证据、版本号）。摘要点名「上轮归瞬态本轮复现」→ 那不是瞬态，按同法重新归因。**无论哪种，流程都跑到终点出完整报告（真 PASS 清单 + 阻塞清单带证据），不中途停摆等人。**
-- 非交互（`infotest -p`）：直接输出归因 + reflow brief，reflow 作为独立步骤由调用方发起。
-- **本 skill 到此即返回**：是否拿重编后的 excel 再 verify 一遍，由**上层**（用户 / goal 循环）决定——verify **不自己套循环**。
+- **The only sanctioned recompile path**: `compile_fanout(skill="compile-worker", briefs)` (concurrent targeted recompiles, backstopped by on-device re-verify). **Never** ad-hoc churn `compile_emit`/`compile_precedent`/`compile_prep` case by case — single-step ad-hoc loops do not converge and slam the per-turn tool_call recursion cap (300), crashing the whole turn (observed: 4 churn rounds, zero excel change). `compile_fanout` is a **batch dispatcher** (not a churnable single step): dispatch once, no loop.
+- **Never `fs_edit` case.xlsx** — binary; text editing cannot change it. Case changes go through the reflow path only.
+- **Transients do not reflow** — label "environment check / re-run later"; they are unrelated to compile quality.
+- **Convergence stop-loss (digest's cross-round comparison is hard fact)**: cases flagged "same-signature fail two rounds running" → last round's fix is falsified; **exclude them from this round's reflow briefs** (a third same-method round almost certainly fails again — observed: zero conversions across two consecutive recompiles). Instead: ① verify environment facts first (dev_probe/dev_ssh the real state of that IP/config on the device — topology and reality can diverge); ② environment confirmed normal yet still reproducing → suspected **product defect**: compare against the defect library via `kb_bug_search`; if known, link it; if new, record a defect candidate in the final report's "suspected product defects" section (repro steps = case steps, expectation + doc source, actual = device_context evidence, version). Cases flagged "last round transient, reproduced this round" → not transient; re-attribute. **Either way, run the flow to completion and produce the full report (true-PASS list + blocked list with evidence); never stall mid-way waiting for a human.**
+- Non-interactive (`infotest -p`): output attributions + reflow briefs directly; reflow is initiated by the caller as a separate step.
+- **This skill returns here**: whether to verify the recompiled excel again is the **caller's** decision (user / goal loop) — verify never loops itself.
 
-**Success criteria**: 待重编的 G/E/V 错经**一次** `compile_fanout(compile-worker)` 并发派完；连续两轮同签名 fail 的不进重编（走环境核实/产品缺陷出口）；瞬态单列
-**Artifacts**: reflow_brief（fan-out briefs;>6 个 case 先把 briefs 数组落 workspace 文件、传 `briefs_path`——内联大数组会被序列化截断）
+**Success criteria**: G/E/V errors needing recompile dispatched in **one** `compile_fanout(compile-worker)`; same-signature two-round fails excluded from recompile (environment-check / product-defect exit); transients listed separately
+**Artifacts**: reflow_brief (fan-out briefs; for >6 cases write the briefs array to a workspace file first and pass `briefs_path` — inline large arrays get truncated by serialization)
 
-### 7. 闭环写回先例库
+### 7. Closed-loop writeback to the precedent store
 
 **Execution**: Direct
 
-对每个**真 PASS** 的 case，做两个互补写回（各有工具、各有机械门，别手动拼文件）：
+For every **true PASS**, perform both complementary writebacks (each has a tool with its own mechanical gate — never hand-assemble files):
 
-1. `compile_writeback(autoid=..., last_run_path="<本次上机的 last_run.json>")` — 整卷写回**先例库**(mirror + 意图索引)。工具内两道机械门:last_run 里该 autoid 必须 verdict=pass(上机 oracle,不信转述)、卷面凭证必须新鲜(写回的就是上机跑过的那份)。写回后同 run 内的 `compile_precedent` 立即能检索到它:先例库越饱,后续同类编写越少从头推导。
-2. `compile_footprint_writeback(autoid=..., provenance_path="<该 case 的 case.provenance.json>", on_device_passed=True)` — 真 PASS 的 **G 段命令文法**写回 footprint 知识树(工具内 evidence 门拒无出处事实;只写 G 段,V 断言/E 具体 IP/运行时值不写)。provenance 自 emit 必传门后每卷都有;个别旧卷缺失时工具自动跳过、不报错。
+1. `compile_writeback(autoid=..., last_run_path="<this run's last_run.json>")` — writes the sheet back to the **precedent store** (mirror + intent index). Two mechanical gates inside: the autoid must be verdict=pass in last_run (on-device oracle, no paraphrase trusted), and the sheet credential must be fresh (what is written back is exactly what ran). Once written, `compile_precedent` in the same run can retrieve it immediately: the fuller the precedent store, the less from-scratch derivation for later same-type compiles.
+2. `compile_footprint_writeback(autoid=..., provenance_path="<the case's case.provenance.json>", on_device_passed=True)` — writes the true-PASS **G-layer command grammar** into the footprint tree (evidence gate rejects sourceless facts; G layer only — V assertions / concrete E IPs / runtime values are never written). Provenance exists on every sheet since the emit mandatory gate; the tool auto-skips rare legacy sheets without it.
 
-**Rules**: 靠工具写回,别手动拷文件/改索引/手动拼 footprint JSON;fail/unknown 的卷两个写回都绝不做(污染知识资产)。
-**Success criteria**: 真 PASS 逐个双写回,报告先例写回条数 + footprint 写入/跳过条数
-**Artifacts**: precedent_writeback + footprint G 段
+**Rules**: write back via the tools only — no manual file copying / index editing / hand-built footprint JSON; fail/unknown sheets get **neither** writeback (knowledge-asset poisoning).
+**Success criteria**: true PASSes dual-written one by one; report precedent count + footprint written/skipped counts
+**Artifacts**: precedent_writeback + footprint G-layer entries
 
-### 8. 输出报告
+### 8. Output the report
 
-**Execution**: Direct（输出时禁止再调工具）
+**Execution**: Direct (no tool calls while emitting output)
 
-按下方结构输出：
+Use this structure (report content is user-facing, keep it in Chinese):
 
 ```
 ### 上机验证 summary
@@ -142,5 +140,5 @@ when_to_use: |
 <逐 autoid + target_layer + device_context 摘要 + 应改方向>
 ```
 
-**Rules**: 报错如实贴出，不含糊；最终输出时禁止再调任何工具。
-**Success criteria**: 报告含 summary + 逐 case 表 + footprint 写回 + reflow brief 四段，异常项有根因
+**Rules**: paste errors verbatim, no hedging; no tool calls during final output.
+**Success criteria**: report contains the four sections (summary / per-case table / footprint writeback / reflow brief); anomalies carry root causes

@@ -127,19 +127,19 @@ def validate_row(row: Row, snapshot=None) -> list[str]:
     f = row.method
     check_methods, env_hosts, _generic = _effective_whitelists(snapshot)
     if e not in VALID_TEST_OBJECTS:
-        errs.append(f"E={e!r} 不是合法测试对象")
+        errs.append(f"E={e!r} is not a valid test object")
         return errs
     if e == "check_point":
         if f not in check_methods:
-            errs.append(f"E=check_point 时 F={f!r} 不是合法断言类型 {sorted(check_methods)}")
+            errs.append(f"E=check_point: F={f!r} is not a valid assertion type {sorted(check_methods)}")
         if f == "found_times" and not row.input_var:
-            errs.append("found_times 需要 I 列指定 times")
+            errs.append("found_times requires column I to specify times")
     elif e == "test_env":
         if f not in env_hosts:
-            errs.append(f"E=test_env 时 F={f!r} 不是合法主机名 {sorted(env_hosts)}")
+            errs.append(f"E=test_env: F={f!r} is not a valid hostname {sorted(env_hosts)}")
     elif e == "time":
         if f != "sleep":
-            errs.append(f"E=time 时 F 必须为 sleep，实际 {f!r}")
+            errs.append(f"E=time: F must be sleep, got {f!r}")
     elif e in ("APV_0", "APV_1"):
         # 通用反射方法 或 中文意图（command_function_mapping）——意图由能力快照校验
         pass
@@ -150,7 +150,7 @@ def validate_case(case: CaseIR, snapshot=None) -> list[str]:
     """良构校验单 case（W4 断言完备 + 行级）。snapshot 透传给行级校验（KP2 单一源）。"""
     errs: list[str] = []
     if case.check_point_count() == 0:
-        errs.append(f"case {case.autoid} 无 check_point —— 上机必 fail（pass 需 success>0）")
+        errs.append(f"case {case.autoid} has no check_point — guaranteed fail on device (pass requires success>0)")
     for st in case.steps:
         for r in st.rows:
             for e in validate_row(r, snapshot):

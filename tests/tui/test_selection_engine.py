@@ -425,6 +425,40 @@ def test_move_focus_drops_anchor_span_to_char_mode():
     assert s.focus == Point(col=7, row=0)
 
 
+def test_scroll_capture_shift_preserve_partial_offscreen_and_round_trip():
+    """滚动时 capture_scrolled_rows + shift_selection 组合的端到端语义:
+    选区随内容平移、滚出视口顶部的那截经累加器保留(复制文本不变)、反向滚回弹出
+    累加器完全复原。复刻 IstInkApp._shift_selection_for_scroll 对引擎的调用序列。"""
+    width = 10
+    min_row, max_row = 0, 4
+    f0 = ["AAAA      ", "BBBB      ", "CCCC      ", "DDDD      ", "EEEE      "]
+    screen0, _, _ = _make_screen(f0, width=width)
+
+    s = SelectionState()
+    s.anchor = Point(col=0, row=1)
+    s.focus = Point(col=3, row=3)
+    assert get_selected_text(s, screen0) == "BBBB\nCCCC\nDDDD"
+
+    # —— 向下滚 2 行(内容上移):顶部 [0,1] 移出上沿,d_row=-2 ——
+    capture_scrolled_rows(s, screen0, min_row, min_row + 2 - 1, side="above")
+    shift_selection(s, d_row=-2, min_row=min_row, max_row=max_row, width=width)
+    assert s.scrolled_off_above == ["BBBB"]
+    assert selection_bounds(s) == (Point(col=0, row=0), Point(col=3, row=1))
+
+    # 重绘后 F1:内容整体上移 2 行。滚出的 BBBB 由累加器补回,屏内 CCCC/DDDD 仍正确选中。
+    f1 = ["CCCC      ", "DDDD      ", "EEEE      ", "FFFF      ", "GGGG      "]
+    screen1, _, _ = _make_screen(f1, width=width)
+    assert get_selected_text(s, screen1) == "BBBB\nCCCC\nDDDD"
+
+    # —— 反向滚回 2 行(内容下移):底部 [3,4] 移出下沿(与选区不相交),d_row=+2 ——
+    capture_scrolled_rows(s, screen1, max_row - 2 + 1, max_row, side="below")
+    shift_selection(s, d_row=2, min_row=min_row, max_row=max_row, width=width)
+    assert s.scrolled_off_above == []  # BBBB 回到屏内,弹出累加器
+    assert s.scrolled_off_below == []
+    assert selection_bounds(s) == (Point(col=0, row=1), Point(col=3, row=3))
+    assert get_selected_text(s, screen0) == "BBBB\nCCCC\nDDDD"
+
+
 
 
 

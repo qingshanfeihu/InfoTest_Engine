@@ -298,7 +298,7 @@ def _payloads_have_max_thinking(payloads) -> bool:
     """任一 running fork 卡处于 max 思考深度 → 引擎底部条挂「最大深度思考中」。
 
     纯函数(入参=fork 卡 payload 可迭代,快照派生),便于测试且 replay 一致。max 深度
-    只在升级重编最后一次触发(effort=max 由 worker_fanout 判 rounds_used 决定)。
+    重编轮触发(首败即升:effort=max 由 worker_fanout 判 rounds_used>=1)。
     """
     for pl in payloads:
         if ((pl.get("kind") or "fork") == "fork" and pl.get("status") == "running"
@@ -1032,7 +1032,9 @@ class IstInkApp:
         sel = self._app.selection
         if not has_selection(sel):
             return
-        text = get_selected_text(sel, self._app._curr_screen)
+        # 读显示帧,不读 _curr_screen:滚动后 _curr_screen 是交换出来的旧草稿,选区已随
+        # 内容平移过,若从旧草稿取文本会与屏幕高亮错位、复制出错(见 app.visible_screen)。
+        text = get_selected_text(sel, self._app.visible_screen())
         if not text:
             return
         seq = set_clipboard(text)
@@ -1051,11 +1053,73 @@ class IstInkApp:
     def _scroll_transcript(self, delta: int) -> None:
         if delta == 0:
             return
+        old_top = self._transcript.node.scroll_top
         self._transcript.scroll_by(delta)
+        # 顶/底 clamp 后真实滚动量可能小于 delta(甚至为 0):用 scroll_top 前后差,别用 delta。
+        actual = self._transcript.node.scroll_top - old_top
+        if actual != 0:
+            self._shift_selection_for_scroll(actual)
         # 滚动会把超宽/软换行内容移进视口，普通 diff 清不掉宽字符跨列残留(溢到最左成"线")。
         # 走 _repaint_full:render_full 逐格重写(含空格)自愈残影,且无 erase 空白相 → 不闪。
         # 不要用 _force_full_render(那条带 erase,会每次滚动闪一下)。
         self._app._repaint_full()
+
+    def _shift_selection_for_scroll(self, scroll_delta: int) -> None:
+        """transcript 滚动后,把活动选区随内容整体平移,让高亮始终贴住原文本。
+
+        选区存的是绝对屏幕行(见 selection.py)。transcript 内容滚动 scroll_delta 行
+        (>0 = scroll_top 增大 = 内容上移)后,若不同步平移选区,高亮就会漂到别的内容上、
+        复制出错——这正是"选中后滚轮/PageUp,选中内容随滚动变化"的根因。
+        即将移出视口且落在选区内的那条行带,先从当前显示帧抓进 scrolled_off 累加器,
+        复制时由 get_selected_text 补回;否则滚出去的那截会丢。
+        """
+        from main.ist_core.ink.selection import (
+            capture_scrolled_rows,
+            has_selection,
+            selection_bounds,
+            shift_selection,
+        )
+
+        sel = self._app.selection
+        if not has_selection(sel):
+            return
+        # transcript 是 root(锚在屏幕原点、无 padding)的首个子节点,故其 rect 的
+        # y/height 就是它在屏幕上占的绝对行区间,与鼠标/选区坐标同一空间。
+        rect = self._transcript.node.rect
+        if rect.height <= 0:
+            return
+        min_row = rect.y
+        max_row = rect.y + rect.height - 1
+        bounds = selection_bounds(sel)
+        if bounds is None or bounds[0].row > max_row or bounds[1].row < min_row:
+            # 选区整体落在 transcript 视口之外(如输入框/footer),不随 transcript 滚动。
+            return
+
+        # 读显示帧:此刻 scroll_by 只改了 scroll_top、尚未重绘,显示帧仍是滚动前内容,
+        # 正好能抓到即将移出的那截原文(见 app.visible_screen 对双缓冲的说明)。
+        screen = self._app.visible_screen()
+        if scroll_delta > 0:
+            # 内容上移:视口顶部 scroll_delta 行移出上沿。
+            capture_scrolled_rows(
+                sel, screen, min_row, min(max_row, min_row + scroll_delta - 1),
+                side="above",
+            )
+        else:
+            # 内容下移:视口底部 |scroll_delta| 行移出下沿。
+            span = -scroll_delta
+            capture_scrolled_rows(
+                sel, screen, max(min_row, max_row - span + 1), max_row,
+                side="below",
+            )
+        # 内容上移 scroll_delta 行 ⇒ 每行屏幕行号减 scroll_delta,故 d_row = -scroll_delta。
+        shift_selection(
+            sel,
+            d_row=-scroll_delta,
+            min_row=min_row,
+            max_row=max_row,
+            width=screen.width,
+        )
+        self._app.notify_selection_change()
 
     
 

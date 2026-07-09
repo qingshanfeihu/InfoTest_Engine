@@ -1,59 +1,59 @@
 ---
 name: test-list-review
-description: 评审测试用例 / 测试策略，独立交叉验证后给出评审结论（VERDICT / P 级别 / 改进建议）。当用户要「评审」「review」一份 Test List、测试用例或测试策略文件（xlsx / markdown / 用例清单），或提到针对某个缺陷（如 BUG-121100 等缺陷单号）做用例评审、看用例覆盖够不够、按以往评审要求复核时使用。触发短语：评审、review、测试用例评审、Test List、用例审查、用例覆盖评审、缺陷用例评审。泛指任何审查 / 评估 / 复核现有测试用例或测试策略质量的请求，都从这里入口。
+description: "Reviews test cases / test strategy and delivers an independently cross-verified conclusion (VERDICT / P level / improvement suggestions). Use when the user wants to review (评审) a Test List, a test-case or test-strategy file (xlsx / markdown / case list), asks for a case review against a defect ticket (e.g. BUG-121100), wants case coverage assessed, or asks to re-check against previous review requirements. Trigger phrases: 评审, review, 测试用例评审, Test List, 用例审查, 用例覆盖评审, 缺陷用例评审. Any request to review / assess / re-check the quality of existing test cases or test strategy enters here."
 context: inline
 when_to_use: |
   Use when the user wants to review test cases (评审 / Test List / 用例评审).
   Examples: "评审 BUG-121100 的测试用例", "review test cases for cookie encryption",
   "看一下 121100 用例怎么样", "按之前评审要求", "xlsx 评审".
   Trigger phrases: 评审, review, Test List, BUG-XXXXX, 测试用例评审.
-  SKIP when: 用户只问 CLI 用法、产品规格说明、缺陷详情查询，或要求生成新用例。
-allowed-tools: fs_read, fs_grep, fs_ls, run_python, run_shell, kb_bug_search, kb_footprint, invoke_skill
+  SKIP when: the user only asks about CLI usage, product specifications, or defect details, or asks to generate new test cases.
+allowed-tools: [fs_read, fs_grep, fs_ls, run_python, run_shell, kb_bug_search, kb_footprint, invoke_skill]
 effort: high
 ---
 
 # Test List Review
 
-对测试用例做独立、有证据的评审。最终 VERDICT/LEVEL 由 review-verification fork skill 给出（你不能 self-assign 结论）。
+Independent, evidence-backed review of test cases. The final VERDICT/LEVEL is issued by the review-verifier fork skill (you cannot self-assign the conclusion).
 
 
 ## Inputs
 
-- 测试用例文件路径（xlsx 或 markdown，位于 knowledge/data/markdown/qa/ 或 workspace/inputs/）
-- 关联的 BUG / 需求 ID
+- Test case file path (xlsx or markdown, under knowledge/data/markdown/qa/ or workspace/inputs/)
+- Associated BUG / requirement ID
 
 ## Goal
 
-产出一份有证据支撑的评审报告（由交叉验证 task 结果块交付用户），含 VERDICT、LEVEL、改进建议。
+Produce an evidence-backed review report (delivered to the user from the cross-verification task result block), containing VERDICT, LEVEL, and improvement suggestions.
 
 ## Principles
 
-- 评审质量来自"读懂产品 + 读懂测试"，不是"套规则字典"
-- 关注研发修改内容和具体产品实现——不要把修复细节当背景一扫而过，逐项理解改了什么参数、行为、选项
-- 参考以往测试用例和测试策略——评审前了解历史覆盖维度，看类似功能历史上关注过什么，不要跑偏
+- Review quality comes from "understanding the product + understanding the tests", not from applying a rule dictionary
+- Focus on what development changed and on the concrete product implementation — do not skim the fix details as mere background; understand item by item which parameters, behaviors, options changed
+- Consult past test cases and test strategies — before reviewing, learn the historical coverage dimensions and what similar features focused on historically, so the review does not drift
 
-## P 级别定义
+## P level definitions
 
-- P0: 覆盖所有功能细节 + 非常丰富的兼容性/负面/压力/corner case 和极端场景
-- P1: 覆盖所有功能细节 + 丰富的兼容性/负面/压力
-- P2: 覆盖所有功能细节 + 比较丰富的兼容性/负面/压力
-- P3: 覆盖所有功能细节 + 一定的兼容性/负面/压力
-- P4: 覆盖所有功能细节 + 一定的负面/压力（兼容性不足）
-- P5: 覆盖所有功能 + 一定的负面/压力（缺少功能细节深度）
-- P6: 覆盖基本功能，包含负面和压力测试类型（功能细节覆盖不全）
-- P7: 无法覆盖基本功能，不包含负面和压力测试类型
+- P0: covers all functional details + very rich compatibility/negative/stress/corner cases and extreme scenarios
+- P1: covers all functional details + rich compatibility/negative/stress
+- P2: covers all functional details + fairly rich compatibility/negative/stress
+- P3: covers all functional details + some compatibility/negative/stress
+- P4: covers all functional details + some negative/stress (insufficient compatibility)
+- P5: covers all functions + some negative/stress (lacking functional-detail depth)
+- P6: covers basic functions, includes negative and stress test types (functional-detail coverage incomplete)
+- P7: fails to cover basic functions, contains no negative or stress test types
 
 ## Steps
 
-### 0. 拆 todo（必做）
+### 0. Break the task into todos (mandatory)
 
-**Execution**: Direct（用 ``write_todos``）
+**Execution**: Direct (via ``write_todos``)
 
-接到评审任务后**第一件事**：调 ``write_todos``。文案必须是**用户友好的中文**（Plan 面板会直接展示）。
+The **first thing** after receiving a review task: call ``write_todos``. The wording must be **user-friendly Chinese** (the Plan panel displays it verbatim).
 
-**禁止**在 todo 中出现：verifier、fork、subagent、gate、brief、review-verification、VERDICT 等内部词。
+**Forbidden** in todos: internal words such as verifier, fork, subagent, gate, brief, review-verifier, VERDICT.
 
-示例：
+Example:
 
 ```text
 - 读取需求文档
@@ -67,127 +67,127 @@ effort: high
 - 完成评审
 ```
 
-**Rules**: 同时只能有一条 ``in_progress``。
+**Rules**: only one todo may be ``in_progress`` at a time.
 
-### 1. 读缺陷 / 需求
+### 1. Read the defect / requirement
 
-调 ``kb_bug_search(ticket_id)``。``ticket_id`` 可用 ``BUG-121100`` 或纯数字 ``121100``——工具在 **bugzilla / 禅道缺陷 / 禅道需求** 三端分别查询，不按前缀猜平台。重点理解研发修复了什么问题、改了哪些参数/枚举值/行为。
+Call ``kb_bug_search(ticket_id)``. ``ticket_id`` accepts ``BUG-121100`` or the bare number ``121100`` — the tool queries **bugzilla / ZenTao defects / ZenTao requirements** separately; it does not guess the platform from the prefix. Focus on understanding what problem development fixed and which parameters / enum values / behaviors changed.
 
-- 仅一端命中：用 ``title`` / ``description`` / ``metadata`` 写后续 ``bug_summary``
-- ``hits_count`` > 1：对比 ``results`` 里各 ``probe_backend``，选定与评审相关的一条（其余勿丢）
+- Exactly one backend hits: use its ``title`` / ``description`` / ``metadata`` to write the ``bug_summary`` used later
+- ``hits_count`` > 1: compare each ``probe_backend`` in ``results`` and select the one relevant to this review (do not discard the others)
 
 **ONLY**: kb_bug_search
-**Success criteria**: 能回答"研发具体改了什么、影响哪些命令和版本"
+**Success criteria**: can answer "what exactly did development change, and which commands and versions are affected"
 **Artifacts**: bug_summary, fix_approach, affected_params, affected_versions, cli_command, severity
 
-### 2. 读产品设计文档
+### 2. Read the product design docs
 
 **ONLY**: knowledge/data/markdown/product/
 **Rules**: NEVER use qa/ paths for product semantics.
-**Success criteria**: 能回答"该功能在系统中的位置、上下游耦合、设计边界（核心/边缘/兼容选项）"
+**Success criteria**: can answer "where the feature sits in the system, its upstream/downstream coupling, and its design boundaries (core / edge / compatibility options)"
 **Artifacts**: feature_position, module_hierarchy, coupling_relations, design_boundaries
 
-### 3. 读 CLI 手册
+### 3. Read the CLI manual
 
-grep `knowledge/data/markdown/product/cli_*_Chapter*.md` + `cli_*_Appendix*.md`，找到相关命令的完整参数表，确认参数间依赖关系（互斥/包含）、合法值范围和默认值。同时查找该命令在其他位置的引用，确认兼容关系。
+Grep `knowledge/data/markdown/product/cli_*_Chapter*.md` + `cli_*_Appendix*.md` to find the complete parameter table of the relevant commands, and confirm inter-parameter dependencies (mutual exclusion / inclusion), legal value ranges, and defaults. Also search for other references to the command elsewhere to confirm compatibility relations.
 
 **ONLY**: knowledge/data/markdown/product/cli_*_Chapter*.md + cli_*_Appendix*.md
-**Success criteria**: 能列出命令完整参数表 + 使用方法 + 配置示例 + 参数间依赖关系
+**Success criteria**: can list the command's complete parameter table + usage + configuration examples + inter-parameter dependencies
 **Artifacts**: param_table, legal_values, defaults, param_dependencies, usage_examples
 
-### 4. 读测试方法论
+### 4. Read the test methodology
 
-grep `knowledge/data/markdown/qa/Test Strategy*.md` 找测试用例中包含的功能在历史上的测试策略，关注历史上类似功能的测试维度（HTTP版本/IPv6/性能/安全等）和方法论（边界值分析/等价类划分/错误推测法等）。
+Grep `knowledge/data/markdown/qa/Test Strategy*.md` for the historical test strategy of the features covered by the test cases, focusing on the dimensions historically applied to similar features (HTTP version / IPv6 / performance / security etc.) and the methodology (boundary value analysis / equivalence partitioning / error guessing etc.).
 
 **ONLY**: knowledge/data/markdown/qa/Test Strategy*.md
-**Success criteria**: 能回答"类似功能历史上关注哪些维度、用了什么测试方法"
+**Success criteria**: can answer "which dimensions similar features focused on historically, and which test methods were used"
 **Artifacts**: test_dimensions, test_focus_areas, test_methods
 
-### 5. 读同类历史用例
+### 5. Read historical cases of the same kind
 
-grep 测试用例中包含的相关功能历史的Test List，重点关注：覆盖维度（功能点/参数组合/网络环境）、设计思路（正向/负向/边界）、质量水平（描述清晰度/预期结果明确度）、模块划分。
+Grep the historical Test Lists for the features covered by the test cases, focusing on: coverage dimensions (feature points / parameter combinations / network environments), design approach (positive / negative / boundary), quality level (description clarity / expected-result explicitness), and module partitioning.
 
-**ONLY**: knowledge/data/markdown/qa/Test List*.md（禁止读当前正在评审的用例文件）
-**Success criteria**: 能对标"同类功能历史上覆盖了什么、怎么分模块、质量如何"
+**ONLY**: knowledge/data/markdown/qa/Test List*.md (never read the case file currently under review)
+**Success criteria**: can benchmark "what similar features covered historically, how modules were partitioned, and at what quality"
 **Artifacts**: historical_coverage_pattern, test_design_approach, module_partition
 
-### 6. 读当前用例全文 + 产品知识补充
+### 6. Read the current case file in full + supplementary product knowledge
 
 **MUST** read entire test case file. If > 500 lines, paginated reads until full coverage.
 
-在 Step 7 之前，对 ``cli_command`` 调 ``kb_footprint``，把测试用例中已确认的产品测试事实写入后续 brief 的 ``evidence_collected``（禁止留到交叉验证之后再补查）。
+Before Step 7, call ``kb_footprint`` on ``cli_command`` and write the already-verified product test facts into the ``evidence_collected`` of the later brief (never defer this lookup until after cross-verification).
 
-**ONLY**: 用例文件 + kb_footprint
-**Success criteria**: 全文覆盖 + footprint 要点已记录 + 用例中所有命令/模块均已确认语义
+**ONLY**: the case file + kb_footprint
+**Success criteria**: full-text coverage + footprint highlights recorded + semantics of every command/module in the cases confirmed
 **Artifacts**: footprint_facts, test_coverage_dimensions, test_design_approach, module_partition
-**Rules**: 用例中出现未知命令/模块时，必须 grep product/ 确认语义后再评审；禁止凭名字推断功能行为
+**Rules**: when an unknown command/module appears in the cases, grep product/ to confirm its semantics before reviewing; never infer feature behavior from a name
 
-### 7. 草稿 + 交叉验证 (when applicable: 多 sheet)
+### 7. Draft + cross-verification
 
-**多 sheet xlsx（when applicable）**：若 xlsx 有 N 个独立 sheet/section（各 >500 行），先 peek 结构，再**同一条消息**并发 N 个 ``invoke_skill(skill="review-verification", brief=...)``，每块一份 brief；全部返回后按 worst-case 聚合（任一 FAIL → FAIL；否则任一 PARTIAL → PARTIAL）。
+**Multi-sheet xlsx (when applicable)**: if the xlsx has N independent sheets/sections (each > 500 lines), peek the structure first, then issue N concurrent ``invoke_skill(skill="review-verifier", brief=...)`` calls **in the same message**, one brief per block; after all return, aggregate worst-case (any FAIL → FAIL; otherwise any PARTIAL → PARTIAL).
 
-**Execution**: Fork skill — 必须调 ``invoke_skill(skill="review-verification", brief=<完整草稿>)``
+**Execution**: Fork skill — must call ``invoke_skill(skill="review-verifier", brief=<complete draft>)``
 
-⚠️ **关键约束**：
-- skill 名必须是 ``review-verification``（fork skill），**不是** ``test-list-review``（你已加载的 inline skill）
-- 再调 ``test-list-review`` 只会重新返回这份 SKILL.md（inline skill 行为），**不会触发独立验证**
-- ``review-verification`` 是 fork skill，会在独立 subagent (review-verifier) 中执行验证，返回结构化研究报告
+⚠️ **Key constraints**:
+- The skill name must be ``review-verifier`` (the fork skill), **not** ``test-list-review`` (the inline skill you already loaded)
+- Calling ``test-list-review`` again only returns this SKILL.md once more (inline skill behavior) and **does not trigger independent verification**
+- ``review-verifier`` is a fork skill: it runs verification in an independent subagent (review-verifier) and returns a structured research report
 
-先在对话里写完整草稿（证据列表 + draft_findings + draft_level），再调 ``invoke_skill(skill="review-verification", ...)``。Brief 必须完整——fork skill 从零上下文开始，看不到你之前的对话。
+First write the complete draft in the conversation (evidence list + draft_findings + draft_level), then call ``invoke_skill(skill="review-verifier", ...)``. The brief must be self-contained — the fork skill starts from zero context and cannot see your earlier conversation.
 
-``brief`` 建议结构：
+Suggested ``brief`` structure:
 
 ```text
-test_case_file: <路径>
+test_case_file: <path>
 bug_id: <BUG-XXXXX>
-bug_summary: <一句话>
+bug_summary: <one sentence>
 cli_command: <CLI>
 evidence_collected:
-  - Phase 1: <研发修改方案 + 影响参数>
-  - Phase 2: <功能位置 + 设计边界>
-  - Phase 3: <参数表 + 依赖关系>
-  - Phase 4: <历史测试维度 + 方法论>
-  - Phase 5: <同类覆盖模式>
-  - Phase 6 footprint: <kb_footprint 要点>
-  - Phase 6 用例结构: <覆盖维度 + 模块划分>
+  - Step 1: <dev fix approach + affected parameters>
+  - Step 2: <feature position + design boundaries>
+  - Step 3: <parameter table + dependencies>
+  - Step 4: <historical test dimensions + methodology>
+  - Step 5: <coverage patterns of similar features>
+  - Step 6 footprint: <kb_footprint highlights>
+  - Step 6 case structure: <coverage dimensions + module partition>
 evidence_gaps:
-  - <知识库中未找到但可能影响判断的信息>
+  - <information not found in the knowledge base that may affect judgment>
 draft_findings:
-  critical (P6-P7 级):
-    - <行号> <描述>
-  major (P3-P5 级):
-    - <行号> <描述>
-  minor (P0-P2 级):
-    - <行号> <描述>
+  critical (P6-P7 severity):
+    - <line number> <description>
+  major (P3-P5 severity):
+    - <line number> <description>
+  minor (P0-P2 severity):
+    - <line number> <description>
 draft_level: P0-P7
 
 Independently verify each finding (you will grep/read internally).
-Try to break my draft. User-facing report: 中文「发现项」+ 证据摘录（勿写 fs_* 工具行）+ VERDICT + LEVEL.
+Try to break my draft. Return your research report in English: findings + evidence excerpts (no fs_* tool lines) + VERDICT + LEVEL.
 ```
 
-**Success criteria**: task 返回含 ``VERDICT:`` + ``LEVEL:`` 的报告
+**Success criteria**: the task returns a report containing ``VERDICT:`` + ``LEVEL:``
 
 **Rules**:
 
-- 不得修改交叉验证给出的 VERDICT/LEVEL（Faithful Reporting）
-- 交叉验证返回后**禁止**再调任何工具或写补充 finding
+- Never modify the VERDICT/LEVEL issued by cross-verification (Faithful Reporting)
+- After cross-verification returns, **never** call another tool or write supplementary findings
 
-### 8. 撰写最终报告（对齐 Anthropic 官方做法）
+### 8. Compose the final report (aligned with Anthropic's official practice)
 
-fork verifier 已返回**结构化研究报告**作为 ToolResult（含 Summary / Verified Findings / New Findings / Level Challenge / Verdict）。这是研究材料，**不是直接给用户的成品**。
+The fork verifier has returned a **structured research report** as a ToolResult (Summary / Verified Findings / New Findings / Level Challenge / Verdict). This is research material, **not a deliverable to hand to the user directly**.
 
-你的任务：基于 verifier 的研究材料 + Phase 1-6 的证据，**用你自己的话**写最终用户可见的评审报告。
+Your task: based on the verifier's research material + the evidence from Steps 1-6, write the final user-visible review report **in your own words**.
 
-**必须遵守**：
-- VERDICT 和 LEVEL 直接采用 verifier 的判定，**不得修改**（Faithful Reporting）
-- 所有 verifier 列出的 findings（Verified + New）都要在最终报告中体现
-- 改进建议来自 verifier 的 Improvement Suggestions
-- 用中文 markdown，结构清晰
+**Must**:
+- Adopt the verifier's VERDICT and LEVEL as-is; **never modify them** (Faithful Reporting)
+- Every finding the verifier lists (Verified + New) must appear in the final report
+- Improvement suggestions come from the verifier's Improvement Suggestions
+- Write the final report in Chinese markdown (the user reads it in Chinese), clearly structured
 
-**禁止**：
-- 直接 copy-paste verifier 的输出（重复显示、用户看到两遍）
-- 篡改 verifier 的 VERDICT/LEVEL
-- 加 verifier 没列的发现（verifier 已是最终评审者）
-- 输出后再调任何工具
+**Forbidden**:
+- Copy-pasting the verifier's output verbatim (it would be shown to the user twice)
+- Tampering with the verifier's VERDICT/LEVEL
+- Adding findings the verifier did not list (the verifier is the final reviewer)
+- Calling any tool after the output starts
 
-**Success criteria**: 最终 AIMessage 包含完整中文评审报告（findings + 改进建议 + VERDICT + LEVEL），用主 agent 自己的语言组织，不是 verifier 输出的逐字复制
+**Success criteria**: the final AIMessage contains the complete Chinese review report (findings + improvement suggestions + VERDICT + LEVEL), organized in the main agent's own words, not a verbatim copy of the verifier output

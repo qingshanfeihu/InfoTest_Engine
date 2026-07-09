@@ -158,6 +158,18 @@ class InkApp:
     def has_text_selection(self) -> bool:
         return has_selection(self.selection)
 
+    def visible_screen(self) -> Screen:
+        """终端上"当前这一帧"对应的 Screen。
+
+        渲染是双缓冲:_do_render_inner 把新帧画进 _curr_screen、diff/显示,然后在
+        结尾交换 _prev_screen/_curr_screen。所以一次渲染完成后,屏幕上正显示的那一帧
+        落在 _prev_screen 里,而 _curr_screen 变成了"下一帧要覆写的旧草稿"。
+        选区坐标是按显示帧解释的——复制取文本、滚动抓即将移出的行都必须读这一帧。
+        读 _curr_screen 在静止态因两 buffer 内容相同而恰好正确,一旦滚动改变了内容
+        就会读到交换后错位的旧草稿(复制串行/抓错行)。
+        """
+        return self._prev_screen
+
     def start(self) -> None:
         """Enter terminal UI mode and start render loop."""
         self._running = True

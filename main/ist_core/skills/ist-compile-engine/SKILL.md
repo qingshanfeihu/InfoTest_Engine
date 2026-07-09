@@ -1,16 +1,14 @@
 ---
 name: ist-compile-engine
-description: "V6 编译引擎入口:一句话把脑图跑成已上机验证的 case.xlsx 交付——确定性状态机驱动整条闭环(编写→欠定问用户→合并→上机→归因→定向重编→循环到不动点→写回→报告),断点续跑。用户要「编译」「脑图转excel」「编译并上机」时优先用它。"
+description: "V6 compile engine entry point: turns a mindmap into on-device-verified case.xlsx deliverables in one call — a deterministic state machine drives the whole closed loop (write → ask user on underdetermined → merge → on-device run → attribution → targeted recompile → iterate to fixpoint → writeback → report), resumable from checkpoint. Preferred whenever the user asks to 编译 / 脑图转excel / compile-and-verify."
 context: inline
 user-invocable: true
-source: hand
-version: "1"
 effort: low
 when_to_use: |
-  Use when 用户要把人工测试用例(脑图/txt)编译成自动化 case.xlsx 并完成上机验证交付。
-  Examples: "编译 dongkl.txt"、"把这批脑图编译并上机"、"用例编译"。
-  Trigger keywords: 编译, 脑图转excel, 编译上机, 用例编译, 闭环编译。
-  SKIP when: 只对已有 excel 复验(ist-verify);只查一条 CLI(dev_probe);引擎关闭时走 ist-compile。
+  Use when the user wants manual test cases (mindmap/txt) compiled into automated case.xlsx with on-device verification and delivery.
+  Examples: "编译 dongkl.txt", "把这批脑图编译并上机", "用例编译".
+  Trigger keywords: 编译, 脑图转excel, 编译上机, 用例编译, 闭环编译.
+  SKIP when: re-verifying an existing excel only (ist-verify); looking up a single CLI (dev_probe).
 engine:
   graph: main.ist_core.compile_engine.graph:graph
   phases: [prep, worker_fanout, ask_decision, merge, run_digest, attribute, writeback, report]
@@ -20,16 +18,13 @@ engine:
   tools: [compile_engine_run]
 ---
 
-# V6 编译引擎(状态机驱动,LLM 只在孔里)
+# V6 compile engine (state-machine driven; LLM only inside the holes)
 
-调 `compile_engine_run(mindmap_path, product_version)` 一次——整条闭环由确定性状态机跑完:
-逐 case 派 worker 编写(机械门+探针自检)→ 欠定用例弹面板问用户(拿到答案才落决策,先问后落
-是代码强制)→ 合并(凭证门+pass 卷面锁)→ 上机 → 归因(已知缺陷短路/机械预判/LLM 只填
-undetermined)→ 只重编 fail 子集 → 循环到不动点(全过/全部标注/轮次封顶)→ 真 PASS 双写回
-→ 交付报告。
+Call `compile_engine_run(mindmap_path, product_version)` once — the deterministic state machine runs the whole loop:
+dispatch a worker per case (mechanical gates + probe self-check) → underdetermined cases pop a user panel (decision lands only after the answer; ask-before-write is code-enforced) → merge (credential gate + pass sheet lock) → on-device run → attribution (known-defect short-circuit / mechanical pre-judgement / LLM fills only the undetermined) → recompile the fail subset only → iterate to fixpoint (all pass / all labeled / round cap) → true-PASS dual writeback → delivery report.
 
-- 产品版本没给就先 `ask_user` 问——版本错整批文法全错。
-- 引擎被打断(进程死/设备忙)后,**同参数重调一次即从断点续跑**(checkpoint),已跑的设备轮不重烧。
-- 面向用户的汇报**简短即可**：引擎已把完整交付报告落盘在返回里给出的 `delivery_report.md`（整批 pass/fail 汇总 + 交付件路径 + 需处置用例证据），报告本体在盘上、不靠你转述——你只需一两句报结果 + 指路"完整报告见 `<delivery_report.md 路径>`"。**别把整份报告长篇复述**（长响应在 deepseek 流式下易被自截断，实证停在半句）。机读全量在 `engine_report.json`。
-- 返回带「升级人工」条目时,这些 case 引擎已穷尽机械路径(轮次耗尽/归因缺失),替用户定性等于把失败藏进报告——**完整证据已在 `delivery_report.md`/`unsuccessful_cases.md`,你只列 autoid + 一句原因、指路报告**(别再长篇复述设备回显,那正是流式截断诱因),`ask_user` 拿处置。处置是**开放的语义判断、按 case 而异**(可能是改用例描述、标注放弃、提产品缺陷、给修法方向再试一批……取决于它为什么失败)——**别套固定选项清单**,把要点摆清让用户/自己按情况判。
-- 复述设备行为只引用返回里的回显摘录、engine_report 各 case 的 `fail_evidence`、或 `fs_read` 该批 `last_run.json` 的 `device_context` 原文;引用不了就先读再引,读不到就写「未取到回显」。凭上下文记忆重构的"回显"是伪证——曾把「设备不支持」复述成「执行成功」,还渲染出一段从未发生的配置会话(LangSmith 实证)。
+- If the product version is missing, `ask_user` first — a wrong version invalidates the grammar of the whole batch.
+- If the engine is interrupted (process death / device busy), **re-calling with the same arguments resumes from checkpoint**; completed device rounds are not re-burned.
+- Keep the user-facing summary **short**: the engine has already written the full delivery report to the `delivery_report.md` path given in its return (batch pass/fail summary + deliverable paths + evidence for cases needing disposition). The report lives on disk — do not retell it. One or two sentences of results plus "完整报告见 `<delivery_report.md path>`" is enough. **Never replay the whole report inline** (long responses under deepseek streaming get self-truncated mid-sentence; observed in practice). Machine-readable full data is in `engine_report.json`.
+- When the return contains "escalated to human" entries, the engine has exhausted its mechanical paths for those cases (rounds exhausted / attribution missing). Deciding on the user's behalf hides failures inside a report — **full evidence is already in `delivery_report.md`/`unsuccessful_cases.md`; list only autoid + one-line reason and point to the report** (do not replay device echoes at length — that is exactly the streaming-truncation trigger), then `ask_user` for disposition. Disposition is an **open, per-case semantic judgement** (rewrite the case description, mark abandoned, file a product defect, give a fix direction and retry, … depending on why it failed) — **do not present a fixed option list**; lay out the facts and let the user (or yourself, case by case) judge.
+- When restating device behavior, quote only: echo excerpts in the return, each case's `fail_evidence` in engine_report, or the `device_context` raw text via `fs_read` of that batch's `last_run.json`. If it cannot be quoted, read first, then quote; if unreadable, write "未取到回显". "Echoes" reconstructed from conversational memory are fabricated evidence — one instance retold "device unsupported" as "executed successfully" and rendered a config session that never happened (trace-verified).

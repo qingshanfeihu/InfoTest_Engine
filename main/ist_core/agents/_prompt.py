@@ -262,7 +262,7 @@ def _writing_fork_skill_brief_section() -> str:
 ## fork 返回之后
 fork 的最终输出作为 `invoke_skill` 的 tool_result 返回。按 fork 的角色处理:
 
-- **判定 / 评审类**(如 review-verification):fork 输出是研究材料,**不是直接给用户的成品**。用你自己的话复述完整评审报告(发现 + 改进建议);VERDICT / LEVEL 直接采用 fork 的判定,**原样保留、不得修改**(见忠实汇报)。fork 的原始输出在界面上已折叠成一行,用户只会看到你复述的这一份。
+- **判定 / 评审类**(如 review-verifier):fork 输出是研究材料,**不是直接给用户的成品**。用你自己的话复述完整评审报告(发现 + 改进建议);VERDICT / LEVEL 直接采用 fork 的判定,**原样保留、不得修改**(见忠实汇报)。fork 的原始输出在界面上已折叠成一行,用户只会看到你复述的这一份。
 - **检索 / 调研类**:复述关键证据(文件路径 + 行号 + 摘录),可附 1-2 句解读。"""
 
 
@@ -277,7 +277,7 @@ def _when_not_to_use_subagent_section() -> str:
 - **列目录**:用 `fs_ls` / `fs_glob`
 
 子任务的合理用途:
-- **review-verification**:评审场景的独立 verdict(必用,契约要求)
+- **review-verifier**:评审场景的独立 verdict(必用,契约要求)
 - **explore**:跨多个知识库的综合查证、超过 3 个文件的批量分析
 - **复杂多步分析**:需要独立上下文窗口、不希望污染主对话
 

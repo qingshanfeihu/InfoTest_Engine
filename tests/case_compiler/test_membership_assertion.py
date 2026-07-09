@@ -53,17 +53,17 @@ def test_validate_ok():
 
 def test_validate_rejects_empty_ips():
     err = validate_membership([], True)
-    assert err and "非空列表" in err
+    assert err and "non-empty list" in err
 
 
 def test_validate_rejects_non_list_ips():
     err = validate_membership("172.16.35.226", True)
-    assert err and "非空列表" in err
+    assert err and "non-empty list" in err
 
 
 def test_validate_rejects_non_ip_item():
     err = validate_membership(["p4"], True)
-    assert err and "不像一个 IP 地址字面量" in err
+    assert err and "does not look like an IP address literal" in err
 
 
 def test_validate_rejects_non_bool_present():

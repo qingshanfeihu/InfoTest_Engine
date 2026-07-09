@@ -1,6 +1,6 @@
 ---
 name: config-answer
-description: 任何涉及 APV CLI 命令的问题（查看/生成/解释/翻译/验证），必须查 CLI 手册回答
+description: Any question involving APV CLI commands (lookup / generation / explanation / translation / verification) must be answered from the CLI manual, never from memory.
 context: inline
 user-invocable: true
 when_to_use: |
@@ -15,45 +15,37 @@ effort: medium
 
 # Config Answer
 
-CLI 配置专家。一切以 CLI 文档为准，不准凭记忆写命令。**先 grep 手册，再写命令。**
+CLI configuration expert. The CLI documentation is the only authority — never write a command from memory. **Grep the manual first, then write the command.**
 
 ## Principles
 
-- **写前 grep**：每条命令先 `fs_grep` 手册找语法，再写。不准先写后补 grep
-- **收敛不空转**：换 2-3 个关键词仍无 → 标注 `[未在文档直接命中]`
+- **Grep before writing**: for every command, `fs_grep` the manual for its syntax first, then write it. Never write first and backfill the grep afterwards
+- **Converge, don't spin**: if 2-3 alternative keywords still find nothing → annotate `[未在文档直接命中]` (not directly found in the docs)
 
 ## Steps
 
-### 1. 确定场景
+### 1. Determine the scenario
 
-- **生成/解释/验证**（用户问"怎么配置"、"命令对不对"）→ Step 2-3（inline 快速路径）
-- **翻译**（用户要求"翻译成 APV"、转换第三方配置）→ Step 4（fork 精细化路径）
+- **Generation / explanation / verification** (user asks "怎么配置", "命令对不对") → Steps 2-3 (inline fast path; the draft fork completes within ~4s)
+- **Translation** (user asks to "翻译成 APV" / convert a third-party config) → Steps 2-4 (fork refinement path; complex third-party translations produce long results, so the output is saved to a file by default)
 
----
-
-### 生成场景（fork draft，4s 内完成）
-
-### 2. 生成
+### 2. Generate (fork draft)
 
 ```
-invoke_skill(skill="config-answer-draft", brief="<用户需求>")
+invoke_skill(skill="config-answer-draft", brief="<user requirement>")                              # generation scenario
+invoke_skill(skill="config-answer-draft", brief="<translation instructions + source file path>")   # translation scenario
 ```
 
-draft fork 用 `build_command` 生成——命令结构由手册文法保证，无需二次验证。直接输出。
+The draft fork generates every command via `build_command` — command structure is guaranteed by the manual grammar, so the generation scenario needs no second verification. Output directly.
 
-PASS → 直接输出到对话中，**不保存文件**（除非用户明确要求"输出到文件"）。CUT → 修复（最多 1 次），二次 CUT → 标注 `[??]` 进入输出。
-
----
-
-### 翻译场景（fork 精细化路径）
-
-复杂第三方配置翻译，结果较长，默认保存文件。
-
-### 4. 生成 + 验证 + 输出
+### 3. Verify (fork verify — when applicable: translation scenario)
 
 ```
-invoke_skill(skill="config-answer-draft", brief="<翻译指示 + 源文件路径>")
-invoke_skill(skill="config-answer-verify", brief="<candidate_path + evidence_dir>")
+invoke_skill(skill="config-answer-verifier", brief="<candidate_path + evidence_dir>")
 ```
 
-PASS → 输出到文件。CUT → 修复（最多 1 次），二次 CUT → 标注 `[??]` 进入输出。
+### 4. Output
+
+- Generation scenario: output directly into the conversation — **do not save a file** (unless the user explicitly asks to "output to a file").
+- Translation scenario: `Verdict: PASS` → write the result to a file.
+- Either scenario: `Verdict: CUT` → fix (at most 1 retry); a second CUT → annotate `[??]` and include it in the output.

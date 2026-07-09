@@ -11,8 +11,8 @@ _SKILLS = Path(__file__).resolve().parents[3] / "main" / "ist_core" / "skills"
 
 
 def test_review_verification_is_fork_skill():
-    """review-verification 是 fork skill，引用 review-verifier subagent。"""
-    fm = read_skill_frontmatter(_SKILLS / "review-verification" / "SKILL.md")
+    """review-verifier 是 fork skill，引用 review-verifier subagent。"""
+    fm = read_skill_frontmatter(_SKILLS / "review-verifier" / "SKILL.md")
     assert fm is not None
     assert fm.get("context") == "fork"
     assert fm.get("agent") == "review-verifier"
@@ -23,9 +23,9 @@ def test_review_verification_listed_to_model():
     """对齐标准：user-invocable: false 仍进模型 listing。
 
     "仅本智能体可调用此 skill" — 模型可见，用户菜单不可见。
-    这样 test-list-review Step 7 引导模型调 review-verification 时，模型知道这个 skill存在。
+    这样 test-list-review Step 7 引导模型调 review-verifier 时，模型知道这个 skill存在。
     """
-    fm = read_skill_frontmatter(_SKILLS / "review-verification" / "SKILL.md")
+    fm = read_skill_frontmatter(_SKILLS / "review-verifier" / "SKILL.md")
     meta = {
         "context": fm.get("context", "inline"),
         "user-invocable": str(fm.get("user-invocable", "true")),
@@ -64,8 +64,8 @@ def test_listing_allows_fork_without_disable():
 
 
 def test_no_legacy_extension_fields():
-    """确保 review-verification 不含已废弃的 IST-Core 扩展字段。"""
-    fm = read_skill_frontmatter(_SKILLS / "review-verification" / "SKILL.md")
+    """确保 review-verifier 不含已废弃的 IST-Core 扩展字段。"""
+    fm = read_skill_frontmatter(_SKILLS / "review-verifier" / "SKILL.md")
     assert "depends-on" not in fm, "depends-on 已被 skillOverrides 替代"
     assert "inherit-parent-prompt" not in fm, "subagent 已有完整 system_prompt"
     assert "recursion-limit" not in fm, "已移到 subagent 配置"

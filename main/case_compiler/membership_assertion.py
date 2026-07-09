@@ -73,13 +73,13 @@ def validate_membership(ips, present) -> str | None:
     - present 必须是 bool（这次该不该命中，由 agent 判断，不是本模块猜）。
     """
     if not isinstance(ips, list) or not ips:
-        return f"命中归属断言 ips（成员 IP 集合）须为非空列表，实际 {ips!r}"
+        return f"Membership assertion ips (member IP set) must be a non-empty list, got {ips!r}"
     for i, ip in enumerate(ips):
         if not isinstance(ip, str) or not _looks_like_ip(ip):
-            return (f"ips[{i}]={ip!r} 不像一个 IP 地址字面量"
-                    "（应是该 pool 配置里的成员 IP，不是 pool 名/变量名）")
+            return (f"ips[{i}]={ip!r} does not look like an IP address literal"
+                    " (should be a member IP from that pool's configuration, not a pool name/variable name)")
     if not isinstance(present, bool):
-        return f"命中归属断言 present（这次该不该命中该成员集合）须为 bool，实际 {present!r}"
+        return f"Membership assertion present (whether this observation should hit the member set) must be a bool, got {present!r}"
     return None
 
 

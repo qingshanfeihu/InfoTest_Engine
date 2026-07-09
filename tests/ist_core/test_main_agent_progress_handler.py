@@ -38,7 +38,7 @@ def test_on_tool_error_clears_task_parent_on_main_agent_fork_skill() -> None:
     run_id = "run-fork-err"
     h.on_tool_start(
         {"name": "invoke_skill"},
-        '{"skill": "review-verification"}',
+        '{"skill": "review-verifier"}',
         run_id=run_id,
         metadata={"lc_agent_name": "main_agent"},
     )

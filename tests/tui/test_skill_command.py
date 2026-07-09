@@ -81,11 +81,11 @@ class TestCmdSkill:
         """裸 /skill 等同 all，显示全部 skill。"""
         mock_scan.return_value = [
             {"name": "test-list-review", "context": "inline"},
-            {"name": "review-verification", "context": "fork"},
+            {"name": "review-verifier", "context": "fork"},
         ]
         result = cmd_skill("", _FakeApp())
         assert "test-list-review" in result.text
-        assert "review-verification" in result.text
+        assert "review-verifier" in result.text
         assert "[on]" in result.text
 
     @patch("main.ist_core.tui.skill_command._scan_all_skills")

@@ -1,6 +1,6 @@
-# SSH 执行模板
+# SSH execution template
 
-## 方式一：run_python + paramiko（推荐）
+## Method 1: run_python + paramiko (recommended)
 
 ```python
 import paramiko, time, re, json
@@ -57,14 +57,9 @@ send_cmd('enable', 2.0)
 ssh.close()
 ```
 
-## 方式二：ask_user 手动
+## Method 2: manual via ask_user
 
 ```
 ssh -o StrictHostKeyChecking=no <user>@<IP>
 # 进入 enable 后执行命令，贴回输出
 ```
-
-## 参考实现
-
-见 `scripts/apv_ssh_client.py`，封装了 `connect()` / `execute_show_commands()` / `execute_config_commands()`。
-环境变量：`APV_DEVICE_IP`（默认 172.16.34.70）、`APV_USERNAME`、`APV_PASSWORD`、`APV_SSH_PORT`。

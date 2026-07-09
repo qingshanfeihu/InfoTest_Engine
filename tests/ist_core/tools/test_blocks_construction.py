@@ -164,7 +164,7 @@ def test_invalid_blocks_rejected_with_actionable_error():
     for bad, needle in [
         ([{"kind": "CAPTURE_COMPARE", "host": "r", "capture_cmd": "d", "relation": "equal"}], "same"),
         ([{"kind": "OBSERVE_ASSERT", "host": "r", "cmd": "d", "asserts": []}], "OBSERVE_ONLY"),
-        ([{"kind": "CONFIG", "cmds": "sdns on"}], "列表"),
+        ([{"kind": "CONFIG", "cmds": "sdns on"}], "list"),
         ([{"kind": "SLEEP", "seconds": 0}], "1..300"),
         ([{"kind": "WAT"}], "kind"),
     ]:
@@ -185,4 +185,4 @@ def test_provenance_expanded_per_block():
     assert prov_out[0]["layer"] == "G" and all(p["layer"] == "V" for p in prov_out[1:])
     # 数量不匹配 → 拒
     _, _, err2 = expand_blocks(blocks, prov[:1])
-    assert err2 and "等于" in err2
+    assert err2 and "equal" in err2

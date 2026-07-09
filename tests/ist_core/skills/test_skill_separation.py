@@ -1,7 +1,7 @@
 """Skill 内容分层（对齐 Anthropic 官方 fork skill 设计）：
 
 - skills/test-list-review/SKILL.md   → inline skill，主 agent 工作流
-- skills/review-verification/SKILL.md → fork skill 任务定义（含 $ARGUMENTS）
+- skills/review-verifier/SKILL.md → fork skill 任务定义（含 $ARGUMENTS）
 - agents/review-verifier.md           → subagent 容器（system_prompt + tools + model）
 """
 
@@ -25,7 +25,7 @@ def test_review_verification_skill_is_thin_task_definition():
     """fork skill SKILL.md 只是任务定义，含 $ARGUMENTS 占位符；
     所有 verifier 行为约束已移到 agents/review-verifier.md。
     """
-    text = (_SKILLS / "review-verification" / "SKILL.md").read_text(encoding="utf-8")
+    text = (_SKILLS / "review-verifier" / "SKILL.md").read_text(encoding="utf-8")
     assert "context: fork" in text
     assert "agent: review-verifier" in text
     assert "user-invocable: false" in text

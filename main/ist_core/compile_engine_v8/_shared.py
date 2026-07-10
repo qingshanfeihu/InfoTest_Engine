@@ -48,6 +48,26 @@ def view(state: dict, fs: list[dict] | None = None) -> dict:
     return V.batch_view(fs if fs is not None else load_facts(state), manifest(state))
 
 
+def case_rows(aid: str) -> list[dict]:
+    """卷面行(未通过卷合并用;失败返回空,判定保守)。"""
+    from main.ist_core.tools.device.precedent_tools import _load_case_rows as _l
+    p = outputs_root() / aid / "case.xlsx"
+    try:
+        return _l(str(p)) if p.is_file() else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def emit_summary(state: dict, summary: dict) -> None:
+    """收口卡事件(TUI §11.2:「交付结果」卡一屏讲完;字段已是渲染层人话)。"""
+    try:
+        from main.ist_core.skills.loader import _fork_emit_event
+        _fork_emit_event({"event": "engine_summary",
+                          "run": str(state.get("out_name") or "engine"), **summary})
+    except Exception:  # noqa: BLE001
+        logger.debug("engine summary emit 失败", exc_info=True)
+
+
 def cap_waiting(fs: list[dict]) -> list[str]:
     """轮次封顶待授权案:cap_reached 事实存在且该轮 cap 问题未获 decision(§11.7 资源问询)。"""
     out = []

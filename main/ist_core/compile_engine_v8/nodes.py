@@ -69,6 +69,32 @@ def prep(state: dict) -> dict:
     st = {**state, "out_name": out_name,
           "manifest_ref": str(manifest.relative_to(sh.project_root())),
           "facts_ref": str((mdir / "facts.jsonl").relative_to(sh.project_root()))}
+    # §11.9 续跑还原:上批 closing 把 per-case 目录收进 delivered/(通过)与
+    # unfinished/(未决),新批开工全部挪回原路径——panel ref/旧卷 history/凭证/
+    # 通过案 xlsx(挂起恢复后终验重组全卷要用)的读路径全部恢复;不还原=断链。
+    import shutil
+    restored = 0
+    for sub in ("unfinished", "delivered"):
+        box = mdir / sub
+        if not box.is_dir():
+            continue
+        for src in sorted(box.iterdir()):
+            if not src.is_dir():
+                continue
+            dst = sh.outputs_root() / src.name
+            if dst.exists():
+                continue   # 原路径已有新产物(不覆盖,新的为准)
+            try:
+                shutil.move(str(src), str(dst))
+                restored += 1
+            except Exception:  # noqa: BLE001
+                logger.debug("%s 还原失败 %s", sub, src.name, exc_info=True)
+        try:
+            box.rmdir()   # 空了才删得掉
+        except OSError:
+            pass
+    if restored:
+        sh.emit(f"续跑还原:{restored} 个案目录从存档取回")
     fs = sh.load_facts(st)
     # 批次锚:每次图从 START 重入记一条(seq 单调;interrupt-resume 不经此处)。
     # 挂起案的「新批恢复问询」以「最后 suspended 之后有 run_start」为触发——
@@ -834,8 +860,41 @@ def ask_contradiction(state: dict) -> dict:
 
 
 # --------------------------------------------------------------- [mech] closing
+def _archive_unsuccessful(aids: list[str], out_name: str) -> str | None:
+    """未通过卷 xlsx(V6 契约迁入):gate-free 合并全部非交付案 → <批名>/unsuccessful_cases.xlsx。"""
+    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit_merged
+    cases = []
+    for aid in aids:
+        rows = sh.case_rows(aid)
+        if rows:
+            cases.append({"autoid": aid, "steps": rows})
+    if not cases:
+        return None
+    arch = f"{out_name}_unsuccessful"
+    try:
+        compile_emit_merged.func(cases_json=json.dumps(cases, ensure_ascii=False),
+                                 out_name=arch)
+    except Exception:  # noqa: BLE001
+        logger.debug("未通过卷合并失败", exc_info=True)
+        return None
+    src = sh.outputs_root() / arch / "case.xlsx"
+    if not src.is_file():
+        return None
+    import shutil
+    dst = sh.outputs_root() / out_name / "unsuccessful_cases.xlsx"
+    try:
+        shutil.move(str(src), str(dst))
+        shutil.rmtree(sh.outputs_root() / arch, ignore_errors=True)
+        return str(dst)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def closing(state: dict) -> dict:
-    """收口:uncertain 观察入库(自愈环)+报告(视图即真相)+子集卷清理+床账收尾。"""
+    """收口(§11.2/11.5/11.9):uncertain 入库(自愈环)→ 机读报告 → 判定式人话双报告
+    (零 LLM,leak_scan 门)→ 未通过卷 xlsx → §11.9 清理(通过案目录删/未决案挪
+    unfinished/ 供续跑/facts 永久保留)→ 交付对账断言 → 收口卡。"""
+    from main.ist_core.compile_engine_v8 import render as RD
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
     out_name = str(state.get("out_name"))
@@ -875,29 +934,80 @@ def closing(state: dict) -> dict:
     }
     (mdir / "engine_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    _delivery_md(mdir, report)
-    # 子集卷清理(交付物之外的运行中间目录)
+
+    # 判定式人话双报告(同一 fold;panel/evidence 从事实引用回读;queues=D 片接缝)
+    m = sh.manifest(state)
+    panels: dict[str, dict] = {}
+    evidence: dict[str, str] = {}
+    for aid in others:
+        mine = [f for f in fs if f.get("aid") == aid]
+        panel, _ = _latest_panel(mine, aid)
+        if panel:
+            panels[aid] = panel
+        last = F.latest_verdict(mine, aid)
+        if last and last.get("result") == "fail":
+            data = sh.read_json(sh.project_root() / str(last.get("evidence_ref") or ""), []) or []
+            rec = next((r for r in data if str(r.get("autoid")) == aid), {})
+            evidence[aid] = str(rec.get("device_context") or "")
+    queues: dict[str, list] = {}
+    dmd = RD.render_delivery_report(report, fs, m, queues, panels)
+    (mdir / "delivery_report.md").write_text(dmd, encoding="utf-8")
+    deliver_files = ["case.xlsx", "delivery_report.md", "engine_report.json", "facts.jsonl"]
+    if others:
+        umd = RD.render_unsuccessful_md(report, fs, m, queues, evidence, panels)
+        (mdir / "unsuccessful_cases.md").write_text(umd, encoding="utf-8")
+        if _archive_unsuccessful(sorted(others), out_name):
+            deliver_files.append("unsuccessful_cases.xlsx")
+        deliver_files.append("unsuccessful_cases.md")
+        leaks = RD.leak_scan(dmd) + RD.leak_scan(umd)
+        if leaks:
+            logger.warning("报告术语泄漏(渲染门):%s", sorted(set(leaks))[:8])
+
+    # §11.9 清理:per-case 目录全部收进批目录(outputs/ 根不留散目录)——
+    # 通过案挪 delivered/(挂起案恢复后终验重组全卷时,merge 仍需其 xlsx,删=断链)、
+    # 未通过/挂起案挪 unfinished/(续跑输入);两者 prep 开工都还原。
+    # 中间件 manifest/last_run/__sub* 删;facts.jsonl 永久保留。
     import shutil
+
+    def _stash(aids, sub: str) -> None:
+        box = mdir / sub
+        for aid in aids:
+            src = sh.outputs_root() / aid
+            if not src.is_dir():
+                continue
+            box.mkdir(exist_ok=True)
+            dst = box / aid
+            if dst.exists():
+                shutil.rmtree(dst, ignore_errors=True)
+            try:
+                shutil.move(str(src), str(dst))
+            except Exception:  # noqa: BLE001
+                logger.debug("%s 挪移失败 %s", sub, aid, exc_info=True)
+
     for d in sh.outputs_root().glob(f"{out_name}__sub*"):
         shutil.rmtree(d, ignore_errors=True)
+    _stash(deliverable, "delivered")
+    _stash(others, "unfinished")
+    for name in ("manifest.json", "last_run.json"):
+        try:
+            (mdir / name).unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 交付对账断言(§11.9:报告说有=盘上真有)+ 收口卡
+    missing = [f for f in deliver_files if not (mdir / f).is_file()]
+    if missing:
+        logger.warning("交付物清单与磁盘不一致:缺 %s", missing)
+    sh.emit_summary(state, {
+        "outcome": report["outcome"],
+        "ok": len(deliverable), "total": len(vw["cases"]),
+        "labels": [{"autoid": a, "text": RD.STATUS_CN.get(str(c["status"]), str(c["status"]))}
+                   for a, c in sorted(others.items())],
+        "report": f"workspace/outputs/{out_name}/delivery_report.md",
+        "files": deliver_files, "missing": missing,
+    })
     sh.emit(f"交付:{len(deliverable)}/{len(vw['cases'])} 可交付"
-            + (f",{len(others)} 案带标注" if others else ""))
+            + (f",{len(others)} 案带标注" if others else "")
+            + f" · 交付物 {len(deliver_files)} 件已核对")
     sh.emit_tick(state, "closing", fs)
     return {"phase_status": "done", **sh.counts_update(state, fs)}
-
-
-def _delivery_md(mdir: Path, report: dict) -> None:
-    lines = [f"# 交付报告 — {mdir.name}(V8)",
-             f"> 结果 **{report['outcome']}** · 可交付 {report['totals']['deliverable']}"
-             f"/{report['totals']['cases']} · volume={report.get('volume')}",
-             ""]
-    if report.get("moved_tail"):
-        lines.append(f"- 持久化家族排卷尾(通道①声明):{', '.join(report['moved_tail'])}")
-    if report.get("coexist_violations"):
-        lines.append(f"- ⚠ 通道④共存违例:{json.dumps(report['coexist_violations'], ensure_ascii=False)[:400]}")
-    bad = {a: c for a, c in report["cases"].items() if c["status"] != "deliverable"}
-    if bad:
-        lines.append("\n## 需人工处置")
-        for a, c in sorted(bad.items()):
-            lines.append(f"- …{a[-6:]} `{c['status']}` 轮次{c['rounds']} 矛盾{c['contradictions']}")
-    (mdir / "delivery_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

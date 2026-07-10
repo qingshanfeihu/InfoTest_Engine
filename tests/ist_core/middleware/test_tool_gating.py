@@ -65,6 +65,8 @@ def test_fresh_conversation_hides_gated_groups(monkeypatch):
     assert "fs_read" in names and "invoke_skill" in names and "kb_footprint" in names
     assert not any(n.startswith("compile_") or n.startswith("dev_") or n.startswith("submit_")
                    for n in names), f"gated 工具泄漏: {names}"
+    # 意图检索随 compile 激活(§11.11 构件二),不常驻——常驻曾顶破 35k schema 预算
+    assert "kb_intent_search" not in names
 
 
 def test_invoke_skill_activates_mapped_groups(monkeypatch):
@@ -74,6 +76,7 @@ def test_invoke_skill_activates_mapped_groups(monkeypatch):
     ])
     assert "compile_prep" in names and "compile_fanout" in names
     assert "dev_run_batch_digest" in names   # ist_compile → compile+device
+    assert "kb_intent_search" in names       # 意图检索随 compile 组到位
 
 
 def test_review_skill_stays_base_only(monkeypatch):

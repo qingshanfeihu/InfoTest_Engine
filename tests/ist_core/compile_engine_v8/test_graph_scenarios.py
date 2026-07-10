@@ -226,5 +226,9 @@ def test_s4_incremental_recompile_goes_subset_then_delivery(rig):
     assert kinds[0] == ("delivery", 3)
     assert ("subset", 1) in kinds
     assert kinds[-1] == ("delivery", 3)
-    # 重编前旧卷存档(V6 archive 职责迁入 author 的回归)
-    assert (rig["outputs"] / c2 / "history" / "case.r1.xlsx").is_file()
+    # §11.9 清理契约(C 片):per-case 目录收进批目录(通过案 delivered/ 存档,
+    # 含重编 history——挂起恢复后终验重组全卷仍可用);outputs/ 根不留散目录
+    assert not (rig["outputs"] / c2).exists()
+    assert (rig["outputs"] / rig["out_name"] / "delivered" / c2
+            / "history" / "case.r1.xlsx").is_file()
+    assert (rig["outputs"] / rig["out_name"] / "delivery_report.md").is_file()

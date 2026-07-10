@@ -41,6 +41,10 @@ _GATED_PREFIX_GROUPS: dict[str, str] = {
     "compile_": "compile",
     "submit_": "compile",
     "dev_": "device",
+    # 精确名条目(startswith 对自身恒真):kb_ 前缀本属基础组,但意图检索只服务
+    # 编译链的 ask 前置(§11.11 构件二"随 compile 激活"),常驻会顶破基础模式
+    # schema 预算(35k 门)
+    "kb_intent_search": "compile",
 }
 
 # skill → 激活组。映射对象是"main 编排该 skill 时自己要用的工具域",宁多勿断

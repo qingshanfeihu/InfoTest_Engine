@@ -317,7 +317,7 @@ ask_contradiction 未获答 → 不再直接 closing，改经 **attribute(final 
 - footer 九态聚合词表复核一遍人话化；
 - 全程零英文零哈希；验收用 cmux 抓屏 + 以本轮 yzg facts.jsonl 为金标准输入回放渲染。
 
-### 11.7 判定式输出：修法归理论，取舍归用户（两轮对抗定形，2026-07-10）
+### 11.7 判定式输出：修法归理论，取舍归用户（两轮对抗定形，2026-07-10；问询形态被 §11.11 终版收敛）
 
 初稿「处置→通用三选项」与二稿「菜单生成器」同病：把**导出问题当选择问题**。668015 实判：
 唯一正确修法=案尾自清理+保持卷尾（复合施加，THEORY 互扰消解推论）；「接受单跑」是量词偷换
@@ -382,7 +382,7 @@ ask_contradiction 未获答 → 不再直接 closing，改经 **attribute(final 
 
 ### 11.10 重做切片（2026-07-10 第5轮后定形；¥96 整批回退的教训=切薄逐片实弹验收）
 
-§11 首次实施(f724ba5c)因整批过大回退(25275ea8);理论与设计结论不变,实施改四片,
+§11 首次实施(f724ba5c)因整批过大回退(25275ea8);理论与设计结论不变(问询子系统按 §11.11 终版),实施改四片,
 每片:建 → 金标准场景 → 小批真机 → 过了再下一片。顺序 A→B→D→C。
 
 - **A 问询权**(决策权还给用户;第5轮三案实证:归因器自判 env_blocked 终结 655173/
@@ -392,3 +392,72 @@ ask_contradiction 未获答 → 不再直接 closing，改经 **attribute(final 
 - **B 修法队列**:remedies 导出队列+authored.remedy 戳+队列空才准问。
 - **D 归因增强**:user_note/doc_quote/device_quote 三字段+通道知识注入 brief。
 - **C 判定式渲染**:人话双报告/未通过卷/收口卡/leak_scan+§11.9 交付清理契约。
+
+### 11.11 Ask 子系统终版设计（2026-07-10 定稿 = THEORY §2.6 十参数 × 调研四定案）
+
+依据:THEORY §2.6(is/ought 分界/K_ought 检索余项/收敛律/采信规则)+RESEARCH_ask_design_survey
+(双源模式+run5 数据四裁决:机械采信/attributor 顺产/adjudications 新库/strict 工具弃
+response_format——mimo 实测 response_format 双形态不守约,strict 工具双形态满分且与思考兼容)。
+
+**构件一:`submit_ask_panel` 工具**(strict=True 单点开;仅 attributor 白名单)
+AskPanel schema(扁平/全 required/additionalProperties:false/enum 小写,全局一版):
+```
+{intent_signature: str,                          ← 判例键之一(语义 slug 素材)
+ conflict_shape: enum{manual_vs_device, expected_vs_observed,
+                      method_vs_implementation, ordering_vs_persistence, other},
+ version_family: str,
+ sides: [{source_ref: str, quote: str, anchor: str|null}],   ← ≥2;quote 过 verbatim 子串门
+        (device 侧对 last_run 原文校验,doc 侧对源文件校验——poka-yoke,错误信息点名字段+
+         期望形态+最近似匹配,模型自纠)
+ retrieval_receipt: [{slug: str, outcome: enum{miss, hit_conflicting, hit_adopted_blocked}}],
+        (≥1 必填——空手问在 schema 层不可能;B 片前允许 slug="manual_declared" outcome=miss)
+ hypothesis: str,                                ← 引擎的理解 Z(中文;唯一自由段)
+ ask: str}                                       ← 一句中文问句
+```
+行为:校验→落盘 outputs/<aid>/ask_panel.json→引擎收割为 ask_panel 事实。三字段归并声明:
+原 D 片的 doc_quote/device_quote 即 sides 两侧,user_note 即 hypothesis——D 片并入本件,不另做。
+
+**构件二:`kb_intent_search` 工具**(通用注册,tool-gating 随 compile 激活;B 片)
+参数 (query, source_type: enum{spec, precedent_case, bug_adjudication, decision, all},
+version_family: str|null, response_format: enum{concise, detailed})。fan-in:spec→FTS5 新索引
+(KMS product md 1720 份,复用 kb_memory_search CJK bigram 底座);precedent_case→compile_precedent
+委托;bug_adjudication→kb_bug_search 委托;decision→knowledge/adjudications/ FTS5。返回 concise=
+slug+title+命中引文+anchor(version,ts,lineage),截断附收窄指引;description 写明何时不该用
+(常规编写不用;同形判据命中/verifiability 欠定才用——A9 触发门控)。
+
+**构件三:`kb_adjudication_write`**(引擎专用,不进任何 fork 白名单——A5 人源专属;B 片)
+(key{intent_signature, conflict_shape, version_family}, ruling 中文, evidence_refs)→渲染 md
+(frontmatter=key+anchor{version=device_build, ts, lineage:"user_proxy"})→验证器(schema/slug
+合法/同键碰撞→追加 revision 段)→落 knowledge/adjudications/<slug>.md→FTS5 reconcile。
+plan-validate-execute;收敛律 eval:同键第二批零 ask。
+
+**构件四:attributor 孔职扩展**(A 片)
+判 ought-欠定(同形判据命中:两投影冲突且选边改写某方意图)时→(B 片起先 kb_intent_search)→
+submit_ask_panel;VERDICT 尾块增 `ASK: panel|none`。判断仍自由,落账仍 strict 工具。
+
+**构件五:引擎机械采信**(attribute 收割后,B 片;run5 漂移数据裁定不交孔)
+三条件:命中记载间无互斥 ∧ 与实机不冲突(记载期望形态 vs 最新回显签名;不可比=未知→不采)
+∧ 填充型(不与 D 文本/既有 E 语义相抵)→ adopted 事实(带 slug 引用,不写回)+按记载重编;
+任一不满足→panel 进 ask 目标。
+
+**构件六:问询节点终形**(A 片;节点名 ask_contradiction 保留——拓扑门三方一致)
+目标 = 未答 ask_panel ∪ cap_reached 二分(有 panel→呈报之;无→escalated 工程故障呈报,附证据)
+∪ contra≥2(题面呈报式) ∪ env_blocked 待确认。题面渲染自 panel(差异呈报+已检索+理解 Z);
+options=[确认,按此继续 / 纠正(Other 自由输入=CorrectedError 语义,feedback 事实注入重编 brief)
+/ 确认产品缺陷(走候选单)];decision 存小写 token confirm|correct|defect;挂起/停止=TUI 常驻
+特权(自由输入兜底),不作引擎选项。confirm→(B 片)kb_adjudication_write。
+安全件(MiMo-Code 移植):_PENDING teardown fail-all;非交互/超时→自动「挂起」带可行动反馈。
+
+**eval 断言(eval-first,随片落测试)**:①空手问 schema 级不可能;②quote 非子串被拒且错误
+信息含最近似;③panel 未答时 cap 必呈报之(二分);④adopted 不触发写回;⑤(B 片)同键第二批
+零 ask(金标准回放);⑥挂起案跨批续跑恢复。
+
+**切片重排(D 并入 A)**:A=构件一+四+六+既有 WIP 收尾 → B=构件二+三+五 → C=渲染层(11.2-11.9)。
+
+**A 片 WIP 现状**(工作区未提交;compact 后由 git status+本节恢复上下文):已改 views
+(S_SUSPENDED+env_blocked 终态收窄到用户来源 _user_sourced)/_shared(cap_waiting/granted_rounds/
+env_confirm_waiting/ask_targets/suspended 计数桶)/nodes(author cap_reached 资源化+attribute
+已归因跳过+ask_contradiction 三类题面初版+env「继续」开隔离复跑处方)/graph(_after_author 四路:
+补 ask 边与 rerun 处方必达 merge——668030 路由洞)。待重整:ask_targets 加 panel 目标源;
+题面从三类内联改 panel 渲染;engine_tool._bridge 未改待写;submit_ask_panel 工具未建;测试未跑。
+

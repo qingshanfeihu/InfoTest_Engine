@@ -38,6 +38,9 @@ SIGNALS = frozenset({
     "escalated",
     "awaiting_user",
     "user_decided",
+    # V8(2026-07-10 验收期转正):终验反证已交付态 / 对账兜底(健康运行恒零)
+    "final_verify_failed",
+    "verdict_unconsumed",
 })
 
 _LOG = Path(__file__).resolve().parents[4] / "runtime" / "logs" / "k_signals.jsonl"

@@ -55,7 +55,7 @@ def drill_env(tmp_path, monkeypatch):
     fp_root = tmp_path / "footprints"
     fp_root.mkdir()
     import main.knowledge_paths as kp
-    from main.ist_core.compile_engine.nodes import _shared as sh
+    from main.ist_core.compile_engine_v8 import _shared as sh
 
     monkeypatch.setattr(kp, "KNOWLEDGE_FOOTPRINTS", fp_root)
     monkeypatch.setattr(sh, "outputs_root", lambda: outputs)
@@ -77,7 +77,7 @@ def _ingest(outputs: Path, aid: str, cands: list[dict], led=None):
     (outputs / aid).mkdir(exist_ok=True)
     (outputs / aid / "behavior_candidates.json").write_text(
         json.dumps(cands, ensure_ascii=False), encoding="utf-8")
-    from main.ist_core.compile_engine.nodes.closing import _ingest_uncertain_observations
+    from main.ist_core.compile_engine_v8.uncertain import _ingest_uncertain_observations
     _ingest_uncertain_observations(led or _StubLedger([aid]))
 
 

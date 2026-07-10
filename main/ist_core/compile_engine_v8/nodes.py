@@ -135,7 +135,20 @@ def author(state: dict) -> dict:
 
     def _one(aid: str) -> None:
         mine = [f for f in fs if f.get("aid") == aid]
-        eff = "max" if F.rounds_used(mine, aid) >= 1 else ""   # 首败即升
+        rn = F.rounds_used(mine, aid)
+        eff = "max" if rn >= 1 else ""   # 首败即升
+        if rn >= 1:   # 重编前存档旧卷(briefs 的 prior_config_rolls 数据源;V6 存档职责迁入)
+            try:
+                import shutil
+                old = sh.outputs_root() / aid / "case.xlsx"
+                if old.is_file():
+                    hd = sh.outputs_root() / aid / "history"
+                    hd.mkdir(exist_ok=True)
+                    dst = hd / f"case.r{rn}.xlsx"
+                    if not dst.exists():
+                        shutil.copyfile(old, dst)
+            except Exception:  # noqa: BLE001
+                logger.debug("旧卷存档失败 %s", aid, exc_info=True)
         out = _call_fork(executor, "compile-worker", BR.build_brief(aid, state, fs),
                          tag=f"engine:{aid[-6:]}", effort=eff)
         xlsx = sh.outputs_root() / aid / "case.xlsx"
@@ -181,7 +194,7 @@ def ask_decision(state: dict) -> dict:
                            and d.get("question_id") == f.get("question_id") for d in fs)]
     if not pending:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
-    from main.ist_core.compile_engine.questions import load_ledgers, build_questions  # 数据模板复用
+    from main.ist_core.compile_engine_v8.questions import load_ledgers, build_questions
     aids = [str(f.get("aid")) for f in pending]
     qs = build_questions(load_ledgers(sh.outputs_root(), aids))
     answers: dict[str, str] = {}
@@ -364,7 +377,10 @@ def reconcile(state: dict) -> dict:
                 wb_facts.append({"ev": "rollback", "aid": aid, "of": "writeback",
                                  "reason": "contradicted_at_delivery",
                                  "voucher_run": last.get("run_id")})
-            sh.signal("final_verify_failed", aid, volume=volume)
+            had_pass = any(f.get("ev") == "verdict" and f.get("aid") == aid
+                           and f.get("result") == "pass" for f in fs2)
+            if had_pass:
+                sh.signal("final_verify_failed", aid, volume=volume)
     if wb_facts:
         sh.append(state, wb_facts)
     fs3 = sh.load_facts(state)
@@ -389,6 +405,13 @@ def _writeback_one(aid: str, lr_ref: str) -> None:
             on_device_passed=True)
     except Exception:  # noqa: BLE001
         logger.debug("footprint 写回失败 %s", aid, exc_info=True)
+    try:  # 行为知识晋升(V6 writeback 三连的第三件,验收后补齐)
+        from main.ist_core.compile_engine_v8.uncertain import _promote_behavior_candidates
+        class _NoLed:
+            data = {"audit": {"notes": []}}
+        _promote_behavior_candidates(aid, _NoLed())
+    except Exception:  # noqa: BLE001
+        logger.debug("行为晋升失败 %s", aid, exc_info=True)
 
 
 def _rollback_one(aid: str) -> None:
@@ -532,7 +555,7 @@ def closing(state: dict) -> dict:
     mdir = sh.outputs_root() / out_name
     # 自愈环:fail 终态/升级案观察 uncertain 入库(复用 V6 已验收的入库器)
     try:
-        from main.ist_core.compile_engine.nodes.closing import _ingest_uncertain_observations
+        from main.ist_core.compile_engine_v8.uncertain import _ingest_uncertain_observations
 
         class _Led:  # 适配器:入库器只用 in_state
             def in_state(self, *states):

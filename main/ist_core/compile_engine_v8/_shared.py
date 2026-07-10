@@ -95,13 +95,27 @@ def emit(text: str) -> None:
 
 
 def emit_tick(state: dict, phase: str, fs: list[dict] | None = None) -> None:
+    """引擎聚合 → events.jsonl(TUI 契约:V6 定稿的九态词汇,V8 视图标签在此翻译——
+    显示契约与引擎内部词汇解耦,前端零改动消费)。"""
     try:
         from main.ist_core.skills.loader import _fork_emit_event
         vw = view(state, fs)
+        c = vw["counts"]
+        counts = {
+            "pending": c.get("pending", 0),
+            "dispatched": 0,
+            "produced": c.get("authored", 0) + c.get("subset_verified", 0),
+            "pending_decision": c.get("awaiting_user", 0),
+            "awaiting_user": 0,
+            "passed": c.get("deliverable", 0),
+            "failed_active": c.get("failed", 0) + c.get("contradicted", 0),
+            "failed_terminal": c.get("failed_terminal", 0),
+            "escalated": c.get("escalated", 0),
+        }
         _fork_emit_event({"event": "engine_tick",
                           "run": str(state.get("out_name") or "engine"),
                           "phase": phase, "round": int(state.get("vol_seq") or 0),
-                          "wave": 0, "counts": vw["counts"],
+                          "wave": 0, "counts": counts,
                           "total": len(vw["cases"])})
     except Exception:  # noqa: BLE001
         logger.debug("engine tick emit 失败", exc_info=True)

@@ -610,7 +610,7 @@ class MessageReducer:
                     "wave": rec.get("wave") or 0,
                     "counts": dict(rec.get("counts") or {}),
                     "total": rec.get("total") or 0,
-                    "status": "done" if rec.get("phase") == "report" else "running",
+                    "status": "done" if rec.get("phase") in ("report", "closing") else "running",
                     "last_event_ts": rec.get("ts"),
                 })
             elif ev == "progress":

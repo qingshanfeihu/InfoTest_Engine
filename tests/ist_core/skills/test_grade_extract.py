@@ -365,13 +365,6 @@ def test_cname_inline_variant_and_bare_name_line():
     assert dg.dangling_references(closure, ["sdns pool cname name cnp"]) == []
 
 
-def test_cname_suspect_not_rework_eligible():
-    """12/13 真机 PASS 卷同形(委托外部 DNS 是常态)——该 suspect 无 rework 触发资格,
-    只走 fail 路径注入(compile_phase._PROBE_NO_REWORK)。防告警疲劳+派发风暴。"""
-    from main.ist_core.compile_engine.nodes.compile_phase import _PROBE_NO_REWORK
-    assert "cname_member_not_local_host_suspect" in _PROBE_NO_REWORK
-
-
 # ── P2 三层架构:文法数据加载 + 判例 note(2026-07-08) ─────────────────────────────
 
 def test_domain_grammar_loads_and_shapes():

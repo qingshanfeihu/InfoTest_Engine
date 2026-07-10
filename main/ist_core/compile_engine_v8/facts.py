@@ -87,7 +87,10 @@ def idem_key(f: dict) -> tuple:
     if ev == "authored":
         return (ev, aid, int(f.get("round") or 0))
     if ev == "attribution":
-        return (ev, aid, int(f.get("round") or 0))
+        # 按 run_id 键控(验收实证:同轮二次归因曾被 (aid,round) 键静默去重);
+        # 无 run_id 的旧形态退回轮键
+        rid = str(f.get("run_id") or "")
+        return (ev, aid, rid) if rid else (ev, aid, int(f.get("round") or 0))
     if ev == "decision":
         return (ev, aid, str(f.get("question_id") or f.get("question", ""))[:120])
     if ev in ("writeback", "rollback"):
@@ -175,18 +178,20 @@ def transient_recur(facts: list[dict], aid: str) -> bool:
 
 
 def contradictions(facts: list[dict], aid: str) -> int:
-    """矛盾计数(第三条 ask 边的输入):同一卷面上 pass@subset 之后出现 fail@delivery 的次数。
+    """矛盾计数(第三条 ask 边的输入):同一卷面上「先 pass 后 fail@delivery」的次数。
 
-    卷面变更(重编)重置矛盾窗口——新卷面的矛盾从零计(旧矛盾史仍在流里可查)。
+    两种翻转形态都计(V8 验收实证):①pass@subset → fail@delivery(单跑过/整卷挂,互扰);
+    ②pass@delivery → fail@delivery(已交付态被后续终验反证——668015 形态,非确定互扰)。
+    卷面变更(重编)重置窗口——新卷面从零计(旧矛盾史仍在流里可查)。
     """
     n = 0
-    passed_subset_artifacts: set[str] = set()
+    passed_artifacts: set[str] = set()
     for f in _facts_of(facts, aid, "verdict"):
         art = str(f.get("artifact"))
-        if f.get("ctx") == CTX_SUBSET and f.get("result") == "pass":
-            passed_subset_artifacts.add(art)
+        if f.get("result") == "pass":
+            passed_artifacts.add(art)
         elif f.get("ctx") == CTX_DELIVERY and f.get("result") == "fail":
-            if art in passed_subset_artifacts:
+            if art in passed_artifacts:
                 n += 1
     return n
 

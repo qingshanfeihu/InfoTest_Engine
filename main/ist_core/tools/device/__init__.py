@@ -5,7 +5,8 @@ from main.ist_core.tools.device.restapi import dev_rest
 from main.ist_core.tools.device.run_case import dev_run_case, dev_probe, dev_help, dev_init_device
 from main.ist_core.tools.device.emit_xlsx_tool import compile_emit, compile_emit_merged
 from main.ist_core.tools.device.verifiability_tool import compile_check_verifiability, compile_user_decision
-from main.ist_core.tools.device.engine_tool import compile_engine_run
+# V8 验收切换(2026-07-10):出口指向 V8;V6 engine_tool 保留在盘待验收后删除
+from main.ist_core.compile_engine_v8.engine_tool import compile_engine_run
 from main.ist_core.tools.device.batch_tools import compile_fanout, dev_run_batch, dev_run_batch_digest
 from main.ist_core.tools.device.compile_prep import compile_prep
 from main.ist_core.tools.device.fail_attribution import compile_attribute, submit_attribution

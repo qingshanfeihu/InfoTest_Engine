@@ -130,7 +130,9 @@ def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
         out = probe_fn(str(spec.get("cmd") or ""))
         report["probes"][name] = (out or "")[:400]
         body = "\n".join(ln for ln in (out or "").splitlines()
-                         if ln.strip() and not ln.startswith(("===", "---", "command:", "status:"))
+                         if ln.strip()
+                         and not ln.startswith(("===", "---", "command:", "status:"))
+                         and not re.match(r"^\w+=\S*$", ln.strip())      # host=/mode= 等探针元数据行
                          and not (len(ln.strip()) <= 40 and ln.strip().endswith(("#", ">"))))
         if body.strip() and not out.startswith("error:") and "(no output)" not in out:
             report["findings"].append({"kind": name, "detail": body[:300]})

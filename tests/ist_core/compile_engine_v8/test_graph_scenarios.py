@@ -109,8 +109,8 @@ def rig(tmp_path, monkeypatch):
     wb, rb = [], []
     monkeypatch.setattr(N, "_writeback_one", lambda aid, lr: wb.append(aid))
     monkeypatch.setattr(N, "_rollback_one", lambda aid: rb.append(aid))
-    import main.ist_core.compile_engine.nodes.closing as V6C
-    monkeypatch.setattr(V6C, "_ingest_uncertain_observations", lambda led: None)
+    import main.ist_core.compile_engine_v8.uncertain as U8
+    monkeypatch.setattr(U8, "_ingest_uncertain_observations", lambda led: None)
 
     return {"tmp": tmp_path, "outputs": outputs, "out_name": out_name,
             "signals": signals, "wb": wb, "rb": rb, "monkeypatch": monkeypatch}
@@ -226,3 +226,5 @@ def test_s4_incremental_recompile_goes_subset_then_delivery(rig):
     assert kinds[0] == ("delivery", 3)
     assert ("subset", 1) in kinds
     assert kinds[-1] == ("delivery", 3)
+    # 重编前旧卷存档(V6 archive 职责迁入 author 的回归)
+    assert (rig["outputs"] / c2 / "history" / "case.r1.xlsx").is_file()

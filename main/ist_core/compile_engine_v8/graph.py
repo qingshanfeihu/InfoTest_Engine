@@ -78,6 +78,10 @@ def _after_attribute(s: dict) -> str:
 
 
 def _after_ask_contradiction(s: dict) -> str:
+    if s.get("n_ask_contradiction", 0) > 0:
+        return "closing"        # 未获答案(非交互/面板失败)→ 如实收口,禁 ask↔attribute 空转
+    if s.get("n_failed", 0) > 0:
+        return "attribute"      # 计数<2 的矛盾案/翻转案继续归因定向回环(验收发现#7)
     if s.get("n_authored", 0) + s.get("n_subset_verified", 0) > 0:
         return "merge"
     return "closing"
@@ -99,7 +103,7 @@ def build_v8_graph(checkpointer=None):
     g.add_conditional_edges("attribute", _after_attribute,
                             ["ask_contradiction", "author", "merge", "closing"])
     g.add_conditional_edges("ask_contradiction", _after_ask_contradiction,
-                            ["merge", "closing"])
+                            ["attribute", "merge", "closing"])
     g.add_edge("closing", END)
     return g.compile(checkpointer=checkpointer)
 

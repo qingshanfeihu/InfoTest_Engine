@@ -32,65 +32,6 @@ def test_limits_for_max_env_override(monkeypatch):
     assert wall == 999.0 and trans == 1500.0
 
 
-# ---------------------------------------------- C: _build_brief 末轮全回显 vs 轻量
-def _brief(case_led, max_rounds=3):
-    from main.ist_core.compile_engine.nodes.compile_phase import _build_brief
-    state = {"manifest_ref": "m.json", "product_version": "v1", "max_rounds": max_rounds}
-    return _build_brief("209030000000000001", state, case_led, "out")
-
-
-def test_build_brief_non_last_is_lightweight():
-    b = _brief({"rounds_used": 0, "evidence_excerpt": "ONLY-LATEST"})
-    assert "FINAL attempt" not in b
-    assert "ONLY-LATEST" in b          # 非末轮仍喂最新一轮证据
-
-
-def test_build_brief_last_attempt_full_history():
-    hist = [
-        {"round": 0, "device_context": "ROUND0-DEV", "fix_direction": "FIX0",
-         "layer": "E", "disposition": "reflow"},
-        {"round": 1, "device_context": "ROUND1-DEV", "fix_direction": "FIX1",
-         "layer": "", "disposition": ""},
-    ]
-    b = _brief({"rounds_used": 2, "fail_evidence": hist})
-    for must in ("FINAL attempt", "thinking depth raised to max", "ROUND0-DEV", "ROUND1-DEV",
-                 "FIX0", "on-device run #0", "on-device run #1", "E/reflow"):
-        assert must in b, must
-
-
-def test_build_brief_last_attempt_needs_history():
-    # rounds_used 达阈值但无 fail 历史 → 不触发全回显(回落轻量)
-    b = _brief({"rounds_used": 2})
-    assert "FINAL attempt" not in b
-
-
-# ------------------------------------------------ B: _archive_round_config 逐轮归档
-def test_archive_round_config(tmp_path, monkeypatch):
-    from main.ist_core.compile_engine.nodes import verify_phase as vp
-    aid = "209030000000000009"
-    root = tmp_path / "outputs"
-    (root / aid).mkdir(parents=True)
-    (root / aid / "case.xlsx").write_bytes(b"CFG-R1")
-    monkeypatch.setattr(vp.sh, "outputs_root", lambda: root)
-
-    vp._archive_round_config(aid, 1)
-    arch = root / aid / "history" / "case.r1.xlsx"
-    assert arch.is_file() and arch.read_bytes() == b"CFG-R1"
-
-    # 覆盖新版后再归档 r2,r1 保留(前几次配置不丢)
-    (root / aid / "case.xlsx").write_bytes(b"CFG-R2")
-    vp._archive_round_config(aid, 2)
-    assert (root / aid / "history" / "case.r2.xlsx").read_bytes() == b"CFG-R2"
-    assert (root / aid / "history" / "case.r1.xlsx").read_bytes() == b"CFG-R1"
-
-
-def test_archive_round_config_no_source_is_noop(tmp_path, monkeypatch):
-    from main.ist_core.compile_engine.nodes import verify_phase as vp
-    monkeypatch.setattr(vp.sh, "outputs_root", lambda: tmp_path)
-    vp._archive_round_config("209030000000000009", 1)   # 无 case.xlsx,静默不抛
-    assert not (tmp_path / "209030000000000009" / "history").exists()
-
-
 # ------------------------------------------ D2: footbar 最大深度思考中
 def test_payloads_have_max_thinking():
     from main.ist_core.ink.components.ist_app import _payloads_have_max_thinking
@@ -148,37 +89,8 @@ def test_reducer_fork_start_carries_effort():
 
 
 # ------------------------------------------ Fix4: 设备回显报告展示层清理
-def test_clean_device_echo_strips_ts_and_collapses_blanks():
-    from main.ist_core.compile_engine.nodes.closing import _clean_device_echo
-    raw = ("=== 头 ===\n"
-           "2026-07-07 23:30:08 172.16.35.70 - sends command in config: sdns pool p1\n"
-           "\n\n"
-           "2026-07-07 23:30:09 172.16.35.70 - show sdns pool\n")
-    clean = _clean_device_echo(raw)
-    assert "2026-07-07 23:30" not in clean          # 时间戳前缀剥掉
-    assert "sends command in config: sdns pool p1" in clean
-    assert "\n\n\n" not in clean                     # consecutive空行折叠
-    assert "=== 头 ===" in clean                     # 非时间戳行保留
-    assert _clean_device_echo(raw, limit=10) == clean[:10]   # limit 截断
-    # 原始不动(喂 LLM 归因的 device_context 保留时间戳=causality 照妖镜)
-    assert "2026-07-07 23:30:08" in raw
-
 
 # ------------------------- 布局门(2026-07-08 官方长上下文实践,PROMPT_ENGINEERING_STANDARD §一)
-def test_build_brief_layout_data_top_instructions_last():
-    """末轮 brief:首行机读信封;数据区(device_evidence)在前,intent 紧邻 round_task(指令)收尾。"""
-    hist = [{"round": 1, "device_context": "DEV-CTX", "fix_direction": "FIX",
-             "layer": "V", "disposition": "reflow"}]
-    b = _brief({"rounds_used": 2, "fail_evidence": hist,
-                "attribution": {"fix_direction": "HYP"}})
-    assert b.splitlines()[0].lstrip().startswith("{")          # 机读信封首行
-    order = ["<device_evidence>", "<prior_hypothesis", "<intent", "<round_task>"]
-    pos = [b.find(t) for t in order]
-    assert all(p >= 0 for p in pos[:1] + pos[-1:]), b[:200]
-    present = [(t, p) for t, p in zip(order, pos) if p >= 0]
-    assert [p for _, p in present] == sorted(p for _, p in present), present
-    assert b.rstrip().endswith("</round_task>")                 # 指令收尾
-
 
 def test_worker_skill_has_tail_examples_and_instructions_last():
     """worker SKILL:尾块 <examples> 存在;$ARGUMENTS(数据)在 <instructions>(指令)之前。"""
@@ -188,12 +100,4 @@ def test_worker_skill_has_tail_examples_and_instructions_last():
     assert body.find("$ARGUMENTS") < body.find("<instructions>")
     assert body.rstrip().endswith("</instructions>")
 
-def test_build_brief_first_retry_gets_full_history():
-    """首败即深思考(2026-07-09):R2(rounds_used=1)就应带全历史 brief——旧逻辑末轮才给,
-    ask_user 第三轮触发时用户答案已无重生成机会(dongkl 批 11 升级人工实证)。"""
-    hist = [{"round": 1, "layer": "V", "disposition": "reflow",
-             "fix_direction": "FIX0", "device_context": "ROUND0-DEV"}]
-    b = _brief({"rounds_used": 1, "fail_evidence": hist})
-    assert "Recompile round" in b and "thinking depth raised to max" in b
-    assert "ROUND0-DEV" in b
-    assert "FINAL attempt" not in b     # R2 不是最后一次(max_rounds=3)
+

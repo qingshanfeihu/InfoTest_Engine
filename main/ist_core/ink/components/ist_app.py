@@ -258,6 +258,9 @@ _ENGINE_PHASE_CN = {
     "prep": "准备", "worker_fanout": "编写", "ask_decision": "待决策",
     "merge": "合并", "run_digest": "上机", "attribute": "归因",
     "writeback": "写回", "report": "收尾",
+    # V8 节点(2026-07-10;bed_gate 床检/reconcile 对账/ask_contradiction 矛盾问询/closing 收口)
+    "bed_gate": "床检", "author": "编写", "run": "上机",
+    "reconcile": "对账", "ask_contradiction": "矛盾问询", "closing": "收口",
 }
 _B, _C2, _D2, _X2 = "\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m"
 _G2, _R2, _Y2 = "\x1b[32m", "\x1b[31m", "\x1b[33m"

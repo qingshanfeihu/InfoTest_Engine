@@ -126,7 +126,9 @@ def bed_gate(state: dict) -> dict:
                        "run_id": f"bed:{int(time.time())}"}])
     # 初始化清理(2026-07-10 用户裁决:开工必净):有文法清理引用的残留先清后复检;
     # 清不掉/无引用的仍走 ask。R1 12/26 崩盘(¥96)最大嫌疑=两天床残留,此门止损。
-    residue = [f for f in (rep.get("findings") or []) if f.get("kind") != "build_anchor"]
+    # probe_failed 项不进清理(床态未知,没有清理对象;题面单独如实呈报)
+    residue = [f for f in (rep.get("findings") or [])
+               if f.get("kind") != "build_anchor" and not f.get("probe_failed")]
     clean: dict = {"cleaned": [], "failed": [], "skipped": []}
     if residue:
         clean = B.bed_cleanup(_exec_fn, residue, root=sh.project_root(), host=host,

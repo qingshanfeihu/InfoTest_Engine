@@ -140,6 +140,19 @@ def bed_cleanup(exec_fn: Callable[[str], str], findings: list[dict], *,
 # ── 体检(只读探针,注入式) ────────────────────────────────────────────────────
 
 
+def _probe_failed(out: str) -> bool:
+    """探针自身失败(床态未知)的协议/契约级判定——不是内容关键字猜测:
+    设备拒绝标记(% Invalid + ^ 行)/fastmcp status 契约行/工具 error 前缀。"""
+    t = str(out or "")
+    if t.startswith("error"):
+        return True
+    if re.search(r"^status:\s*error", t, re.MULTILINE):
+        return True
+    if "% Invalid" in t and re.search(r"^\s*\^\s*$", t, re.MULTILINE):
+        return True
+    return False
+
+
 def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
               root: Path, host: str, precedent_build: str = "") -> dict:
     """批前床态体检:版本锚三方比对 + 各通道残留探测 + 床账差额。
@@ -170,6 +183,16 @@ def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
             continue
         out = probe_fn(str(spec.get("cmd") or ""))
         report["probes"][name] = (out or "")[:400]
+        # 探针失败 ≠ 有残留(2026-07-11 yzg 验收实证:`% Invalid input` 单次瞬态被
+        # 报成"分区配置残留"——失败报错文本也是非空回显,混进残留=谎报床上有东西)。
+        # 失败=床态未知,单独归类如实呈报;信号全部协议/契约级,非内容词表:
+        # ①设备 `% Invalid`+`^` 拒绝标记(与 compile_attribute 的 G 层判据同源)
+        # ②fastmcp 回显契约行 `status: error` ③工具错误契约前缀 `error:`
+        if _probe_failed(out):
+            report["needs_ask"] = True
+            report["findings"].append({"kind": name, "probe_failed": True,
+                                       "detail": (out or "")[:400]})
+            continue
         hdr_pats = [re.compile(p, re.IGNORECASE) for p in (spec.get("header_patterns") or [])]
         body = "\n".join(ln for ln in (out or "").splitlines()
                          if ln.strip()
@@ -185,7 +208,7 @@ def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
                          # 列表头(领域数据):探针条目 header_patterns 按引用过滤,
                          # 新表头形态=改 JSON 零代码
                          and not any(p.match(ln.strip()) for p in hdr_pats))
-        if body.strip() and not out.startswith("error:") and "(no output)" not in out:
+        if body.strip() and "(no output)" not in out:
             report["findings"].append({"kind": name, "detail": body[:300]})
 
     # ③ 床账差额:己方未复原 → 可自动恢复;其余发现 → ask

@@ -157,3 +157,73 @@ def test_interactive_confirm_cleanup_skipped_not_lied(tmp_path):
                       root=tmp_path, host="h")
     assert out["cleaned"] == [] and out["skipped"] == ["sdns_config_files"]
     assert ran == []
+
+
+def test_probe_failure_reported_as_unknown_not_residue(tmp_path):
+    """探针失败≠残留(2026-07-11 yzg 验收实证):设备拒绝探针命令(% Invalid + ^)
+    曾被"非空即报"当成分区残留——失败=床态未知,单独归类如实呈报。"""
+    outputs = {
+        "show segment name": ("host=1.2.3.4  mode=show\ncommand: show segment name\n"
+                              "status: success\n--- output ---\n"
+                              "% Invalid input: command 'show segment name' is invalid on this device\n"
+                              "show segment name\n    ^"),
+        "show synconfig peer": "host=1.2.3.4  mode=show\n--- output ---\nAPV#",
+        "show sdns config file": "host=1.2.3.4  mode=show\n--- output ---\nAPV#",
+    }
+    rep = bed_check(_probe(DEV_585, outputs), CFG, root=tmp_path, host="h")
+    seg = [f for f in rep["findings"] if f["kind"] == "segments"]
+    assert seg and seg[0].get("probe_failed") is True
+    assert rep["needs_ask"] is True                     # 床态未知也要问,但如实
+    assert all(f.get("probe_failed") for f in rep["findings"])   # 不误报其他通道
+    # 题面:探测未完成,不说"有残留"
+    import main.ist_core.compile_engine_v8.engine_tool as ET
+    captured = {}
+
+    def _fake_panel(qs):
+        captured["q"] = qs[0]["question"]
+        return {"decision": "停止"}
+
+    orig = ET._panel
+    ET._panel = _fake_panel
+    try:
+        ET._bridge({"kind": "bed_gate", "report": {
+            "anchor": {"status": "match", "device": "InfosecOS Beta.APV-HG-K.10.5.0.585"},
+            "findings": rep["findings"], "cleanup": {}}})
+    finally:
+        ET._panel = orig
+    assert "探测未完成" in captured["q"] and "床态未知" in captured["q"]
+    assert "仍有残留" not in captured["q"]
+
+
+def test_probe_failure_status_error_and_tool_error_forms(tmp_path):
+    """契约级失败形态全覆盖:fastmcp status:error 行/工具 error: 前缀同样归探测失败。"""
+    outputs = {
+        "show segment name": "host=1.2.3.4  mode=show\nstatus: error\n--- output ---\nsomething",
+        "show synconfig peer": "error: ssh channel closed",
+        "show sdns config file": "host=1.2.3.4  mode=show\n--- output ---\nAPV#",
+    }
+    rep = bed_check(_probe(DEV_585, outputs), CFG, root=tmp_path, host="h")
+    failed = {f["kind"] for f in rep["findings"] if f.get("probe_failed")}
+    assert failed == {"segments", "sync_peers"}
+    assert not [f for f in rep["findings"] if not f.get("probe_failed")]
+
+
+def test_probe_failed_findings_never_enter_cleanup(tmp_path, monkeypatch):
+    """probe_failed 项不进清理(没有清理对象;bed_gate residue 过滤)。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    outputs = {
+        "show segment name": ("host=1.2.3.4  mode=show\n--- output ---\n"
+                              "% Invalid input: nope\nshow segment name\n    ^"),
+        "show synconfig peer": "host=1.2.3.4  mode=show\n--- output ---\nAPV#",
+        "show sdns config file": "host=1.2.3.4  mode=show\n--- output ---\nAPV#",
+    }
+    monkeypatch.setattr(N, "_probe_fn", _probe(DEV_585, outputs))
+    monkeypatch.setattr(N.B, "bed_cleanup",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("cleanup called")))
+    monkeypatch.setattr(sh, "outputs_root", lambda: tmp_path / "outputs")
+    monkeypatch.setattr(sh, "facts_path", lambda s: tmp_path / "facts.jsonl")
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": []})
+    monkeypatch.setattr(N, "interrupt", lambda p: {"decision": "停止"})
+    out = N.bed_gate({"out_name": "b1"})
+    assert out["phase_status"] == "bed_blocked"   # 用户答停止;cleanup 从未被调

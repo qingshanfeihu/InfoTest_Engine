@@ -190,7 +190,8 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
     rewriting (multi-line snippets get mangled by parameter escaping; a single line is safest).
 
     Args:
-        xlsx_path: the case.xlsx run this round (locates the sibling last_run.json).
+        xlsx_path: the volume case.xlsx run this round, or the brief's last_run_path
+            directly (both accepted; the ledger is the sibling last_run.json).
         autoid: the attributed case's full autoid (must exist in last_run.json).
         layer: one of five — G (device syntax rejection), E (environment/IP), V (assertion vs
             behavior mismatch), transient (non-reproducible), product_defect (suspected).
@@ -232,9 +233,15 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
     except Exception:  # noqa: BLE001
         xp = None
     p = Path(xp) if xp else Path(xlsx_path)
-    lr = p.parent / "last_run.json"
+    # xlsx_path 双收 last_run.json 直传(2026-07-10 第5轮实证:brief 给的是 last_run_path,
+    # 工具却要 xlsx 反推兄弟文件——fork 传错一次、glob 自救一次,纯摩擦;直传消掉这层间接)
+    if p.name == "last_run.json":
+        lr = p
+    else:
+        lr = p.parent / "last_run.json"
     if not lr.is_file():
-        return f"error: last_run.json does not exist: {lr} (run dev_run_batch_digest first)"
+        return (f"error: last_run.json does not exist: {lr} — pass the brief's last_run_path "
+                f"(or the volume sheet next to it), not the per-case sheet")
     try:
         records = json.loads(lr.read_text(encoding="utf-8"))
         assert isinstance(records, list)

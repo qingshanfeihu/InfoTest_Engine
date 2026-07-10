@@ -74,7 +74,9 @@ unfiled observations evaporate; the engine decides mechanically whether they ent
 
 ## Deliver
 
-File via `submit_attribution(xlsx_path, autoid, layer, disposition, evidence, fix_direction)`.
+File via `submit_attribution(xlsx_path, autoid, layer, disposition, evidence, fix_direction)` —
+pass the brief's `last_run_path` as xlsx_path (accepted directly; do not point at the
+per-case sheet, its directory has no run ledger).
 disposition ∈ reflow / frozen / rerun_isolated / env_blocked / defect_candidate. End with:
 
 VERDICT: <layer>/<disposition>

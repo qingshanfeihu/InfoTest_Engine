@@ -333,12 +333,16 @@ class FooterPane:
             _st = _PHASE_STATE_TEXT.get(self._llm_phase)
             if _st:
                 status_text = f"{status_text} · \x1b[1m{_st}\x1b[0m"
-        if self._obs_warning:
-            status_text = f"\x1b[33m{self._obs_warning}\x1b[0m · {status_text}"
         if self._sticky_error and self.status == "error":
             # 驻留错误占状态行主位(红),session 摘要退到 hint 行之上仍可见
             status_text = f"\x1b[31m✖ {self._sticky_error}\x1b[0m · {status_text}"
         self._status_line.set_value(status_text)
-        self._hint_line.set_value(
-            "ctrl+c abort · ctrl+d exit · / commands · ↑↓ history"
-        )
+        # obs 告警挂 hint 行(短形态,顶掉尾部 history 提示)——挂状态行会撑爆宽度换行,
+        # 把固定高度 footer 的引擎进度行挤出屏(2026-07-10 第5轮实证)
+        if self._obs_warning:
+            self._hint_line.set_value(
+                f"\x1b[33m{self._obs_warning}\x1b[0m · ctrl+c abort · ctrl+d exit · / commands")
+        else:
+            self._hint_line.set_value(
+                "ctrl+c abort · ctrl+d exit · / commands · ↑↓ history"
+            )

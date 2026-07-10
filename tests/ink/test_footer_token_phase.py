@@ -202,12 +202,15 @@ def test_sticky_error_truncated_to_single_width():
     assert "…" in seg and len(seg) < 130
 
 
-def test_obs_warning_persists_on_status_line():
-    """可观测性告警(Langfuse 上报失败)常驻状态行——盲跑必须看得见(2026-07-10 实证)。"""
+def test_obs_warning_persists_on_hint_line_not_status():
+    """可观测性告警常驻 hint 行(短形态)——挂状态行会撑爆宽度把引擎进度行挤出屏
+    (2026-07-10 第5轮实证:状态行换行→footer 固定高度溢出→进度条消失)。"""
     f = FooterPane()
-    f.set_obs_warning("⚠ Langfuse 上报失败,本会话未被追踪")
+    f.set_obs_warning("⚠ Langfuse 上报有失败,追踪可能不完整")
     f.update(status="ready", input_tokens=10, output_tokens=5)
-    assert "Langfuse 上报失败" in f._status_line.value
+    assert "Langfuse" in f._hint_line.value          # 家在 hint 行
+    assert "Langfuse" not in f._status_line.value    # 不再撑状态行
     f.set_obs_warning("")
     f.update(status="ready")
-    assert "Langfuse" not in f._status_line.value
+    assert "Langfuse" not in f._hint_line.value
+    assert "↑↓ history" in f._hint_line.value        # 无告警时提示恢复完整

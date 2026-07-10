@@ -459,7 +459,7 @@ class IstInkApp:
         try:
             from main.ist_core.observability import on_observability_failure
             on_observability_failure(
-                lambda st: self._footer.set_obs_warning("⚠ Langfuse 上报失败,本会话未被追踪"))
+                lambda st: self._footer.set_obs_warning("⚠ Langfuse 上报有失败,追踪可能不完整"))
         except Exception:  # noqa: BLE001
             pass
 

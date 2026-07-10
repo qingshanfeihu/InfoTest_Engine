@@ -72,7 +72,7 @@
    收到 decision 后调用;fork 工具白名单不含);先落盘过验证器(key 碰撞/引文子串/schema)
    再提交(plan-validate-execute)。
 
-**AskPanel schema**(专职孔 json_schema 产出;全 required+null、扁平、additionalProperties:false):
+**AskPanel schema**(attributor 经 strict 工具 `submit_ask_panel` 提交——§五.4 实测定案;全 required+null、扁平、additionalProperties:false):
 ```
 {intent_signature, conflict_shape∈{manual_vs_device, expected_vs_observed,
  method_vs_implementation, ordering_vs_persistence, other},

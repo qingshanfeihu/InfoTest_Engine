@@ -214,7 +214,7 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
     from pathlib import Path
 
     _LAYERS = ("G", "E", "V", "transient", "product_defect")
-    _DISPS = ("reflow", "frozen", "env_blocked", "defect_candidate", "fixed")
+    _DISPS = ("reflow", "frozen", "env_blocked", "defect_candidate", "fixed", "rerun_isolated")
     layer = (layer or "").strip()
     disposition = (disposition or "").strip()
     if layer not in _LAYERS:

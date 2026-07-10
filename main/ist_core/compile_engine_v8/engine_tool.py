@@ -1,0 +1,148 @@
+"""compile_engine_run(V8):主 agent 一句话触发整条编译闭环的薄工具。
+
+图套图边界(与 V6 同型):qa_agent 图经本工具进程内 invoke V8 图;checkpointer 分库
+(runtime/compile_engine_v8_checkpoints.db,thread=v8:<out_name>)——账实分离(INV-7):
+checkpoint 只存图游标+interrupt 挂起态+引用,业务真理在批目录 facts.jsonl。
+[user] 孔桥接:interrupt payload(bed_gate/ask_decision/ask_contradiction 三类)→
+既有 ask_user 面板 → Command(resume) 续跑。
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+from langchain_core.tools import tool
+
+logger = logging.getLogger(__name__)
+
+_MAX_INTERRUPT_ROUNDS = 12
+
+
+import re as _re
+
+
+def _panel(questions: list[dict]) -> dict:
+    """interrupt 问题组 → ask_user 面板(≤4 题/批,面板 schema:question/header/options)
+    → {key: 答案label}。非交互/异常 → {_non_interactive: True}。"""
+    from main.ist_core.tools.ask_user import ask_user
+    answers: dict = {}
+    for i in range(0, len(questions), 4):
+        batch = questions[i:i + 4]
+        payload = [{k: v for k, v in q.items() if not str(k).startswith("_")} for q in batch]
+        try:
+            out = ask_user.func(payload)
+        except Exception:  # noqa: BLE001
+            logger.exception("ask 面板桥接失败")
+            return {"_non_interactive": True}
+        if isinstance(out, str) and (out.startswith("error") or "非交互" in out):
+            return {"_non_interactive": True}
+        for q in batch:
+            header = str(q.get("header", ""))
+            m = _re.search(rf'"{_re.escape(header)}"="([^"]+)"', out or "")
+            if m:
+                answers[str(q.get("_key", header))] = m.group(1)
+    return answers
+
+
+def _bridge(payload: dict) -> dict:
+    """三类挂起 → 面板问题(形态转换,零语义判断)。"""
+    kind = str(payload.get("kind") or "")
+    if kind == "bed_gate":
+        rep = payload.get("report") or {}
+        anchor = rep.get("anchor") or {}
+        qs = [{"question": f"床态体检未通过(设备 {anchor.get('device', '?')} vs 配置 "
+                           f"{anchor.get('config', '?')};发现 {len(rep.get('findings') or [])} 项),继续吗?",
+               "header": "床态体检",
+               "options": [
+                   {"label": "停止", "description": "处理床态(换床/清理/重锚)后同参数重跑续接"},
+                   {"label": "继续", "description": "接受当前床态照跑(裁决将锚定实测 build)"}],
+               "_key": "decision"}]
+        ans = _panel(qs)
+        v = str(ans.get("decision") or "")
+        return {"decision": "proceed" if "继续" in v else (v or "停止")}
+    if kind == "ask_decision":
+        qs = list(payload.get("questions") or [])
+        for q in qs:
+            q["_key"] = str(q.get("_autoid") or q.get("header") or "")
+        return _panel(qs)
+    if kind == "ask_contradiction":
+        qs = []
+        for c in (payload.get("cases") or []):
+            aid = str(c.get("autoid"))
+            qs.append({
+                "question": f"用例 …{aid[-6:]} 单跑通过、整卷复验第 {c.get('contradictions')} 次失败"
+                            f"(跨案持久态互扰嫌疑;既往选择 {c.get('prior_choices') or '无'}),如何处置?",
+                "header": f"矛盾{aid[-4:]}",
+                "options": [
+                    {"label": "接受单跑", "description": "按单跑语义标注交付(报告声明整卷互扰)"},
+                    {"label": "重排复验", "description": "重排卷序后再终验一轮"},
+                    {"label": "如实降级", "description": "该案不入交付卷,如实报告"}],
+                "_key": aid})
+        return _panel(qs)
+    return {"_non_interactive": True}
+
+
+@tool(parse_docstring=True)
+def compile_engine_run(mindmap_path: str, product_version: str,
+                       out_name: str = "", max_rounds: int = 3) -> str:
+    """Run the V8 compile engine: mindmap → bed check → per-case authoring → ask on underdetermined → merge → on-device run → reconcile → attribution → targeted recompile → final delivery verify → writeback → report.
+
+    Facts are append-only (workspace/outputs/<batch>/facts.jsonl); every on-device verdict is
+    reconciled with an explicit outcome — swallowed verdicts are structurally impossible. Three
+    user-decision edges may pause the run (bed anchor mismatch / underdetermined claims /
+    delivery contradiction); answers resume from checkpoint. Re-calling with the same
+    arguments resumes an interrupted run without re-burning device rounds.
+
+    Args:
+        mindmap_path: mindmap txt path (e.g. workspace/inputs/automatic_case/x.txt).
+        product_version: product version (e.g. 10.5) — decides which manual workers consult.
+        out_name: batch name (deliverables at workspace/outputs/<out_name>/); defaults to
+            the mindmap filename.
+        max_rounds: per-case recompile cap (default 3).
+
+    Returns:
+        Result summary; full report at workspace/outputs/<out_name>/delivery_report.md,
+        machine-readable at engine_report.json, facts at facts.jsonl.
+    """
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    from langgraph.types import Command
+    from main.ist_core.compile_engine_v8.graph import build_v8_graph
+    from main.ist_core.compile_engine_v8 import _shared as sh
+
+    name = (out_name or Path(mindmap_path).stem).strip()
+    root = sh.project_root()
+    db = root / "runtime" / "compile_engine_v8_checkpoints.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with SqliteSaver.from_conn_string(str(db)) as saver:
+            g = build_v8_graph(checkpointer=saver)
+            cfg = {"configurable": {"thread_id": f"v8:{name}"}, "recursion_limit": 200}
+            state = {"mindmap_path": mindmap_path, "product_version": product_version,
+                     "out_name": name, "max_rounds": int(max_rounds or 3)}
+            res = g.invoke(state, cfg)
+            rounds = 0
+            while isinstance(res, dict) and "__interrupt__" in res and rounds < _MAX_INTERRUPT_ROUNDS:
+                payload = res["__interrupt__"][0].value
+                res = g.invoke(Command(resume=_bridge(payload)), cfg)
+                rounds += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("V8 引擎异常")
+        return (f"error: compile engine aborted — {type(exc).__name__}: {exc}\n"
+                f"Progress is saved (checkpoint + facts); re-call with the same arguments to resume.")
+
+    rp = sh.outputs_root() / name / "engine_report.json"
+    if not rp.is_file():
+        return f"error: engine finished without a report (state keys: {sorted((res or {}).keys())[:12]})"
+    rep = json.loads(rp.read_text(encoding="utf-8"))
+    t = rep.get("totals", {})
+    lines = [
+        f"compile engine (v8) done: {rep.get('outcome')}",
+        f"cases {t.get('cases', 0)}: deliverable {t.get('deliverable', 0)}"
+        + (f", labels {json.dumps({k: v for k, v in t.items() if k not in ('cases', 'deliverable') and v}, ensure_ascii=False)}"
+           if any(v for k, v in t.items() if k not in ("cases", "deliverable")) else ""),
+        f"full report (on disk): workspace/outputs/{name}/delivery_report.md",
+        f"facts ledger: {rep.get('refs', {}).get('facts')}",
+    ]
+    return "\n".join(lines)

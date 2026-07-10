@@ -37,6 +37,7 @@ from main.ist_core.tools.device import (
 from main.ist_core.tools.knowledge.kb_bug_search import kb_bug_search
 from main.ist_core.tools.knowledge.footprint_lookup import kb_footprint
 from main.ist_core.tools.knowledge.memory_search import kb_memory_search
+from main.ist_core.tools.knowledge.intent_search import kb_intent_search
 from main.ist_core.tools.knowledge.footprint_writeback import compile_footprint_writeback
 from main.ist_core.tools.skills import invoke_skill
 from main.ist_core.tools.skills.agent_define import agent_define
@@ -89,6 +90,7 @@ def _default_generic_tools() -> list[Any]:
 
         kb_footprint,
         kb_memory_search,  # 长期记忆拉式检索(BM25;推注入之外的主动回忆通道)
+        kb_intent_search,  # 意图记载四源检索(spec/先例/缺陷缓存/决策史;ask 前置)
 
 
         invoke_skill,

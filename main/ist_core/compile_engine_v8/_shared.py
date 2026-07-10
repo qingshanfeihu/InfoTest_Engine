@@ -95,20 +95,25 @@ def env_confirm_waiting(fs: list[dict], vw: dict) -> list[str]:
 
 
 def panel_waiting(fs: list[dict], vw: dict) -> list[str]:
-    """归因孔呈报的 ought-欠定面板待答案(§11.11:panel 事实存在且该轮未获 decision)。"""
+    """归因孔呈报的 ought-欠定面板待答案(§11.11:panel 事实存在且该轮未获 decision
+    也未被同键判例机械采信——adopted 即免问,收敛律的采信面)。"""
     out = []
     for f in fs:
         if f.get("ev") != "ask_panel":
             continue
         aid = str(f.get("aid"))
+        rnd = int(f.get("round") or 0)
         c = vw["cases"].get(aid)
         if not c or c["status"] in (V.S_DELIVERABLE, V.S_TERMINAL, V.S_SUSPENDED,
                                     V.S_ESCALATED):
             continue
-        qid = f"panel:{aid}:{int(f.get('round') or 0)}"
-        if not any(d.get("ev") == "decision" and d.get("question_id") == qid for d in fs):
-            if aid not in out:
-                out.append(aid)
+        qid = f"panel:{aid}:{rnd}"
+        answered = any(d.get("ev") == "decision" and d.get("question_id") == qid
+                       for d in fs)
+        adopted = any(d.get("ev") == "adopted" and str(d.get("aid")) == aid
+                      and int(d.get("round") or 0) == rnd for d in fs)
+        if not answered and not adopted and aid not in out:
+            out.append(aid)
     return out
 
 

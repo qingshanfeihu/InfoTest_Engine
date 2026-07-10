@@ -454,10 +454,13 @@ options=[确认,按此继续 / 纠正(Other 自由输入=CorrectedError 语义,f
 
 **切片重排(D 并入 A)**:A=构件一+四+六+既有 WIP 收尾 → B=构件二+三+五 → C=渲染层(11.2-11.9)。
 
-**A 片 WIP 现状**(工作区未提交;compact 后由 git status+本节恢复上下文):已改 views
-(S_SUSPENDED+env_blocked 终态收窄到用户来源 _user_sourced)/_shared(cap_waiting/granted_rounds/
-env_confirm_waiting/ask_targets/suspended 计数桶)/nodes(author cap_reached 资源化+attribute
-已归因跳过+ask_contradiction 三类题面初版+env「继续」开隔离复跑处方)/graph(_after_author 四路:
-补 ask 边与 rerun 处方必达 merge——668030 路由洞)。待重整:ask_targets 加 panel 目标源;
-题面从三类内联改 panel 渲染;engine_tool._bridge 未改待写;submit_ask_panel 工具未建;测试未跑。
+**A 片已落地**(9d59c08f,2026-07-11;红线评审 PASS,全量 1695 绿):构件一/四/六全部
++eval ①②③⑥(test_ask_panel.py 17 例)。实施中修正三处设计盲点:①`list[dict]` 注解经
+strict 转换成「强制空对象」,LLM 无法传字段——嵌套结构必须显式 pydantic 模型;②特权词
+(挂起/停止)只对短指令生效(≤8 字或句首),长句是叙述(「不要挂起,按…」按题面默认);
+③_user_sourced 收窄 round==99 单信号(evidence 串可被回显常见词撞上;round 由工具内部
+取自台账,fork 伪造不了)。另加形态-侧别一致门:record-vs-device 类差异必须有记载侧原文
+出场,防文档侧意图只活在 hypothesis 转述里。
+**B 片待做**:构件二(kb_intent_search 四源 fan-in)+三(kb_adjudication_write+
+knowledge/adjudications/)+五(机械采信)+confirm→写回接线+eval ④⑤;真机验收与 B 片合跑。
 

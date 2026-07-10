@@ -236,6 +236,11 @@ def _build_tool_registry_locked() -> dict[str, Any]:
             _TOOL_REGISTRY["kb_footprint"] = kb_footprint
         except ImportError:
             logger.debug("工具 kb_footprint 未可用，跳过注册")
+        try:
+            from main.ist_core.tools.knowledge.intent_search import kb_intent_search
+            _TOOL_REGISTRY["kb_intent_search"] = kb_intent_search
+        except ImportError:
+            logger.debug("工具 kb_intent_search 未可用，跳过注册")
         # 单 case 编译/上机 tools（compile-worker fork 用）
         try:
             from main.ist_core.tools.device import (

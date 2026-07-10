@@ -41,8 +41,8 @@ class _Side(BaseModel):
 class _Receipt(BaseModel):
     """One retrieval you performed before asking."""
     slug: str = Field(description=(
-        'What you searched, as a short slug (until the intent-search tool lands, use '
-        '"manual_declared").'))
+        "What you searched: a kb_intent_search hit's slug, or your query itself when the "
+        "search missed."))
     outcome: Literal["miss", "hit_conflicting", "hit_adopted_blocked"] = Field(
         description="miss = nothing found; hit_conflicting = records disagree; "
                     "hit_adopted_blocked = a record matched but contradicts the live device.")
@@ -162,8 +162,8 @@ def submit_ask_panel(last_run_path: str, autoid: str, intent_signature: str,
         return err
     if len(receipt_l) < 1:
         return ("error: retrieval_receipt needs >=1 entry — asking without having searched is "
-                "not allowed; record what you looked up (slug + outcome). Until the intent-search "
-                "tool lands, use {\"slug\": \"manual_declared\", \"outcome\": \"miss\"}")
+                "not allowed; run kb_intent_search first and record what you looked up "
+                "(a hit's slug + outcome, or your query as slug with outcome \"miss\")")
     for i, r in enumerate(receipt_l):
         if not isinstance(r, dict) or not str(r.get("slug") or "").strip():
             return f"error: retrieval_receipt[{i}] must be an object with a non-empty slug"

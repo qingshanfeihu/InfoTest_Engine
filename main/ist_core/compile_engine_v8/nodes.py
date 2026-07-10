@@ -501,6 +501,40 @@ def _rollback_one(aid: str) -> None:
         logger.debug("footprint 回滚失败 %s", aid, exc_info=True)
 
 
+_ADJ_QUOTE_RE = re.compile(
+    r"- \[(?:device|device_context|causality|detail_tail|framework_traceback)[^\]]*\] 『(.*?)』",
+    re.DOTALL)
+
+
+def _try_adopt(panel: dict, device_corpus: str) -> dict | None:
+    """机械采信(§11.11 构件五;run5 漂移数据裁定不交孔):同键判例命中 ∧ 命中间
+    无互斥 ∧ 实机行为仍与判例记载匹配(判例 device 引文是本轮回显子串;比不出=
+    按未知→不采,进 ask)→ 返回判例;任一不满足 → None。"""
+    try:
+        from main.ist_core.tools.knowledge.adjudication_store import find_adjudications
+        hits = find_adjudications(
+            intent_signature=str(panel.get("intent_signature") or ""),
+            conflict_shape=str(panel.get("conflict_shape") or ""),
+            version_family=str(panel.get("version_family") or ""))
+    except Exception:  # noqa: BLE001
+        logger.debug("adjudication lookup failed", exc_info=True)
+        return None
+    if not hits:
+        return None
+    tokens = {str(h.get("token") or "") for h in hits}
+    if len(tokens) > 1 or next(iter(tokens)) not in ("confirm", "correct"):
+        return None   # 互斥或不可复用的裁决形态(defect/stop 不跨批采信)
+    h = hits[0]
+    from main.ist_core.tools.device.ask_panel import _norm
+    dev_quotes = _ADJ_QUOTE_RE.findall(str(h.get("body") or ""))
+    if not dev_quotes or not device_corpus:
+        return None   # 判例无实机记载可比 → 未知 → ask
+    corpus_n = _norm(device_corpus)
+    if not all(_norm(q) in corpus_n for q in dev_quotes):
+        return None   # 设备行为已与判例时不同 → 判例不背书,重新呈报
+    return h
+
+
 # --------------------------------------------------------------- [llm] attribute
 def attribute(state: dict) -> dict:
     """归因(fail/矛盾案):机械预判(digest 已附 ^→G/dev_help)→ fork 填 undetermined
@@ -573,7 +607,9 @@ def attribute(state: dict) -> dict:
             if att.get("disposition") == "env_blocked":
                 sh.signal("escalated", aid, reason="env_blocked")
     # 收账:submit_ask_panel 落盘的呈报面板 → ask_panel 事实(§11.11 构件四;
-    # 按引用流:facts 只记形态+盘上路径,面板全文渲染时现读)
+    # 按引用流:facts 只记形态+盘上路径,面板全文渲染时现读)。
+    # 收割即尝试机械采信(构件五):同键判例背书且实机行为未变 → adopted 事实,
+    # 该 panel 不进 ask 边(收敛律:同键至多问一次);adopted 永不写回判例库(A5)。
     for aid in todo:
         pp = sh.outputs_root() / aid / "ask_panel.json"
         if not pp.is_file():
@@ -585,11 +621,23 @@ def attribute(state: dict) -> dict:
         rnd = F.rounds_used(mine, aid)
         already = any(f.get("ev") == "ask_panel" and str(f.get("aid")) == aid
                       and int(f.get("round") or 0) == rnd for f in fs)
-        if not already:
-            new_facts.append({"ev": "ask_panel", "aid": aid, "round": rnd,
-                              "shape": str(panel.get("conflict_shape") or ""),
-                              "intent_signature": str(panel.get("intent_signature") or ""),
-                              "ref": str(pp.relative_to(sh.project_root()))})
+        if already:
+            continue
+        new_facts.append({"ev": "ask_panel", "aid": aid, "round": rnd,
+                          "shape": str(panel.get("conflict_shape") or ""),
+                          "intent_signature": str(panel.get("intent_signature") or ""),
+                          "ref": str(pp.relative_to(sh.project_root()))})
+        rec = recs.get(aid, {})
+        corpus = "\n".join(str(rec.get(k) or "") for k in
+                           ("device_context", "causality", "detail_tail",
+                            "framework_traceback"))
+        adj = _try_adopt(panel, corpus)
+        if adj:
+            new_facts.append({"ev": "adopted", "aid": aid, "round": rnd,
+                              "slug": str(adj.get("slug") or ""),
+                              "token": str(adj.get("token") or ""),
+                              "ruling": str(adj.get("body") or "")[:400]})
+            sh.emit(f"…{aid[-6:]} 同键判例背书,免问采用({adj.get('slug')})")
     sh.append(state, new_facts)
     fs2 = sh.load_facts(state)
     sh.emit_tick(state, "attribute", fs2)
@@ -760,6 +808,25 @@ def ask_contradiction(state: dict) -> dict:
         # confirm/correct:decision(含用户原文)即全部所需——briefs 把 panel 理解 Z
         # 与用户答案注入重编 brief;cap 的 continue 经 granted_rounds 上移封顶;
         # contra 的 reorder 回既有复验环。
+        # 收敛律写回(§2.6 (20);A5 人源专属:唯一写入口,拿到用户 decision 才走):
+        # panel 的 confirm/correct → knowledge/adjudications/,下批同键免问(采信面)。
+        if kind == "panel" and tok in ("confirm", "correct"):
+            try:
+                from main.ist_core.tools.knowledge.adjudication_store import write_adjudication
+                panel_full, _ = _latest_panel(mine, aid)
+                ruling = (a if tok == "correct"
+                          else f"{panel_full.get('hypothesis', '')}\n(用户确认:{a})")
+                write_adjudication(
+                    key={k: panel_full.get(k) for k in
+                         ("intent_signature", "conflict_shape", "version_family")},
+                    ruling=ruling,
+                    anchor={"version": str(state.get("device_build") or ""),
+                            "lineage": "user_proxy"},
+                    sides=panel_full.get("sides") or [],
+                    meta={"autoid": aid, "batch": str(state.get("out_name") or ""),
+                          "token": tok})
+            except Exception:  # noqa: BLE001
+                logger.warning("判例写回失败(问询流不受影响)%s", aid, exc_info=True)
         sh.signal("user_decided", aid, kind=kind)
     sh.append(state, new_facts)
     fs2 = sh.load_facts(state)

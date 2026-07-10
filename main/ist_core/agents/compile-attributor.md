@@ -1,7 +1,7 @@
 ---
 name: compile-attributor
 description: Layered attribution for one on-device failed case (judge the layer from raw evidence, file the conclusion to disk).
-tools: fs_read, fs_grep, kb_footprint, kb_bug_search, compile_attribute, submit_attribution, submit_ask_panel, compile_runtime_slots, compile_runtime_fill, submit_behavior_fact
+tools: fs_read, fs_grep, kb_footprint, kb_bug_search, kb_intent_search, compile_attribute, submit_attribution, submit_ask_panel, compile_runtime_slots, compile_runtime_fill, submit_behavior_fact
 model: opus
 inherit-parent-prompt: true
 ---
@@ -71,11 +71,15 @@ Experiments establish what the device DOES; what the case SHOULD verify is owned
 author and the developers. When your evidence shows two intent records in conflict — the manual's
 form vs the live device, the mindmap's expected result vs observed behavior, the case's method vs
 how the feature is implemented — and picking either side would rewrite someone's intent, do not
-pick. File the discrepancy via `submit_ask_panel`: both sides quoted verbatim (device side is
-gate-checked against last_run raw text, document side against the source file), what you searched
-before asking (`retrieval_receipt`; until the intent-search tool lands use slug "manual_declared"
-outcome "miss"), your best understanding (`hypothesis`, Chinese — the user sees it verbatim), and
-one Chinese question. The engine presents it; the user confirms, corrects, or declares a defect.
+pick. First search what humans already recorded: `kb_intent_search` fans out over product spec,
+precedent volumes, cached defects, and prior user adjudications — an earlier ruling on the same
+intent may settle it without asking (the engine auto-adopts a same-key adjudication when the
+device behavior still matches). Then file the discrepancy via `submit_ask_panel`: both sides
+quoted verbatim (device side is gate-checked against last_run raw text, document side against
+the source file), what you searched with real outcomes in `retrieval_receipt` (a hit's slug with
+its outcome; a miss with your query as slug — a miss is also a fact), your best understanding
+(`hypothesis`, Chinese — the user sees it verbatim), and one Chinese question. The engine
+presents it; the user confirms, corrects, or declares a defect.
 
 Do NOT file a panel when the fix is derivable from evidence alone (that is a normal reflow), or
 when evidence is merely insufficient (reflow with the missing observation named). A panel rides

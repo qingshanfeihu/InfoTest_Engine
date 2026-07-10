@@ -44,6 +44,7 @@ from main.ist_core.tools.skills.file_server import qa_file_server
 from main.ist_core.tools.skills.download_case import download_agile_case
 from main.ist_core.tools.ask_user import ask_user
 from main.ist_core.tools.memory_tool import remember
+from main.ist_core.tools.wx_send_file import wx_send_file
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ def _default_generic_tools() -> list[Any]:
 
         ask_user,
         remember,
+        wx_send_file,
 
     ]
 

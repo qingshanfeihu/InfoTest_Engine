@@ -218,3 +218,17 @@ def test_reconcile_ignores_stale_records_outside_composition(tmp_path, monkeypat
     fs2 = [_json.loads(l) for l in facts_p.read_text().splitlines() if l.strip()]
     vs = [f for f in fs2 if f["ev"] == "verdict"]
     assert [v["aid"] for v in vs] == [A]                # B 的幽灵裁决被拒之门外
+
+
+def test_pid_stamp_excluded_from_idempotency(tmp_path):
+    """写入者审计字段 _pid 不入幂等键——跨进程续跑重放同一事实仍去重(僵尸跨写取证 #61)。"""
+    import os
+    from main.ist_core.compile_engine_v8.facts import append_facts, load_facts, idem_key
+    p = tmp_path / "facts.jsonl"
+    f = {"ev": "bed_checked", "aid": "", "host": "h", "findings": []}
+    assert append_facts(p, [dict(f)]) == 1
+    assert append_facts(p, [dict(f)]) == 0            # 同内容重放:去重
+    got = load_facts(p)
+    assert len(got) == 1 and got[0].get("_pid") == os.getpid()
+    other = {**f, "_pid": 99999}                       # 模拟另一进程写的同一事实
+    assert idem_key(other) == idem_key(got[0])         # 键不含 _pid

@@ -39,8 +39,10 @@ def append_facts(path: Path, facts: list[dict]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = {idem_key(f) for f in load_facts(path)}
     written = 0
+    import os as _os
     with path.open("a", encoding="utf-8") as fh:
         for f in facts:
+            f = {**f, "_pid": _os.getpid()}   # 写入者审计(僵尸跨写取证用;不参与幂等键)
             k = idem_key(f)
             if k in existing:
                 continue
@@ -95,8 +97,10 @@ def idem_key(f: dict) -> tuple:
         return (ev, aid, str(f.get("question_id") or f.get("question", ""))[:120])
     if ev in ("writeback", "rollback"):
         return (ev, aid, str(f.get("voucher_run") or f.get("of", "")), str(f.get("reason", "")))
-    # 未知/其余类型:内容键(排序序列化)
-    return (ev, aid, json.dumps(f, sort_keys=True, ensure_ascii=False))
+    # 未知/其余类型:内容键(排序序列化;剔除 _ 前缀审计字段——_pid 随进程变,
+    # 入键会破坏跨进程续跑的重放幂等)
+    core = {k: v for k, v in f.items() if not str(k).startswith("_")}
+    return (ev, aid, json.dumps(core, sort_keys=True, ensure_ascii=False))
 
 
 def dedup(facts: list[dict]) -> list[dict]:

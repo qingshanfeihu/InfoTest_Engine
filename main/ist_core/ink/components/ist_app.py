@@ -565,8 +565,14 @@ class IstInkApp:
         except KeyboardInterrupt:
             pass
         finally:
-            
-            
+            # teardown 终结器:先 fail 掉全部挂起问询(阻塞在 event.wait 的引擎线程
+            # 立即收到取消并走无答案路径=自动挂起),再取消 bridge——顺序反了 bridge
+            # join 会被挂死的 ask 卡满 3 秒超时。
+            try:
+                from main.ist_core.tools.ask_user import cancel_all_pending
+                cancel_all_pending("TUI exit")
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 if self._bridge is not None:
                     self._bridge.cancel()

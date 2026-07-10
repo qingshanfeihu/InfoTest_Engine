@@ -277,14 +277,17 @@ def _build_tool_registry_locked() -> dict[str, Any]:
             _TOOL_REGISTRY["compile_writeback"] = compile_writeback
             from main.ist_core.tools.device.checker_tool import compile_expected_hits
             _TOOL_REGISTRY["compile_expected_hits"] = compile_expected_hits
-            # 归因孔(compile-attributor,V6)专用
-            from main.ist_core.tools.device import compile_attribute, submit_attribution
+            # 归因孔(compile-attributor)专用
+            from main.ist_core.tools.device import (
+                compile_attribute, submit_attribution, submit_ask_panel,
+            )
             from main.ist_core.tools.device.runtime_fill_tools import (
                 compile_runtime_slots, compile_runtime_fill,
             )
             from main.ist_core.tools.knowledge.behavior_tool import submit_behavior_fact
             _TOOL_REGISTRY["compile_attribute"] = compile_attribute
             _TOOL_REGISTRY["submit_attribution"] = submit_attribution
+            _TOOL_REGISTRY["submit_ask_panel"] = submit_ask_panel
             _TOOL_REGISTRY["compile_runtime_slots"] = compile_runtime_slots
             _TOOL_REGISTRY["compile_runtime_fill"] = compile_runtime_fill
             _TOOL_REGISTRY["submit_behavior_fact"] = submit_behavior_fact

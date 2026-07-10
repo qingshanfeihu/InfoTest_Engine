@@ -25,8 +25,12 @@ and may pause on any of three user-decision edges, each surfacing as an ask pane
 
 - **bed_gate** — device build anchor mismatch or foreign residue on the shared bed;
 - **ask_decision** — underdetermined claims (ask-before-write is code-enforced);
-- **ask_contradiction** — a case passed alone but failed in the delivery volume (from the
-  second contradiction onwards, every occurrence returns to the user).
+- **ask_contradiction** — the user-adjudication edge: intent discrepancies filed by the
+  attribution hole via submit_ask_panel (manual vs device, expected vs observed — the user
+  confirms / corrects via free text / declares a product defect), round-cap resource grants,
+  env-blocked stop-loss confirmations, alone-pass-volume-fail contradictions, and
+  resume-or-keep for previously suspended cases. Unanswered questions auto-suspend the case
+  (non-terminal; re-asked on the next run with the same arguments).
 
 If the product version is missing, `ask_user` first — a wrong version invalidates the whole
 batch's grammar. If the run is interrupted, re-calling with the same arguments resumes from

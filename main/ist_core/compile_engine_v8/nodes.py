@@ -70,6 +70,12 @@ def prep(state: dict) -> dict:
           "manifest_ref": str(manifest.relative_to(sh.project_root())),
           "facts_ref": str((mdir / "facts.jsonl").relative_to(sh.project_root()))}
     fs = sh.load_facts(st)
+    # 批次锚:每次图从 START 重入记一条(seq 单调;interrupt-resume 不经此处)。
+    # 挂起案的「新批恢复问询」以「最后 suspended 之后有 run_start」为触发——
+    # 同批内挂起后不再打扰,同参数重跑才问一次恢复。
+    sh.append(st, [{"ev": "run_start", "aid": "",
+                    "seq": sum(1 for f in fs if f.get("ev") == "run_start") + 1}])
+    fs = sh.load_facts(st)
     sh.emit(f"prep:{len(sh.manifest(st).get('cases') or [])} 个用例")
     sh.emit_tick(st, "prep", fs)
     return {"phase_status": "ok", **{k: st[k] for k in ("out_name", "manifest_ref", "facts_ref")},
@@ -139,8 +145,11 @@ def author(state: dict) -> dict:
     # fail/矛盾案只重编 reflow/frozen 处置且未封顶的(归因定向;rerun_isolated/
     # transient 不重编——由 merge 收进待验集直接复跑);矛盾≥2 的不在此处理(ask 边)
     max_rounds = int(state.get("max_rounds") or 3)
+    panel_wait = set(sh.panel_waiting(fs, vw))
     todo: list[str] = []
     for aid in pending:
+        if aid in panel_wait:
+            continue   # ought-欠定呈报未获答案:重编等用户确认(路由先经 ask 边,此为保险)
         mine = [f for f in fs if f.get("aid") == aid]
         if vw["cases"][aid]["status"] in (V.S_FAILED, V.S_CONTRADICTED):
             if F.contradictions(mine, aid) >= 2:
@@ -148,11 +157,12 @@ def author(state: dict) -> dict:
             att = [f for f in mine if f.get("ev") == "attribution"]
             disp = str(att[-1].get("disposition")) if att else "reflow"
             if disp not in ("reflow", "frozen", "defect_candidate"):
-                continue   # rerun_isolated/transient 由 merge 复跑;env_blocked 已终态
-            if F.rounds_used(mine, aid) >= max_rounds:
-                sh.append(state, [{"ev": "escalated", "aid": aid,
-                                   "reason": "max_rounds_exhausted"}])
-                sh.signal("escalated", aid, reason="max_rounds_exhausted")
+                continue   # rerun_isolated/transient 由 merge 复跑;env_blocked 走确认问询
+            # 轮次封顶 ≠ 终态(§11.7 三权分立:资源权归用户):记 cap_reached 进资源问询,
+            # 用户授权(granted_rounds)后封顶上移继续;引擎无单方终结权
+            if F.rounds_used(mine, aid) >= max_rounds + sh.granted_rounds(fs, aid):
+                sh.append(state, [{"ev": "cap_reached", "aid": aid,
+                                   "round": F.rounds_used(mine, aid)}])
                 continue
         todo.append(aid)
     if not todo:
@@ -497,26 +507,49 @@ def attribute(state: dict) -> dict:
     → attribution 事实(submit_attribution 落盘为证)。"""
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
-    todo = [a for a, c in vw["cases"].items()
-            if c["status"] in (V.S_FAILED, V.S_CONTRADICTED)]
+    todo = []
+    for aid, c in vw["cases"].items():
+        if c["status"] not in (V.S_FAILED, V.S_CONTRADICTED):
+            continue
+        mine = [f for f in fs if f.get("aid") == aid]
+        last = F.latest_verdict(mine, aid)
+        if last and any(f.get("ev") == "attribution"
+                        and f.get("run_id") == last.get("run_id") for f in mine):
+            continue   # 该 fail 裁决已归因过(每裁决一次;防 env 确认等待期反复烧孔)
+        todo.append(aid)
     if not todo:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
     lr_ref = str(state.get("last_run_ref") or "")
     data = sh.read_json(sh.project_root() / lr_ref, []) or []
     recs = {str(r.get("autoid")): r for r in data if isinstance(r, dict)}
 
+    t0 = time.time()   # panel 收割新鲜度基线:早于本轮派发的 ask_panel.json 是陈旧遗留
     executor, limiter, _ = sh.fork_executor(len(todo))
     for aid in todo:
         rec = recs.get(aid, {})
         mine = [f for f in fs if f.get("aid") == aid]
         contra = F.contradictions(mine, aid)
-        brief = json.dumps({
+        env = {
             "autoid": aid, "last_run_path": lr_ref,
             "device_build": state.get("device_build", ""),
             "batch_pass_examples": [a for a, c in vw["cases"].items()
                                     if c["status"] in (V.S_DELIVERABLE, V.S_SUBSET_VERIFIED)][:6],
             "contradiction": bool(contra),
-        }, ensure_ascii=False) + "\n" + (
+        }
+        # 已答 panel 裁决随 brief 下发:同一差异用户已裁,不再重复呈报(§2.6 收敛律
+        # 的批内面;跨批由 B 片判例检索承接)
+        pf = [f for f in mine if f.get("ev") == "ask_panel"]
+        if pf:
+            prnd = int(pf[-1].get("round") or 0)
+            dec = next((d for d in reversed(mine) if d.get("ev") == "decision"
+                        and str(d.get("question_id")) == f"panel:{aid}:{prnd}"), None)
+            if dec:
+                env["prior_adjudication"] = {
+                    "shape": str(pf[-1].get("shape") or ""),
+                    "answer": str(dec.get("answer") or "")[:300],
+                    "token": str(dec.get("token") or ""),
+                    "note": "already adjudicated by the user — do not re-file the same discrepancy"}
+        brief = json.dumps(env, ensure_ascii=False) + "\n" + (
             "<device_help>\n" + str(rec.get("_device_help"))[:1500] + "\n</device_help>\n"
             if rec.get("_device_help") else "")
         with limiter:
@@ -539,6 +572,24 @@ def attribute(state: dict) -> dict:
                               "evidence": str(att.get("evidence") or "")[:500]})
             if att.get("disposition") == "env_blocked":
                 sh.signal("escalated", aid, reason="env_blocked")
+    # 收账:submit_ask_panel 落盘的呈报面板 → ask_panel 事实(§11.11 构件四;
+    # 按引用流:facts 只记形态+盘上路径,面板全文渲染时现读)
+    for aid in todo:
+        pp = sh.outputs_root() / aid / "ask_panel.json"
+        if not pp.is_file():
+            continue
+        panel = sh.read_json(pp, {}) or {}
+        if float(panel.get("ts") or 0) < t0 - 1:
+            continue   # 上一轮遗留(用户可能已答过);只收本轮孔新产的
+        mine = [f for f in fs if f.get("aid") == aid]
+        rnd = F.rounds_used(mine, aid)
+        already = any(f.get("ev") == "ask_panel" and str(f.get("aid")) == aid
+                      and int(f.get("round") or 0) == rnd for f in fs)
+        if not already:
+            new_facts.append({"ev": "ask_panel", "aid": aid, "round": rnd,
+                              "shape": str(panel.get("conflict_shape") or ""),
+                              "intent_signature": str(panel.get("intent_signature") or ""),
+                              "ref": str(pp.relative_to(sh.project_root()))})
     sh.append(state, new_facts)
     fs2 = sh.load_facts(state)
     sh.emit_tick(state, "attribute", fs2)
@@ -546,36 +597,170 @@ def attribute(state: dict) -> dict:
 
 
 # ---------------------------------------------------- [user] ask_contradiction
+def _case_story(mine: list[dict]) -> str:
+    """极简人话时间线(A 片内联版;C 片渲染层落地后由其接管)。"""
+    ctx_cn = {"delivery": "整卷复验", "subset": "单独验证"}
+    out = []
+    for f in mine:
+        if f.get("ev") == "authored":
+            out.append(f"第{int(f.get('round') or 0)}次编写")
+        elif f.get("ev") == "verdict":
+            out.append(f"{ctx_cn.get(str(f.get('ctx')), f.get('ctx'))}"
+                       f"{'通过' if f.get('result') == 'pass' else '未通过'}")
+    return "→".join(out[-8:])
+
+
+def _case_diag(mine: list[dict]) -> str:
+    atts = [f for f in mine if f.get("ev") == "attribution"]
+    if not atts:
+        return ""
+    a = atts[-1]
+    note = str(a.get("user_note") or "").strip()
+    return note or str(a.get("fix_direction") or "")[:160]
+
+
+def _latest_panel(mine: list[dict], aid: str) -> tuple[dict, int]:
+    """最新 ask_panel 事实的(盘上面板全文, round);无则 ({}, -1)。"""
+    pf = [f for f in mine if f.get("ev") == "ask_panel"]
+    if not pf:
+        return {}, -1
+    last = pf[-1]
+    panel = sh.read_json(sh.project_root() / str(last.get("ref") or ""), {}) or {}
+    return panel, int(last.get("round") or 0)
+
+
+def _answer_token(kind: str, a: str) -> str:
+    """用户答案 → 小写决策 token(机械映射;挂起/停止是跨题面常驻特权)。
+    自由输入(Other)按题面语义归并:panel→correct(纠正反馈)、cap→continue(带
+    反馈继续)、env→retry、contra→reorder、suspended→keep(不明确不动)。
+    特权词只在短指令里生效(≤8 字):长句里的「挂起/停止」多为叙述
+    (「不要挂起,按手册来」),按题面默认走、原文全程保留在 decision 里。"""
+    short = len(a) <= 8
+    if kind == "suspended":
+        # 先于特权判定:「保持挂起」是本题面的常规选项,不是特权触发
+        if "恢复" in a:
+            return "resume"
+        return "stop" if ("停止" in a and short) else "keep"
+    if "挂起" in a and (short or a.startswith("挂起")):
+        return "suspend"
+    if "停止" in a and (short or a.startswith("停止")):
+        return "stop"
+    if kind == "panel":
+        if "缺陷" in a:
+            return "defect"
+        if "确认" in a or "按此" in a:
+            return "confirm"
+        return "correct"
+    if kind == "cap":
+        return "continue"
+    if kind == "env":
+        return "stop" if "确认环境" in a else "retry"
+    if kind == "contra":
+        if "降级" in a or "接受单跑" in a:
+            return "downgrade"
+        return "reorder"
+    return "correct"
+
+
 def ask_contradiction(state: dict) -> dict:
-    """矛盾即问(第三条 ask 边):矛盾≥2 的案,携累计历史问用户;每次矛盾都回到这里。"""
+    """用户问询边终形(§11.11 构件六):目标 = 未答 ask_panel ∪ cap 二分 ∪ contra≥2
+    ∪ env 待确认 ∪ 挂起案新批恢复。题面渲染自 panel(差异呈报+已检索+理解 Z);
+    决策存小写 token(confirm|correct|defect|…);挂起/停止=常驻特权(自由输入兜底,
+    不占选项);未获答案(非交互/面板取消)→ 自动挂起带可行动反馈,永不空转。"""
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
-    targets = [a for a, c in vw["cases"].items()
-               if c["status"] == V.S_CONTRADICTED and c["contradictions"] >= 2]
+    t = sh.ask_targets(state, fs, vw)
+    cap_set = set(t["cap"])
+    # 优先序 panel>contra>cap>env>suspended;panel∩cap 合并一题(cap 语境附注)
+    ordered = ([(a, "panel") for a in t["panel"]] + [(a, "contra") for a in t["contra"]]
+               + [(a, "cap") for a in t["cap"]] + [(a, "env") for a in t["env"]]
+               + [(a, "suspended") for a in t["suspended"]])
+    seen: set = set()
+    targets = [(a, k) for a, k in ordered if not (a in seen or seen.add(a))]
     if not targets:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
+    m = sh.manifest(state)
+    titles = {str(c.get("autoid")): str(c.get("title") or "") for c in (m.get("cases") or [])}
     payload = []
-    for aid in targets:
+    qids: dict[str, str] = {}
+    for aid, kind in targets:
         mine = [f for f in fs if f.get("aid") == aid]
-        prior = [f.get("answer") for f in mine if f.get("ev") == "decision"
-                 and str(f.get("question_id", "")).startswith("contra:")]
-        payload.append({"autoid": aid,
-                        "contradictions": vw["cases"][aid]["contradictions"],
-                        "prior_choices": prior})
+        item = {"autoid": aid, "kind": kind,
+                "title": titles.get(aid, ""),
+                "rounds": vw["cases"][aid]["rounds"],
+                "contradictions": vw["cases"][aid]["contradictions"],
+                "timeline": _case_story(mine),
+                "diagnosis": _case_diag(mine)[:300],
+                "prior_choices": [f.get("answer") for f in mine if f.get("ev") == "decision"]}
+        if kind == "panel":
+            panel, prnd = _latest_panel(mine, aid)
+            item["panel"] = {k: panel.get(k) for k in
+                             ("conflict_shape", "sides", "retrieval_receipt",
+                              "hypothesis", "ask", "intent_signature")}
+            item["cap_reached"] = aid in cap_set
+            qids[aid] = f"panel:{aid}:{prnd}"
+        elif kind == "cap":
+            atts = [f for f in mine if f.get("ev") == "attribution"]
+            item["evidence"] = str((atts[-1] if atts else {}).get("fix_direction") or "")[:300]
+            qids[aid] = f"cap:{aid}:{vw['cases'][aid]['rounds']}"
+        elif kind == "env":
+            atts = [f for f in mine if f.get("ev") == "attribution"]
+            item["evidence"] = str((atts[-1] if atts else {}).get("evidence") or "")[:300]
+            qids[aid] = f"env:{aid}:{int((atts[-1] if atts else {}).get('round') or 0)}"
+        elif kind == "suspended":
+            n_runs = sum(1 for f in fs if f.get("ev") == "run_start")
+            qids[aid] = f"resume:{aid}:{n_runs}"
+        else:
+            qids[aid] = f"contra:{aid}:{vw['cases'][aid]['contradictions']}"
+        payload.append(item)
     ans = interrupt({"kind": "ask_contradiction", "cases": payload})
     new_facts = []
-    for aid in targets:
-        a = str((ans or {}).get(aid) or (ans or {}).get("decision") or "")
+    for item in payload:
+        aid, kind, qid = item["autoid"], item["kind"], qids[item["autoid"]]
+        mine = [f for f in fs if f.get("aid") == aid]
+        a = str((ans or {}).get(aid) or "")
         if not a:
+            # 安全件(§11.11):未获答案不悬置不空转——自动挂起,报告给出恢复路径;
+            # 本就挂起的案保持原状(不落重复事实)
+            if kind != "suspended":
+                new_facts.append({"ev": "decision", "aid": aid, "question_id": qid,
+                                  "answer": "", "token": "suspend",
+                                  "note": "auto-suspended: no answer (non-interactive or panel cancelled)"})
+                new_facts.append({"ev": "suspended", "aid": aid, "reason": f"auto:{qid}"})
+                sh.emit(f"…{aid[-6:]} 未获答案,自动挂起(重跑同参数会再次呈报)")
             continue
-        n = vw["cases"][aid]["contradictions"]
-        new_facts.append({"ev": "decision", "aid": aid,
-                          "question_id": f"contra:{aid}:{n}", "answer": a})
-        if a in ("接受单跑", "accept_subset", "降级", "downgrade"):
+        tok = _answer_token(kind, a)
+        new_facts.append({"ev": "decision", "aid": aid, "question_id": qid,
+                          "answer": a, "token": tok})
+        if tok == "suspend":
+            new_facts.append({"ev": "suspended", "aid": aid, "reason": qid})
+        elif tok in ("stop", "downgrade"):
+            # 止损=用户显式裁决(evidence=user → 终态;不符交付预期,记未通过卷)
             new_facts.append({"ev": "attribution", "aid": aid, "round": 99,
                               "layer": "E", "disposition": "env_blocked",
                               "fix_direction": f"user decision: {a}", "evidence": "user"})
-        sh.signal("user_decided", aid, kind="contradiction")
+        elif tok == "defect":
+            # 用户确认产品缺陷=唯一合法非 excel 结果(§11.7 telos);走缺陷候选单
+            new_facts.append({"ev": "attribution", "aid": aid, "round": 99,
+                              "layer": "product_defect", "disposition": "defect_candidate",
+                              "fix_direction": f"user confirmed product defect: {a}",
+                              "evidence": "user"})
+        elif tok == "retry":
+            # 用户不接受环境阻塞判断 → 开隔离复跑处方(用户来源,merge 收进待验集)
+            new_facts.append({"ev": "attribution", "aid": aid,
+                              "round": F.rounds_used(mine, aid),
+                              "run_id": f"user:env_retry:{qid}",
+                              "layer": "E", "disposition": "rerun_isolated",
+                              "fix_direction": f"user overrode env_blocked: {a}",
+                              "evidence": "user"})
+        elif tok == "resume":
+            new_facts.append({"ev": "resumed", "aid": aid, "of": qid})
+        elif tok == "keep":
+            new_facts.append({"ev": "suspended", "aid": aid, "reason": f"keep:{qid}"})
+        # confirm/correct:decision(含用户原文)即全部所需——briefs 把 panel 理解 Z
+        # 与用户答案注入重编 brief;cap 的 continue 经 granted_rounds 上移封顶;
+        # contra 的 reorder 回既有复验环。
+        sh.signal("user_decided", aid, kind=kind)
     sh.append(state, new_facts)
     fs2 = sh.load_facts(state)
     return {"phase_status": "ok", **sh.counts_update(state, fs2)}

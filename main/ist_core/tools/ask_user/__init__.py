@@ -49,6 +49,24 @@ def list_pending_questions() -> list[dict[str, Any]]:
                 for qid, q in _PENDING.items()]
 
 
+def cancel_all_pending(reason: str = "") -> int:
+    """teardown 终结器(MiMo-Code question/index.ts 移植):TUI 退出/会话终结时把所有
+    挂起问询以「无答案」唤醒——阻塞在 event.wait() 的引擎/工具线程立即收到取消并
+    走自己的无答案路径(引擎侧=自动挂起带反馈),永不悬死。返回取消条数。"""
+    with _PENDING_LOCK:
+        items = list(_PENDING.values())
+    n = 0
+    for pending in items:
+        evt = pending.get("_event")
+        if pending.get("answers") is None and evt is not None and not evt.is_set():
+            evt.set()
+            n += 1
+    if n:
+        logger.info("ask_user teardown:取消 %d 个挂起问询%s", n,
+                    f"({reason})" if reason else "")
+    return n
+
+
 def submit_answers(question_id: str, answers: dict[str, str]) -> bool:
     """TUI 端用：用户选完后回写答案，唤醒等待的工具调用。
 

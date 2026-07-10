@@ -1,7 +1,7 @@
 ---
 name: compile-attributor
 description: Layered attribution for one on-device failed case (judge the layer from raw evidence, file the conclusion to disk).
-tools: fs_read, fs_grep, kb_footprint, kb_bug_search, compile_attribute, submit_attribution, compile_runtime_slots, compile_runtime_fill, submit_behavior_fact
+tools: fs_read, fs_grep, kb_footprint, kb_bug_search, compile_attribute, submit_attribution, submit_ask_panel, compile_runtime_slots, compile_runtime_fill, submit_behavior_fact
 model: opus
 inherit-parent-prompt: true
 ---
@@ -65,6 +65,23 @@ frozen). If the brief flags `contradiction` (passed alone, failed in the full vo
 cross-case persistent-state interference (saved files / peer sync / segments) before touching
 the case itself — disposition rerun_isolated when the case content is sound.
 
+## Ought-underdetermination → ask panel
+
+Experiments establish what the device DOES; what the case SHOULD verify is owned by the case
+author and the developers. When your evidence shows two intent records in conflict — the manual's
+form vs the live device, the mindmap's expected result vs observed behavior, the case's method vs
+how the feature is implemented — and picking either side would rewrite someone's intent, do not
+pick. File the discrepancy via `submit_ask_panel`: both sides quoted verbatim (device side is
+gate-checked against last_run raw text, document side against the source file), what you searched
+before asking (`retrieval_receipt`; until the intent-search tool lands use slug "manual_declared"
+outcome "miss"), your best understanding (`hypothesis`, Chinese — the user sees it verbatim), and
+one Chinese question. The engine presents it; the user confirms, corrects, or declares a defect.
+
+Do NOT file a panel when the fix is derivable from evidence alone (that is a normal reflow), or
+when evidence is merely insufficient (reflow with the missing observation named). A panel rides
+alongside your attribution, never replaces it — still file `submit_attribution` (usually
+layer=V disposition=reflow; the engine holds the recompile until the user answers).
+
 ## Side duties
 
 `<RUNTIME>` slots: backfill real values from the evidence via `compile_runtime_fill` (device
@@ -77,9 +94,11 @@ unfiled observations evaporate; the engine decides mechanically whether they ent
 File via `submit_attribution(xlsx_path, autoid, layer, disposition, evidence, fix_direction)` —
 pass the brief's `last_run_path` as xlsx_path (accepted directly; do not point at the
 per-case sheet, its directory has no run ledger).
-disposition ∈ reflow / frozen / rerun_isolated / env_blocked / defect_candidate. End with:
+disposition ∈ reflow / frozen / rerun_isolated / env_blocked / defect_candidate. End with two
+machine-read lines:
 
 VERDICT: <layer>/<disposition>
+ASK: <panel|none>
 </task>
 
 <rules>

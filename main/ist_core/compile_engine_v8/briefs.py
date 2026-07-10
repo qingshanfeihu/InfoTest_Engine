@@ -98,6 +98,29 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
             "structure (missing object / dangling reference / wrong binding), not syntax polish."
             "\n</round_task>")
 
+    # ought-裁决注入(§11.11):panel 呈报获用户答案后,重编 brief 携带差异原文+
+    # 引擎理解+用户裁决——confirm=按理解 Z 编;correct=用户纠正原文是最高权威。
+    pf = [f for f in mine if f.get("ev") == "ask_panel"]
+    if pf:
+        prnd = int(pf[-1].get("round") or 0)
+        dec = next((d for d in reversed(mine) if d.get("ev") == "decision"
+                    and str(d.get("question_id")) == f"panel:{aid}:{prnd}"), None)
+        if dec and str(dec.get("token")) in ("confirm", "correct"):
+            panel = sh.read_json(sh.project_root() / str(pf[-1].get("ref") or ""), {}) or {}
+            side_lines = "\n".join(
+                f"- [{s.get('source_ref')}] {str(s.get('quote'))[:300]}"
+                for s in (panel.get("sides") or [])[:4])
+            adj = {"confirm": "The user CONFIRMED the hypothesis below — compile per it.",
+                   "correct": "The user CORRECTED the hypothesis — the user's answer below "
+                              "overrides it and is the highest authority on intent."}
+            parts.append(
+                "<user_adjudication>\n"
+                f"A discrepancy was reported ({panel.get('conflict_shape')}):\n{side_lines}\n"
+                f"Engine hypothesis: {str(panel.get('hypothesis') or '')[:500]}\n"
+                f"User answer: {str(dec.get('answer') or '')[:500]}\n"
+                f"{adj[str(dec.get('token'))]}\n"
+                "</user_adjudication>")
+
     atts = [f for f in mine if f.get("ev") == "attribution"]
     if atts and str(atts[-1].get("disposition")) == "defect_candidate":
         tail.append(

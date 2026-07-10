@@ -18,8 +18,30 @@ S_FAILED = "failed"                   # 最新裁决 fail(同卷面),未终态
 S_SUBSET_VERIFIED = "subset_verified" # 子集 pass,待终验
 S_DELIVERABLE = "deliverable"         # delivery-ctx pass 且三重匹配
 S_CONTRADICTED = "contradicted"       # 矛盾计数>0 且当前不可交付
-S_ESCALATED = "escalated"             # 升级事实在案
-S_TERMINAL = "failed_terminal"        # 终态标注(env_blocked/defect 等 disposition)
+S_ESCALATED = "escalated"             # 升级事实在案(fork 无产出等基础设施失败)
+S_TERMINAL = "failed_terminal"        # 终态标注(仅用户来源的止损裁决,§11.7 三权分立)
+S_SUSPENDED = "suspended"             # 用户裁决挂起(非终态:下批同参续跑)
+
+
+def _user_sourced(att: dict) -> bool:
+    """止损归用户(§11.7):env_blocked/defect_candidate 只有携用户来源标记才构成终态;
+    归因器自判的是待确认判断(进 ask 边),不是引擎单方终结权。
+    判 round==99 单一信号:该值只能由 ask_contradiction 节点写——fork 经
+    submit_attribution 落账时 round 由工具内部取自台账 _round,入参伪造不了;
+    而 evidence 字符串可被设备回显里的常见词(如 "user")撞上,不作来源信号。"""
+    return int(att.get("round") or 0) == 99
+
+
+def _is_suspended(mine: list[dict]) -> bool:
+    """挂起非终态(§11.11):最后一个 suspended 之后出现 resumed 即解除(跨批恢复通道)。"""
+    last_susp = -1
+    last_resume = -1
+    for i, f in enumerate(mine):
+        if f.get("ev") == "suspended":
+            last_susp = i
+        elif f.get("ev") == "resumed":
+            last_resume = i
+    return last_susp >= 0 and last_resume < last_susp
 
 
 def case_status(fs: list[dict], aid: str, current_artifact: str,
@@ -28,7 +50,11 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
     mine = [f for f in fs if str(f.get("aid")) == aid]
     if any(f.get("ev") == "escalated" for f in mine):
         return S_ESCALATED
-    if any(f.get("ev") == "attribution" and f.get("disposition") in ("env_blocked",)
+    if _is_suspended(mine):
+        return S_SUSPENDED
+    # 用户来源终态两种:止损(env_blocked)与确认产品缺陷(defect_candidate 走候选单)
+    if any(f.get("ev") == "attribution" and _user_sourced(f)
+           and f.get("disposition") in ("env_blocked", "defect_candidate")
            for f in mine):
         return S_TERMINAL
     if any(f.get("ev") == "needs_decision" for f in mine) and not any(
@@ -76,6 +102,6 @@ def batch_view(fs: list[dict], manifest: dict) -> dict:
 
 
 def all_settled(view: dict) -> bool:
-    """不动点判据:每案都在 {deliverable, escalated, failed_terminal}。"""
-    return all(v["status"] in (S_DELIVERABLE, S_ESCALATED, S_TERMINAL)
+    """不动点判据:每案都在 {deliverable, escalated, failed_terminal, suspended}。"""
+    return all(v["status"] in (S_DELIVERABLE, S_ESCALATED, S_TERMINAL, S_SUSPENDED)
                for v in view["cases"].values()) and bool(view["cases"])

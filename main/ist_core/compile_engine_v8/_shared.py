@@ -48,12 +48,114 @@ def view(state: dict, fs: list[dict] | None = None) -> dict:
     return V.batch_view(fs if fs is not None else load_facts(state), manifest(state))
 
 
+def cap_waiting(fs: list[dict]) -> list[str]:
+    """轮次封顶待授权案:cap_reached 事实存在且该轮 cap 问题未获 decision(§11.7 资源问询)。"""
+    out = []
+    for f in fs:
+        if f.get("ev") != "cap_reached":
+            continue
+        aid, rnd = str(f.get("aid")), int(f.get("round") or 0)
+        qid = f"cap:{aid}:{rnd}"
+        if not any(d.get("ev") == "decision" and d.get("question_id") == qid for d in fs):
+            if aid not in out:
+                out.append(aid)
+    return out
+
+
+def granted_rounds(fs: list[dict], aid: str) -> int:
+    """用户已授权的追加轮次(cap 问询答「继续」每次 +2;token 优先,兼容早期无 token 事实)。"""
+    n = 0
+    for f in fs:
+        if (f.get("ev") == "decision" and str(f.get("aid")) == aid
+                and str(f.get("question_id", "")).startswith("cap:")):
+            tok = str(f.get("token") or "")
+            if tok == "continue" or (not tok and "继续" in str(f.get("answer", ""))):
+                n += 2
+    return n
+
+
+def env_confirm_waiting(fs: list[dict], vw: dict) -> list[str]:
+    """归因器自判 env_blocked 待用户确认的案(§11.7:止损归用户,引擎无单方终结权)。
+
+    最新归因为 env_blocked 且非用户来源、且该判断未获 decision → 进 ask 边。"""
+    out = []
+    for aid, c in vw["cases"].items():
+        if c["status"] in (V.S_DELIVERABLE, V.S_TERMINAL, V.S_SUSPENDED, V.S_ESCALATED):
+            continue
+        mine = [f for f in fs if str(f.get("aid")) == aid]
+        atts = [f for f in mine if f.get("ev") == "attribution"]
+        if not atts or str(atts[-1].get("disposition")) != "env_blocked":
+            continue
+        if V._user_sourced(atts[-1]):
+            continue
+        qid = f"env:{aid}:{int(atts[-1].get('round') or 0)}"
+        if not any(d.get("ev") == "decision" and d.get("question_id") == qid for d in mine):
+            out.append(aid)
+    return out
+
+
+def panel_waiting(fs: list[dict], vw: dict) -> list[str]:
+    """归因孔呈报的 ought-欠定面板待答案(§11.11:panel 事实存在且该轮未获 decision)。"""
+    out = []
+    for f in fs:
+        if f.get("ev") != "ask_panel":
+            continue
+        aid = str(f.get("aid"))
+        c = vw["cases"].get(aid)
+        if not c or c["status"] in (V.S_DELIVERABLE, V.S_TERMINAL, V.S_SUSPENDED,
+                                    V.S_ESCALATED):
+            continue
+        qid = f"panel:{aid}:{int(f.get('round') or 0)}"
+        if not any(d.get("ev") == "decision" and d.get("question_id") == qid for d in fs):
+            if aid not in out:
+                out.append(aid)
+    return out
+
+
+def suspended_resume_waiting(fs: list[dict], vw: dict) -> list[str]:
+    """挂起案跨批恢复问询:新批(run_start 在最后 suspended 之后)开工时问一次
+    「恢复处理/保持挂起」——同批内挂起后绝不再问(挂起=本批不打扰)。"""
+    n_runs = sum(1 for f in fs if f.get("ev") == "run_start")
+    out = []
+    for aid, c in vw["cases"].items():
+        if c["status"] != V.S_SUSPENDED:
+            continue
+        idx_susp = max((i for i, f in enumerate(fs)
+                        if f.get("ev") == "suspended" and str(f.get("aid")) == aid),
+                       default=-1)
+        if idx_susp < 0 or not any(f.get("ev") == "run_start" for f in fs[idx_susp + 1:]):
+            continue
+        qid = f"resume:{aid}:{n_runs}"
+        if not any(d.get("ev") == "decision" and d.get("question_id") == qid
+                   and str(d.get("aid")) == aid for d in fs):
+            out.append(aid)
+    return out
+
+
+def ask_targets(state: dict, fs: list[dict], vw: dict) -> dict:
+    """ask 边目标(§11.11 构件六;B 片再加采信失败队列):
+    panel = 归因孔 ought-欠定呈报待确认;contra = 矛盾≥2 且本次矛盾未获裁决;
+    cap = 轮次封顶待授权(有 panel 呈报之/无则工程故障呈报——二分在题面层);
+    env = 归因器止损判断待确认;suspended = 挂起案新批恢复问询。"""
+    contra = []
+    for aid, c in vw["cases"].items():
+        if c["status"] == V.S_CONTRADICTED and c["contradictions"] >= 2:
+            qid = f"contra:{aid}:{c['contradictions']}"
+            if not any(d.get("ev") == "decision" and d.get("question_id") == qid
+                       for d in fs):
+                contra.append(aid)
+    return {"panel": panel_waiting(fs, vw), "contra": contra,
+            "cap": cap_waiting(fs), "env": env_confirm_waiting(fs, vw),
+            "suspended": suspended_resume_waiting(fs, vw)}
+
+
 def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
     """视图 → 条件边计数缓存(INV-7:缓存;真理在事实流)。"""
+    if fs is None:
+        fs = load_facts(state)
     vw = view(state, fs)
     c = vw["counts"]
-    ask_contra = sum(1 for x in vw["cases"].values()
-                     if x["status"] == V.S_CONTRADICTED and x["contradictions"] >= 2)
+    t = ask_targets(state, fs, vw)
     return {
         "n_pending": c.get(V.S_PENDING, 0),
         "n_awaiting_user": c.get(V.S_AWAITING_USER, 0),
@@ -62,8 +164,11 @@ def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
         "n_subset_verified": c.get(V.S_SUBSET_VERIFIED, 0),
         "n_deliverable": c.get(V.S_DELIVERABLE, 0),
         "n_contradicted": c.get(V.S_CONTRADICTED, 0),
-        "n_settled_bad": c.get(V.S_ESCALATED, 0) + c.get(V.S_TERMINAL, 0),
-        "n_ask_contradiction": ask_contra,
+        "n_settled_bad": (c.get(V.S_ESCALATED, 0) + c.get(V.S_TERMINAL, 0)
+                          + c.get(V.S_SUSPENDED, 0)),
+        # 去重计数(一个案可能同时命中 panel 与 cap,题面层合并成一题)
+        "n_ask_contradiction": len(set(t["panel"]) | set(t["contra"]) | set(t["cap"])
+                                   | set(t["env"]) | set(t["suspended"])),
     }
 
 
@@ -109,7 +214,7 @@ def emit_tick(state: dict, phase: str, fs: list[dict] | None = None) -> None:
             "awaiting_user": 0,
             "passed": c.get("deliverable", 0),
             "failed_active": c.get("failed", 0) + c.get("contradicted", 0),
-            "failed_terminal": c.get("failed_terminal", 0),
+            "failed_terminal": c.get("failed_terminal", 0) + c.get("suspended", 0),
             "escalated": c.get("escalated", 0),
         }
         _fork_emit_event({"event": "engine_tick",

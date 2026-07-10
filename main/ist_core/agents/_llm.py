@@ -297,6 +297,22 @@ def _get_chat_openai_with_reasoning():
             # IST_TOOLS_STRICT=1 → 统一 strict 绑定(见类 docstring;默认关)。
             if os.environ.get("IST_TOOLS_STRICT", "0") == "1":
                 kwargs.setdefault("strict", True)
+            elif kwargs.get("strict") is None:
+                # per-tool strict 单点开(DESIGN §11.11:结构化落账工具走 strict 通道
+                # ——mimo 端点实测 response_format json_schema 双形态不守约、strict 工具
+                # 双形态满分且与思考兼容;全局开关不动,只对名单内工具逐个转换)。
+                from main.ist_core.agents._llm_strict import PER_TOOL_STRICT, to_strict_tool
+                converted, changed = [], False
+                for t in tools:
+                    name = getattr(t, "name", None) or (
+                        (t.get("function") or {}).get("name") if isinstance(t, dict) else None)
+                    if name in PER_TOOL_STRICT:
+                        converted.append(to_strict_tool(t))
+                        changed = True
+                    else:
+                        converted.append(t)
+                if changed:
+                    tools = converted
             return super().bind_tools(tools, **kwargs)
 
         def _split_think_inline(self, text: str) -> tuple[str, str]:

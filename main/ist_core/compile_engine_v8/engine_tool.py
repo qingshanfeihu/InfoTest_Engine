@@ -40,7 +40,8 @@ def _panel(questions: list[dict]) -> dict:
             return {"_non_interactive": True}
         for q in batch:
             header = str(q.get("header", ""))
-            m = _re.search(rf'"{_re.escape(header)}"="([^"]+)"', out or "")
+            # 非贪婪到「下一键或串尾」:Other 自由输入可含引号,[^"]+ 会早停截断
+            m = _re.search(rf'"{_re.escape(header)}"="(.*?)"(?=\. "|\.?\s*$)', out or "")
             if m:
                 answers[str(q.get("_key", header))] = m.group(1)
     return answers
@@ -89,20 +90,90 @@ def _bridge(payload: dict) -> dict:
             q["_key"] = str(q.get("_autoid") or q.get("header") or "")
         return _panel(qs)
     if kind == "ask_contradiction":
-        qs = []
-        for c in (payload.get("cases") or []):
-            aid = str(c.get("autoid"))
-            qs.append({
-                "question": f"用例 …{aid[-6:]} 单跑通过、整卷复验第 {c.get('contradictions')} 次失败"
-                            f"(跨案持久态互扰嫌疑;既往选择 {c.get('prior_choices') or '无'}),如何处置?",
-                "header": f"矛盾{aid[-4:]}",
-                "options": [
-                    {"label": "接受单跑", "description": "按单跑语义标注交付(报告声明整卷互扰)"},
-                    {"label": "重排复验", "description": "重排卷序后再终验一轮"},
-                    {"label": "如实降级", "description": "该案不入交付卷,如实报告"}],
-                "_key": aid})
-        return _panel(qs)
+        return _panel([_contradiction_question(c) for c in (payload.get("cases") or [])])
     return {"_non_interactive": True}
+
+
+_SHAPE_CN = {"manual_vs_device": "手册与实机不符",
+             "expected_vs_observed": "预期结果与上机行为不符",
+             "method_vs_implementation": "验证方法与功能实现不符",
+             "ordering_vs_persistence": "执行顺序与持久化状态互扰",
+             "other": "意图记载有差异"}
+_RECEIPT_CN = {"miss": "知识库未命中", "hit_conflicting": "命中但记载互斥",
+               "hit_adopted_blocked": "命中但与实机矛盾未采用"}
+
+
+# 引文截断上限:题面(用户裁决所见)与 briefs 重编注入(worker 所得)必须同一事实面
+_QUOTE_CLIP = 300
+
+
+def _side_cn(s: dict) -> str:
+    src = str(s.get("source_ref") or "")
+    label = "实机回显" if (src in ("device", "device_context", "causality", "detail_tail",
+                                   "framework_traceback") or "last_run" in src) \
+        else src.rsplit("/", 1)[-1]
+    return f"{label}:『{str(s.get('quote') or '')[:_QUOTE_CLIP]}』"
+
+
+def _contradiction_question(c: dict) -> dict:
+    """问询目标 → 面板一题(§11.11 构件六:题面渲染自 panel,自然中文,零内部术语)。"""
+    aid = str(c.get("autoid"))
+    kind = str(c.get("kind") or "contra")
+    title = str(c.get("title") or "")
+    who = f"用例 …{aid[-6:]}" + (f"({title[:24]})" if title else "")
+    if kind == "panel":
+        p = c.get("panel") or {}
+        sides = "；".join(_side_cn(s) for s in (p.get("sides") or [])[:3])
+        rc = [str(r.get("outcome") or "") for r in (p.get("retrieval_receipt") or [])]
+        searched = "、".join(sorted({_RECEIPT_CN.get(x, x) for x in rc if x}))
+        shape_cn = _SHAPE_CN.get(str(p.get("conflict_shape") or ""), _SHAPE_CN["other"])
+        q = (f"{who}:{shape_cn}。双方记载——{sides}。"
+             + (f"已检索:{searched}。" if searched else "")
+             + f"引擎的理解:{str(p.get('hypothesis') or '')[:300]}。"
+             + str(p.get("ask") or "这样理解对吗?")
+             + ("(该用例重编轮次已用尽,你的答案同时决定是否继续)" if c.get("cap_reached") else "")
+             + " 如两者都不对,选 Other 直接写出正确的意图/预期。")
+        return {"question": q, "header": f"确认{aid[-4:]}",
+                "options": [
+                    {"label": "确认,按此继续", "description": "按引擎的理解重编该用例"},
+                    {"label": "确认产品缺陷", "description": "该差异是产品问题——记入缺陷候选单,该用例以缺陷结案"}],
+                "_key": aid}
+    if kind == "cap":
+        q = (f"{who} 已重编 {c.get('rounds')} 轮仍未通过"
+             + (f"(最近的修法方向:{str(c.get('evidence') or '')[:160]})" if c.get("evidence") else "")
+             + ",引擎多轮未收敛。如何处理?")
+        return {"question": q, "header": f"轮次{aid[-4:]}",
+                "options": [
+                    {"label": "继续,再修 2 轮", "description": "授权追加重编轮次"},
+                    {"label": "挂起该案", "description": "先放一放,跑完其他用例;重跑同参数时会再次询问"},
+                    {"label": "停止该案", "description": "以未通过如实报告,不再消耗轮次"}],
+                "_key": aid}
+    if kind == "env":
+        q = (f"{who} 的失败被判为环境阻塞"
+             + (f"(依据:{str(c.get('evidence') or '')[:160]})" if c.get("evidence") else "")
+             + "。确认是环境问题吗?")
+        return {"question": q, "header": f"环境{aid[-4:]}",
+                "options": [
+                    {"label": "确认环境问题,停止该案", "description": "以环境阻塞如实报告该用例"},
+                    {"label": "不认可,隔离复跑", "description": "单独再跑一次验证这个判断"}],
+                "_key": aid}
+    if kind == "suspended":
+        q = f"{who} 上批被挂起。本批如何处理?"
+        return {"question": q, "header": f"挂起{aid[-4:]}",
+                "options": [
+                    {"label": "恢复处理", "description": "回到正常流程继续修"},
+                    {"label": "保持挂起", "description": "本批继续不动它"}],
+                "_key": aid}
+    q = (f"{who} 单独验证通过、整卷复验第 {c.get('contradictions')} 次失败"
+         f"(跨案持久态互扰嫌疑"
+         + (f";{str(c.get('diagnosis') or '')[:120]}" if c.get("diagnosis") else "")
+         + (f";既往选择:{c.get('prior_choices')}" if c.get("prior_choices") else "")
+         + "),如何处置?")
+    return {"question": q, "header": f"矛盾{aid[-4:]}",
+            "options": [
+                {"label": "重排复验", "description": "重排卷序后再终验一轮(互扰案排卷尾)"},
+                {"label": "如实降级", "description": "该案不入交付卷,以未通过如实报告"}],
+            "_key": aid}
 
 
 @tool(parse_docstring=True)

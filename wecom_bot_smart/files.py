@@ -1,16 +1,14 @@
-"""文件收发——接收走 HTTP+AES 解密，上传走官方 SDK。"""
+"""文件收发——接收走 SDK decrypt_file，上传走官方 SDK。"""
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import logging
-import math
 import os
+import re
 from pathlib import Path
-from typing import Any
 
 import requests
+from wecom_aibot_sdk.crypto import decrypt_file
 
 logger = logging.getLogger("wecom_bot_smart.files")
 
@@ -19,7 +17,7 @@ _MAX_FILE_BYTES = 100 * 1024 * 1024  # 100MB
 
 
 # ============================================================================
-# 文件接收（下载 + AES 解密，不变）
+# 文件接收（下载 + SDK AES 解密）
 # ============================================================================
 
 def download_qywx_file(file_url: str, aes_key_b64: str, save_dir: str) -> str:
@@ -34,23 +32,13 @@ def download_qywx_file(file_url: str, aes_key_b64: str, save_dir: str) -> str:
     resp.raise_for_status()
     encrypted = resp.content
 
-    # AES-256-CBC 解密
-    aes_key = base64.b64decode(aes_key_b64)
-    iv = aes_key[:16]
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.primitives import padding as crypto_padding
-    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv))
-    decryptor = cipher.decryptor()
-    padded = decryptor.update(encrypted) + decryptor.finalize()
-    # PKCS#7 去填充
-    unpadder = crypto_padding.PKCS7(128).unpadder()
-    data = unpadder.update(padded) + unpadder.finalize()
+    # 使用 SDK 内置解密（处理 base64 padding + PKCS#7 32 字节块）
+    data = decrypt_file(encrypted, aes_key_b64)
 
     # 从 URL 或 Content-Disposition 提取文件名
     fname = os.path.basename(file_url.split("?")[0]) or "downloaded_file"
     cd = resp.headers.get("Content-Disposition", "")
     if "filename" in cd:
-        import re
         m = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';\s]+)', cd)
         if m:
             fname = requests.utils.unquote(m.group(1))

@@ -4,7 +4,7 @@
 
     prep            ok→bed_gate | error→closing
     bed_gate        ok→author | bed_blocked→closing
-    author          欠定>0→ask_decision | 有待验卷→merge | 封顶待授权→ask_contradiction | 全躺→closing
+    author          欠定>0→ask_decision | 有待验卷→merge | 全躺→closing
     ask_decision    有待编(决策已答)→author | 有待验→merge | 全躺→closing
     merge           ok→run | error/nothing→closing
     run             ok→reconcile | busy/error→closing
@@ -37,8 +37,6 @@ def _after_author(s: dict) -> str:
         return "ask_decision"
     if s.get("n_authored", 0) > 0 or s.get("n_subset_verified", 0) > 0:
         return "merge"
-    if s.get("n_ask_contradiction", 0) > 0:
-        return "ask_contradiction"   # 轮次封顶=资源问询(11.7),不是终态
     return "closing"
 
 
@@ -96,8 +94,7 @@ def build_v8_graph(checkpointer=None):
     g.add_edge(START, "prep")
     g.add_conditional_edges("prep", _after_prep, ["bed_gate", "closing"])
     g.add_conditional_edges("bed_gate", _after_bed, ["author", "closing"])
-    g.add_conditional_edges("author", _after_author,
-                            ["ask_decision", "merge", "ask_contradiction", "closing"])
+    g.add_conditional_edges("author", _after_author, ["ask_decision", "merge", "closing"])
     g.add_conditional_edges("ask_decision", _after_ask_decision, ["author", "merge", "closing"])
     g.add_conditional_edges("merge", _after_merge, ["run", "closing"])
     g.add_conditional_edges("run", _after_run, ["reconcile", "closing"])

@@ -46,24 +46,7 @@ def _round_evidence(fs: list[dict], aid: str) -> list[dict]:
     return docs
 
 
-def _linker_fact_note(aid: str) -> str:
-    """上一轮成品卷的引用结构事实(V6 迁入):单看是常态形态,与设备回显合取才有诊断力
-    (dig 返回 CNAME 串而非 IP + 成员未本地定义 = 解析链断头,035413 三轮 escalated 根因)。"""
-    try:
-        from main.ist_core.tools.device.compile_pipeline import _grade_extract_facts
-        d = sh.outputs_root() / aid
-        facts = _grade_extract_facts(d / "case.xlsx", d / "case.provenance.json") or {}
-    except Exception:  # noqa: BLE001
-        return ""
-    notes = []
-    for k in ("cname_member_not_local_host_suspect",):
-        base = k[: -len("_suspect")]
-        if facts.get(k) and str(facts.get(base + "_note") or "").strip():
-            notes.append(str(facts[base + "_note"]).strip())
-    return "\n".join(notes)
-
-
-def build_brief(aid: str, state: dict, fs: list[dict], remedy: dict | None = None) -> str:
+def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
     mine = [f for f in fs if str(f.get("aid")) == aid]
     rounds_used = F.rounds_used(mine, aid)
     max_rounds = int(state.get("max_rounds") or 3)
@@ -98,11 +81,6 @@ def build_brief(aid: str, state: dict, fs: list[dict], remedy: dict | None = Non
             parts.append("<prior_config_rolls note=\"previous config sheets; fs_read and diff them\">\n"
                          + "\n".join(f"- {p.relative_to(sh.project_root())}" for p in prev)
                          + "\n</prior_config_rolls>")
-        linker = _linker_fact_note(aid)
-        if linker:
-            parts.append("<sheet_reference_facts note=\"structural facts from the previous "
-                         "sheet; individually normal, diagnostic only in conjunction with the "
-                         "device echo\">\n" + linker + "\n</sheet_reference_facts>")
         # 矛盾案(单跑过/连跑挂)明示对照——归因定向的重编不许无差别改卷
         n_contra = F.contradictions(mine, aid)
         contra = ("\nThis case passed in isolation but failed in the full-volume run — "
@@ -110,27 +88,10 @@ def build_brief(aid: str, state: dict, fs: list[dict], remedy: dict | None = Non
                   "sync / segments) before rewriting anything; prefer making the case "
                   "self-contained (own artifact names, head/tail cleanup of its own channel)."
                   if n_contra else "")
-        # 冻结注(V6 override 换法通道的 brief 面):同法已证伪,必须换法
-        frozen_note = ("\nThe same-signature fix has FAILED twice on this sheet — that "
-                       "approach is falsified. You must change the method (the emit gate "
-                       "will require an override_frozen_reason declaring what changed)."
-                       if F.frozen(mine, aid) else "")
-        # 导出修法注入(§11.7:引擎导出,worker 按引用现查手册落地,零写死命令)
-        remedy_note = ""
-        if remedy:
-            refs = "; ".join(str(r) for r in (remedy.get("refs") or [])[:2])
-            remedy_note = ("\n<derived_remedy>\naction: " + str(remedy.get("action"))
-                           + (f"\nchannel: {remedy.get('channel')}" if remedy.get("channel") else "")
-                           + (f"\nobligation: {remedy.get('obligation')}" if remedy.get("obligation") else "")
-                           + (f"\ndirection: {str(remedy.get('direction'))[:300]}" if remedy.get("direction") else "")
-                           + (f"\nmanual_refs: {refs}" if refs else "")
-                           + "\nThis remedy is derived from the persistence-channel grammar and "
-                             "the attribution history — implement it this round (look up exact "
-                             "command forms in the manual refs; do not invent them).\n</derived_remedy>")
         tail.append(
             f"<round_task>\nRecompile round (previous on-device runs failed; thinking depth is max"
             + ("; FINAL attempt" if rounds_used >= max_rounds - 1 else "") + ")."
-            + contra + frozen_note + remedy_note + "\n"
+            + contra + "\n"
             "Before adopting any prior attribution, answer independently against each round's "
             "device echo: did the config realize the intent (is the observed form the kind the "
             "intent asks for)? A wrong form with a right-looking assertion usually means config "

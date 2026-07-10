@@ -343,23 +343,6 @@ def _render_fork_card(payload: dict, *, now: float,
     frame = _FORK_SPINNER[int(now * 3) % 10]
     B, C, D, X, G, R, Y = _B, _C2, _D2, _X2, _G2, _R2, _Y2
 
-    if kind == "engine_summary":
-        # 收口卡(§11.2):交付结果一屏讲完;labels 已是引擎渲染层的人话
-        ok, total = int(p.get("ok") or 0), int(p.get("total") or 0)
-        head = (f"   {G}✓{X} {B}交付完成{X} {G}{ok}{X}{D}/{total} 全部通过整卷复验{X}"
-                if ok == total else
-                f"   {G}✓{X} {B}交付完成{X} {G}{ok}{X}{D}/{total} 通过,"
-                f"{total - ok} 项需你关注:{X}")
-        lines = [head]
-        for it in (p.get("labels") or [])[:6]:
-            aid = str(it.get("autoid") or "")
-            lines.append(f"     {Y}•{X} {D}…{aid[-6:]} {it.get('text', '')}{X}")
-        if p.get("missing"):
-            lines.append(f"     {R}⚠ 交付物与磁盘不一致:缺 {', '.join(str(x) for x in p['missing'])}{X}")
-        if p.get("report"):
-            lines.append(f"     {D}完整报告:{p['report']}{X}")
-        return "\n".join(lines)
-
     if kind == "progress":
         phase = str(p.get("phase") or "进行")
         n_cases = p.get("n_cases")

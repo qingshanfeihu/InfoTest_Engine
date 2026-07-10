@@ -200,7 +200,7 @@
   "provenance": "预期拒绝/不支持语义词表(draft 写的人类预期措辞,spec_conflict 探针专用)。刻意不复用 device_errors.has_cli_error(面向真实设备统一裁决句,对人写措辞几乎全失配,589432 教训);刻意不含『不存在/not found』——那是合法的删除验证预期,非预期冲突"
  },
  "persistence_channels": {
-  "_provenance": "2026-07-10 手册取证定形(CLI 10.5 Ch6/Ch20/Ch26 + Multi_Segment_Spec + HA Training):Λ(per-case 清场)只清运行配置;以下通道的产物在 Λ 外存活。字段:patterns=识别正则(卷面 G 列扫,行级);scope=污染作用域;mitigation=缓解动作(merge 排序/床态体检/共存检查)。新通道=加条目零代码(自愈合纪律)。 case_mitigation(2026-07-10 §11.8):案侧消解义务——互扰消解推论的复合手段之一(自清理∘排尾),按引用注入 worker/attributor brief,命令形态由 LLM 现查手册(refs 给出处)。",
+  "_provenance": "2026-07-10 手册取证定形(CLI 10.5 Ch6/Ch20/Ch26 + Multi_Segment_Spec + HA Training):Λ(per-case 清场)只清运行配置;以下通道的产物在 Λ 外存活。字段:patterns=识别正则(卷面 G 列扫,行级);scope=污染作用域;mitigation=缓解动作(merge 排序/床态体检/共存检查)。新通道=加条目零代码(自愈合纪律)。",
   "local_disk": {
    "patterns": [
     "^\\s*write\\s+(memory|file|net|all)\\b",
@@ -208,14 +208,7 @@
    ],
    "scope": "volume",
    "mitigation": "order_tail",
-   "provenance": "CLI Ch20:『clear sdns all 不会清除SDNS配置文件』;保存快照/文件在本机磁盘跨案存活(yzg 保存族三案整卷互扰实测)",
-   "case_mitigation": {
-    "action": "self_cleanup_tail",
-    "obligation": "At the case tail, delete/clear every file or snapshot this case saved to local disk. `clear sdns all` does NOT remove SDNS config files — file-level cleanup must be explicit (look up the file-level clear form in the manual ref).",
-    "refs": [
-     "CLI Ch20 清除本地SDNS配置文件(床探针 cleanup_refs.sdns_config_files 同源)"
-    ]
-   }
+   "provenance": "CLI Ch20:『clear sdns all 不会清除SDNS配置文件』;保存快照/文件在本机磁盘跨案存活(yzg 保存族三案整卷互扰实测)"
   },
   "peer_node": {
    "patterns": [
@@ -225,15 +218,7 @@
    ],
    "scope": "cross_device",
    "mitigation": "order_tail+bed_check",
-   "provenance": "CLI Ch26:synconfig to 把本地运行配置写为对端当前配置且自动写对端硬盘(from 方向才需手动 write memory);Ch6:ha synconfig runtime 双端开启后黑名单外一切配置实时复制对端;Ch5:cluster virtual priority 带 synconfig_peer_name 参数时直接配置对端",
-   "case_mitigation": {
-    "action": "restore_peer_tail",
-    "obligation": "Whatever this case pushed to or enabled toward the peer must be reverted at the case tail (sync the original back / disable the sync it enabled). Peer-side residue outlives the volume and the bed cleanup.",
-    "refs": [
-     "CLI Ch26 synconfig 方向语义",
-     "CLI Ch6 ha synconfig 开关"
-    ]
-   }
+   "provenance": "CLI Ch26:synconfig to 把本地运行配置写为对端当前配置且自动写对端硬盘(from 方向才需手动 write memory);Ch6:ha synconfig runtime 双端开启后黑名单外一切配置实时复制对端;Ch5:cluster virtual priority 带 synconfig_peer_name 参数时直接配置对端"
   },
   "segment_fs": {
    "patterns": [
@@ -243,14 +228,7 @@
    ],
    "scope": "cross_batch",
    "mitigation": "bed_check",
-   "provenance": "Multi_Segment_Spec:每分区独立 <seg>.conf;删除分区不删文件改名 .conf.tmp;同名重建+加载时 .tmp 复活转正;仅 array 下 write memory 清 .tmp;官方 spec 自带【存在问题】节",
-   "case_mitigation": {
-    "action": "purge_segment_tail",
-    "obligation": "At the case tail, delete segments this case created AND purge the .conf.tmp remnant (per spec only array-context `write memory` purges it); otherwise a same-name re-create resurrects the old config.",
-    "refs": [
-     "Multi_Segment_Spec .conf.tmp 复活机制(含官方【存在问题】节)"
-    ]
-   }
+   "provenance": "Multi_Segment_Spec:每分区独立 <seg>.conf;删除分区不删文件改名 .conf.tmp;同名重建+加载时 .tmp 复活转正;仅 array 下 write memory 清 .tmp;官方 spec 自带【存在问题】节"
   },
   "ha_sync_state_x_config_reload": {
    "patterns": [],
@@ -264,14 +242,7 @@
    ],
    "scope": "coexistence",
    "mitigation": "coexist_check",
-   "provenance": "CLI Ch6 官方警告:HA 开启环境下执行 synconfig from/to/rollback/config memory/config file 前必须确认启动时配置同步为禁用,否则可能配置异常",
-   "case_mitigation": {
-    "action": "declare_exclusion",
-    "obligation": "Before any save/reload command in this case, ensure boot-time config sync is disabled, and restore the original switch state at the case tail (official Ch6 warning: doing them together may corrupt config).",
-    "refs": [
-     "CLI Ch6 官方警告"
-    ]
-   }
+   "provenance": "CLI Ch6 官方警告:HA 开启环境下执行 synconfig from/to/rollback/config memory/config file 前必须确认启动时配置同步为禁用,否则可能配置异常"
   }
  },
  "bed_probes": {

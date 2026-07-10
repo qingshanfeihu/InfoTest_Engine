@@ -107,32 +107,23 @@ def author(state: dict) -> dict:
     pending = [a for a, c in vw["cases"].items()
                if c["status"] in (V.S_PENDING, V.S_FAILED, V.S_CONTRADICTED)]
     # fail/矛盾案只重编 reflow/frozen 处置且未封顶的(归因定向;rerun_isolated/
-    # transient 不重编——由 merge 收进待验集直接复跑);矛盾≥2 且队列空的归 ask 边
+    # transient 不重编——由 merge 收进待验集直接复跑);矛盾≥2 的不在此处理(ask 边)
     max_rounds = int(state.get("max_rounds") or 3)
-    from main.ist_core.compile_engine_v8 import remedies as R
     todo: list[str] = []
-    remedy_of: dict[str, dict] = {}
     for aid in pending:
         mine = [f for f in fs if f.get("aid") == aid]
-        queue = R.derive_queue(mine, aid, sh.case_rows(aid))
         if vw["cases"][aid]["status"] in (V.S_FAILED, V.S_CONTRADICTED):
-            if F.contradictions(mine, aid) >= 2 and not queue:
-                continue                      # 修法试尽 → ask_contradiction 边
+            if F.contradictions(mine, aid) >= 2:
+                continue                      # 归 ask_contradiction 边
             att = [f for f in mine if f.get("ev") == "attribution"]
             disp = str(att[-1].get("disposition")) if att else "reflow"
-            if disp not in ("reflow", "frozen", "defect_candidate") and not any(
-                    q["action"] in ("self_cleanup", "vary_form") for q in queue):
+            if disp not in ("reflow", "frozen", "defect_candidate"):
                 continue   # rerun_isolated/transient 由 merge 复跑;env_blocked 已终态
-            # 轮次封顶 ≠ 终态(§11.7):队列/方向仍在 → 资源问询;用户授权后 cap 上移
-            if F.rounds_used(mine, aid) >= max_rounds + sh.granted_rounds(fs, aid):
-                sh.append(state, [{"ev": "cap_reached", "aid": aid,
-                                   "round": F.rounds_used(mine, aid)}])
+            if F.rounds_used(mine, aid) >= max_rounds:
+                sh.append(state, [{"ev": "escalated", "aid": aid,
+                                   "reason": "max_rounds_exhausted"}])
+                sh.signal("escalated", aid, reason="max_rounds_exhausted")
                 continue
-        # 重编携带队列头修法(brief 结构化注入;authored 事实盖 remedy 戳=机械"已试")
-        head = next((q for q in queue if q["action"] in
-                     ("self_cleanup", "recompile_directed", "vary_form")), None)
-        if head:
-            remedy_of[aid] = head
         todo.append(aid)
     if not todo:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state)}
@@ -158,8 +149,7 @@ def author(state: dict) -> dict:
                         shutil.copyfile(old, dst)
             except Exception:  # noqa: BLE001
                 logger.debug("旧卷存档失败 %s", aid, exc_info=True)
-        out = _call_fork(executor, "compile-worker",
-                         BR.build_brief(aid, state, fs, remedy=remedy_of.get(aid)),
+        out = _call_fork(executor, "compile-worker", BR.build_brief(aid, state, fs),
                          tag=f"engine:{aid[-6:]}", effort=eff)
         xlsx = sh.outputs_root() / aid / "case.xlsx"
         fresh = xlsx.is_file() and xlsx.stat().st_mtime >= t0 - 1
@@ -182,10 +172,8 @@ def author(state: dict) -> dict:
         rnd = F.rounds_used(mine, aid) + 1
         if kind == "authored":
             art = sh.artifact_fingerprint(aid)
-            fact = {"ev": "authored", "aid": aid, "round": rnd, "artifact": art}
-            if aid in remedy_of:
-                fact["remedy"] = str(remedy_of[aid].get("remedy_key"))
-            new_facts.append(fact)
+            new_facts.append({"ev": "authored", "aid": aid, "round": rnd,
+                              "artifact": art})
         elif kind == "needs_decision":
             new_facts.append({"ev": "needs_decision", "aid": aid,
                               "question_id": f"nd:{aid}:{rnd}"})
@@ -249,7 +237,7 @@ def merge(state: dict) -> dict:
              if c["status"] in (V.S_AUTHORED, V.S_SUBSET_VERIFIED, V.S_DELIVERABLE,
                                 V.S_CONTRADICTED, V.S_FAILED)]
     live = [a for a, c in vw["cases"].items()
-            if c["status"] not in (V.S_ESCALATED, V.S_TERMINAL, V.S_SUSPENDED)]
+            if c["status"] not in (V.S_ESCALATED, V.S_TERMINAL)]
     def _rerun_disposed(aid: str) -> bool:
         att = [f for f in fs if f.get("aid") == aid and f.get("ev") == "attribution"]
         return bool(att) and str(att[-1].get("disposition")) in ("rerun_isolated", "transient")
@@ -322,19 +310,6 @@ def run(state: dict) -> dict:
     fs = sh.load_facts(state)
     mf = [f for f in fs if f.get("ev") == "merged"]
     comp = list(mf[-1].get("composition") or []) if mf else []
-    # 上机幂等(V6 run_marker 等价,事实流形态):最近一次 merged 之后已有本卷 run_done
-    # 且 last_run.json 在盘 → 断点续跑不重烧设备轮(蓄意复验会先过 merge 产新 merged 事实)
-    volume = str(mf[-1].get("volume")) if mf else ""
-    ctx = str(state.get("run_ctx") or "")
-    mi = max(i for i, f in enumerate(fs) if f.get("ev") == "merged") if mf else -1
-    done = any(f.get("ev") == "run_done" and f.get("volume") == volume
-               and f.get("ctx") == ctx for f in fs[mi + 1:])
-    lr0 = merged.parent / "last_run.json"
-    if done and lr0.is_file():
-        sh.emit(f"上机幂等命中:{volume[:8]} 已跑过,直接消费既有结果")
-        return {"phase_status": "ok",
-                "last_run_ref": str(lr0.relative_to(sh.project_root())),
-                **sh.counts_update(state, fs)}
     sh.emit(f"上机[{state.get('run_ctx')}]:{len(comp)} 案 @ {state.get('bed_host')}")
     out = _digest_fn(str(merged), comp)
     if isinstance(out, str) and ("device_busy" in out or "run_in_progress" in out):
@@ -342,8 +317,6 @@ def run(state: dict) -> dict:
     lr = merged.parent / "last_run.json"
     if not lr.is_file():
         return {"phase_status": "error", "error": "digest produced no last_run"}
-    sh.append(state, [{"ev": "run_done", "aid": "", "volume": volume, "ctx": ctx,
-                       "run_id": f"rd:{volume}:{ctx}:{mi}"}])
     return {"phase_status": "ok",
             "last_run_ref": str(lr.relative_to(sh.project_root())),
             **sh.counts_update(state, fs)}
@@ -408,11 +381,6 @@ def reconcile(state: dict) -> dict:
                            and f.get("result") == "pass" for f in fs2)
             if had_pass:
                 sh.signal("final_verify_failed", aid, volume=volume)
-                sh.emit_case_flag(state, aid,
-                                  f"…{aid[-6:]} 单独跑通过、整卷复验失败——正在分析原因")
-        if last.get("result") == "pass" and ctx == F.CTX_DELIVERY and \
-                F.contradictions([f for f in fs2 if f.get("aid") == aid], aid) > 0:
-            sh.emit_case_flag(state, aid, f"…{aid[-6:]} 复验通过,矛盾解除", status="done")
     if wb_facts:
         sh.append(state, wb_facts)
     fs3 = sh.load_facts(state)
@@ -489,118 +457,54 @@ def _rollback_one(aid: str) -> None:
 
 
 # --------------------------------------------------------------- [llm] attribute
-def _known_defect_hit(ctx: str) -> dict | None:
-    """已知缺陷短路(机械,V6 迁入):env_capabilities.known_defects 的 feature token 组
-    全部命中 device_context 即短路,不进 LLM 孔。"""
-    known = sh.read_json(sh.project_root() / "knowledge" / "data" / "auto_env"
-                         / "env_capabilities.json", {}) or {}
-    for d in (known.get("known_defects") or []):
-        toks = [w for w in str(d.get("feature", "")).replace("<", " ").replace(">", " ").split()
-                if len(w) >= 4 and w.isascii()]
-        if toks and all(t in ctx for t in toks):
-            return d
-    return None
-
-
-def _attribute_batch(state: dict, fs: list[dict], todo: list[str],
-                     final: bool = False) -> list[dict]:
-    """归因一批案 → attribution 事实列表(attribute 节点与 closing 补归因共用)。
-
-    机械层先行:已知缺陷短路;LLM 孔注入命中持久通道的知识(case_mitigation 数据)与
-    未试修法队列——归因在知识给定的行动空间内判断(§11.8),不在真空里想修法。
-    final=True(收口前补齐,oracle 残差全覆盖):只归因不派工,brief 声明。
-    """
-    from main.ist_core.compile_engine_v8 import remedies as R
+def attribute(state: dict) -> dict:
+    """归因(fail/矛盾案):机械预判(digest 已附 ^→G/dev_help)→ fork 填 undetermined
+    → attribution 事实(submit_attribution 落盘为证)。"""
+    fs = sh.load_facts(state)
     vw = sh.view(state, fs)
-    new_facts: list[dict] = []
-    fork_todo: list[tuple[str, str, str]] = []   # (aid, lr_ref, brief)
+    todo = [a for a, c in vw["cases"].items()
+            if c["status"] in (V.S_FAILED, V.S_CONTRADICTED)]
+    if not todo:
+        return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
+    lr_ref = str(state.get("last_run_ref") or "")
+    data = sh.read_json(sh.project_root() / lr_ref, []) or []
+    recs = {str(r.get("autoid")): r for r in data if isinstance(r, dict)}
+
+    executor, limiter, _ = sh.fork_executor(len(todo))
     for aid in todo:
+        rec = recs.get(aid, {})
         mine = [f for f in fs if f.get("aid") == aid]
-        last = F.latest_verdict(mine, aid)
-        lr_ref = str((last or {}).get("evidence_ref") or state.get("last_run_ref") or "")
-        data = sh.read_json(sh.project_root() / lr_ref, []) or []
-        rec = next((r for r in data if str(r.get("autoid")) == aid), {})
-        ctx = str(rec.get("device_context") or "")
-        hit = _known_defect_hit(ctx)
-        rows = sh.case_rows(aid)
-        channels = sorted(P.case_channels(rows))
-        if hit:   # 机械短路:不进 LLM 孔
-            new_facts.append({"ev": "attribution", "aid": aid,
-                              "round": F.rounds_used(mine, aid),
-                              "run_id": (last or {}).get("run_id", ""),
-                              "layer": "product_defect", "disposition": "defect_candidate",
-                              "fix_direction": f"known defect matched: {str(hit.get('feature'))[:200]}",
-                              "evidence": str(hit.get("feature"))[:200],
-                              "user_note": "命中环境能力表登记的已知缺陷,按缺陷候选处理。",
-                              "channel": channels[0] if channels else "", "mech": True})
-            continue
-        queue = R.derive_queue(mine, aid, rows)
-        chan_specs = [{"channel": n, **(P._channels().get(n, {}).get("case_mitigation") or {})}
-                      for n in channels
-                      if (P._channels().get(n, {}) or {}).get("case_mitigation")]
+        contra = F.contradictions(mine, aid)
         brief = json.dumps({
             "autoid": aid, "last_run_path": lr_ref,
             "device_build": state.get("device_build", ""),
             "batch_pass_examples": [a for a, c in vw["cases"].items()
                                     if c["status"] in (V.S_DELIVERABLE, V.S_SUBSET_VERIFIED)][:6],
-            "contradiction": bool(F.contradictions(mine, aid)),
-            "persistence_channels": chan_specs,      # 命中通道的案侧义务(文法数据,按引用)
-            "untried_remedies": [q.get("action") for q in queue],
-            "final_report_only": bool(final),
+            "contradiction": bool(contra),
         }, ensure_ascii=False) + "\n" + (
             "<device_help>\n" + str(rec.get("_device_help"))[:1500] + "\n</device_help>\n"
             if rec.get("_device_help") else "")
-        fork_todo.append((aid, lr_ref, brief))
+        with limiter:
+            _call_fork(executor, "compile-attributor", brief, tag=f"attr:{aid[-6:]}")
 
-    if fork_todo:
-        executor, limiter, _ = sh.fork_executor(len(fork_todo))
-        for aid, _lr, brief in fork_todo:
-            with limiter:
-                _call_fork(executor, "compile-attributor", brief, tag=f"attr:{aid[-6:]}")
-        for aid, lr_ref, _b in fork_todo:   # 收账:落盘 _attribution → 事实(含 §11.3 三字段)
-            data2 = sh.read_json(sh.project_root() / lr_ref, []) or []
-            rec = next((r for r in data2 if str(r.get("autoid")) == aid), {})
-            att = rec.get("_attribution")
-            if not isinstance(att, dict):
-                continue
+    # 收账:submit_attribution 落盘的 _attribution → attribution 事实
+    data2 = sh.read_json(sh.project_root() / lr_ref, []) or []
+    new_facts = []
+    for rec in data2:
+        aid = str(rec.get("autoid") or "")
+        att = rec.get("_attribution")
+        if aid in todo and isinstance(att, dict):
             mine = [f for f in fs if f.get("aid") == aid]
             last = F.latest_verdict(mine, aid)
-            rows = sh.case_rows(aid)
-            channels = sorted(P.case_channels(rows))
             new_facts.append({"ev": "attribution", "aid": aid,
                               "round": F.rounds_used(mine, aid),
                               "run_id": (last or {}).get("run_id", ""),
                               "layer": att.get("layer"), "disposition": att.get("disposition"),
                               "fix_direction": str(att.get("fix_direction") or "")[:800],
-                              "evidence": str(att.get("evidence") or "")[:500],
-                              "user_note": str(att.get("user_note") or "")[:300],
-                              "doc_quote": str(att.get("doc_quote") or "")[:500],
-                              "doc_source": str(att.get("doc_source") or "")[:200],
-                              "device_quote": str(att.get("device_quote") or "")[:500],
-                              "channel": channels[0] if channels else ""})
+                              "evidence": str(att.get("evidence") or "")[:500]})
             if att.get("disposition") == "env_blocked":
                 sh.signal("escalated", aid, reason="env_blocked")
-    return new_facts
-
-
-def attribute(state: dict) -> dict:
-    """归因(fail/矛盾案):已知缺陷机械短路 → 通道知识注入 LLM 孔 → attribution 事实
-    (submit_attribution 落盘为证,§11.3 三字段随账)。"""
-    fs = sh.load_facts(state)
-    vw = sh.view(state, fs)
-    todo = []
-    for aid, c in vw["cases"].items():
-        if c["status"] not in (V.S_FAILED, V.S_CONTRADICTED):
-            continue
-        mine = [f for f in fs if f.get("aid") == aid]
-        last = F.latest_verdict(mine, aid)
-        if last and any(f.get("ev") == "attribution"
-                        and f.get("run_id") == last.get("run_id") for f in mine):
-            continue   # 该 fail 裁决已归因过(每裁决一次;省 fork)
-        todo.append(aid)
-    if not todo:
-        return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
-    sh.append(state, _attribute_batch(state, fs, todo))
+    sh.append(state, new_facts)
     fs2 = sh.load_facts(state)
     sh.emit_tick(state, "attribute", fs2)
     return {"phase_status": "ok", **sh.counts_update(state, fs2)}
@@ -608,51 +512,35 @@ def attribute(state: dict) -> dict:
 
 # ---------------------------------------------------- [user] ask_contradiction
 def ask_contradiction(state: dict) -> dict:
-    """用户问询边(§11.7 充要条件):只在信息/权限不在引擎侧时到达——
-    ① 矛盾≥2 **且导出修法队列已空**(修法归理论:队列非空由自愈环继续,不问);
-    ② 轮次封顶待授权(资源问询:继续加轮 / 挂起下批 / 停止)。
-    题面=呈报+取舍(诊断/已试/建议),不提供修法选项;「接受单跑」只收用户主动输入。"""
-    from main.ist_core.compile_engine_v8 import render as RD
+    """矛盾即问(第三条 ask 边):矛盾≥2 的案,携累计历史问用户;每次矛盾都回到这里。"""
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
-    t = sh.ask_targets(state, fs, vw)
-    targets = list(dict.fromkeys(t["contra"] + t["cap"]))
+    targets = [a for a, c in vw["cases"].items()
+               if c["status"] == V.S_CONTRADICTED and c["contradictions"] >= 2]
     if not targets:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
-    m = sh.manifest(state)
-    titles = {str(c.get("autoid")): str(c.get("title") or "") for c in (m.get("cases") or [])}
     payload = []
     for aid in targets:
         mine = [f for f in fs if f.get("aid") == aid]
         prior = [f.get("answer") for f in mine if f.get("ev") == "decision"
-                 and str(f.get("question_id", "")).startswith(("contra:", "cap:"))]
-        payload.append({"autoid": aid, "kind": "cap" if aid in t["cap"] else "contra",
-                        "title": titles.get(aid, ""),
-                        "rounds": vw["cases"][aid]["rounds"],
+                 and str(f.get("question_id", "")).startswith("contra:")]
+        payload.append({"autoid": aid,
                         "contradictions": vw["cases"][aid]["contradictions"],
-                        "timeline": "→ ".join(RD.case_timeline(mine)[-6:]),
-                        "diagnosis": RD.diagnosis_text(mine)[:300],
                         "prior_choices": prior})
     ans = interrupt({"kind": "ask_contradiction", "cases": payload})
     new_facts = []
-    for item in payload:
-        aid = item["autoid"]
-        a = str((ans or {}).get(aid) or "")
+    for aid in targets:
+        a = str((ans or {}).get(aid) or (ans or {}).get("decision") or "")
         if not a:
             continue
-        qid = (f"cap:{aid}:{vw['cases'][aid]['rounds']}" if item["kind"] == "cap"
-               else f"contra:{aid}:{vw['cases'][aid]['contradictions']}")
-        new_facts.append({"ev": "decision", "aid": aid, "question_id": qid, "answer": a})
-        if "挂起" in a:
-            new_facts.append({"ev": "suspended", "aid": aid, "reason": qid})
-        elif "停止" in a or a in ("接受单跑", "accept_subset", "降级", "downgrade"):
-            # 止损=用户显式裁决(不符交付预期,记未通过卷);「接受单跑」仅自由输入通道
+        n = vw["cases"][aid]["contradictions"]
+        new_facts.append({"ev": "decision", "aid": aid,
+                          "question_id": f"contra:{aid}:{n}", "answer": a})
+        if a in ("接受单跑", "accept_subset", "降级", "downgrade"):
             new_facts.append({"ev": "attribution", "aid": aid, "round": 99,
                               "layer": "E", "disposition": "env_blocked",
-                              "fix_direction": f"user decision: {a}", "evidence": "user",
-                              "user_note": f"按你的裁决「{a}」收尾。"})
-        # 「继续」:cap 案由 granted_rounds 上移封顶;矛盾案回归因/复验环
-        sh.signal("user_decided", aid, kind=item["kind"])
+                              "fix_direction": f"user decision: {a}", "evidence": "user"})
+        sh.signal("user_decided", aid, kind="contradiction")
     sh.append(state, new_facts)
     fs2 = sh.load_facts(state)
     return {"phase_status": "ok", **sh.counts_update(state, fs2)}
@@ -660,34 +548,12 @@ def ask_contradiction(state: dict) -> dict:
 
 # --------------------------------------------------------------- [mech] closing
 def closing(state: dict) -> dict:
-    """收口(§11.5/11.9):补齐归因(oracle 残差全覆盖)→ uncertain 入库(自愈环)→
-    判定式渲染(delivery/unsuccessful)→ 未通过卷 xlsx → 清理(挂起案存档)→ 收口卡。"""
-    from main.ist_core.compile_engine_v8 import remedies as R
-    from main.ist_core.compile_engine_v8 import render as RD
+    """收口:uncertain 观察入库(自愈环)+报告(视图即真相)+子集卷清理+床账收尾。"""
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
     out_name = str(state.get("out_name"))
     mdir = sh.outputs_root() / out_name
-
-    # ① 补齐归因(G-4):最新 fail 裁决无归因的案,收口前补一趟(只归因不派工,无环)
-    naked = []
-    for aid, c in vw["cases"].items():
-        mine = [f for f in fs if f.get("aid") == aid]
-        last = F.latest_verdict(mine, aid)
-        if last and last.get("result") == "fail" and not any(
-                f.get("ev") == "attribution" and f.get("run_id") == last.get("run_id")
-                for f in mine):
-            naked.append(aid)
-    if naked:
-        sh.emit(f"收口前补齐归因:{len(naked)} 案(任何失败不哑收)")
-        try:
-            sh.append(state, _attribute_batch(state, fs, naked, final=True))
-            fs = sh.load_facts(state)
-            vw = sh.view(state, fs)
-        except Exception:  # noqa: BLE001
-            logger.debug("收口补归因失败", exc_info=True)
-
-    # ② 自愈环:fail 终态/升级案观察 uncertain 入库(在删目录之前)
+    # 自愈环:fail 终态/升级案观察 uncertain 入库(复用 V6 已验收的入库器)
     try:
         from main.ist_core.compile_engine_v8.uncertain import _ingest_uncertain_observations
 
@@ -722,102 +588,29 @@ def closing(state: dict) -> dict:
     }
     (mdir / "engine_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    # ③ 判定式渲染(同一 fold;修法队列现算;设备证据从事实 evidence_ref 回读)
-    m = sh.manifest(state)
-    queues, evidence = {}, {}
-    for aid in others:
-        mine = [f for f in fs if f.get("aid") == aid]
-        queues[aid] = R.derive_queue(mine, aid, sh.case_rows(aid))
-        last = F.latest_verdict(mine, aid)
-        if last and last.get("result") == "fail":
-            data = sh.read_json(sh.project_root() / str(last.get("evidence_ref") or ""), []) or []
-            rec = next((r for r in data if str(r.get("autoid")) == aid), {})
-            evidence[aid] = str(rec.get("device_context") or "")
-    dmd = RD.render_delivery_report(report, fs, m, queues)
-    (mdir / "delivery_report.md").write_text(dmd, encoding="utf-8")
-    deliver_files = ["case.xlsx", "delivery_report.md", "engine_report.json", "facts.jsonl"]
-    if others:
-        umd = RD.render_unsuccessful_md(report, fs, m, queues, evidence)
-        (mdir / "unsuccessful_cases.md").write_text(umd, encoding="utf-8")
-        if _archive_unsuccessful(sorted(others), out_name):
-            deliver_files.append("unsuccessful_cases.xlsx")
-        deliver_files.append("unsuccessful_cases.md")
-        leaks = RD.leak_scan(dmd) + RD.leak_scan(umd)
-        if leaks:
-            logger.warning("报告术语泄漏(渲染门):%s", sorted(set(leaks))[:8])
-
-    # ④ 清理(§11.9):已通过案目录删除;未通过/挂起案整体挪 unfinished/(续跑输入);
-    #    中间件 manifest/last_run/__sub* 删除;facts.jsonl 永久保留
+    _delivery_md(mdir, report)
+    # 子集卷清理(交付物之外的运行中间目录)
     import shutil
     for d in sh.outputs_root().glob(f"{out_name}__sub*"):
         shutil.rmtree(d, ignore_errors=True)
-    for aid in deliverable:
-        shutil.rmtree(sh.outputs_root() / aid, ignore_errors=True)
-    unf = mdir / "unfinished"
-    for aid in others:
-        src = sh.outputs_root() / aid
-        if src.is_dir():
-            unf.mkdir(exist_ok=True)
-            dst = unf / aid
-            if dst.exists():
-                shutil.rmtree(dst, ignore_errors=True)
-            try:
-                shutil.move(str(src), str(dst))
-            except Exception:  # noqa: BLE001
-                logger.debug("unfinished 挪移失败 %s", aid, exc_info=True)
-    for name in ("manifest.json", "last_run.json"):
-        try:
-            (mdir / name).unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
-
-    # ⑤ 收口对账断言(§11.9:报告说有=盘上真有)+ 收口卡
-    missing = [f for f in deliver_files if not (mdir / f).is_file()
-               and f != "manifest.json"]
-    if missing:
-        logger.warning("交付物清单与磁盘不一致:缺 %s", missing)
-    from main.ist_core.compile_engine_v8.render import STATUS_CN
-    sh.emit_summary(state, {
-        "outcome": report["outcome"],
-        "ok": len(deliverable), "total": len(vw["cases"]),
-        "labels": [{"autoid": a, "text": STATUS_CN.get(str(c["status"]), str(c["status"]))}
-                   for a, c in sorted(others.items())],
-        "report": f"workspace/outputs/{out_name}/delivery_report.md",
-        "files": deliver_files, "missing": missing,
-    })
     sh.emit(f"交付:{len(deliverable)}/{len(vw['cases'])} 可交付"
-            + (f",{len(others)} 案带标注" if others else "")
-            + f" · 交付物 {len(deliver_files)} 件已核对")
+            + (f",{len(others)} 案带标注" if others else ""))
     sh.emit_tick(state, "closing", fs)
     return {"phase_status": "done", **sh.counts_update(state, fs)}
 
 
-def _archive_unsuccessful(aids: list[str], out_name: str) -> str | None:
-    """未通过卷 xlsx(V6 契约迁入):gate-free 合并全部非交付案 → <批名>/unsuccessful_cases.xlsx。"""
-    from main.ist_core.tools.device.emit_xlsx_tool import compile_emit_merged
-    cases = []
-    for aid in aids:
-        rows = sh.case_rows(aid)
-        if rows:
-            cases.append({"autoid": aid, "steps": rows})
-    if not cases:
-        return None
-    arch = f"{out_name}_unsuccessful"
-    try:
-        compile_emit_merged.func(cases_json=json.dumps(cases, ensure_ascii=False),
-                                 out_name=arch)
-    except Exception:  # noqa: BLE001
-        logger.debug("未通过卷合并失败", exc_info=True)
-        return None
-    src = sh.outputs_root() / arch / "case.xlsx"
-    if not src.is_file():
-        return None
-    import shutil
-    dst = sh.outputs_root() / out_name / "unsuccessful_cases.xlsx"
-    try:
-        shutil.move(str(src), str(dst))
-        shutil.rmtree(sh.outputs_root() / arch, ignore_errors=True)
-        return str(dst)
-    except Exception:  # noqa: BLE001
-        return None
+def _delivery_md(mdir: Path, report: dict) -> None:
+    lines = [f"# 交付报告 — {mdir.name}(V8)",
+             f"> 结果 **{report['outcome']}** · 可交付 {report['totals']['deliverable']}"
+             f"/{report['totals']['cases']} · volume={report.get('volume')}",
+             ""]
+    if report.get("moved_tail"):
+        lines.append(f"- 持久化家族排卷尾(通道①声明):{', '.join(report['moved_tail'])}")
+    if report.get("coexist_violations"):
+        lines.append(f"- ⚠ 通道④共存违例:{json.dumps(report['coexist_violations'], ensure_ascii=False)[:400]}")
+    bad = {a: c for a, c in report["cases"].items() if c["status"] != "deliverable"}
+    if bad:
+        lines.append("\n## 需人工处置")
+        for a, c in sorted(bad.items()):
+            lines.append(f"- …{a[-6:]} `{c['status']}` 轮次{c['rounds']} 矛盾{c['contradictions']}")
+    (mdir / "delivery_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -170,10 +170,7 @@ def compile_attribute(verdict_detail: str, failing_assertion_layer: str = "",
 def submit_attribution(xlsx_path: str, autoid: str, layer: str,
                        disposition: str, evidence: str,
                        fix_direction: str = "",
-                       defect_candidate: dict | None = None,
-                       user_note: str = "",
-                       doc_quote: str = "", doc_source: str = "",
-                       device_quote: str = "") -> str:
+                       defect_candidate: dict | None = None) -> str:
     """Land your attribution **conclusion** for one failed case into last_run.json (the judgement itself is still yours, made from the raw evidence).
 
     **When to use**: the raw device evidence has been read and the layer verdict has formed —
@@ -209,15 +206,6 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
         defect_candidate: structured candidate form when disposition=defect_candidate, with
             repro (reproduction steps), expected_with_source (expectation + manual source),
             actual (actual + device evidence), version, optionally ticket_id.
-        user_note: ONE Chinese sentence for the delivery report reader describing what
-            mechanically went wrong on the device — plain language, no internal terms.
-            This is the only user-facing field; write it in Chinese, everything else English.
-        doc_quote: verbatim quote from the manual/mindmap that states the expected behavior
-            (the "docs say X" half of the doc-vs-device pair; optional but strongly preferred
-            for V/G layers).
-        doc_source: where doc_quote comes from (manual path/chapter or mindmap ref).
-        device_quote: verbatim substring of this case's device_context showing the actual
-            behavior (the "device does Y" half) — gate-checked like evidence.
 
     Returns:
         Confirmation (path written + field echo); error when the autoid is absent from
@@ -279,19 +267,11 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
                 "byte-exact cross-line alignment needed).")
 
     import time as _time
-    dq = (device_quote or "").strip()
-    if dq and dq not in corpus and _norm(dq) not in _norm(corpus):
-        return ("error: device_quote is not a substring of this case's landed raw text — "
-                "copy it directly from device_context/causality (same gate as evidence).")
     entry = {
         "layer": layer,
         "disposition": disposition,
         "evidence": ev[:2000],
         "fix_direction": (fix_direction or "").strip(),
-        "user_note": (user_note or "").strip()[:300],
-        "doc_quote": (doc_quote or "").strip()[:500],
-        "doc_source": (doc_source or "").strip()[:200],
-        "device_quote": dq[:500],
         "ts": _time.time(),
         "round": rec.get("_round"),
     }

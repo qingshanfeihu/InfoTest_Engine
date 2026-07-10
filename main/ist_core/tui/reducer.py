@@ -613,18 +613,6 @@ class MessageReducer:
                     "status": "done" if rec.get("phase") in ("report", "closing") else "running",
                     "last_event_ts": rec.get("ts"),
                 })
-            elif ev == "engine_summary":
-                # 收口卡(§11.2):交付结果一屏讲完(人话字段由引擎渲染层产,前端只显示)
-                changed |= self._upsert_card(f"engine_summary:{rec.get('run')}", {
-                    "kind": "engine_summary", "run": rec.get("run") or "",
-                    "outcome": rec.get("outcome") or "",
-                    "ok": rec.get("ok") or 0, "total": rec.get("total") or 0,
-                    "labels": list(rec.get("labels") or []),
-                    "report": rec.get("report") or "",
-                    "files": list(rec.get("files") or []),
-                    "missing": list(rec.get("missing") or []),
-                    "status": "done", "last_event_ts": rec.get("ts"),
-                })
             elif ev == "progress":
                 changed |= self._upsert_card(f"progress:{rec.get('key')}", {
                     "kind": "progress", "key": rec.get("key") or "",

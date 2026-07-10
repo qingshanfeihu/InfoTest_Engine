@@ -20,7 +20,6 @@ S_DELIVERABLE = "deliverable"         # delivery-ctx pass 且三重匹配
 S_CONTRADICTED = "contradicted"       # 矛盾计数>0 且当前不可交付
 S_ESCALATED = "escalated"             # 升级事实在案
 S_TERMINAL = "failed_terminal"        # 终态标注(env_blocked/defect 等 disposition)
-S_SUSPENDED = "suspended"             # 用户裁决挂起(非终态:下批同参续跑,§11.7)
 
 
 def case_status(fs: list[dict], aid: str, current_artifact: str,
@@ -29,8 +28,6 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
     mine = [f for f in fs if str(f.get("aid")) == aid]
     if any(f.get("ev") == "escalated" for f in mine):
         return S_ESCALATED
-    if any(f.get("ev") == "suspended" for f in mine):
-        return S_SUSPENDED
     if any(f.get("ev") == "attribution" and f.get("disposition") in ("env_blocked",)
            for f in mine):
         return S_TERMINAL
@@ -79,6 +76,6 @@ def batch_view(fs: list[dict], manifest: dict) -> dict:
 
 
 def all_settled(view: dict) -> bool:
-    """不动点判据:每案都在 {deliverable, escalated, failed_terminal, suspended}。"""
-    return all(v["status"] in (S_DELIVERABLE, S_ESCALATED, S_TERMINAL, S_SUSPENDED)
+    """不动点判据:每案都在 {deliverable, escalated, failed_terminal}。"""
+    return all(v["status"] in (S_DELIVERABLE, S_ESCALATED, S_TERMINAL)
                for v in view["cases"].values()) and bool(view["cases"])

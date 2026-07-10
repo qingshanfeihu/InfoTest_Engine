@@ -52,12 +52,33 @@ def _bridge(payload: dict) -> dict:
     if kind == "bed_gate":
         rep = payload.get("report") or {}
         anchor = rep.get("anchor") or {}
-        qs = [{"question": f"床态体检未通过(设备 {anchor.get('device', '?')} vs 配置 "
-                           f"{anchor.get('config', '?')};发现 {len(rep.get('findings') or [])} 项),继续吗?",
-               "header": "床态体检",
+        cu = rep.get("cleanup") or {}
+        _KIND_CN = {"segments": "分区配置残留", "sdns_config_files": "SDNS 配置文件残留",
+                    "sync_peers": "同步对端配置残留", "build_anchor": "版本不匹配"}
+        kinds = [_KIND_CN.get(str(f.get("kind")), str(f.get("kind")))
+                 for f in (rep.get("findings") or []) if f.get("kind") != "build_anchor"]
+        parts = []
+        if kinds:
+            parts.append(f"测试床上仍有残留:{'、'.join(kinds)}")
+        cl, fl, sk = cu.get("cleaned") or [], cu.get("failed") or [], cu.get("skipped") or []
+        if cl or fl or sk:
+            seg = []
+            if cl:
+                seg.append(f"已自动清掉 {len(cl)} 项")
+            if fl:
+                seg.append(f"{len(fl)} 项清理被设备拒绝")
+            if sk:
+                seg.append(f"{len(sk)} 项引擎不认识、不敢动")
+            parts.append("(" + ",".join(seg) + ")")
+        if str(anchor.get("status")) == "match":
+            parts.append(f"版本正常(实测 {str(anchor.get('device', ''))[-12:]},与配置同族)")
+        else:
+            parts.append(f"⚠ 版本不匹配:设备 {anchor.get('device', '?')} vs 配置 {anchor.get('config', '?')}")
+        q = ";".join(parts) + "。如何处理?"
+        qs = [{"question": q, "header": "床态体检",
                "options": [
-                   {"label": "停止", "description": "处理床态(换床/清理/重锚)后同参数重跑续接"},
-                   {"label": "继续", "description": "接受当前床态照跑(裁决将锚定实测 build)"}],
+                   {"label": "继续", "description": "接受现状照跑——残留不再清理,风险自担;所有结果记录在实测版本上"},
+                   {"label": "停止", "description": "先人工清理/换床,之后同参数重跑会从这里续接"}],
                "_key": "decision"}]
         ans = _panel(qs)
         v = str(ans.get("decision") or "")

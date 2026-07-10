@@ -83,23 +83,34 @@ def test_clean_bed_clean_pass(tmp_path):
 # ── 初始化清理(2026-07-10 用户裁决:开工必净) ─────────────────────────────────
 
 def test_bed_cleanup_executes_grammar_ref_and_records_ledger(tmp_path):
-    """有文法清理引用的 kind → 执行清理命令+记床账;无引用的 kind → skipped 不动手。"""
+    """有文法清理引用的 kind → config 通道执行+回显校验 success+记床账;无引用 → skipped。"""
     from main.ist_core.compile_engine_v8.bed import bed_cleanup, _ledger_path
     ran: list[str] = []
 
-    def probe(cmd: str) -> str:
+    def exec_cfg(cmd: str) -> str:
         ran.append(cmd)
-        return "cleared"
+        return f"host=x  mode=config\ncommand: {cmd}\nstatus: success\n--- output ---\n"
 
     findings = [{"kind": "sdns_config_files", "detail": "sdns_test.conf"},
                 {"kind": "segments", "detail": "seg1"},          # 无清理引用
                 {"kind": "build_anchor", "detail": {}}]          # 版本锚不清
-    out = bed_cleanup(probe, findings, root=tmp_path, host="h", batch="b")
+    out = bed_cleanup(exec_cfg, findings, root=tmp_path, host="h", batch="b")
     assert [c["kind"] for c in out["cleaned"]] == ["sdns_config_files"]
-    assert out["skipped"] == ["segments"]
+    assert out["failed"] == [] and out["skipped"] == ["segments"]
     assert ran and "clear" in ran[0]                     # 命令来自文法数据,非硬编码
     led = _ledger_path(tmp_path, "h").read_text(encoding="utf-8")
     assert '"cleaned"' in led and "sdns_config_files" in led
+
+
+def test_bed_cleanup_device_rejection_reported_not_lied(tmp_path):
+    """设备拒绝(status: error,2026-07-10 show 通道实证)→ failed 如实上报,零床账,不谎报已清。"""
+    from main.ist_core.compile_engine_v8.bed import bed_cleanup, _ledger_path
+    out = bed_cleanup(lambda c: f"command: {c}\nstatus: error\n--- output ---\n",
+                      [{"kind": "sdns_config_files", "detail": "x"}],
+                      root=tmp_path, host="h")
+    assert out["cleaned"] == []
+    assert [f["kind"] for f in out["failed"]] == ["sdns_config_files"]
+    assert not _ledger_path(tmp_path, "h").is_file()     # 失败不记 cleaned 账
 
 
 def test_bed_cleanup_never_touches_unknown_kinds(tmp_path):

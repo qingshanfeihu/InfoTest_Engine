@@ -99,18 +99,20 @@ def bed_unrestored(root: Path, host: str) -> list[dict]:
 # ── 初始化清理(2026-07-10 用户裁决:开工必净) ─────────────────────────────────
 
 
-def bed_cleanup(probe_fn: Callable[[str], str], findings: list[dict], *,
+def bed_cleanup(exec_fn: Callable[[str], str], findings: list[dict], *,
                 root: Path, host: str, batch: str = "") -> dict:
     """床态初始化清理:编写工作开始前环境必须干净(用户裁决;R1 12/26 崩盘的
     最大嫌疑即两天床残留)。
 
-    清理动作**全部来自文法数据** bed_probes.cleanup_refs(手册出处,按 finding.kind
-    对号)——引擎零硬编码领域命令;无清理引用的发现不动手(留给体检 ask 兜底)。
-    每笔清理记床账(ev=cleaned)+返回回显摘要;调用方清理后必须**复检**再放行。
+    exec_fn 必须是**配置模式**执行通道(clear 族在 show 通道被设备拒——2026-07-10
+    实证 status:error 却被记成"已清",复检恒 3 项)。清理动作**全部来自文法数据**
+    bed_probes.cleanup_refs(手册出处,按 finding.kind 对号)——引擎零硬编码领域命令;
+    无清理引用的发现不动手(留给体检 ask 兜底)。**回显必须校验**:status: success
+    才算清成(记床账 ev=cleaned);error/异常 → failed 如实上报。调用方清理后必须复检。
     """
     refs = dict((load_grammar().get("bed_probes") or {}).get("cleanup_refs") or {})
     refs.pop("_provenance", None)
-    out: dict = {"cleaned": [], "skipped": []}
+    out: dict = {"cleaned": [], "failed": [], "skipped": []}
     for f in findings:
         kind = str(f.get("kind") or "")
         if kind == "build_anchor":
@@ -119,10 +121,14 @@ def bed_cleanup(probe_fn: Callable[[str], str], findings: list[dict], *,
         if not isinstance(spec, dict) or not str(spec.get("cmd") or "").strip():
             out["skipped"].append(kind)   # 文法层无清理引用 → 不动手
             continue
-        echo = probe_fn(str(spec["cmd"]))
-        bed_record(root, host, "cleaned", kind, "init_cleanup", batch)
-        out["cleaned"].append({"kind": kind, "provenance": str(spec.get("provenance", ""))[:120],
-                               "echo": (echo or "")[:200]})
+        echo = exec_fn(str(spec["cmd"])) or ""
+        item = {"kind": kind, "provenance": str(spec.get("provenance", ""))[:120],
+                "echo": echo[:300]}
+        if "status: success" in echo:
+            bed_record(root, host, "cleaned", kind, "init_cleanup", batch)
+            out["cleaned"].append(item)
+        else:
+            out["failed"].append(item)    # 设备拒绝/通道异常:不谎报,进问询题面
     return out
 
 

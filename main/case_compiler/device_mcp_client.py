@@ -483,16 +483,19 @@ def fastmcp_call(tool: str, arguments: dict, env: Any = None,
 
 
 def probe_via_fastmcp(command: str, build: str = "", env: Any = None,
-                      timeout: int = 30) -> dict | None:
-    """经跳转机新版 FastMCP(:8000) 的 ``apv_ssh_execute`` 在被测设备上跑只读 show，取回显。
+                      timeout: int = 30, mode: str = "show") -> dict | None:
+    """经跳转机新版 FastMCP(:8000) 的 ``apv_ssh_execute`` 在被测设备上执行命令，取回显。
 
+    mode="show"(默认,只读探针) / "config"(配置模式——床态初始化清理用:clear 族命令在
+    show 通道被设备拒,2026-07-10 实证 status:error,须走 config 通道)。
     返回 ``{"text": <服务端格式化文本，含 status + 回显 + 对齐 ^>, "device_ip": ip}``；
     设备 IP 解析不出 / FastMCP 不可达 / 响应异常 → 返回 None（上层回退老 stdio probe_show）。
     """
     device_ip = resolve_device_ip(build, env)
     if not device_ip:
         return None
-    text = fastmcp_call("apv_ssh_execute", {"host": device_ip, "command": command},
+    text = fastmcp_call("apv_ssh_execute",
+                        {"host": device_ip, "command": command, "mode": mode},
                         env=env, timeout=timeout)
     if text is None:
         return None

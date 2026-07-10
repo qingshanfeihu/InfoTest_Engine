@@ -295,12 +295,15 @@ def _annotate_if_empty_probe(text: str) -> str:
             "consult the product manual/spec or precedents — do not keep re-probing emptiness.)")
 
 
-def _do_probe(cmd: str) -> str:
+def _do_probe(cmd: str, mode: str = "show") -> str:
     """真探一次设备。**永不抛**——失败返回 'error:'/包装文本。
 
     优先走新版 FastMCP ``apv_ssh_execute``（自带 status + 完整回显 + 对齐 ^，治老 probe_show
     剥命令回显行→无效命令只剩裸 ^ 的困惑）；FastMCP 不可达 / 解析不出设备 IP 时回退老 stdio
     ``probe_show``。两路都经跳转机，本地直连 APV 不通。
+
+    mode="config":配置模式执行(床态初始化清理专用——clear 族在 show 通道被拒,
+    2026-07-10 实证);该模式不回退 stdio(老通道只有只读)。
     """
     # build 决定 conf 设备段(单一事实源:compiler config)
     try:
@@ -312,10 +315,12 @@ def _do_probe(cmd: str) -> str:
     # 1) 新版 FastMCP apv_ssh_execute —— status + 对齐 ^，不剥回显
     try:
         from main.case_compiler.device_mcp_client import probe_via_fastmcp, _redact
-        fr = probe_via_fastmcp(cmd, build=_build)
+        fr = probe_via_fastmcp(cmd, build=_build, mode=mode)
     except Exception:  # noqa: BLE001
         logger.debug("FastMCP 探针失败(将回退 stdio): cmd=%s", cmd, exc_info=True)
         fr = None
+    if mode != "show" and not (isinstance(fr, dict) and fr.get("text")):
+        return "error: config-mode execution unavailable (FastMCP unreachable)"
     if isinstance(fr, dict) and fr.get("text"):
         text = fr["text"]
         try:

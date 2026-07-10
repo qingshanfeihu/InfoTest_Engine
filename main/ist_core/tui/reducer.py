@@ -480,6 +480,11 @@ class MessageReducer:
 
         parent_tool_use_id = self._current_subagent_parent(event)
         subagent_type = tags.get("parent_subagent") or ""
+        if not tool_use_id and not parent_tool_use_id:
+            # 孤儿结果块:配不上任何 tool_call 又无容器可挂——渲染出来是无头 ⎿ 噪音
+            # (2026-07-10 第5轮实证:fork 泄漏单边拦截后,漏网 result 成片无头块刷屏)。
+            # 主 agent 的正常结果恒有 call 配对(map/inflight 双通道),此闸只挡异常泄漏。
+            return
 
         block = make_tool_result_block(tool_use_id=tool_use_id, output=output, name=tool_name)
         msg = make_user_message(

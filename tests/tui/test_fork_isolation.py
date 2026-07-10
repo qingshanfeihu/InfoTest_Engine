@@ -98,3 +98,16 @@ def test_graph_callback_falls_back_to_thread_label():
     finally:
         L._FORK_CTX.label = ""
     assert h._subagent_tags({}).get("parent_subagent") is None
+
+
+def test_orphan_tool_result_without_call_is_dropped():
+    """无头孤儿结果块不渲染(2026-07-10 第5轮 ctrl+o 实证:单边泄漏的 result 成片
+    无头 ⎿ 噪音);主 agent 正常结果有 call 配对不受影响。"""
+    r = MessageReducer()
+    r.dispatch(_evt("tool_result", 1, payload={"output": "orphan noise"}))
+    assert not r.snapshot().messages
+    # 正常配对:call 先行 → result 挂上
+    r.dispatch(_evt("tool_call", 2, tags={"name": "fs_read"}, payload={"input": {"p": "x"}}))
+    r.dispatch(_evt("tool_result", 3, tags={"name": "fs_read"}, payload={"output": "content"}))
+    snap = r.snapshot()
+    assert any(b.type == "tool_result" for m in snap.messages for b in m.content)

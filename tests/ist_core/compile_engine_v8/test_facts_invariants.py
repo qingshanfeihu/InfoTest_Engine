@@ -181,3 +181,40 @@ def test_reconcile_yzg_hash10_scenario_cannot_swallow():
     facts += r["append"]
     assert r["transition"] == [A]
     assert not deliverable(facts, A, "art1", "vol1")
+
+
+def test_reconcile_ignores_stale_records_outside_composition(tmp_path, monkeypatch):
+    """语境锚回归(2026-07-10 第5轮实证):last_run.json 按 autoid 跨轮 merge,卷外案的
+    陈腐记录不得被 reconcile 记成本卷裁决(终态案 655173 的上轮记录曾被记入终验卷)。"""
+    import json as _json
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    from main.ist_core.compile_engine_v8 import nodes as N
+    outputs = tmp_path / "outputs"; (outputs / "b").mkdir(parents=True)
+    monkeypatch.setattr(sh, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sh, "outputs_root", lambda: outputs)
+    monkeypatch.setattr(sh, "emit", lambda t: None)
+    monkeypatch.setattr(sh, "emit_tick", lambda *a, **k: None)
+    monkeypatch.setattr(sh, "signal", lambda *a, **k: None)
+    monkeypatch.setattr(N, "_writeback_one", lambda aid, lr: None)
+    A, B = "209030000000000001", "209030000000000002"
+    (outputs / "b" / "manifest.json").write_text(_json.dumps(
+        {"cases": [{"autoid": A}, {"autoid": B}]}), encoding="utf-8")
+    facts_p = outputs / "b" / "facts.jsonl"
+    facts_p.write_text("\n".join(_json.dumps(f) for f in [
+        {"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+        {"ev": "authored", "aid": B, "round": 1, "artifact": "b1"},
+        {"ev": "merged", "aid": "", "volume": "volX", "ctx": "delivery",
+         "composition": [A], "run_id": "m1"},          # 本卷只有 A
+    ]) + "\n", encoding="utf-8")
+    (outputs / "b" / "last_run.json").write_text(_json.dumps([
+        {"autoid": A, "verdict": "pass"},
+        {"autoid": B, "verdict": "fail"},               # B 的陈腐记录(跨轮 merge 遗留)
+    ]), encoding="utf-8")
+    state = {"out_name": "b", "manifest_ref": "outputs/b/manifest.json",
+             "facts_ref": "outputs/b/facts.jsonl",
+             "merged_ref": "outputs/b/case.xlsx", "run_ctx": "delivery",
+             "last_run_ref": "outputs/b/last_run.json"}
+    N.reconcile(state)
+    fs2 = [_json.loads(l) for l in facts_p.read_text().splitlines() if l.strip()]
+    vs = [f for f in fs2 if f["ev"] == "verdict"]
+    assert [v["aid"] for v in vs] == [A]                # B 的幽灵裁决被拒之门外

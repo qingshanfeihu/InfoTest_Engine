@@ -359,6 +359,7 @@ def reconcile(state: dict) -> dict:
     fs = sh.load_facts(state)
     mf = [f for f in fs if f.get("ev") == "merged"]
     volume = str(mf[-1].get("volume")) if mf else ""
+    comp = set(mf[-1].get("composition") or []) if mf else set()
     ctx = str(state.get("run_ctx") or F.CTX_SUBSET)
     lr_ref = str(state.get("last_run_ref") or "")
     data = sh.read_json(sh.project_root() / lr_ref, []) or []
@@ -367,6 +368,10 @@ def reconcile(state: dict) -> dict:
     for rec in data:
         aid = str(rec.get("autoid") or "")
         if not aid:
+            continue
+        if comp and aid not in comp:
+            # last_run.json 按 autoid 跨轮 merge——卷外案的陈腐记录不得入本卷裁决
+            # (语境锚:2026-07-10 第5轮实证,终态案 655173 的上轮记录被记成终验卷裁决)
             continue
         verdicts.append({
             "aid": aid, "run_id": f"{run_id}:{aid}", "ctx": ctx,

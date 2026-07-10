@@ -96,11 +96,30 @@ CorrectedError 语义)/确认产品缺陷];decision 事实存小写 token confir
 "user_proxy";版本族收敛(A12)=key.version_family+检索按族过滤;收敛律(20)=decision→
 adjudication 写回,下批检索命中即采用——固化为 eval 断言("同键第二批零 ask")。
 
-## 五、遗留决策点（设计评审待拍板）
+## 五、四决策点——run5 数据裁决（2026-07-10 当日定案）
 
-1. 采信判定的"与实机不冲突"由谁算:引擎机械比对(保守,能比的少) vs 归因孔判(灵活,要管住);
-2. AskPanel 专职孔放哪:attribute 后独立节点(图加一节点) vs attributor 顺产(孔加一职);
-3. K_ought 语料源的落库形态:spec/design 已在 KMS markdown,bug 裁决走 kb_bug_search 既有
-   通道,决策史新建 adjudications/ 目录(FTS5 索引)——三源三形态还是统一进 footprint 判例层;
-4. json_schema 接入点:ChatOpenAIWithReasoning.with_structured_output vs extra_body 直传
-   (需对 mimo 端点实测一次两种形态)。
+1. **采信判定=引擎机械判,比不出保守回落 ask**。数据:同案跨轮归因漂移严重——655173 三轮
+   三个层(G/reflow→V/defect_candidate→E/env_blocked)、668030 两轮换处置(defect_candidate
+   →rerun_isolated);加历史 942 配对"LLM 审 LLM 判别力 3pp"——把采信门交给孔,门会漂。
+   三条件机械化:命中间无互斥(slug/结论比对)、填充型(verifiability 欠定槽有记载=填充)、
+   与实机不冲突(记载期望形态 vs 最新回显签名,能比则比,比不出=按未知→ask)。
+2. **AskPanel 由 attributor 顺产,不设独立节点**。数据:归因 fork 均价 ↑256k tokens
+   (run5 共 9 fork ↑2.30M);独立 panel 孔=同批证据重读一遍(+~256k/panel,+2-3min),
+   且判断漂移数据说明第二个孔可能讲出第三个故事——同孔顺产保归因与呈报一致。
+   落地形态:attributor 工具白名单加 `submit_ask_panel`(strict),判 ought-欠定时顺手提交。
+3. **决策史新建 `knowledge/adjudications/`(md+frontmatter=判例键/锚,FTS5 复用
+   kb_memory_search 底座),不塞 footprint**。数据:footprint 2398 节点按 CLI feature
+   组织,decision_rules 105 条是 CLI 决策规则非用户裁决;冲突形态(ordering_vs_persistence
+   等)跨 feature,塞单节点检索必漏;决策史存量≈零(user_decision.json 存档 0 个,decision
+   事实 5 条)——绿地建正确形态零迁移。kb_intent_search 的四源 fan-in:spec/design=KMS
+   product md(1720 份 53.9MB,FTS5 CJK bigram 已验)、人写先例=compile_precedent 意图索引
+   (mirror 96 卷,委托)、bug 裁决=kb_bug_search(委托)、决策史=adjudications/(新)。
+4. **结构化产物全走 strict 合成工具,弃 response_format**(mimo 端点实测,2026-07-10):
+   - response_format json_schema strict 裸调:HTTP 200 但**不守约**(丢 enum 必填字段);
+   - 同形态+思考:返回 ```json 围栏散文,schema 完全无视;
+   - **strict 工具+强制 tool_choice+思考:满分**(enum/键集全对,reasoning 1k 字正常);
+   - **strict 工具+auto+思考:满分**。
+   官方"json_schema 管说什么/strict 管怎么调"的分工判据在 Anthropic 家族成立,mimo 实测
+   只有 strict 工具一条可信通道——且 mimo 强制 tool_choice 与思考**兼容**(Anthropic 不容),
+   MiMo-Code 的合成工具模式即最终形态。接入=既有 bind_tools strict 通道按工具单点开
+   (strict=True per-tool),不动 IST_TOOLS_STRICT 全局开关。

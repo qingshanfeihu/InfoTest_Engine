@@ -260,7 +260,10 @@
   "sdns_config_files": {
    "cmd": "show sdns config file",
    "extract": null,
-   "provenance": "CLI Ch20;探通道①残留 SDNS 配置文件(clear sdns all 官方明文不清它们)"
+   "provenance": "CLI Ch20;探通道①残留 SDNS 配置文件(clear sdns all 官方明文不清它们);空列表仍打印段落头+列头(2026-07-10 实录假阳性),header_patterns 过滤",
+   "header_patterns": [
+    "^length\\s+date/time\\s+name"
+   ]
   },
   "sync_peers": {
    "cmd": "show synconfig peer",
@@ -271,7 +274,8 @@
    "sdns_config_files": {
     "cmd": "clear sdns config file",
     "granularity": "all",
-    "provenance": "CLI Ch20『清除本地所有SDNS配置文件』——粗粒度:仅当床账证明全部为己方产物才可自动执行,否则 ask(INV-9);2026-07-10 用户裁决「开工必净」:bed_gate 初始化清理自动执行本引用并复检(残留是 R1 12/26 崩盘主嫌)"
+    "provenance": "CLI Ch20『清除本地所有SDNS配置文件』——粗粒度:仅当床账证明全部为己方产物才可自动执行,否则 ask(INV-9);2026-07-10 用户裁决「开工必净」:bed_gate 初始化清理自动执行本引用并复检(残留是 R1 12/26 崩盘主嫌);实测该命令要求交互输入 YES 确认——单发通道做不完,需会话式通道支持(立项)",
+    "interactive_confirm": "YES"
    },
    "_provenance": "清理引用:bed_gate 初始化清理按 finding.kind 对号执行(2026-07-10 用户裁决:开工必净);无引用的 kind 不动手走 ask。新清理动作=加条目零代码。"
   }

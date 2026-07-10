@@ -82,8 +82,17 @@ def test_clean_bed_clean_pass(tmp_path):
 
 # ── 初始化清理(2026-07-10 用户裁决:开工必净) ─────────────────────────────────
 
-def test_bed_cleanup_executes_grammar_ref_and_records_ledger(tmp_path):
+def _fake_grammar_with_ref():
+    """合成清理引用(非交互):真实 sdns_config_files 引用带 interactive_confirm 会被跳过,
+    执行路径用合成通道测。"""
+    return {"bed_probes": {"cleanup_refs": {
+        "fake_channel": {"cmd": "clear fake residue", "provenance": "测试用"}}}}
+
+
+def test_bed_cleanup_executes_grammar_ref_and_records_ledger(tmp_path, monkeypatch):
     """有文法清理引用的 kind → config 通道执行+回显校验 success+记床账;无引用 → skipped。"""
+    import main.ist_core.compile_engine_v8.bed as bedmod
+    monkeypatch.setattr(bedmod, "load_grammar", _fake_grammar_with_ref)
     from main.ist_core.compile_engine_v8.bed import bed_cleanup, _ledger_path
     ran: list[str] = []
 
@@ -91,25 +100,27 @@ def test_bed_cleanup_executes_grammar_ref_and_records_ledger(tmp_path):
         ran.append(cmd)
         return f"host=x  mode=config\ncommand: {cmd}\nstatus: success\n--- output ---\n"
 
-    findings = [{"kind": "sdns_config_files", "detail": "sdns_test.conf"},
+    findings = [{"kind": "fake_channel", "detail": "residue1"},
                 {"kind": "segments", "detail": "seg1"},          # 无清理引用
                 {"kind": "build_anchor", "detail": {}}]          # 版本锚不清
     out = bed_cleanup(exec_cfg, findings, root=tmp_path, host="h", batch="b")
-    assert [c["kind"] for c in out["cleaned"]] == ["sdns_config_files"]
+    assert [c["kind"] for c in out["cleaned"]] == ["fake_channel"]
     assert out["failed"] == [] and out["skipped"] == ["segments"]
-    assert ran and "clear" in ran[0]                     # 命令来自文法数据,非硬编码
+    assert ran == ["clear fake residue"]                 # 命令来自文法数据,非硬编码
     led = _ledger_path(tmp_path, "h").read_text(encoding="utf-8")
-    assert '"cleaned"' in led and "sdns_config_files" in led
+    assert '"cleaned"' in led and "fake_channel" in led
 
 
-def test_bed_cleanup_device_rejection_reported_not_lied(tmp_path):
+def test_bed_cleanup_device_rejection_reported_not_lied(tmp_path, monkeypatch):
     """设备拒绝(status: error,2026-07-10 show 通道实证)→ failed 如实上报,零床账,不谎报已清。"""
+    import main.ist_core.compile_engine_v8.bed as bedmod
+    monkeypatch.setattr(bedmod, "load_grammar", _fake_grammar_with_ref)
     from main.ist_core.compile_engine_v8.bed import bed_cleanup, _ledger_path
     out = bed_cleanup(lambda c: f"command: {c}\nstatus: error\n--- output ---\n",
-                      [{"kind": "sdns_config_files", "detail": "x"}],
+                      [{"kind": "fake_channel", "detail": "x"}],
                       root=tmp_path, host="h")
     assert out["cleaned"] == []
-    assert [f["kind"] for f in out["failed"]] == ["sdns_config_files"]
+    assert [f["kind"] for f in out["failed"]] == ["fake_channel"]
     assert not _ledger_path(tmp_path, "h").is_file()     # 失败不记 cleaned 账
 
 
@@ -121,3 +132,28 @@ def test_bed_cleanup_never_touches_unknown_kinds(tmp_path):
                       root=tmp_path, host="h")
     assert out["cleaned"] == [] and out["skipped"] == ["synconfig_peer"]
     assert ran == []                                     # 零执行:无引用绝不动手
+
+
+def test_phantom_findings_metadata_and_headers_filtered(tmp_path):
+    """幽灵残留回归(2026-07-10 两轮实证):组合元数据行 host=IP  mode=show 与
+    空列表的段落头/列头不构成残留;三通道实际全空 → 零发现零问询。"""
+    empty_outputs = {
+        "show segment name": "=== apv_ssh_execute ===\nhost=1.2.3.4  mode=show\ncommand: show segment name\nstatus: success\n--- output ---\nAPV#",
+        "show synconfig peer": "host=1.2.3.4  mode=show\n--- output ---\n\nAPV#",
+        "show sdns config file": ("host=1.2.3.4  mode=show\n--- output ---\n"
+                                   "Running configuration backup files: \n"
+                                   "length     date/time            name                 hmac-sm3\n\nAPV#"),
+    }
+    rep = bed_check(_probe(DEV_585, empty_outputs), CFG, root=tmp_path, host="h")
+    assert rep["findings"] == [] and rep["needs_ask"] is False
+
+
+def test_interactive_confirm_cleanup_skipped_not_lied(tmp_path):
+    """需交互确认(YES)的清理引用:单发通道做不完 → skipped,绝不执行(会卡确认提示且误判成功)。"""
+    from main.ist_core.compile_engine_v8.bed import bed_cleanup
+    ran: list[str] = []
+    out = bed_cleanup(lambda c: ran.append(c) or "status: success",
+                      [{"kind": "sdns_config_files", "detail": "x"}],
+                      root=tmp_path, host="h")
+    assert out["cleaned"] == [] and out["skipped"] == ["sdns_config_files"]
+    assert ran == []

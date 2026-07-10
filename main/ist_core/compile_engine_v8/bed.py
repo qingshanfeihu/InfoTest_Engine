@@ -121,6 +121,11 @@ def bed_cleanup(exec_fn: Callable[[str], str], findings: list[dict], *,
         if not isinstance(spec, dict) or not str(spec.get("cmd") or "").strip():
             out["skipped"].append(kind)   # 文法层无清理引用 → 不动手
             continue
+        if spec.get("interactive_confirm"):
+            # 需交互确认(如 Type "YES")的命令单发通道做不完——会卡在确认提示上且
+            # status 无错误标记会被误判成功(2026-07-10 实录);会话式通道支持前跳过
+            out["skipped"].append(kind)
+            continue
         echo = exec_fn(str(spec["cmd"])) or ""
         item = {"kind": kind, "provenance": str(spec.get("provenance", ""))[:120],
                 "echo": echo[:300]}
@@ -165,11 +170,21 @@ def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
             continue
         out = probe_fn(str(spec.get("cmd") or ""))
         report["probes"][name] = (out or "")[:400]
+        hdr_pats = [re.compile(p, re.IGNORECASE) for p in (spec.get("header_patterns") or [])]
         body = "\n".join(ln for ln in (out or "").splitlines()
                          if ln.strip()
                          and not ln.startswith(("===", "---", "command:", "status:"))
-                         and not re.match(r"^\w+=\S*$", ln.strip())      # host=/mode= 等探针元数据行
-                         and not (len(ln.strip()) <= 40 and ln.strip().endswith(("#", ">"))))
+                         # 探针元数据行:一至多个 key=val(实录 "host=IP  mode=show" 组合行
+                         # 穿透单 token 版过滤 → 每个探针恒剩此行 → 幽灵残留恒弹床态问询,
+                         # 2026-07-10 两轮实证;三通道实际全空)
+                         and not re.match(r"^\w+=\S+(\s+\w+=\S+)*$", ln.strip())
+                         and not (len(ln.strip()) <= 40 and ln.strip().endswith(("#", ">")))
+                         # 段落标题行(通用):"Running configuration backup files:" 这类
+                         # 以冒号收尾的头,空列表也打印,不算残留
+                         and not ln.strip().endswith(":")
+                         # 列表头(领域数据):探针条目 header_patterns 按引用过滤,
+                         # 新表头形态=改 JSON 零代码
+                         and not any(p.match(ln.strip()) for p in hdr_pats))
         if body.strip() and not out.startswith("error:") and "(no output)" not in out:
             report["findings"].append({"kind": name, "detail": body[:300]})
 

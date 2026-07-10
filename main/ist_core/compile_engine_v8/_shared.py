@@ -48,12 +48,65 @@ def view(state: dict, fs: list[dict] | None = None) -> dict:
     return V.batch_view(fs if fs is not None else load_facts(state), manifest(state))
 
 
+def case_rows(aid: str) -> list[dict]:
+    """卷面行(通道命中/队列共用;失败返回空,判定保守)。"""
+    from main.ist_core.tools.device.precedent_tools import _load_case_rows as _l
+    p = outputs_root() / aid / "case.xlsx"
+    try:
+        return _l(str(p)) if p.is_file() else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def cap_waiting(fs: list[dict]) -> list[str]:
+    """轮次封顶待授权案:cap_reached 事实存在且该轮 cap 问题未获 decision(§11.7 资源问询)。"""
+    out = []
+    for f in fs:
+        if f.get("ev") != "cap_reached":
+            continue
+        aid, rnd = str(f.get("aid")), int(f.get("round") or 0)
+        qid = f"cap:{aid}:{rnd}"
+        if not any(d.get("ev") == "decision" and d.get("question_id") == qid for d in fs):
+            if aid not in out:
+                out.append(aid)
+    return out
+
+
+def granted_rounds(fs: list[dict], aid: str) -> int:
+    """用户已授权的追加轮次(cap 问询答「继续」每次 +2)。"""
+    n = 0
+    for f in fs:
+        if (f.get("ev") == "decision" and str(f.get("aid")) == aid
+                and str(f.get("question_id", "")).startswith("cap:")
+                and "继续" in str(f.get("answer", ""))):
+            n += 2
+    return n
+
+
+def ask_targets(state: dict, fs: list[dict], vw: dict) -> dict:
+    """ask 边目标(§11.7 充要条件的机械面):
+    contra = 矛盾≥2 且导出修法队列为空(队列非空禁问,继续自愈环);
+    cap   = 轮次封顶待授权(资源问询)。"""
+    from main.ist_core.compile_engine_v8 import remedies as R
+    contra = []
+    for aid, c in vw["cases"].items():
+        if c["status"] == V.S_CONTRADICTED and c["contradictions"] >= 2:
+            qid = f"contra:{aid}:{c['contradictions']}"
+            if any(d.get("ev") == "decision" and d.get("question_id") == qid for d in fs):
+                continue   # 本次矛盾已获裁决;新矛盾计数+1 时再问(用户裁决:每次必问)
+            mine = [f for f in fs if str(f.get("aid")) == aid]
+            if R.queue_empty(mine, aid, case_rows(aid)):
+                contra.append(aid)
+    return {"contra": contra, "cap": cap_waiting(fs)}
+
+
 def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
     """视图 → 条件边计数缓存(INV-7:缓存;真理在事实流)。"""
+    if fs is None:
+        fs = load_facts(state)
     vw = view(state, fs)
     c = vw["counts"]
-    ask_contra = sum(1 for x in vw["cases"].values()
-                     if x["status"] == V.S_CONTRADICTED and x["contradictions"] >= 2)
+    t = ask_targets(state, fs, vw)
     return {
         "n_pending": c.get(V.S_PENDING, 0),
         "n_awaiting_user": c.get(V.S_AWAITING_USER, 0),
@@ -62,8 +115,9 @@ def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
         "n_subset_verified": c.get(V.S_SUBSET_VERIFIED, 0),
         "n_deliverable": c.get(V.S_DELIVERABLE, 0),
         "n_contradicted": c.get(V.S_CONTRADICTED, 0),
-        "n_settled_bad": c.get(V.S_ESCALATED, 0) + c.get(V.S_TERMINAL, 0),
-        "n_ask_contradiction": ask_contra,
+        "n_settled_bad": (c.get(V.S_ESCALATED, 0) + c.get(V.S_TERMINAL, 0)
+                          + c.get(V.S_SUSPENDED, 0)),
+        "n_ask_contradiction": len(t["contra"]) + len(t["cap"]),
     }
 
 
@@ -119,6 +173,27 @@ def emit_tick(state: dict, phase: str, fs: list[dict] | None = None) -> None:
                           "total": len(vw["cases"])})
     except Exception:  # noqa: BLE001
         logger.debug("engine tick emit 失败", exc_info=True)
+
+
+def emit_case_flag(state: dict, aid: str, text: str, status: str = "running") -> None:
+    """问题案单行(§11.6):复用 TUI progress 卡的按 key 原地更新机制,人话状态。"""
+    try:
+        from main.ist_core.skills.loader import _fork_emit_event
+        _fork_emit_event({"event": "progress", "key": f"case:{aid[-6:]}",
+                          "phase": "问题跟踪", "detail": text, "status": status,
+                          "elapsed_s": 0, "total_s": 0})
+    except Exception:  # noqa: BLE001
+        logger.debug("case flag emit 失败", exc_info=True)
+
+
+def emit_summary(state: dict, summary: dict) -> None:
+    """收口卡事件(TUI §11.2:footer 上方「交付结果」卡,一屏讲完;人话字段)。"""
+    try:
+        from main.ist_core.skills.loader import _fork_emit_event
+        _fork_emit_event({"event": "engine_summary",
+                          "run": str(state.get("out_name") or "engine"), **summary})
+    except Exception:  # noqa: BLE001
+        logger.debug("engine summary emit 失败", exc_info=True)
 
 
 def fork_executor(n_items: int):

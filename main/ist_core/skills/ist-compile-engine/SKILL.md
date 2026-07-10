@@ -25,14 +25,22 @@ and may pause on any of three user-decision edges, each surfacing as an ask pane
 
 - **bed_gate** — device build anchor mismatch or foreign residue on the shared bed;
 - **ask_decision** — underdetermined claims (ask-before-write is code-enforced);
-- **ask_contradiction** — a case passed alone but failed in the delivery volume (from the
-  second contradiction onwards, every occurrence returns to the user).
+- **ask_contradiction** — reaches the user only when the engine's own moves are exhausted
+  (derived-remedy queue empty on a repeated contradiction) or the round budget needs
+  authorization; the panel reports diagnosis + history and asks continue / suspend / stop —
+  fixes are derived from theory and knowledge, never offered as a menu. A suspended case
+  keeps its artifacts under `<batch>/unfinished/` and resumes on the next same-name run.
 
 If the product version is missing, `ask_user` first — a wrong version invalidates the whole
 batch's grammar. If the run is interrupted, re-calling with the same arguments resumes from
 checkpoint; completed device rounds are not re-burned. Batch truth lives in
 `workspace/outputs/<batch>/facts.jsonl` (append-only); machine contracts are documented in
 `references/contracts.md`.
+
+Deliverables (all in `workspace/outputs/<batch>/`): `case.xlsx` (passing volume),
+`unsuccessful_cases.xlsx` + `unsuccessful_cases.md` (when any case did not pass),
+`delivery_report.md` (plain-language, determinate remedies), `engine_report.json`,
+`facts.jsonl`. Intermediate per-case dirs and subset volumes are cleaned at closing.
 
 Keep the user-facing summary **short**: the engine already wrote the full report to
 `delivery_report.md` (path in its return). One or two sentences plus the report path is

@@ -1,0 +1,237 @@
+{
+  "engine": "v8",
+  "outcome": "delivered_with_labels",
+  "totals": {
+    "cases": 26,
+    "deliverable": 23,
+    "contradicted": 1,
+    "failed": 1,
+    "failed_terminal": 1
+  },
+  "volume": "87f7127442d4d2b0",
+  "moved_tail": [
+    "203601753067668000",
+    "203601753067668015",
+    "203601753067668030",
+    "203601753067668044"
+  ],
+  "coexist_violations": [],
+  "bed": {
+    "host": "10.4.127.93",
+    "device_build": "InfosecOS Beta.APV-HG-K.10.5.0.585"
+  },
+  "cases": {
+    "203601753067655154": {
+      "status": "deliverable",
+      "artifact": "203601753067655154:1783656453.6038342",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067655173": {
+      "status": "deliverable",
+      "artifact": "203601753067655173:1783656537.2058172",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067655188": {
+      "status": "deliverable",
+      "artifact": "203601753067655188:1783656464.8296318",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067655203": {
+      "status": "deliverable",
+      "artifact": "203601753067655203:1783656563.2145424",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067655218": {
+      "status": "deliverable",
+      "artifact": "203601753067655218:1783656502.0462868",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067655233": {
+      "status": "deliverable",
+      "artifact": "203601753067655233:1783656444.9387925",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067655248": {
+      "status": "deliverable",
+      "artifact": "203601753067655248:1783656500.807231",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067655262": {
+      "status": "deliverable",
+      "artifact": "203601753067655262:1783656519.397774",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067655276": {
+      "status": "deliverable",
+      "artifact": "203601753067655276:1783656667.4757605",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067655290": {
+      "status": "deliverable",
+      "artifact": "203601753067655290:1783657707.4515758",
+      "rounds": 2,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067667986": {
+      "status": "deliverable",
+      "artifact": "203601753067667986:1783656709.1502402",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067668000": {
+      "status": "deliverable",
+      "artifact": "203601753067668000:1783656664.0990539",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067668015": {
+      "status": "contradicted",
+      "artifact": "203601753067668015:1783659585.1722476",
+      "rounds": 2,
+      "contradictions": 1,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067668030": {
+      "status": "failed",
+      "artifact": "203601753067668030:1783656853.6894825",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067668044": {
+      "status": "failed_terminal",
+      "artifact": "203601753067668044:1783658526.7029757",
+      "rounds": 2,
+      "contradictions": 2,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067668059": {
+      "status": "deliverable",
+      "artifact": "203601753067668059:1783656725.4042137",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067676594": {
+      "status": "deliverable",
+      "artifact": "203601753067676594:1783656779.7307873",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067676612": {
+      "status": "deliverable",
+      "artifact": "203601753067676612:1783656788.7778065",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067676626": {
+      "status": "deliverable",
+      "artifact": "203601753067676626:1783656849.6854079",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067676640": {
+      "status": "deliverable",
+      "artifact": "203601753067676640:1783657041.78175",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067676654": {
+      "status": "deliverable",
+      "artifact": "203601753067676654:1783656810.2626207",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067676668": {
+      "status": "deliverable",
+      "artifact": "203601753067676668:1783656895.8649971",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067681539": {
+      "status": "deliverable",
+      "artifact": "203601753067681539:1783656897.547489",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067681556": {
+      "status": "deliverable",
+      "artifact": "203601753067681556:1783656919.9567928",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067681571": {
+      "status": "deliverable",
+      "artifact": "203601753067681571:1783656867.9811034",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    },
+    "203601753067681588": {
+      "status": "deliverable",
+      "artifact": "203601753067681588:1783656894.2001522",
+      "rounds": 1,
+      "contradictions": 0,
+      "frozen": false,
+      "transient_recur": false
+    }
+  },
+  "refs": {
+    "facts": "workspace/outputs/yzg/facts.jsonl",
+    "merged": "workspace/outputs/yzg/case.xlsx"
+  }
+}

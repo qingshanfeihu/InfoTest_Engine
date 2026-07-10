@@ -43,3 +43,18 @@ Data-driven from `knowledge/data/compile_ref/domain_grammar.json`
 (`persistence_channels`, `bed_probes`) — adding a channel or probe is a JSON edit, zero code.
 Bed ledger: `runtime/bed_ledger/<host>.jsonl` (created/restored pairs; auto-cleanup only for
 our own unrestored artifacts).
+
+## Derived-remedy queue & ask precondition (2026-07-10, §11.7)
+
+- Fact types added: `run_done` (device-run idempotency marker), `cap_reached` (round budget
+  hit; a resource question, not a terminal), `suspended` (user chose to suspend; batch-settled,
+  resumable next run). `authored` may carry `remedy` (the remedy_key it implements).
+- `attribution` facts carry `user_note` (Chinese, report-facing), `doc_quote`/`doc_source`/
+  `device_quote` (doc-vs-device pair; device_quote substring-gated), `channel` (mechanical).
+- `remedies.derive_queue(facts, aid, case_rows)` — pure function; ask edges require the queue
+  to be EMPTY (`remedies.queue_empty`). Queue actions: self_cleanup (per persistence channel
+  `case_mitigation` data) → recompile_directed (keyed per attribution round) → rerun_isolated
+  → vary_form.
+- Rendering (`render.py`) is a pure projection of facts; `render.leak_scan` gates internal
+  enum/hash leakage out of user-facing reports.
+

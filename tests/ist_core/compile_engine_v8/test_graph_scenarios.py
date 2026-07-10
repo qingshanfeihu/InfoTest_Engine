@@ -67,8 +67,11 @@ def rig(tmp_path, monkeypatch):
         "anchor": {"status": "match", "device": "InfosecOS Beta.APV-HG-K.10.5.0.585"},
         "findings": [], "needs_ask": False, "ours_unrestored": []})
 
-    # worker/attributor 假实现
+    # worker/attributor 假实现(briefs 全录供断言)
+    briefs: list[tuple[str, str]] = []
+
     def fake_fork(skill, brief, *, tag="", effort=""):
+        briefs.append((skill, brief))
         env = json.loads(brief.splitlines()[0])
         aid = str(env.get("autoid"))
         if skill == "compile-worker":
@@ -113,7 +116,8 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(U8, "_ingest_uncertain_observations", lambda led: None)
 
     return {"tmp": tmp_path, "outputs": outputs, "out_name": out_name,
-            "signals": signals, "wb": wb, "rb": rb, "monkeypatch": monkeypatch}
+            "signals": signals, "wb": wb, "rb": rb, "briefs": briefs,
+            "monkeypatch": monkeypatch}
 
 
 def _run_graph(rig, device, resume_answers=None, thread="t1"):
@@ -226,5 +230,13 @@ def test_s4_incremental_recompile_goes_subset_then_delivery(rig):
     assert kinds[0] == ("delivery", 3)
     assert ("subset", 1) in kinds
     assert kinds[-1] == ("delivery", 3)
-    # 重编前旧卷存档(V6 archive 职责迁入 author 的回归)
-    assert (rig["outputs"] / c2 / "history" / "case.r1.xlsx").is_file()
+    # 重编前旧卷存档(V6 archive 职责迁入 author 的回归):R2 brief 必带前轮卷引用
+    r2_briefs = [b for sk, b in rig["briefs"]
+                 if sk == "compile-worker" and f'"autoid": "{c2}"' in b
+                 and "Recompile round" in b]
+    assert r2_briefs and "prior_config_rolls" in r2_briefs[0]
+    # 11.9 交付契约:通过案 per-autoid 目录删除、中间件收走、交付物在位
+    base = rig["outputs"] / rig["out_name"]
+    assert not (rig["outputs"] / c2).exists()
+    assert not (base / "manifest.json").exists() and not (base / "last_run.json").exists()
+    assert (base / "delivery_report.md").is_file() and (base / "facts.jsonl").is_file()

@@ -72,17 +72,36 @@ original only). Behavior knowledge worth the next batch knowing (echo formats, c
 semantics, cross-object config-consistency): file via `submit_behavior_fact` with grounds —
 unfiled observations evaporate; the engine decides mechanically whether they enter the store.
 
+## Persistence-channel knowledge in the brief
+
+When the brief carries `persistence_channels` (this case writes state that outlives per-case
+cleanup) and/or `untried_remedies`, judge **inside that action space**: for interference-shaped
+failures the derived remedy order is case self-cleanup ∘ tail ordering — prefer dispositions
+that exercise an untried remedy over inventing a new direction. `final_report_only: true`
+means the engine is closing: file the attribution for the report; no recompile will follow.
+
 ## Deliver
 
-File via `submit_attribution(xlsx_path, autoid, layer, disposition, evidence, fix_direction)`.
-disposition ∈ reflow / frozen / rerun_isolated / env_blocked / defect_candidate. End with:
+File via `submit_attribution(xlsx_path, autoid, layer, disposition, evidence, fix_direction,
+user_note, doc_quote, doc_source, device_quote)`.
+disposition ∈ reflow / frozen / rerun_isolated / env_blocked / defect_candidate.
+
+- `user_note`: ONE Chinese sentence for the delivery-report reader — what mechanically went
+  wrong, plain language, no internal terms (this is the only Chinese field).
+- `doc_quote` + `doc_source`: what the manual/mindmap says should happen (verbatim + where).
+- `device_quote`: what the device actually did (verbatim substring, gate-checked) — the
+  doc-vs-device pair is rendered to the user side by side; fill both whenever they diverge.
+
+End with:
 
 VERDICT: <layer>/<disposition>
 </task>
 
 <rules>
 - The engine reads only filed fields; prose conclusions do not count.
-- Evidence is a verbatim substring of the device original (gate-checked).
+- Evidence and device_quote are verbatim substrings of the device original (gate-checked).
 - No guessing: insufficient evidence → reflow with fix_direction "insufficient evidence; add
   observation X".
+- A defect claim requires the behavior to contradict the manual (doc_quote showing the
+  manual's statement is mandatory for defect_candidate).
 </rules>

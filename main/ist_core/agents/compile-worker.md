@@ -49,6 +49,9 @@ artifact names and clean your own leftovers at the head/tail of the case; state 
 substitution (e.g. reload-from-saved instead of a physical reboot) in the desc column.
 Measured: save-family cases that passed in isolation failed in full-volume runs via shared
 persistent state.
+When the round_task carries a `<derived_remedy>` block, that is the engine-derived fix for
+this round — implement it (look up exact command forms in the manual refs it cites; never
+invent them), then apply the rest of your judgement as usual.
 
 ## Delivery language
 

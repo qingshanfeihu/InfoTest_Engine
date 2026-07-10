@@ -68,18 +68,35 @@ def _bridge(payload: dict) -> dict:
             q["_key"] = str(q.get("_autoid") or q.get("header") or "")
         return _panel(qs)
     if kind == "ask_contradiction":
+        # §11.7 呈报+取舍:题面带诊断与经过;不提供修法选项(修法归理论);
+        # 「接受单跑」不在选项里,用户可经 Other 自由输入,引擎照收
         qs = []
         for c in (payload.get("cases") or []):
             aid = str(c.get("autoid"))
-            qs.append({
-                "question": f"用例 …{aid[-6:]} 单跑通过、整卷复验第 {c.get('contradictions')} 次失败"
-                            f"(跨案持久态互扰嫌疑;既往选择 {c.get('prior_choices') or '无'}),如何处置?",
-                "header": f"矛盾{aid[-4:]}",
-                "options": [
-                    {"label": "接受单跑", "description": "按单跑语义标注交付(报告声明整卷互扰)"},
-                    {"label": "重排复验", "description": "重排卷序后再终验一轮"},
-                    {"label": "如实降级", "description": "该案不入交付卷,如实报告"}],
-                "_key": aid})
+            title = str(c.get("title") or ("用例 …" + aid[-6:]))
+            story = str(c.get("timeline") or "")
+            diag = str(c.get("diagnosis") or "")
+            if str(c.get("kind")) == "cap":
+                q = (f"「{title}」已编写 {c.get('rounds')} 次仍未通过。"
+                     + (f"经过:{story}。" if story else "")
+                     + (f"当前判断:{diag} " if diag else "")
+                     + "引擎还有修法可试,但轮次额度用完了——要继续吗?")
+                opts = [
+                    {"label": "继续(加2轮)", "description": "授权引擎继续按导出修法重编复验"},
+                    {"label": "挂起", "description": "暂停此用例,成果保留,下批同参数续跑"},
+                    {"label": "停止此用例", "description": "按你的裁决收尾,记入未通过卷(不符脑图预期,如实标注)"}]
+            else:
+                q = (f"「{title}」单独验证能通过,但整卷复验第 {c.get('contradictions')} 次失败,"
+                     "引擎侧修法已全部试过。"
+                     + (f"经过:{story}。" if story else "")
+                     + (f"当前判断:{diag} " if diag else "")
+                     + (f"你此前的裁决:{c.get('prior_choices')}。" if c.get("prior_choices") else "")
+                     + "如何处置?")
+                opts = [
+                    {"label": "再复验一轮", "description": "不改卷面,整卷再跑一轮确认(排除偶发)"},
+                    {"label": "挂起", "description": "暂停此用例,成果保留,下批同参数续跑"},
+                    {"label": "停止此用例", "description": "按你的裁决收尾,记入未通过卷(如实标注)"}]
+            qs.append({"question": q, "header": f"…{aid[-4:]}", "options": opts, "_key": aid})
         return _panel(qs)
     return {"_non_interactive": True}
 

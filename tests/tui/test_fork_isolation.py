@@ -66,3 +66,35 @@ def test_main_agent_events_untouched():
     snap = r.snapshot()
     assert any("主回答完整" in (b.text or "")
                for m in snap.messages for b in m.content if b.type == BLOCK_TEXT)
+
+
+def test_thread_local_fork_label_set_and_cleared():
+    """graph 回调 metadata 缺失时的兜底身份标:fork 执行期同线程可读,退出即清。"""
+    from main.ist_core.skills import loader as L
+
+    class _Stub:
+        def invoke(self, inp, cfg):
+            assert L.current_fork_label() == "compile-attributor"   # 执行期可读
+            return {"messages": []}
+
+    import os
+    os.environ["IST_FORK_STEP_EMIT"] = "0"   # 走阻塞 invoke 分支
+    try:
+        L._invoke_fork_streamed(_Stub(), "brief", "compile-attributor#3")
+    finally:
+        os.environ.pop("IST_FORK_STEP_EMIT", None)
+    assert L.current_fork_label() == ""                             # 退出即清
+
+
+def test_graph_callback_falls_back_to_thread_label():
+    """kwargs 无 metadata(LangChain tool/end 回调常态)→ 兜底 thread-local 打标。"""
+    from main.ist_core.graph import _MainAgentProgressHandler
+    from main.ist_core.skills import loader as L
+    h = _MainAgentProgressHandler()
+    L._FORK_CTX.label = "compile-worker"
+    try:
+        tags = h._subagent_tags({})            # 无 metadata
+        assert tags.get("parent_subagent") == "compile-worker"
+    finally:
+        L._FORK_CTX.label = ""
+    assert h._subagent_tags({}).get("parent_subagent") is None

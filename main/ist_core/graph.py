@@ -156,7 +156,15 @@ class _MainAgentProgressHandler(BaseCallbackHandler):
         tags = dict(base_tags or {})
         meta = kwargs.get("metadata") or {}
         agent_name = meta.get("lc_agent_name") or ""
-        
+        if not agent_name:
+            # 兜底:LangChain 对 tool/end 回调常不带 metadata(2026-07-02 实证),引擎直调
+            # fork 的工具行因此漏标刷主屏(2026-07-10 第5轮实证)——fork 执行线程有
+            # thread-local 身份标(loader 设置),回调同线程可靠可读
+            try:
+                from main.ist_core.skills.loader import current_fork_label
+                agent_name = current_fork_label()
+            except Exception:  # noqa: BLE001
+                agent_name = ""
         if agent_name and agent_name not in {"main_agent", ""}:
             tags["parent_subagent"] = agent_name
             if getattr(self, "_current_task_tool_use_id", ""):

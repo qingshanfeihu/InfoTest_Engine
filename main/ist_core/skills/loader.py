@@ -961,6 +961,21 @@ def _emit_fork_step_events(fork_id: str, msg: Any, counter: list[int]) -> None:
                           "summary": _short_fork_result(content)[:140]})
 
 
+import threading as _threading
+
+_FORK_CTX = _threading.local()
+
+
+def current_fork_label() -> str:
+    """当前线程若在执行 fork 则返回其 skill 名,否则空串。
+
+    graph.py 回调的 metadata 兜底用:LangChain 对 tool/end 回调常不带 metadata,
+    引擎直调 fork 的工具事件因此漏 parent_subagent 标刷主屏(2026-07-10 第5轮实证)。
+    fork 在 ForkExecutor 工作线程内同步执行,其全部回调同线程触发——thread-local 可靠。
+    """
+    return str(getattr(_FORK_CTX, "label", "") or "")
+
+
 def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str, *,
                           tally: Any = None, fork_id: str = "") -> dict:
     """跑 fork 并把内部每个工具调用实时发到主 bus(让 TUI 看到 draft/grade 运行过程)。
@@ -980,28 +995,32 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str, *,
     # lc_agent_name:fork 身份标(metadata 随 LangChain 传播到全部子调用)。缺它的实证后果
     # (2026-07-10 yzg 复跑):①fork 流式正文/工具行涌进主屏 ⏺ 通道刷屏;②fork usage 被
     # reducer 误并主计数(双计);③Langfuse trace 无名。streaming.py 读它打 parent_subagent。
-    cfg = {"callbacks": _cbs,
-           "metadata": {"lc_agent_name": str(label or "fork").split("#")[0]}}
-    stream = getattr(runnable, "stream", None)
-    if not callable(stream) or not _fork_step_emit_enabled():
-        # runnable 不支持流式 或 关了步骤显示(IST_FORK_STEP_EMIT=0)→ 退回阻塞 invoke,
-        # 行为与旧版完全一致(只是看不到实时步骤)。
-        return runnable.invoke(inp, cfg)
-    final_state: dict = {}
-    seen = 0
-    n_calls = [0]
-    for state in stream(inp, cfg, stream_mode="values"):
-        if not isinstance(state, dict):
-            continue
-        final_state = state
-        msgs = state.get("messages", []) or []
-        for m in msgs[seen:]:
-            for line in _fork_step_lines(label, m):
-                _fork_emit(line)
-            if fork_id:
-                _emit_fork_step_events(fork_id, m, n_calls)
-        seen = len(msgs)
-    return final_state
+    _agent_name = str(label or "fork").split("#")[0]
+    cfg = {"callbacks": _cbs, "metadata": {"lc_agent_name": _agent_name}}
+    _FORK_CTX.label = _agent_name   # 线程身份标(回调 metadata 缺失时的兜底,见 current_fork_label)
+    try:
+        stream = getattr(runnable, "stream", None)
+        if not callable(stream) or not _fork_step_emit_enabled():
+            # runnable 不支持流式 或 关了步骤显示(IST_FORK_STEP_EMIT=0)→ 退回阻塞 invoke,
+            # 行为与旧版完全一致(只是看不到实时步骤)。
+            return runnable.invoke(inp, cfg)
+        final_state: dict = {}
+        seen = 0
+        n_calls = [0]
+        for state in stream(inp, cfg, stream_mode="values"):
+            if not isinstance(state, dict):
+                continue
+            final_state = state
+            msgs = state.get("messages", []) or []
+            for m in msgs[seen:]:
+                for line in _fork_step_lines(label, m):
+                    _fork_emit(line)
+                if fork_id:
+                    _emit_fork_step_events(fork_id, m, n_calls)
+            seen = len(msgs)
+        return final_state
+    finally:
+        _FORK_CTX.label = ""
 
 
 def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",

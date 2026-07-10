@@ -977,7 +977,11 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str, *,
     _lf = get_langfuse_handler()
     if _lf:
         _cbs.append(_lf)
-    cfg = {"callbacks": _cbs}
+    # lc_agent_name:fork 身份标(metadata 随 LangChain 传播到全部子调用)。缺它的实证后果
+    # (2026-07-10 yzg 复跑):①fork 流式正文/工具行涌进主屏 ⏺ 通道刷屏;②fork usage 被
+    # reducer 误并主计数(双计);③Langfuse trace 无名。streaming.py 读它打 parent_subagent。
+    cfg = {"callbacks": _cbs,
+           "metadata": {"lc_agent_name": str(label or "fork").split("#")[0]}}
     stream = getattr(runnable, "stream", None)
     if not callable(stream) or not _fork_step_emit_enabled():
         # runnable 不支持流式 或 关了步骤显示(IST_FORK_STEP_EMIT=0)→ 退回阻塞 invoke,

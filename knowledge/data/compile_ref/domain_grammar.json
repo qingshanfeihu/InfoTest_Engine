@@ -271,8 +271,9 @@
    "sdns_config_files": {
     "cmd": "clear sdns config file",
     "granularity": "all",
-    "provenance": "CLI Ch20『清除本地所有SDNS配置文件』——粗粒度:仅当床账证明全部为己方产物才可自动执行,否则 ask(INV-9)"
-   }
+    "provenance": "CLI Ch20『清除本地所有SDNS配置文件』——粗粒度:仅当床账证明全部为己方产物才可自动执行,否则 ask(INV-9);2026-07-10 用户裁决「开工必净」:bed_gate 初始化清理自动执行本引用并复检(残留是 R1 12/26 崩盘主嫌)"
+   },
+   "_provenance": "清理引用:bed_gate 初始化清理按 finding.kind 对号执行(2026-07-10 用户裁决:开工必净);无引用的 kind 不动手走 ask。新清理动作=加条目零代码。"
   }
  }
 }

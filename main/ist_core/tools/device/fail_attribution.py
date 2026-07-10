@@ -170,7 +170,7 @@ def compile_attribute(verdict_detail: str, failing_assertion_layer: str = "",
 def submit_attribution(xlsx_path: str, autoid: str, layer: str,
                        disposition: str, evidence: str,
                        fix_direction: str = "",
-                       defect_candidate: dict | None = None) -> str:
+                       defect_candidate: dict | str | None = None) -> str:
     """Land your attribution **conclusion** for one failed case into last_run.json (the judgement itself is still yours, made from the raw evidence).
 
     **When to use**: the raw device evidence has been read and the layer verdict has formed —
@@ -205,7 +205,8 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
             change — next round's "same approach?" check relies on it).
         defect_candidate: structured candidate form when disposition=defect_candidate, with
             repro (reproduction steps), expected_with_source (expectation + manual source),
-            actual (actual + device evidence), version, optionally ticket_id.
+            actual (actual + device evidence), version, optionally ticket_id. Pass a JSON
+            object; a JSON-encoded string of the same object is also accepted.
 
     Returns:
         Confirmation (path written + field echo); error when the autoid is absent from
@@ -276,7 +277,17 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
         "round": rec.get("_round"),
     }
     if disposition == "defect_candidate":
-        dc = defect_candidate if isinstance(defect_candidate, dict) else {}
+        dc = defect_candidate
+        if isinstance(dc, str):
+            # 双收字符串通道(2026-07-10 yzg 复跑实证:非 strict 下 dict 参数被序列化成
+            # JSON 字符串,校验层三连拒→LLM 绕道降级 frozen,缺陷候选单丢失)
+            try:
+                dc = json.loads(dc)
+            except Exception:  # noqa: BLE001
+                return ("error: defect_candidate is a string but not valid JSON — pass a JSON "
+                        "object with keys repro / expected_with_source / actual")
+        if not isinstance(dc, dict):
+            dc = {}
         missing = [k for k in ("repro", "expected_with_source", "actual") if not str(dc.get(k, "")).strip()]
         if missing:
             return f"error: defect_candidate missing required fields: {', '.join(missing)}"

@@ -96,6 +96,36 @@ def bed_unrestored(root: Path, host: str) -> list[dict]:
     return list(created.values())
 
 
+# ── 初始化清理(2026-07-10 用户裁决:开工必净) ─────────────────────────────────
+
+
+def bed_cleanup(probe_fn: Callable[[str], str], findings: list[dict], *,
+                root: Path, host: str, batch: str = "") -> dict:
+    """床态初始化清理:编写工作开始前环境必须干净(用户裁决;R1 12/26 崩盘的
+    最大嫌疑即两天床残留)。
+
+    清理动作**全部来自文法数据** bed_probes.cleanup_refs(手册出处,按 finding.kind
+    对号)——引擎零硬编码领域命令;无清理引用的发现不动手(留给体检 ask 兜底)。
+    每笔清理记床账(ev=cleaned)+返回回显摘要;调用方清理后必须**复检**再放行。
+    """
+    refs = dict((load_grammar().get("bed_probes") or {}).get("cleanup_refs") or {})
+    refs.pop("_provenance", None)
+    out: dict = {"cleaned": [], "skipped": []}
+    for f in findings:
+        kind = str(f.get("kind") or "")
+        if kind == "build_anchor":
+            continue                      # 版本锚不是残留,只能 ask
+        spec = refs.get(kind)
+        if not isinstance(spec, dict) or not str(spec.get("cmd") or "").strip():
+            out["skipped"].append(kind)   # 文法层无清理引用 → 不动手
+            continue
+        echo = probe_fn(str(spec["cmd"]))
+        bed_record(root, host, "cleaned", kind, "init_cleanup", batch)
+        out["cleaned"].append({"kind": kind, "provenance": str(spec.get("provenance", ""))[:120],
+                               "echo": (echo or "")[:200]})
+    return out
+
+
 # ── 体检(只读探针,注入式) ────────────────────────────────────────────────────
 
 

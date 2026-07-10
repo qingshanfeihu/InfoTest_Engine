@@ -23,6 +23,54 @@ logger = logging.getLogger(__name__)
 _HANDLER = None
 _INIT_DONE = False
 
+# 可观测性自身的可观测(2026-07-10 实证:jp.cloud 出口静默读超时,一轮 ¥96 全程无 trace,
+# 仅 tui.log 有 ERROR——盲跑必须对用户可见):状态机 + 失败回调(TUI footer 挂告警)。
+_STATUS: dict = {"state": "uninit", "detail": ""}   # uninit|off|ok|init_failed|export_failing
+_FAIL_CB = None
+_WATCH_INSTALLED = False
+
+
+def langfuse_status() -> dict:
+    return dict(_STATUS)
+
+
+def on_observability_failure(cb) -> None:
+    """注册失败回调(线程安全的幂等安装):初始化失败或运行中上报失败时以 status dict 调用。"""
+    global _FAIL_CB
+    _FAIL_CB = cb
+    if _STATUS["state"] in ("init_failed", "export_failing"):
+        try:
+            cb(dict(_STATUS))
+        except Exception:  # noqa: BLE001
+            logger.debug("obs 失败回调异常", exc_info=True)
+
+
+def _set_status(state: str, detail: str = "") -> None:
+    _STATUS.update(state=state, detail=detail[:200])
+    if state in ("init_failed", "export_failing") and _FAIL_CB is not None:
+        try:
+            _FAIL_CB(dict(_STATUS))
+        except Exception:  # noqa: BLE001
+            logger.debug("obs 失败回调异常", exc_info=True)
+
+
+class _OtelExportErrWatch(logging.Handler):
+    """挂在 OTLP exporter logger 上:首次导出失败即置 export_failing(此后幂等)。"""
+
+    def emit(self, record: logging.LogRecord) -> None:  # noqa: D102
+        if record.levelno >= logging.ERROR and _STATUS["state"] != "export_failing":
+            _set_status("export_failing", record.getMessage())
+
+
+def _install_export_watch() -> None:
+    global _WATCH_INSTALLED
+    if _WATCH_INSTALLED:
+        return
+    _WATCH_INSTALLED = True
+    for name in ("opentelemetry.exporter.otlp.proto.http.trace_exporter",
+                 "opentelemetry.sdk.trace.export"):
+        logging.getLogger(name).addHandler(_OtelExportErrWatch())
+
 
 def _enabled() -> bool:
     v = (os.environ.get("LANGFUSE_TRACING_ENABLED") or "").strip().lower()
@@ -43,6 +91,7 @@ def get_langfuse_handler():
         return _HANDLER
     _INIT_DONE = True
     if not _enabled():
+        _set_status("off", "未配置或显式关闭")
         return None
     try:
         from langfuse import get_client
@@ -51,13 +100,18 @@ def get_langfuse_handler():
         try:
             if not client.auth_check():  # 一次性校验,失败静默降级(不阻断)
                 logger.warning("Langfuse auth_check 未通过,链路追踪禁用")
+                _set_status("init_failed", "auth_check 未通过")
                 return None
-        except Exception:  # noqa: BLE001 — auth_check 网络异常也降级,不抛
+        except Exception as exc:  # noqa: BLE001 — auth_check 网络异常也降级,不抛
             logger.debug("Langfuse auth_check 异常,按未通过处理", exc_info=True)
+            _set_status("init_failed", f"auth_check 异常: {exc}")
             return None
         _HANDLER = CallbackHandler()
+        _set_status("ok")
+        _install_export_watch()   # 运行中导出失败(网络断流)也要浮到用户面
         logger.info("Langfuse 链路追踪已启用")
     except Exception as exc:  # noqa: BLE001
         logger.warning("Langfuse handler 初始化失败(降级为不追踪): %s", exc)
+        _set_status("init_failed", str(exc))
         _HANDLER = None
     return _HANDLER

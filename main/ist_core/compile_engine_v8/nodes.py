@@ -86,6 +86,23 @@ def bed_gate(state: dict) -> dict:
     sh.append(state, [{"ev": "bed_checked", "aid": "", "host": host,
                        "anchor": rep.get("anchor"), "findings": rep.get("findings"),
                        "run_id": f"bed:{int(time.time())}"}])
+    # 初始化清理(2026-07-10 用户裁决:开工必净):有文法清理引用的残留先清后复检;
+    # 清不掉/无引用的仍走 ask。R1 12/26 崩盘(¥96)最大嫌疑=两天床残留,此门止损。
+    residue = [f for f in (rep.get("findings") or []) if f.get("kind") != "build_anchor"]
+    if residue:
+        clean = B.bed_cleanup(_probe_fn, residue, root=sh.project_root(), host=host,
+                              batch=str(state.get("out_name") or ""))
+        sh.append(state, [{"ev": "bed_cleaned", "aid": "", "host": host,
+                           "cleaned": clean["cleaned"], "skipped": clean["skipped"],
+                           "run_id": f"bedclean:{int(time.time())}"}])
+        if clean["cleaned"]:
+            sh.emit(f"床态初始化清理:{len(clean['cleaned'])} 项残留已清"
+                    + (f",{len(clean['skipped'])} 项无清理引用待问" if clean["skipped"] else "")
+                    + " → 复检")
+            rep = B.bed_check(_probe_fn, cfg_build, root=sh.project_root(), host=host)
+            sh.append(state, [{"ev": "bed_checked", "aid": "", "host": host,
+                               "anchor": rep.get("anchor"), "findings": rep.get("findings"),
+                               "run_id": f"bed:recheck:{int(time.time())}"}])
     if rep.get("needs_ask"):
         ans = interrupt({"kind": "bed_gate", "report": {
             "anchor": rep.get("anchor"), "findings": rep.get("findings"),

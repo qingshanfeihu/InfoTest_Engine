@@ -601,8 +601,11 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                     tail_txt = tail_lines[-1].strip()[-70:] if tail_lines else ""
                     # 当前在跑第几个 case:框架按 autoids 顺序单跑,日志尾最近提到的 18 位
                     # autoid 即当前 case → 在 autoids 里的序号是诚实进度(比时长更直观)。
+                    # 排除 pytest 模块路径/命令行——整卷模式模块路径含首案 autoid,恒占
+                    # 日志尾把进度钉死在 1/N(2026-07-10 复跑实证:恒 1/26,25/26 一闪即回)。
+                    _scan = "\n".join(ln for ln in _log.splitlines() if ".py" not in ln)
                     _cur_idx = 0
-                    for _id in reversed(re.findall(r"(?<!\d)(\d{18})(?!\d)", _log)):
+                    for _id in reversed(re.findall(r"(?<!\d)(\d{18})(?!\d)", _scan)):
                         if _id in autoids:
                             _cur_idx = autoids.index(_id) + 1
                             break

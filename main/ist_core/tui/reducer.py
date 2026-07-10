@@ -273,12 +273,19 @@ class MessageReducer:
 
     
 
+    @staticmethod
+    def _is_fork_event(event: IstCoreEvent) -> bool:
+        """fork 子 agent 事件(parent_subagent 标,来源=loader 的 lc_agent_name metadata)。"""
+        return bool((event.get("tags") or {}).get("parent_subagent"))
+
     def _on_llm_start(self, event: IstCoreEvent | None = None) -> None:
         """模型调用开始：footer 显示 input 阶段（尚无流式输出 token）。
 
-        fork 子 agent 的 llm_start 也走这里——只更新 _llm_phase 让 footer
-        显示"接收/处理中"，**不**累加 usage（累加归 _FORK_TOKENS / callback handler）。
+        fork 的 llm_start 不再驱动主相位(fork 活性由卡片+fork 计数承担;
+        混入会让 footer 相位在 main 阻塞期被 fork 抖动)。
         """
+        if event is not None and self._is_fork_event(event):
+            return
         self._llm_phase = "input"
         self._output_token_count = 0
 
@@ -292,6 +299,9 @@ class MessageReducer:
         return max(1, cjk + (len(text) - cjk) // 4)
 
     def _on_token(self, event: IstCoreEvent) -> None:
+        # fork 流式增量不进主 ⏺ 流、不驱动主相位(散文刷屏根因;卡片是 fork 的 UI)
+        if self._is_fork_event(event):
+            return
         payload = event.get("payload") or {}
         reasoning = payload.get("reasoning")
         # 思考增量（mimo 深度思考期以 reasoning_content 逐步返回，content 为空）：
@@ -355,6 +365,8 @@ class MessageReducer:
 
         parent_tool_use_id = self._current_subagent_parent(event)
         subagent_type = (event.get("tags") or {}).get("parent_subagent") or ""
+        if subagent_type and not parent_tool_use_id:
+            return   # 游离 fork 正文(引擎直调,无容器可挂)→ 不落主 transcript
 
         msg = make_assistant_message(
             uuid=uuid,
@@ -373,6 +385,10 @@ class MessageReducer:
         ts = event.get("ts") or ""
         tags = event.get("tags") or {}
         payload = event.get("payload") or {}
+        # 游离 fork 工具行:不进主 transcript,更不许注册 inflight(会抢主 agent 的
+        # tool_use 配对,错标主工具完成态)
+        if tags.get("parent_subagent") and not self._current_subagent_parent(event):
+            return
 
         tool_name = tags.get("name") or payload.get("name") or ""
         raw_input = payload.get("input") or {}
@@ -430,6 +446,9 @@ class MessageReducer:
         ts = event.get("ts") or ""
         tags = event.get("tags") or {}
         payload = event.get("payload") or {}
+        # 与 _on_tool_call 对称:游离 fork 的结果行既不落屏,也不许吃掉主 inflight 队头
+        if tags.get("parent_subagent") and not self._current_subagent_parent(event):
+            return
         tool_name = tags.get("name") or payload.get("name") or ""
         output = payload.get("output") or ""
         if not isinstance(output, str):

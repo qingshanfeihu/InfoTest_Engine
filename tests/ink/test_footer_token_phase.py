@@ -76,32 +76,39 @@ _VERBS_ALL = [
 ]
 
 
-def _busy_thinking_line(**phase_kw) -> str:
-    """造 busy footer，捕获思考行文本（thinking_cb），跑完停 timer。"""
+def _busy_footer(**phase_kw):
+    """造 busy footer,返回 (busy 行, 状态行)。相位词的家在状态行(2026-07-10 用户裁决)。"""
     captured: list = []
     f = FooterPane(thinking_text_cb=lambda t: captured.append(t))
     f.update(status="busy", model="mimo-v2.5-pro", **phase_kw)
+    busy = next((t for t in reversed(captured) if t), "")
+    status = f._status_line.value
     f._stop_timer()
-    return captured[-1] if captured else ""
+    return busy, status
 
 
-def test_footer_thinking_line_shows_real_state_thinking():
-    """thinking 相位 → 尾字段=深度思考中；前面随机词保留；模型名不再是尾字段。"""
-    line = _busy_thinking_line(llm_phase="thinking", input_tokens=100)
-    assert "深度思考中" in line
-    assert "· mimo-v2.5-pro)" not in line          # 尾字段被真实状态替换
-    assert any(f"✶ {v}…" in line for v in _VERBS_ALL)  # 前面随机词不动
+def _busy_thinking_line(**phase_kw) -> str:
+    return _busy_footer(**phase_kw)[0]
 
 
-def test_footer_thinking_line_output_state():
-    line = _busy_thinking_line(llm_phase="output", output_token_count=42)
-    assert "生成回答中" in line
-    assert "· mimo-v2.5-pro)" not in line
+def test_footer_thinking_phase_lives_in_status_line():
+    """thinking 相位:「深度思考中」在 footbar 状态行;busy 行只留 verb+时长+token。"""
+    busy, status = _busy_footer(llm_phase="thinking", input_tokens=100)
+    assert "深度思考中" in status                    # 家在 footbar
+    assert "深度思考中" not in busy                  # busy 行不再挂相位词
+    assert "· mimo-v2.5-pro)" not in busy
+    assert any(f"✶ {v}…" in busy for v in _VERBS_ALL)  # 前面随机词不动
 
 
-def test_footer_thinking_line_input_state():
-    line = _busy_thinking_line(llm_phase="input", input_tokens=200)
-    assert "接收/处理中" in line
+def test_footer_output_phase_lives_in_status_line():
+    busy, status = _busy_footer(llm_phase="output", output_token_count=42)
+    assert "生成回答中" in status and "生成回答中" not in busy
+    assert "· mimo-v2.5-pro)" not in busy
+
+
+def test_footer_input_phase_lives_in_status_line():
+    busy, status = _busy_footer(llm_phase="input", input_tokens=200)
+    assert "接收/处理中" in status and "接收/处理中" not in busy
 
 
 def test_footer_thinking_line_no_phase_shows_run_increment_tokens():
@@ -124,17 +131,17 @@ def test_footer_thinking_line_no_phase_shows_run_increment_tokens():
 
 def test_footer_thinking_line_live_download_tokens():
     """思考/回答期只显 ↓(单箭头=当前相位方向,2026-07-06):本轮累计+(当次实时)。"""
-    line = _busy_thinking_line(llm_phase="thinking", output_token_count=1234, output_tokens=0)
+    busy, status = _busy_footer(llm_phase="thinking", output_token_count=1234, output_tokens=0)
     # 口径统一(2026-07-03):↓ 恒显本轮累计,当次调用实时估算以 (+N) 并列——
     # 同一显示位不再随相位切换含义(旧版 thinking 显当次、等待显累计,被读成"不同步")。
-    assert "↓ 0(+1.2k) tokens" in line              # 累计 0 + 当次实时 1.2k
-    assert "深度思考中" in line
-    assert "↑" not in line                           # 下载相位不显上传箭头
+    assert "↓ 0(+1.2k) tokens" in busy              # 累计 0 + 当次实时 1.2k
+    assert "深度思考中" in status                    # 相位词在 footbar 状态行
+    assert "↑" not in busy                           # 下载相位不显上传箭头
     # input 相位：只显 ↑ 本轮增量(单箭头=当前方向)
-    line2 = _busy_thinking_line(llm_phase="input", input_tokens=2000)
-    assert "↑ 2.0k tokens" in line2
-    assert "↓" not in line2
-    assert "接收/处理中" in line2
+    busy2, status2 = _busy_footer(llm_phase="input", input_tokens=2000)
+    assert "↑ 2.0k tokens" in busy2
+    assert "↓" not in busy2
+    assert "接收/处理中" in status2
 
 
 def test_footer_no_phase_shows_worker_wait_when_fork_silent():
@@ -193,3 +200,14 @@ def test_sticky_error_truncated_to_single_width():
     f.set_sticky_error("x" * 300)
     seg = f._status_line.value.split("·")[0]
     assert "…" in seg and len(seg) < 130
+
+
+def test_obs_warning_persists_on_status_line():
+    """可观测性告警(Langfuse 上报失败)常驻状态行——盲跑必须看得见(2026-07-10 实证)。"""
+    f = FooterPane()
+    f.set_obs_warning("⚠ Langfuse 上报失败,本会话未被追踪")
+    f.update(status="ready", input_tokens=10, output_tokens=5)
+    assert "Langfuse 上报失败" in f._status_line.value
+    f.set_obs_warning("")
+    f.update(status="ready")
+    assert "Langfuse" not in f._status_line.value

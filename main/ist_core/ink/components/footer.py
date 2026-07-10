@@ -76,6 +76,7 @@ class FooterPane:
         self.fork_output: int = 0
         self.fork_cache_hit: int = 0  # fork 累计 cache 命中(进成本 hit 价,不计则全按 miss 高估)
         self._latest_evidence: str = ""   # 最新一条 fork 步骤,塞进 busy 状态行(单行,不刷 transcript)
+        self._obs_warning: str = ""       # 可观测性告警(如 Langfuse 上报失败),状态行常驻黄字
         self._cache_hit_tokens: int = 0
         self._llm_phase: str = ""
         self._output_token_count: int = 0
@@ -159,6 +160,14 @@ class FooterPane:
         self._engine_text = text
         self._engine_line.set_value(text)
         self._node.style.height = 3 if text else 2
+
+    def set_obs_warning(self, text: str) -> None:
+        """可观测性告警常驻状态行(黄):如 Langfuse 上报失败——盲跑必须看得见
+        (2026-07-10 实证:出口静默超时,¥96 一轮全程无 trace 无人知)。空串清除。"""
+        one_line = " ".join(str(text or "").split())[:60]
+        if one_line != self._obs_warning:
+            self._obs_warning = one_line
+            self._refresh()
 
     def set_sticky_error(self, text: str) -> None:
         """把 run_error 摘要驻留到状态行(单行截断);下一轮 run 开始自动清除。"""
@@ -294,7 +303,9 @@ class FooterPane:
                         f"↓ {_format_token_count(_run_out)}"
                         f"(+{_format_token_count(self._output_token_count)}) tokens"
                     )
-                thinking_text = f"✶ {self._verb}… ({elapsed_str} · {_tok} · {_state})"
+                # 相位文本(深度思考中/生成回答中/接收中)归 footbar 状态行显示
+                # (2026-07-10 用户裁决),busy 行只留 verb+时长+token
+                thinking_text = f"✶ {self._verb}… ({elapsed_str} · {_tok})"
             else:
                 # 无相位常见于 main 阻塞等 fork/长工具。
                 # fork 静默期仍要显本轮 token 增量（fork_input 实时递增），
@@ -317,6 +328,13 @@ class FooterPane:
                 self._thinking_cb(None)
         
         status_text = self._session_summary()
+        # 相位文本在 footbar 状态行尾(2026-07-10 用户裁决:「深度思考中」的家在这里)
+        if self._timer_running and self._busy_since:
+            _st = _PHASE_STATE_TEXT.get(self._llm_phase)
+            if _st:
+                status_text = f"{status_text} · \x1b[1m{_st}\x1b[0m"
+        if self._obs_warning:
+            status_text = f"\x1b[33m{self._obs_warning}\x1b[0m · {status_text}"
         if self._sticky_error and self.status == "error":
             # 驻留错误占状态行主位(红),session 摘要退到 hint 行之上仍可见
             status_text = f"\x1b[31m✖ {self._sticky_error}\x1b[0m · {status_text}"

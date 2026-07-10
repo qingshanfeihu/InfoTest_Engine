@@ -454,6 +454,14 @@ class IstInkApp:
 
 
         self._footer = FooterPane(render_callback=self._app.render, thinking_text_cb=self._update_thinking_line)
+        # 可观测性失败可见化(2026-07-10 实证:Langfuse 出口静默超时,¥96 一轮全程盲跑):
+        # 初始化失败或运行中上报断流 → footbar 常驻黄字告警
+        try:
+            from main.ist_core.observability import on_observability_failure
+            on_observability_failure(
+                lambda st: self._footer.set_obs_warning("⚠ Langfuse 上报失败,本会话未被追踪"))
+        except Exception:  # noqa: BLE001
+            pass
 
         
         self._divider_top = create_element(NodeType.BOX)

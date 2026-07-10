@@ -187,7 +187,13 @@ async def astream_to_bus(
                         elif event_name == "run_error":
                             mapped = "error"
                             payload = {"error": payload.get("message", "")}
-            bus.emit(mapped, payload=payload, tags=tags, usage=usage)
+            # on_chat_model_end 的 content 已由 graph.py 的 _MainAgentProgressHandler
+            # 以 name="thought"/"final_thought" 发射 llm_end；此处再发一次同内容的
+            # llm_end(name=<模型名>) 会导致 reducer 双 append 同一文本，前端输出重复。
+            # usage 也已由 callback handler 以 name="usage_only" 独占发射（reducer 只认该路径），
+            # 故这里直接跳过，不向 bus 发射。
+            if lc_kind != "on_chat_model_end":
+                bus.emit(mapped, payload=payload, tags=tags, usage=usage)
 
             
             if lc_kind == "on_chain_end" and (ev.get("name") in ("LangGraph", "agent")):

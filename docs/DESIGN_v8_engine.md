@@ -571,3 +571,28 @@ delivered/ 存档,prep 一并还原(test_render_closing.py 14 例)。
 | is_transient_error markers | 合法：自家 LLM 端点传输层契约词（异常类名/标准 HTTP 错误文本），非领域判断；裸数字坑已修在案 | 不动 |
 | 渲染词表（STATUS_CN/LAYER_CN/_SHAPE_CN 等） | 合法：机器枚举→中文的显示映射，非判断 | 不动 |
 | A 层机械门/原理层检测器/资源规则 | 合法（P1/P2 与 R2 已定性） | 不动 |
+
+## 13. 基础设施可靠性设计审计（2026-07-12，对照 THEORY_infra_reliability；缺漏=I 行）
+
+依据：`THEORY_infra_reliability.md`（R5 数据校准后）。§12 审计的是行动论冲突，本节
+审计的是 infra 域**设计缺漏**——理论已有位、设计全无的构件。
+
+### 13.1 缺漏表（I1-I8，按理论 §9 优先级）
+
+| # | 理论位 | 现设计 | 缺漏与设计方向 |
+|---|---|---|---|
+| I1 | L3 床基线恢复（§4；原语已查实；54% T1 结构性根治） | bed_gate/closing 只有床账（L1） | **全无**。设计方向：真机验证 save/restore 配对语义后——bed_gate 批前落基线（`config save` 类原语到专属槽位）+closing 批后恢复基线+探针对账；床账降级为审计（记「恢复发生过」而非承载恢复）。验证实验卷=explore 级一次上机（基线→弄脏→恢复→diff 清零断言） |
+| I2 | #67 归属一致性门（§7 通用形态） | reconcile/attribute 无证据校验 | **全无**。设计方向：digest/attribute 收证时对每份取证附件跑「执行目标 vs 卷面 G 列」机械比对；不一致=`evidence_suspect` 事实+attr_evidence.json 内标记+brief 声明段；切分 bug 本体另修（框架侧或 digest 侧） |
+| I3 | mirror 同步锚（§6 第 0 条） | 恒真门/found 语义门直接信 mirror，无新鲜度声明 | **全无且波及存量**：所有 mirror 推导门共享未声明假设。设计方向：`knowledge/framework/mirror/.sync_anchor.json`（跳板机框架关键文件 hash 清单+采集时间）；bed_gate 或定期任务对账，失配=呈报「框架已变，mirror 推导的 N 个门进入可疑态」；采集脚本经跳板机 SSH 只读 |
+| I4 | quarantine 态（§5，与 suspended 分立） | 视图无此状态；瞬态案占轮次烧归因 | **全无**。设计方向：新派生标签 S_QUARANTINED（attribution.layer==transient 自动进区；进区案不入重编队列不进交付分母，报告单列「隔离区 N 案待仲裁」）；仲裁=小批复跑（重跑预算=资源规则）；复现→出区转正常 fail 流，通过→出区转 pass。fold 全函数性随动（状态语义先定义再上线，A6 纪律） |
+| I5 | 契约测试套件（§6） | 恒真门推导散在 emit 实现内；无组织 | 半缺。设计方向：`tests/framework_contracts/` 套件化——0.8 模糊匹配契约/切分标记契约/清理范围契约/IP 记账契约/found DOTALL 契约,直接跑 mirror;I3 的锚是第 0 条 |
+| I6 | OD 主动检测/污染配对（§3） | 矛盾谓词=被动;diagnose(X1/X3 序②)未实施 | 已有位（§12 X1/X3）,本审计只补输入结构化引用:配对=diff 实体×受害案触碰实体交集 |
+| I7 | flake 率指标（§5） | engine_report 无此字段;DS-4 无前置排除 | 设计方向:report.totals 加 transient_rate;K 健康度仪表(DS-4)按 §2.8 以此为前置排除项 |
+| I8 | L2 命名空间机械门（§4） | worker md C 层倡导,无机械门 | 设计方向:emit 门加「持久对象名含 autoid 尾缀」检查(限持久化家族案);低成本 |
+
+### 13.2 与既有落地序的合并
+
+infra 域优先级（理论 §9）与行动论落地序（§12.4）合流为单一队列：
+**L3 真机验证（I1 实验先行）→ #67+I2 归属门 → I3 mirror 锚 → 序②（diagnose+前筛，
+I6 输入并入）→ I4 quarantine → 序③行动判例化 → I5 契约套件 → I7/I8 → sleep 治理**。
+每步独立验收、数据不支持即停（(22) 纪律不变）。

@@ -278,6 +278,21 @@
     "interactive_confirm": "YES"
    },
    "_provenance": "清理引用:bed_gate 初始化清理按 finding.kind 对号执行(2026-07-10 用户裁决:开工必净);无引用的 kind 不动手走 ask。新清理动作=加条目零代码。"
+  },
+  "interface_addresses": {
+   "cmd": "show ip address",
+   "extract": null,
+   "provenance": "CLI Ch3 ip address;平台状态面(THEORY 2.7.7 R4-G2):接口地址表,床态快照 diff 投影——2026-07-11 run9 vlan100 跨批污染实证;snapshot_only:合法地址恒在,非空≠残留,只进快照 diff 不进残留判定",
+   "snapshot_only": true
   }
+ },
+ "bed_restore_syntax": {
+  "interface_addresses": {
+   "line_re": "^ip address \"(?P<ifname>[^\"]+)\" (?P<ip>[0-9.]+) (?P<mask>[0-9.]+)$",
+   "add": "ip address {ifname} {ip} {masklen}",
+   "del": "no ip address {ifname} 4",
+   "provenance": "yzg 233 R1 device-accepted forms(ip address vlan100 172.16.34.70 24 / no ip address port2 4),2026-07-11;点分掩码↔masklen 互转在调用方"
+  },
+  "_provenance": "床账机械逆放模板(THEORY (25) 通路一/R4-G3:机械回放非 LLM 生成);仅覆盖已建模状态面,扩面=加条目零代码"
  }
 }

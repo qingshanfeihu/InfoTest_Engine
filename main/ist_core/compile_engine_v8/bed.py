@@ -64,15 +64,19 @@ def _ledger_path(root: Path, host: str) -> Path:
 
 
 def bed_record(root: Path, host: str, ev: str, kind: str, ident: str,
-               batch: str = "") -> None:
+               batch: str = "", payload: dict | None = None) -> None:
     """记一笔床账。ev ∈ {created, restored};kind ∈ {segment, sdns_config_file, sync_peer, …}。
+    payload 承载机械恢复所需数据(如逆放命令列表——(25) 通路一:恢复=回放账本)。
     追加失败静默告警(床账是护栏,不阻断主流程——但 unrestored 差额会在下批体检露头)。"""
     try:
         p = _ledger_path(root, host)
         p.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": round(time.time(), 3), "ev": ev, "kind": kind,
+               "id": ident, "batch": batch}
+        if payload:
+            rec["payload"] = payload
         with p.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"ts": round(time.time(), 3), "ev": ev, "kind": kind,
-                                "id": ident, "batch": batch}, ensure_ascii=False) + "\n")
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:  # noqa: BLE001
         logger.warning("床账追加失败 host=%s %s %s", host, ev, ident, exc_info=True)
 
@@ -94,6 +98,133 @@ def bed_unrestored(root: Path, host: str) -> list[dict]:
         elif d.get("ev") == "restored":
             created.pop(k, None)
     return list(created.values())
+
+
+# ── 床态快照与机械逆放(X11 床账接线;THEORY 2.7.7 (25)(26)+R4) ─────────────────
+
+
+def _clean_probe_body(out: str) -> list[str]:
+    """探针回显 → 内容行(剥元数据/提示符/空行;与 bed_check 的行清洗同源)。"""
+    lines = []
+    for ln in str(out or "").splitlines():
+        s = ln.strip()
+        if not s or ln.startswith(("===", "---", "command:", "status:")):
+            continue
+        if re.match(r"^\w+=\S+(\s+\w+=\S+)*$", s):
+            continue
+        if len(s) <= 40 and s.endswith(("#", ">")):
+            continue
+        lines.append(s)
+    return lines
+
+
+def bed_snapshot(probe_fn: Callable[[str], str]) -> dict:
+    """床态快照:全部探针(含 snapshot_only 状态面)的内容行。批前/批后各拍一次,
+    diff=本批漂移(观测结果,不解析卷面意图——X5 裁决:不做持久写识别器)。"""
+    probes = dict(load_grammar().get("bed_probes") or {})
+    probes.pop("_provenance", None)
+    probes.pop("cleanup_refs", None)
+    snap: dict = {}
+    for name, spec in probes.items():
+        if name == "build":
+            continue
+        out = probe_fn(str(spec.get("cmd") or ""))
+        if _probe_failed(out):
+            snap[name] = {"failed": True, "lines": []}
+        else:
+            snap[name] = {"failed": False, "lines": _clean_probe_body(out)}
+    return snap
+
+
+def bed_diff(before: dict, after: dict) -> dict:
+    """快照差分:{probe: {added: […], removed: […]}}(任一侧探测失败的通道跳过——
+    比不出=未知,不误报;R4-G2 的诚实边界)。"""
+    out: dict = {}
+    for name in sorted(set(before) | set(after)):
+        b, a = before.get(name) or {}, after.get(name) or {}
+        if b.get("failed") or a.get("failed") or (not b and not a):
+            continue
+        bl, al = set(b.get("lines") or []), set(a.get("lines") or [])
+        added, removed = sorted(al - bl), sorted(bl - al)
+        if added or removed:
+            out[name] = {"added": added, "removed": removed}
+    return out
+
+
+_MASK_SEGS = {"0", "128", "192", "224", "240", "248", "252", "254", "255"}
+
+
+def _identity_tokens(line: str) -> list[str]:
+    """diff 行的身份 token:接口名与 IP。掩码剔除——点分掩码与 masklen 是同一事实
+    的两种表示法(show 显点分,命令用 /24),参与身份比对会让己方判定恒失配。"""
+    toks: list[str] = []
+    for t in re.findall(r"[\w.-]+", line):
+        if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", t):
+            if all(seg in _MASK_SEGS for seg in t.split(".")):
+                continue   # 掩码形态
+            toks.append(t)
+        elif any(ch.isdigit() for ch in t) and not t.replace(".", "").isdigit():
+            toks.append(t)   # vlan100/port2/eth0.100 类带数字的名字
+    return toks
+
+
+def own_writes(diff: dict, command_corpus: str) -> tuple[dict, dict]:
+    """己方交叉验证(R4-G4):diff 行的身份 token(接口名/IP)全部在本批执行命令面出现
+    → 认己方可逆放;对不上的归 foreign(共享床上他人并行动的,只报不动——INV-9)。"""
+    own: dict = {}
+    foreign: dict = {}
+    corpus = str(command_corpus or "")
+    for name, d in diff.items():
+        o = {"added": [], "removed": []}
+        f = {"added": [], "removed": []}
+        for side in ("added", "removed"):
+            for ln in d.get(side) or []:
+                toks = _identity_tokens(ln)
+                (o if toks and all(t in corpus for t in toks) else f)[side].append(ln)
+        if o["added"] or o["removed"]:
+            own[name] = o
+        if f["added"] or f["removed"]:
+            foreign[name] = f
+    return own, foreign
+
+
+def _mask_to_len(mask: str) -> int:
+    try:
+        return sum(bin(int(o)).count("1") for o in mask.split("."))
+    except Exception:  # noqa: BLE001
+        return 24
+
+
+def restore_plan(diff_own: dict) -> tuple[list[str], list[str]]:
+    """己方漂移 → 机械逆放命令(仅已建模状态面;模板=grammar 数据带 provenance,
+    R4-G3:机械回放非 LLM 生成)。返回 (commands, unmodeled_notes)。"""
+    syn = dict(load_grammar().get("bed_restore_syntax") or {})
+    cmds: list[str] = []
+    notes: list[str] = []
+    for name, d in diff_own.items():
+        spec = syn.get(name)
+        if not isinstance(spec, dict):
+            for side in ("added", "removed"):
+                for ln in d.get(side) or []:
+                    notes.append(f"{name}:{side}:{ln}")
+            continue
+        line_re = re.compile(str(spec.get("line_re") or "$^"))
+        for ln in d.get("added") or []:      # 批后多出的 → 撤销
+            m = line_re.match(ln)
+            if m:
+                cmds.append(str(spec.get("del")).format(**m.groupdict()))
+            else:
+                notes.append(f"{name}:added:{ln}")
+        for ln in d.get("removed") or []:    # 批后缺失的 → 原值回放
+            m = line_re.match(ln)
+            if m:
+                gd = dict(m.groupdict())
+                if "mask" in gd:
+                    gd["masklen"] = _mask_to_len(gd["mask"])
+                cmds.append(str(spec.get("add")).format(**gd))
+            else:
+                notes.append(f"{name}:removed:{ln}")
+    return cmds, notes
 
 
 # ── 初始化清理(2026-07-10 用户裁决:开工必净) ─────────────────────────────────
@@ -179,8 +310,8 @@ def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
 
     # ② 各通道残留(只读;结果原文交调用方/用户判读,引擎只做"非空即报")
     for name, spec in probes.items():
-        if name == "build":
-            continue
+        if name == "build" or spec.get("snapshot_only"):
+            continue   # snapshot_only:合法内容恒在的状态面(非空≠残留),只进快照 diff
         out = probe_fn(str(spec.get("cmd") or ""))
         report["probes"][name] = (out or "")[:400]
         # 探针失败 ≠ 有残留(2026-07-11 yzg 验收实证:`% Invalid input` 单次瞬态被

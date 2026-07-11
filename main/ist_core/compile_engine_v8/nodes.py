@@ -118,9 +118,35 @@ def bed_gate(state: dict) -> dict:
         cfg_build = str(cfg.build or "")
     except Exception:  # noqa: BLE001
         host, cfg_build = "", ""
+    # 床账接力(X11/(26):账内己方未复原 → 机械逆放,零问询;INV-9 既定授权)
+    try:
+        for item in B.bed_unrestored(sh.project_root(), host):
+            cmds = list((item.get("payload") or {}).get("commands") or [])
+            if not cmds:
+                continue
+            ok = all(not B._probe_failed(_exec_fn(c)) for c in cmds)
+            if ok:
+                B.bed_record(sh.project_root(), host, "restored",
+                             str(item.get("kind")), str(item.get("id")),
+                             batch=str(state.get("out_name") or ""))
+                sh.emit(f"床账接力:上批未复原产物已恢复({item.get('kind')}:{item.get('id')})")
+            else:
+                sh.emit(f"床账接力:恢复失败({item.get('kind')}:{item.get('id')}),进问询")
+    except Exception:  # noqa: BLE001
+        logger.debug("床账接力失败", exc_info=True)
+
     rep = B.bed_check(_probe_fn, cfg_build, root=sh.project_root(), host=host)
     device_build = str((rep.get("anchor") or {}).get("device") or "")
     updates = {"bed_host": host, "device_build": device_build}
+    # 批前床态快照(X11:批后 diff 的基线;观测不解析意图)
+    try:
+        snap = B.bed_snapshot(_probe_fn)
+        mdir = sh.outputs_root() / str(state.get("out_name") or "")
+        mdir.mkdir(parents=True, exist_ok=True)
+        (mdir / "bed_before.json").write_text(
+            json.dumps(snap, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        logger.debug("批前快照失败", exc_info=True)
     sh.append(state, [{"ev": "bed_checked", "aid": "", "host": host,
                        "anchor": rep.get("anchor"), "findings": rep.get("findings"),
                        "run_id": f"bed:{int(time.time())}"}])
@@ -930,6 +956,47 @@ def closing(state: dict) -> dict:
     except Exception:  # noqa: BLE001
         logger.debug("uncertain 入库失败", exc_info=True)
 
+    # 批后床态收敛(X11:谁弄脏谁收拾——快照 diff→己方交叉验证→机械逆放→残余入账)
+    bed_note = ""
+    try:
+        host = str(state.get("bed_host") or "")
+        before = sh.read_json(mdir / "bed_before.json", None)
+        if host and isinstance(before, dict):
+            after = B.bed_snapshot(_probe_fn)
+            diff = B.bed_diff(before, after)
+            if diff:
+                lr = sh.read_json(sh.project_root() / str(state.get("last_run_ref") or ""),
+                                  []) or []
+                corpus = "\n".join(str(r.get("device_context") or "") for r in lr
+                                   if isinstance(r, dict))
+                own, foreign = B.own_writes(diff, corpus)
+                cmds, notes = B.restore_plan(own)
+                restored_ok = bool(cmds) and all(
+                    not B._probe_failed(_exec_fn(c)) for c in cmds)
+                residual = B.bed_diff(before, B.bed_snapshot(_probe_fn)) if cmds else diff
+                for name, d in residual.items():
+                    rcmds, _ = B.restore_plan({name: d})
+                    B.bed_record(sh.project_root(), host, "created", name,
+                                 f"{state.get('out_name')}:{name}",
+                                 batch=str(state.get("out_name") or ""),
+                                 payload={"commands": rcmds,
+                                          "added": d.get("added"),
+                                          "removed": d.get("removed")})
+                parts = []
+                if cmds:
+                    parts.append(f"己方漂移已逆放 {len(cmds)} 条"
+                                 + ("(验证通过)" if restored_ok and not residual else ""))
+                if residual:
+                    parts.append(f"{len(residual)} 通道残余入床账(下批接力)")
+                if foreign:
+                    parts.append(f"{len(foreign)} 通道非己方漂移(只报不动,INV-9)")
+                if notes:
+                    parts.append(f"{len(notes)} 项未建模状态面(如实报告)")
+                bed_note = ";".join(parts)
+                sh.emit(f"批后床态收敛:{bed_note or '干净'}")
+    except Exception:  # noqa: BLE001
+        logger.debug("批后床态收敛失败", exc_info=True)
+
     deliverable = [a for a, c in vw["cases"].items() if c["status"] == V.S_DELIVERABLE]
     others = {a: c for a, c in vw["cases"].items() if c["status"] != V.S_DELIVERABLE}
     mf = [f for f in fs if f.get("ev") == "merged"]
@@ -942,7 +1009,8 @@ def closing(state: dict) -> dict:
                    **vw["counts"]},
         "volume": vw.get("volume"),
         "moved_tail": moved, "coexist_violations": coexist,
-        "bed": {"host": state.get("bed_host"), "device_build": state.get("device_build")},
+        "bed": {"host": state.get("bed_host"), "device_build": state.get("device_build"),
+                "closure": bed_note},
         "cases": vw["cases"],
         "refs": {"facts": state.get("facts_ref"), "merged": state.get("merged_ref")},
     }

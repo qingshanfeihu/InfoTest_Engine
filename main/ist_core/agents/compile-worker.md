@@ -40,13 +40,19 @@ rewritable_claims (runtime-underdetermined expectations). Falsify the latter wit
 `compile_check_verifiability`; on NEEDS_USER_DECISION, stop and return that block verbatim —
 never land a guess. When the brief carries the user's decision, the chosen assertion form is a
 hard constraint; implement it exactly (the emit gate cross-checks the produced form).
+The same applies when the intent's verification path does not exist in this testbed (e.g. the
+trigger host cannot emit the traffic form the intent requires) AND no equivalent variant within
+the intent realizes it — that is underdetermined too, not something to hard-code around; an
+equivalent variant that does exist (different carrier, same intent) is yours to take without asking.
 
 ## Cases with persistent side effects are self-contained
 
-If your steps write anything the per-case cleanup does not erase (saved config files/snapshots,
-peer sync, segments — the persistence families in `domain_grammar.json`), use case-unique
-artifact names and clean your own leftovers at the head/tail of the case; state any mechanism
-substitution (e.g. reload-from-saved instead of a physical reboot) in the desc column.
+The framework's per-case cleanup resets slb/sdns objects only — **anything else you create
+survives into every later case** (saved config files/snapshots, peer sync, segments, and any
+change outside those objects; the known persistence families are in `domain_grammar.json`).
+Use case-unique artifact names and clean your own leftovers at the head/tail of the case;
+state any mechanism substitution (e.g. reload-from-saved instead of a physical reboot) in
+the desc column.
 Measured: save-family cases that passed in isolation failed in full-volume runs via shared
 persistent state.
 

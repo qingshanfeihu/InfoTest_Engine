@@ -42,7 +42,10 @@ dropped a standalone `^` and mis-attributed; every gate-rejected retry traced to
 3. **Cross-case consistency** before any systemic claim: `fs_grep` this batch's last_run for
    same-signature cases and reconcile with batch_pass_examples — a "whole batch broken" story
    must explain why the passing cases pass (measured: 3 config-existence passes refuted a
-   "systemic failure" narrative; the real cause was one level deeper).
+   "systemic failure" narrative; the real cause was one level deeper). When several cases share
+   your failure signature, also fs_read the **earliest** failing case's attr_evidence.json —
+   the common cause usually lives in what that case changed (measured: an interface move in
+   one case timed out nine downstream cases; single-case reading missed it).
 4. Layers: G = device rejected/grammar (upstream; later failures are downstream); E =
    reachability/environment (a dig with a responding `SERVER:` line is NOT unreachable); V =
    expectation disagrees with real behavior; transient = judged by reproducibility only;

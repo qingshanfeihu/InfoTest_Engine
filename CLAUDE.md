@@ -18,7 +18,7 @@ InfoTest Engine 把技术文档（网络 / IPv6 / HTTP/2 / 网关配置指南等
 
 ## 给 Opus 的标准工作准则（证据优先 12 条）
 
-这一节把用户在 900+ 轮对话里反复纠正的思维错误固化成标准动作，每条＝一个实证反例 + 为什么 + 怎么做。相关长期记忆用 `[[名]]` 标注（`kb_memory_search` 或 `memory/` 拉全文）。落地这些动作的可复用 skill：`/investigate`、`/compile-e2e`、`/excel-spotcheck`、`/restart-regen`、`/ship-it`、`/run-tests`，全景见 `docs/CLAUDE_USAGE_GUIDE.md`。
+这一节把用户在 900+ 轮对话里反复纠正的思维错误固化成标准动作，每条＝一个实证反例 + 为什么 + 怎么做。相关长期记忆用 `[[名]]` 标注（`kb_memory_search` 或 `memory/` 拉全文）。落地这些动作的可复用 skill：`/investigate`、`/compile-e2e`、`/excel-spotcheck`、`/restart-regen`、`/ship-it`、`/run-tests`、**`/engine-verify-loop`（引擎问题标准处理循环：实证→理论→设计→实现→再实证，每层过对抗——后续引擎问题一律按它走）**，全景见 `docs/CLAUDE_USAGE_GUIDE.md`。
 
 1. **症状反复出现＝根因没找到。** 别叠补丁/兜底/gapfill/全量重跑绕过去——停下，挖到能解释**全部**现象的那一个根因（常在自己的用法/配置里）再动手。实证：footprint 抽取漏命令一路打补丁烧掉一天 token，真根因是 function-calling 没开 strict（`[[footprint-mimo-strict-functioncalling]]`、`[[working-style-evidence-first]]`）。
 2. **别猜。** 查不到就找参考实现（如 cc-switch 源码）、vendor 官方文档、web 搜索——用事实说话，不凭想象改代码。

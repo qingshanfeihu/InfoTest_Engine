@@ -597,7 +597,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                  coverage_reduction_reason: str = "",
                  provenance: dict | list | str | None = None,
                  provenance_path: str = "",
-                 blocks: list | None = None) -> str:
+                 blocks: list | str | None = None) -> str:
     """Produce a structurally correct case.xlsx from a step list (clones the framework-native template; you never deal with template structure/column alignment).
 
     **When to use**: the semantic design of a single case (config/trigger/assertions) is settled
@@ -698,10 +698,19 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     # 悬空断言/未定义寄存器/带H步后直接断言/字面\n 在组合子语言下不可表达
     # (实证:34 已验证卷反解 5 组合子 round-trip 33/34 字节级等价,唯一失败卷=上机 fail 卷)。
     # 展开产物仍走下游全部机械门作自检(应零触发,触发=展开器 bug)。
-    if blocks not in (None, []):
+    if blocks not in (None, "", []):
+        # 双收字符串(2026-07-11 yzg 实测:26 案 worker 首发多数把组合子数组序列化成
+        # JSON 字符串,被参数校验层整调拒绝、每案多烧 1-2 往返——steps 通道同款兜底)
+        if isinstance(blocks, str):
+            try:
+                blocks = json.loads(blocks)
+            except Exception:  # noqa: BLE001
+                return (f"error: case {autoid} blocks arrived as an unparseable string — pass a "
+                        "native array of combinator objects (preferred), or a valid JSON-encoded "
+                        "array string")
         if not isinstance(blocks, list):
             return (f"error: case {autoid} blocks must be a native array (a list of semantic "
-                    "combinators), not serialized into a string — got " + type(blocks).__name__)
+                    "combinators), got " + type(blocks).__name__)
         from main.case_compiler.blocks import expand_blocks
         _prov_steps = None
         _prov_obj: dict | None = None

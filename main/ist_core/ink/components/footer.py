@@ -303,9 +303,10 @@ class FooterPane:
                         f"↓ {_format_token_count(_run_out)}"
                         f"(+{_format_token_count(self._output_token_count)}) tokens"
                     )
-                # 相位文本(深度思考中/生成回答中/接收中)归 footbar 状态行显示
-                # (2026-07-10 用户裁决),busy 行只留 verb+时长+token
-                thinking_text = f"✶ {self._verb}… ({elapsed_str} · {_tok})"
+                # 相位文本(深度思考中/生成回答中/接收中)并进 busy 行括号
+                # (2026-07-11 用户裁决:它描述的是当前这次调用的相位,家在
+                # `✶ Considering… (…)` 里,不在 token 统计行尾)
+                thinking_text = f"✶ {self._verb}… ({elapsed_str} · {_tok} · \x1b[1m{_state}\x1b[0m)"
             else:
                 # 无相位常见于 main 阻塞等 fork/长工具。
                 # fork 静默期仍要显本轮 token 增量（fork_input 实时递增），
@@ -328,11 +329,6 @@ class FooterPane:
                 self._thinking_cb(None)
         
         status_text = self._session_summary()
-        # 相位文本在 footbar 状态行尾(2026-07-10 用户裁决:「深度思考中」的家在这里)
-        if self._timer_running and self._busy_since:
-            _st = _PHASE_STATE_TEXT.get(self._llm_phase)
-            if _st:
-                status_text = f"{status_text} · \x1b[1m{_st}\x1b[0m"
         if self._sticky_error and self.status == "error":
             # 驻留错误占状态行主位(红),session 摘要退到 hint 行之上仍可见
             status_text = f"\x1b[31m✖ {self._sticky_error}\x1b[0m · {status_text}"

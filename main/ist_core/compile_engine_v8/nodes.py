@@ -591,8 +591,20 @@ def attribute(state: dict) -> dict:
         rec = recs.get(aid, {})
         mine = [f for f in fs if f.get("aid") == aid]
         contra = F.contradictions(mine, aid)
+        # 单案证据文件(X8 效率债,2026-07-11 实测:fork 主读整批 last_run 把 26 案
+        # 回显全吸进上下文,均价 849k↑=run5 的 3.3 倍)——主读单案,跨案对账仍可
+        # fs_grep last_run(不整读)
+        ev_ref = ""
+        try:
+            evp = sh.outputs_root() / aid / "attr_evidence.json"
+            evp.parent.mkdir(parents=True, exist_ok=True)
+            evp.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+            ev_ref = str(evp.relative_to(sh.project_root()))
+        except Exception:  # noqa: BLE001
+            logger.debug("单案证据落盘失败 %s", aid, exc_info=True)
         env = {
             "autoid": aid, "last_run_path": lr_ref,
+            "evidence_path": ev_ref,
             "device_build": state.get("device_build", ""),
             "batch_pass_examples": [a for a, c in vw["cases"].items()
                                     if c["status"] in (V.S_DELIVERABLE, V.S_SUBSET_VERIFIED)][:6],

@@ -26,7 +26,8 @@ def intent_summary(aid: str, state: dict) -> str:
 
 
 def _round_evidence(fs: list[dict], aid: str) -> list[dict]:
-    """逐轮失败证据:verdict(fail) 事实 + 其 evidence_ref 指向的 last_run 里该案原文。"""
+    """逐轮失败证据:verdict(fail) 事实 + 其 evidence_ref 指向的 last_run 里该案原文。
+    非末轮的 device_context 由调用方降级为 ref 引用(载荷按引用,X8)。"""
     docs = []
     for f in fs:
         if f.get("aid") != aid or f.get("ev") != "verdict" or f.get("result") != "fail":
@@ -39,7 +40,7 @@ def _round_evidence(fs: list[dict], aid: str) -> list[dict]:
             ctxt = str(rec.get("device_context") or rec.get("detail_tail") or "")[:6000]
         att = next((a for a in fs if a.get("aid") == aid and a.get("ev") == "attribution"
                     and a.get("run_id") == f.get("run_id")), {})
-        docs.append({"run_id": f.get("run_id"), "ctx": f.get("ctx"),
+        docs.append({"run_id": f.get("run_id"), "ctx": f.get("ctx"), "ref": ref,
                      "device_context": ctxt,
                      "layer": att.get("layer", ""), "disposition": att.get("disposition", ""),
                      "fix_direction": att.get("fix_direction", "")})
@@ -65,14 +66,23 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
 
     is_retry = rounds_used >= 1
     if is_retry:
+        # 载荷按引用(X8 效率债):只有最新失败轮的回显全文内联;更早轮给归因结论行
+        # +引用路径(需要时 fs_read 现查)——旧版全轮内联 6000 字符/轮随轮数线性膨胀
+        evs = _round_evidence(fs, aid)
         docs = []
-        for e in _round_evidence(fs, aid):
+        for i, e in enumerate(evs):
             sig = "/".join(x for x in (e["layer"], e["disposition"]) if x)
-            docs.append(
-                f'<document label="on-device run {e["run_id"]}" ctx="{e["ctx"]}"'
-                + (f' attribution="{sig}"' if sig else "") + ">\n"
-                + (f"<fix_direction>{e['fix_direction'][:800]}</fix_direction>\n" if e["fix_direction"] else "")
-                + f"<device_context>\n{e['device_context']}\n</device_context>\n</document>")
+            head = (f'<document label="on-device run {e["run_id"]}" ctx="{e["ctx"]}"'
+                    + (f' attribution="{sig}"' if sig else "") + ">\n"
+                    + (f"<fix_direction>{e['fix_direction'][:800]}</fix_direction>\n"
+                       if e["fix_direction"] else ""))
+            if i == len(evs) - 1:
+                docs.append(head + f"<device_context>\n{e['device_context']}\n"
+                            "</device_context>\n</document>")
+            else:
+                docs.append(head + f"<device_context ref=\"{e['ref']}\" note=\"earlier "
+                            "round; fs_read the ref if the latest echo is not enough\"/>\n"
+                            "</document>")
         if docs:
             parts.append("<device_evidence>\n" + "\n".join(docs) + "\n</device_evidence>")
         hist_dir = sh.outputs_root() / aid / "history"

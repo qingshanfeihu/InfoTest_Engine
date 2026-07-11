@@ -91,24 +91,26 @@ def _busy_thinking_line(**phase_kw) -> str:
     return _busy_footer(**phase_kw)[0]
 
 
-def test_footer_thinking_phase_lives_in_status_line():
-    """thinking 相位:「深度思考中」在 footbar 状态行;busy 行只留 verb+时长+token。"""
+def test_footer_thinking_phase_lives_in_busy_parens():
+    """thinking 相位:「深度思考中」并进 busy 行括号(2026-07-11 用户裁决——它描述
+    当前这次调用的相位,家在 `✶ Considering… (…)` 里,不在 token 统计行尾)。"""
     busy, status = _busy_footer(llm_phase="thinking", input_tokens=100)
-    assert "深度思考中" in status                    # 家在 footbar
-    assert "深度思考中" not in busy                  # busy 行不再挂相位词
+    assert "深度思考中" in busy                      # 家在 busy 行括号
+    assert "深度思考中" not in status                # token 统计行不再挂相位词
     assert "· mimo-v2.5-pro)" not in busy
     assert any(f"✶ {v}…" in busy for v in _VERBS_ALL)  # 前面随机词不动
+    assert busy.rstrip().endswith(")")               # 相位词在括号内
 
 
-def test_footer_output_phase_lives_in_status_line():
+def test_footer_output_phase_lives_in_busy_parens():
     busy, status = _busy_footer(llm_phase="output", output_token_count=42)
-    assert "生成回答中" in status and "生成回答中" not in busy
+    assert "生成回答中" in busy and "生成回答中" not in status
     assert "· mimo-v2.5-pro)" not in busy
 
 
-def test_footer_input_phase_lives_in_status_line():
+def test_footer_input_phase_lives_in_busy_parens():
     busy, status = _busy_footer(llm_phase="input", input_tokens=200)
-    assert "接收/处理中" in status and "接收/处理中" not in busy
+    assert "接收/处理中" in busy and "接收/处理中" not in status
 
 
 def test_footer_thinking_line_no_phase_shows_run_increment_tokens():
@@ -135,13 +137,13 @@ def test_footer_thinking_line_live_download_tokens():
     # 口径统一(2026-07-03):↓ 恒显本轮累计,当次调用实时估算以 (+N) 并列——
     # 同一显示位不再随相位切换含义(旧版 thinking 显当次、等待显累计,被读成"不同步")。
     assert "↓ 0(+1.2k) tokens" in busy              # 累计 0 + 当次实时 1.2k
-    assert "深度思考中" in status                    # 相位词在 footbar 状态行
+    assert "深度思考中" in busy                      # 相位词并在 busy 行括号内
     assert "↑" not in busy                           # 下载相位不显上传箭头
     # input 相位：只显 ↑ 本轮增量(单箭头=当前方向)
     busy2, status2 = _busy_footer(llm_phase="input", input_tokens=2000)
     assert "↑ 2.0k tokens" in busy2
     assert "↓" not in busy2
-    assert "接收/处理中" in status2
+    assert "接收/处理中" in busy2
 
 
 def test_footer_no_phase_shows_worker_wait_when_fork_silent():

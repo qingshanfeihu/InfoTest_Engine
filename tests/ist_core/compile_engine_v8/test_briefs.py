@@ -84,3 +84,23 @@ def test_contradiction_brief_carries_interference_note(rig):
     state, lr_ref = rig
     b = build_brief(A, state, _facts(lr_ref, rounds=1, contra=True))
     assert "passed in isolation but failed in the full-volume run" in b
+
+
+def test_multi_round_evidence_latest_inline_earlier_by_ref(rig):
+    """载荷按引用(X8 效率债,2026-07-11):多轮 fail 只有最新轮回显全文内联,
+    更早轮降级为 ref 引用+归因结论行(fs_read 现查)——旧版全轮内联随轮数线性膨胀。"""
+    state, lr_ref = rig
+    fs = [{"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+          {"ev": "verdict", "aid": A, "run_id": "r1", "ctx": "delivery", "result": "fail",
+           "artifact": "a1", "volume": "v", "evidence_ref": lr_ref, "signatures": []},
+          {"ev": "attribution", "aid": A, "round": 1, "run_id": "r1",
+           "layer": "V", "disposition": "reflow", "fix_direction": "FIX-R1"},
+          {"ev": "authored", "aid": A, "round": 2, "artifact": "a2"},
+          {"ev": "verdict", "aid": A, "run_id": "r2", "ctx": "delivery", "result": "fail",
+           "artifact": "a2", "volume": "v", "evidence_ref": lr_ref, "signatures": []},
+          {"ev": "attribution", "aid": A, "round": 2, "run_id": "r2",
+           "layer": "V", "disposition": "reflow", "fix_direction": "FIX-R2"}]
+    b = build_brief(A, state, fs)
+    assert b.count("ROUND1-DEV") == 1                      # 回显全文只出现一次(最新轮)
+    assert f'ref="{lr_ref}"' in b and "earlier" in b       # 早轮按引用
+    assert "FIX-R1" in b and "FIX-R2" in b                 # 归因结论行全轮保留

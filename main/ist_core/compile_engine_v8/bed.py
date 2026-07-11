@@ -188,43 +188,44 @@ def own_writes(diff: dict, command_corpus: str) -> tuple[dict, dict]:
     return own, foreign
 
 
-def _mask_to_len(mask: str) -> int:
+def entity_gate(cmds: list[str], diff_own: dict) -> tuple[list[str], list[str]]:
+    """实体越界门(机械):恢复命令的身份 token 必须 ⊆ 己方 diff 的身份 token 集——
+    LLM 生成的命令不许碰 diff 之外的任何实体(行动论:判断开放,门闭合)。
+    返回 (放行命令, 拒绝命令)。"""
+    allowed: set = set()
+    for d in diff_own.values():
+        for side in ("added", "removed"):
+            for ln in d.get(side) or []:
+                allowed.update(_identity_tokens(ln))
+    ok: list[str] = []
+    rejected: list[str] = []
+    for c in cmds:
+        toks = _identity_tokens(str(c))
+        (ok if all(t in allowed for t in toks) else rejected).append(str(c))
+    return ok, rejected
+
+
+def restore_via_llm(diff_own: dict, llm_fn: Callable[[str, str], str]) -> list[str]:
+    """己方漂移 → 恢复命令,**生成归 LLM**(它懂任何状态面的 show↔配置命令对应——
+    vlan/路由/ACL 同一条路,零模板零场景枚举);产物过 entity_gate+执行验证双门。
+    llm_fn(system, user) -> text(注入;生产=flash 档直调,测试=假)。返回命令列表
+    (失败/不可解析返回空——保守,残余入账走下批接力或 ask)。"""
+    payload = json.dumps(diff_own, ensure_ascii=False, indent=1)
+    sys_p = ("You revert testbed configuration drift on a network device. Given a "
+             "before/after diff of `show` output lines (added = lines that appeared "
+             "after the batch, removed = lines that disappeared), produce the CLI "
+             "commands that restore the BEFORE state: undo each added line, re-create "
+             "each removed line. Use the device's native config syntax implied by the "
+             "show lines themselves. Reply with a JSON array of command strings only — "
+             "no prose, no fences. Touch ONLY entities present in the diff.")
     try:
-        return sum(bin(int(o)).count("1") for o in mask.split("."))
+        out = llm_fn(sys_p, payload)
+        m = re.search(r"\[.*\]", str(out or ""), re.DOTALL)
+        cmds = json.loads(m.group(0)) if m else []
+        return [str(c) for c in cmds if isinstance(c, str) and c.strip()]
     except Exception:  # noqa: BLE001
-        return 24
-
-
-def restore_plan(diff_own: dict) -> tuple[list[str], list[str]]:
-    """己方漂移 → 机械逆放命令(仅已建模状态面;模板=grammar 数据带 provenance,
-    R4-G3:机械回放非 LLM 生成)。返回 (commands, unmodeled_notes)。"""
-    syn = dict(load_grammar().get("bed_restore_syntax") or {})
-    cmds: list[str] = []
-    notes: list[str] = []
-    for name, d in diff_own.items():
-        spec = syn.get(name)
-        if not isinstance(spec, dict):
-            for side in ("added", "removed"):
-                for ln in d.get(side) or []:
-                    notes.append(f"{name}:{side}:{ln}")
-            continue
-        line_re = re.compile(str(spec.get("line_re") or "$^"))
-        for ln in d.get("added") or []:      # 批后多出的 → 撤销
-            m = line_re.match(ln)
-            if m:
-                cmds.append(str(spec.get("del")).format(**m.groupdict()))
-            else:
-                notes.append(f"{name}:added:{ln}")
-        for ln in d.get("removed") or []:    # 批后缺失的 → 原值回放
-            m = line_re.match(ln)
-            if m:
-                gd = dict(m.groupdict())
-                if "mask" in gd:
-                    gd["masklen"] = _mask_to_len(gd["mask"])
-                cmds.append(str(spec.get("add")).format(**gd))
-            else:
-                notes.append(f"{name}:removed:{ln}")
-    return cmds, notes
+        logger.warning("恢复命令生成失败(保守:入账待接力)", exc_info=True)
+        return []
 
 
 # ── 初始化清理(2026-07-10 用户裁决:开工必净) ─────────────────────────────────

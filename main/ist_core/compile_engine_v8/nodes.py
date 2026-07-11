@@ -54,6 +54,15 @@ def _digest_fn(xlsx_path: str, autoids: list[str]) -> str:
     return dev_run_batch_digest.func(xlsx_path, autoids)
 
 
+def _bed_llm_fn(system_prompt: str, user_prompt: str) -> str:
+    """床态恢复命令生成的轻 LLM 直调(flash 档,单次 completion,思考关——数据变换级
+    微调用,与 fork 孔区分;kms_classifier/dream 同类先例)。测试经模块 hook 替换。"""
+    from main.ist_core.agents._llm import build_explore_model
+    m = build_explore_model(thinking="off")
+    out = m.invoke([("system", system_prompt), ("human", user_prompt)])
+    return str(getattr(out, "content", out) or "")
+
+
 # --------------------------------------------------------------- [mech] prep
 def prep(state: dict) -> dict:
     out_name = str(state.get("out_name") or Path(str(state.get("mindmap_path"))).stem)
@@ -118,20 +127,30 @@ def bed_gate(state: dict) -> dict:
         cfg_build = str(cfg.build or "")
     except Exception:  # noqa: BLE001
         host, cfg_build = "", ""
-    # 床账接力(X11/(26):账内己方未复原 → 机械逆放,零问询;INV-9 既定授权)
+    # 床账接力(X11/(26):账内己方未复原 → 恢复,零问询;INV-9 既定授权)。
+    # 有命令账项=上批已验证记录,机械回放(R4-G3 本义);无命令账项=上批生成失败的
+    # 残余,LLM 现生成+实体门(判断开放,门闭合)——失败则留账,由 bed_check 残留
+    # 判定自然进问询(合法 ask:尝试已穷尽)
     try:
         for item in B.bed_unrestored(sh.project_root(), host):
-            cmds = list((item.get("payload") or {}).get("commands") or [])
+            pl = item.get("payload") or {}
+            cmds = list(pl.get("commands") or [])
+            if not cmds and (pl.get("added") or pl.get("removed")):
+                d = {str(item.get("kind")): {"added": pl.get("added") or [],
+                                             "removed": pl.get("removed") or []}}
+                cmds, _rej = B.entity_gate(B.restore_via_llm(d, _bed_llm_fn), d)
             if not cmds:
+                sh.emit(f"床账接力:无可用恢复命令({item.get('kind')}:{item.get('id')}),留账")
                 continue
             ok = all(not B._probe_failed(_exec_fn(c)) for c in cmds)
             if ok:
                 B.bed_record(sh.project_root(), host, "restored",
                              str(item.get("kind")), str(item.get("id")),
-                             batch=str(state.get("out_name") or ""))
+                             batch=str(state.get("out_name") or ""),
+                             payload={"commands": cmds})
                 sh.emit(f"床账接力:上批未复原产物已恢复({item.get('kind')}:{item.get('id')})")
             else:
-                sh.emit(f"床账接力:恢复失败({item.get('kind')}:{item.get('id')}),进问询")
+                sh.emit(f"床账接力:恢复失败({item.get('kind')}:{item.get('id')}),留账")
     except Exception:  # noqa: BLE001
         logger.debug("床账接力失败", exc_info=True)
 
@@ -832,7 +851,13 @@ def ask_contradiction(state: dict) -> dict:
     for item in payload:
         aid, kind, qid = item["autoid"], item["kind"], qids[item["autoid"]]
         mine = [f for f in fs if f.get("aid") == aid]
-        a = str((ans or {}).get(aid) or "")
+        raw = (ans or {}).get(aid)
+        # 双形态:dict={answer, token}(引擎同源精确映射,W3)/str=旧形态或直答
+        if isinstance(raw, dict):
+            a = str(raw.get("answer") or "")
+            tok_exact = str(raw.get("token") or "")
+        else:
+            a, tok_exact = str(raw or ""), ""
         if not a:
             # 安全件(§11.11):未获答案不悬置不空转——自动挂起,报告给出恢复路径;
             # 本就挂起的案保持原状(不落重复事实)
@@ -843,7 +868,8 @@ def ask_contradiction(state: dict) -> dict:
                 new_facts.append({"ev": "suspended", "aid": aid, "reason": f"auto:{qid}"})
                 sh.emit(f"…{aid[-6:]} 未获答案,自动挂起(重跑同参数会再次呈报)")
             continue
-        tok = _answer_token(kind, a)
+        # 精确 token 优先(引擎产 label 的同源映射);Other 自由输入才走语义兜底
+        tok = tok_exact or _answer_token(kind, a)
         new_facts.append({"ev": "decision", "aid": aid, "question_id": qid,
                           "answer": a, "token": tok})
         if tok == "suspend":
@@ -970,28 +996,35 @@ def closing(state: dict) -> dict:
                 corpus = "\n".join(str(r.get("device_context") or "") for r in lr
                                    if isinstance(r, dict))
                 own, foreign = B.own_writes(diff, corpus)
-                cmds, notes = B.restore_plan(own)
-                restored_ok = bool(cmds) and all(
-                    not B._probe_failed(_exec_fn(c)) for c in cmds)
-                residual = B.bed_diff(before, B.bed_snapshot(_probe_fn)) if cmds else diff
+                # 恢复命令:生成归 LLM(懂任何状态面,零模板);机械双门=实体越界门
+                # +执行后复探验证(行动论 (22):判断开放,入库门闭合)
+                cmds, rejected = [], []
+                if own:
+                    raw = B.restore_via_llm(own, _bed_llm_fn)
+                    cmds, rejected = B.entity_gate(raw, own)
+                if cmds:
+                    for c in cmds:
+                        _exec_fn(c)
+                residual = B.bed_diff(before, B.bed_snapshot(_probe_fn)) if cmds else \
+                    {k: v for k, v in diff.items() if k in own} if own else {}
+                verified = [c for c in cmds] if cmds and not residual else []
                 for name, d in residual.items():
-                    rcmds, _ = B.restore_plan({name: d})
                     B.bed_record(sh.project_root(), host, "created", name,
                                  f"{state.get('out_name')}:{name}",
                                  batch=str(state.get("out_name") or ""),
-                                 payload={"commands": rcmds,
-                                          "added": d.get("added"),
+                                 payload={"commands": [], "added": d.get("added"),
                                           "removed": d.get("removed")})
                 parts = []
-                if cmds:
-                    parts.append(f"己方漂移已逆放 {len(cmds)} 条"
-                                 + ("(验证通过)" if restored_ok and not residual else ""))
+                if verified:
+                    parts.append(f"己方漂移已恢复(验证通过,{len(verified)} 条随账可复用)")
+                elif cmds:
+                    parts.append(f"恢复执行 {len(cmds)} 条但复探未清零")
+                if rejected:
+                    parts.append(f"{len(rejected)} 条越界命令被门拒")
                 if residual:
                     parts.append(f"{len(residual)} 通道残余入床账(下批接力)")
                 if foreign:
                     parts.append(f"{len(foreign)} 通道非己方漂移(只报不动,INV-9)")
-                if notes:
-                    parts.append(f"{len(notes)} 项未建模状态面(如实报告)")
                 bed_note = ";".join(parts)
                 sh.emit(f"批后床态收敛:{bed_note or '干净'}")
     except Exception:  # noqa: BLE001

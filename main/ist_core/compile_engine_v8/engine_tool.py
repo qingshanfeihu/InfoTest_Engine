@@ -101,7 +101,20 @@ def _bridge(payload: dict) -> dict:
             q["_key"] = str(q.get("_autoid") or q.get("header") or "")
         return _panel(qs)
     if kind == "ask_contradiction":
-        return _panel([_contradiction_question(c) for c in (payload.get("cases") or [])])
+        qs = [_contradiction_question(c) for c in (payload.get("cases") or [])]
+        raw = _panel(qs)
+        if raw.get("_non_interactive"):
+            return raw
+        # label→token 引擎同源精确映射(W3:label 是引擎自己产的,不猜;
+        # Other 自由输入不在表 → token 空,节点侧语义兜底)
+        out: dict = {}
+        for q in qs:
+            k = str(q.get("_key") or "")
+            if k in raw:
+                label = raw[k]
+                out[k] = {"answer": label,
+                          "token": (q.get("_tokens") or {}).get(label, "")}
+        return out
     return {"_non_interactive": True}
 
 
@@ -148,6 +161,7 @@ def _contradiction_question(c: dict) -> dict:
                 "options": [
                     {"label": "确认,按此继续", "description": "按引擎的理解重编该用例"},
                     {"label": "确认产品缺陷", "description": "该差异是产品问题——记入缺陷候选单,该用例以缺陷结案"}],
+                "_tokens": {"确认,按此继续": "confirm", "确认产品缺陷": "defect"},
                 "_key": aid}
     if kind == "cap":
         q = (f"{who} 已重编 {c.get('rounds')} 轮仍未通过"
@@ -158,6 +172,8 @@ def _contradiction_question(c: dict) -> dict:
                     {"label": "继续,再修 2 轮", "description": "授权追加重编轮次"},
                     {"label": "挂起该案", "description": "先放一放,跑完其他用例;重跑同参数时会再次询问"},
                     {"label": "停止该案", "description": "以未通过如实报告,不再消耗轮次"}],
+                "_tokens": {"继续,再修 2 轮": "continue", "挂起该案": "suspend",
+                            "停止该案": "stop"},
                 "_key": aid}
     if kind == "env":
         q = (f"{who} 的失败被判为环境阻塞"
@@ -167,6 +183,7 @@ def _contradiction_question(c: dict) -> dict:
                 "options": [
                     {"label": "确认环境问题,停止该案", "description": "以环境阻塞如实报告该用例"},
                     {"label": "不认可,隔离复跑", "description": "单独再跑一次验证这个判断"}],
+                "_tokens": {"确认环境问题,停止该案": "stop", "不认可,隔离复跑": "retry"},
                 "_key": aid}
     if kind == "suspended":
         q = f"{who} 上批被挂起。本批如何处理?"
@@ -174,6 +191,7 @@ def _contradiction_question(c: dict) -> dict:
                 "options": [
                     {"label": "恢复处理", "description": "回到正常流程继续修"},
                     {"label": "保持挂起", "description": "本批继续不动它"}],
+                "_tokens": {"恢复处理": "resume", "保持挂起": "keep"},
                 "_key": aid}
     q = (f"{who} 单独验证通过、整卷复验第 {c.get('contradictions')} 次失败"
          f"(跨案持久态互扰嫌疑"
@@ -184,6 +202,7 @@ def _contradiction_question(c: dict) -> dict:
             "options": [
                 {"label": "重排复验", "description": "重排卷序后再终验一轮(互扰案排卷尾)"},
                 {"label": "如实降级", "description": "该案不入交付卷,以未通过如实报告"}],
+            "_tokens": {"重排复验": "reorder", "如实降级": "downgrade"},
             "_key": aid}
 
 

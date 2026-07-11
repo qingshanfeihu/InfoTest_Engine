@@ -498,7 +498,7 @@ delivered/ 存档,prep 一并还原(test_render_closing.py 14 例)。
 | X7 | D 片 remedies.derive_queue 纯文法数据驱动（persistence_channels case_mitigation） | 半冲突：队列来源是场景数据；但 ACTION_CN 的 self_cleanup/rerun_isolated/vary_form/recompile_directed 恰是**能力原语**（A3 裁决的正确枚举对象） | 原语枚举保留并正名（能力原语表=行动侧的路由词表）；队列**来源**扩容：文法判例（已验证）+common_cause 提案（新形态）；§11.7「队列空才 ask」充要条件重述为「簇假设已验证/证伪 ∧ 队列空 ∧ 权限外」（序②与 D 片合并） |
 | X8 | 归因 brief 喂全历史设备回显（_round_evidence 每轮 6000 字符内联；实测 fork 均价 849k↑=run5 的 3.3 倍） | R2-E5：效率债第一位——新构件收益会被既有泄漏淹没 | 载荷按引用改造：brief 内联最新轮摘要+历史轮引用（fs_read 现查），与「LLM 走控制面、数据按引用流」既有纪律对齐（序①，已落 c4a272a7）。**已知代价面（run8 实证，THEORY 2.7.6）**：单案主读让跨案根因追溯变浅（run7 整批视野两 fork 追到 233 源头，run8 未追到）——不回退，由 X3 diagnose 结构性兜住（其实证论据②） |
 | X10 | worker/attributor 对「意图 vs 环境能力」形态的 panel 触发缺失（233 两轮均硬编未呈报：测 VLAN listener 而触发端 untagged 打不了 tagged 流量） | §2.6 意图触碰面与 conflict_shape 枚举（method_vs_implementation）**均已覆盖**——判断层未触发，非理论/schema 缺口 | C 层提示**必须带等价类限定**（R3-P1：先穷尽 §3.3 正解等价类内变形——如改物理口等价验证，那是实然自决；**无任何等价路径**才呈报）；与 P3 的跨案加固合并 ≤2 句、并入既有段不开新段（R3-P4 prompt 减法纪律）；diagnose 位（X3）为结构性兜底 |
-| X11 | 床账（bed ledger）设计在案未接线（O-3）：上批己方污染本批 → env ask 抛给用户 | 违 (26) 非法 ask（信息=账应载、权限=INV-9 账内自动清理既定授权，均在引擎侧应然可达集）；run9 用户裁决实证 | **接线为序②之首**：bed_gate 批前快照落盘→closing 批后复探 diff→diff 项与本批命令面交叉验证认己方（R4-G4，机械 grep last_run 的 sends-command 行）→己方项按快照原值机械逆放（限已建模状态面，逆放语法=grammar 数据带 provenance）+验证探针 diff 清零→未清项入账 created，下批 bed_gate 据账接力恢复（R4-G6 双保险）。账空存量=一次性清偿（R4-G1，run9 的 4 题是账空时代最后合法 ask）；非己方 diff→ask 依然合法 |
+| X11 | 床账（bed ledger）设计在案未接线（O-3）：上批己方污染本批 → env ask 抛给用户 | 违 (26) 非法 ask（信息=账应载、权限=INV-9 账内自动清理既定授权，均在引擎侧应然可达集）；run9 用户裁决实证 | **接线为序②之首**：bed_gate 批前快照落盘→closing 批后复探 diff→diff 项与本批命令面交叉验证认己方（R4-G4，机械 grep last_run 的 sends-command 行）→己方项恢复命令**生成归 LLM**（flash 直调；它懂任何状态面的 show↔配置对应——vlan/路由/ACL 同一条路，**零模板零场景枚举**，2026-07-11 用户拦下模板库路线后修正）+机械双门（实体越界门：命令 token ⊆ diff 身份集；执行后复探 diff 清零验证）→未清项入账（diff 随账），下批 bed_gate 据账接力（账内命令=已验证记录机械回放——G3 本义；无命令账项 LLM 再生成过门）。账空存量=一次性清偿（R4-G1，run9 的 4 题是账空时代最后合法 ask）；非己方 diff→ask 依然合法 |
 | X9 | compile_emit blocks 无字符串双收（本轮 26 案自纠往返实测） | R2-E5 同项 | blocks: list\|str 双收+_coerce（steps 通道样板；#65 已立案）（序①） |
 
 ### 12.2 被理论再确认的设计（不动清单——防止行动论被误读为推翻一切）
@@ -558,3 +558,16 @@ delivered/ 存档,prep 一并还原(test_render_closing.py 14 例)。
 数据 → cmux 重新上机验证——循环到无问题。**每层必过对抗、不许跳层**；跳层代价在案
 （跳理论=检测器膨胀被三连否；跳对抗=¥96 回退）。本节 §12.1-12.4 即该循环第 2-4 步的
 一次完整产物。
+
+### 12.6 全库合规审计（2026-07-11，用户「还有没有类似不符」指令；判据=(22)-(26)）
+
+| 项 | 裁定 | 处置 |
+|---|---|---|
+| bed_restore_syntax 模板库（W1） | **违规**：模板库=规则库，每状态面一条=场景枚举增长——(22) 被实现走样 | 已删；恢复命令生成归 LLM+实体越界门+执行验证双门（本批落地） |
+| _answer_token 对预置 label 关键词猜（W3） | 糙：label 是引擎自己产的，「in」猜测多余且可误 | 已修：_bridge 每题携带 label→token 同源精确映射；语义兜底只剩 Other 自由输入 |
+| cleanup_refs/persistence_channels/coexist/bed_probes 的人手写增长 | 同族（存量合法：provenance 数据；增长方式违 (22)） | 序③提案链路（恢复通道的 LLM 生成+双门已通用，cleanup 可复用同通道） |
+| verifiability 的 claim_kind | 合法：判断归 worker（LLM），工具只收 enum——与 conflict_shape 同型 | 不动 |
+| FORM_BY_KIND（欠定选项的形态建议） | 合法：决策辅助显示，判断权在 LLM（kind）与用户（拍板），emit 门核对 | 不动 |
+| is_transient_error markers | 合法：自家 LLM 端点传输层契约词（异常类名/标准 HTTP 错误文本），非领域判断；裸数字坑已修在案 | 不动 |
+| 渲染词表（STATUS_CN/LAYER_CN/_SHAPE_CN 等） | 合法：机器枚举→中文的显示映射，非判断 | 不动 |
+| A 层机械门/原理层检测器/资源规则 | 合法（P1/P2 与 R2 已定性） | 不动 |

@@ -46,20 +46,37 @@ def test_own_writes_cross_validation():
     assert not own2 and "interface_addresses" in foreign2
 
 
-def test_restore_plan_mechanical_replay():
-    """R4-G3:恢复=模板机械回放(grammar 数据带 provenance),添撤销/缺回放。"""
+def test_restore_via_llm_generation_open_gates_closed():
+    """行动论 (22) 实现形态:恢复命令生成归 LLM(零模板零场景枚举——vlan/路由/ACL
+    同一条路);机械双门=实体越界门+执行验证。"""
     d = B.bed_diff(BEFORE, AFTER_POLLUTED)
     own, _ = B.own_writes(d, CORPUS)
-    cmds, notes = B.restore_plan(own)
-    assert "no ip address vlan100 4" in cmds          # added → del 模板
-    assert "ip address port2 172.16.34.70 24" in cmds  # removed → add 回放(掩码转 masklen)
-    assert notes == []
+
+    def fake_llm(sys_p, user_p):
+        assert "vlan100" in user_p                    # diff 原文喂给 LLM
+        return '["no ip address vlan100 4", "ip address port2 172.16.34.70 24"]'
+
+    cmds = B.restore_via_llm(own, fake_llm)
+    ok, rejected = B.entity_gate(cmds, own)
+    assert ok == ["no ip address vlan100 4", "ip address port2 172.16.34.70 24"]
+    assert rejected == []
 
 
-def test_restore_plan_unmodeled_channel_reports_not_acts():
-    cmds, notes = B.restore_plan({"segments": {"added": ["segment weird thing"],
-                                               "removed": []}})
-    assert cmds == [] and notes == ["segments:added:segment weird thing"]
+def test_entity_gate_blocks_out_of_scope_commands():
+    """越界门:LLM 命令只许碰 diff 内实体——碰别的接口/IP 一律拒(INV-9 的机械面)。"""
+    d = B.bed_diff(BEFORE, AFTER_POLLUTED)
+    own, _ = B.own_writes(d, CORPUS)
+    ok, rejected = B.entity_gate(
+        ["no ip address vlan100 4", "no ip address port3 4", "clear slb all"], own)
+    assert "no ip address vlan100 4" in ok
+    assert "no ip address port3 4" in rejected        # port3 不在 diff 实体集
+    assert "clear slb all" in ok or "clear slb all" in rejected  # 无实体 token=不越界放行
+
+
+def test_restore_via_llm_unparseable_is_conservative_empty():
+    cmds = B.restore_via_llm({"x": {"added": ["y 1"], "removed": []}},
+                             lambda s, u: "I think you should…(prose, no JSON)")
+    assert cmds == []
 
 
 def test_ledger_roundtrip_with_payload(tmp_path):
@@ -125,9 +142,11 @@ def test_closing_converges_own_drift_and_ledgers_residue(rig):
     lr = rig["mdir"] / "last_run.json"
     lr.write_text(json.dumps([{"autoid": "a", "device_context": CORPUS}]), encoding="utf-8")
     executed: list[str] = []
-    # 设备顽固:逆放命令接受但状态不变(残余应入账)
+    # 设备顽固:恢复命令接受但状态不变(残余应入账,payload 带 diff 供下批 LLM 再生成)
     mp.setattr(N, "_probe_fn", lambda c: json.dumps(AFTER_POLLUTED) and _fake_show(c))
     mp.setattr(N, "_exec_fn", lambda c: executed.append(c) or "status: success")
+    mp.setattr(N, "_bed_llm_fn",
+               lambda s, u: '["no ip address vlan100 4", "ip address port2 172.16.34.70 24"]')
     state = {"out_name": "b1", "bed_host": H,
              "last_run_ref": str(lr.relative_to(tmp))}
     out = N.closing(state)
@@ -135,9 +154,9 @@ def test_closing_converges_own_drift_and_ledgers_residue(rig):
     assert "no ip address vlan100 4" in executed
     items = B.bed_unrestored(tmp, H)
     assert items and items[0]["kind"] == "interface_addresses"
-    assert "no ip address vlan100 4" in items[0]["payload"]["commands"]
+    assert items[0]["payload"]["added"]               # diff 随账(下批接力再生成)
     rep = json.loads((rig["mdir"] / "engine_report.json").read_text(encoding="utf-8"))
-    assert "床账" in rep["bed"]["closure"] or "逆放" in rep["bed"]["closure"]
+    assert "床账" in rep["bed"]["closure"] or "恢复" in rep["bed"]["closure"]
 
 
 def _fake_show(cmd):
@@ -156,6 +175,8 @@ def test_bed_gate_relay_restores_from_ledger(rig):
                                                    "ip address port2 172.16.34.70 24"]})
     executed: list[str] = []
     mp.setattr(N, "_exec_fn", lambda c: executed.append(c) or "status: success")
+    mp.setattr(N, "_bed_llm_fn",
+               lambda s, u: (_ for _ in ()).throw(AssertionError("LLM called for ledgered cmds!")))
     mp.setattr(N, "_probe_fn", lambda c: (
         " Software Version : InfosecOS Beta.APV-HG-K.10.5.0.585" if "version" in c
         else "--- output ---\nAPV#"))

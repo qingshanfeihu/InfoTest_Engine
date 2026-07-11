@@ -599,16 +599,21 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                     _log = st.get("log_tail") or ""
                     tail_lines = _log.strip().splitlines()
                     tail_txt = tail_lines[-1].strip()[-70:] if tail_lines else ""
-                    # 当前在跑第几个 case:框架按 autoids 顺序单跑,日志尾最近提到的 18 位
-                    # autoid 即当前 case → 在 autoids 里的序号是诚实进度(比时长更直观)。
-                    # 排除 pytest 模块路径/命令行——整卷模式模块路径含首案 autoid,恒占
-                    # 日志尾把进度钉死在 1/N(2026-07-10 复跑实证:恒 1/26,25/26 一闪即回)。
-                    _scan = "\n".join(ln for ln in _log.splitlines() if ".py" not in ln)
+                    # 当前在跑第几个 case:首选框架的语义行「begin case: <autoid>」
+                    # (2026-07-12 #66 实证:日志有时只有 .py 路径行含 autoid,旧版
+                    # 「排除 .py 行防恒 1/26」把唯一来源也排掉→进度恒 0);语义行
+                    # 缺失时回落通用扫描(仍排路径行防恒 1/26)。
                     _cur_idx = 0
-                    for _id in reversed(re.findall(r"(?<!\d)(\d{18})(?!\d)", _scan)):
-                        if _id in autoids:
-                            _cur_idx = autoids.index(_id) + 1
-                            break
+                    _begins = re.findall(r"begin case:\s*(\d{18})", _log)
+                    if _begins and _begins[-1] in autoids:
+                        _cur_idx = autoids.index(_begins[-1]) + 1
+                    else:
+                        _scan = "\n".join(ln for ln in _log.splitlines()
+                                          if ".py" not in ln)
+                        for _id in reversed(re.findall(r"(?<!\d)(\d{18})(?!\d)", _scan)):
+                            if _id in autoids:
+                                _cur_idx = autoids.index(_id) + 1
+                                break
                     _env_host = getattr(client, "host", "") or ""
                     sig = f"{tail_txt}|{_cur_idx}"
                     if sig == _prog_state["sig"] and now - _prog_state["ts"] < 30:

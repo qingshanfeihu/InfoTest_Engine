@@ -586,6 +586,30 @@ def _rollback_one(aid: str) -> None:
         logger.debug("footprint 回滚失败 %s", aid, exc_info=True)
 
 
+_DIG_HEAD_RE = re.compile(r"<<>> DiG [^\n]*?@(\S+)")
+_SHEET_DIG_RE = re.compile(r"dig\s+@(\S+)")
+
+
+def _evidence_suspect(rec: dict, aid: str) -> dict | None:
+    """归属一致性门(I2/(27) 域内展开,机械):取证附件中的执行目标 vs 卷面对应步
+    ——框架触发端会话按 case 切文件存在延迟输出跨界竞态(#67 实证:dig 超时 10s
+    的输出落进邻案文件,归因孔拿邻案证据讲灵异故事)。两侧都非空且不相交=证据
+    疑似错位;引擎自己发现自己的证据坏了,如实声明而非让孔猜。"""
+    try:
+        ctx = str(rec.get("device_context") or "")
+        ev_targets = set(_DIG_HEAD_RE.findall(ctx))
+        rows = _load_case_rows(aid)
+        sheet_targets = set()
+        for r in rows:
+            sheet_targets.update(_SHEET_DIG_RE.findall(str(r.get("G") or "")))
+        if ev_targets and sheet_targets and not (ev_targets & sheet_targets):
+            return {"evidence_targets": sorted(ev_targets),
+                    "sheet_targets": sorted(sheet_targets)}
+    except Exception:  # noqa: BLE001
+        logger.debug("归属一致性门检查失败 %s", aid, exc_info=True)
+    return None
+
+
 _ADJ_QUOTE_RE = re.compile(
     r"- \[(?:device|device_context|causality|detail_tail|framework_traceback)[^\]]*\] 『(.*?)』",
     re.DOTALL)
@@ -651,11 +675,19 @@ def attribute(state: dict) -> dict:
         # 单案证据文件(X8 效率债,2026-07-11 实测:fork 主读整批 last_run 把 26 案
         # 回显全吸进上下文,均价 849k↑=run5 的 3.3 倍)——主读单案,跨案对账仍可
         # fs_grep last_run(不整读)
+        suspect = _evidence_suspect(rec, aid)
+        if suspect:
+            sh.append(state, [{"ev": "evidence_suspect", "aid": aid,
+                               "round": F.rounds_used(mine, aid), **suspect}])
+            sh.emit(f"…{aid[-6:]} 取证归属可疑(附件目标 {suspect['evidence_targets']}"
+                    f" ≠ 卷面 {suspect['sheet_targets']}),已声明")
         ev_ref = ""
         try:
             evp = sh.outputs_root() / aid / "attr_evidence.json"
             evp.parent.mkdir(parents=True, exist_ok=True)
-            evp.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+            rec_out = {**rec, "_evidence_suspect": suspect} if suspect else rec
+            evp.write_text(json.dumps(rec_out, ensure_ascii=False, indent=1),
+                           encoding="utf-8")
             ev_ref = str(evp.relative_to(sh.project_root()))
         except Exception:  # noqa: BLE001
             logger.debug("单案证据落盘失败 %s", aid, exc_info=True)
@@ -667,6 +699,13 @@ def attribute(state: dict) -> dict:
                                     if c["status"] in (V.S_DELIVERABLE, V.S_SUBSET_VERIFIED)][:6],
             "contradiction": bool(contra),
         }
+        if suspect:
+            env["evidence_note"] = (
+                "trigger-side capture in this case's evidence is suspected MISATTRIBUTED "
+                f"(capture dig targets {suspect['evidence_targets']} vs sheet targets "
+                f"{suspect['sheet_targets']} — framework per-case session split race). "
+                "Do NOT trust the RouterA/RouterB attachment; judge from the framework "
+                "step log and device config session instead.")
         # 已答 panel 裁决随 brief 下发:同一差异用户已裁,不再重复呈报(§2.6 收敛律
         # 的批内面;跨批由 B 片判例检索承接)
         pf = [f for f in mine if f.get("ev") == "ask_panel"]

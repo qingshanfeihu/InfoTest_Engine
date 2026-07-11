@@ -224,3 +224,29 @@ def test_bed_gate_stuck_ledger_escalates_to_ask(rig):
     finds = asked.get("report", {}).get("findings") or []
     assert any(f.get("ledger_stuck") for f in finds)   # 悬账进了呈报
     assert B.bed_unrestored(tmp, H)                    # 账仍在(留待人工/下批)
+
+
+def test_evidence_suspect_gate_detects_misattribution(rig, monkeypatch):
+    """I2 归属一致性门(#67 防御侧):附件 dig 目标与卷面不相交=疑似错位;
+    相交/单侧空=不误报(run9 248 拿到 233 输出的金标准形态)。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    monkeypatch.setattr(N, "_load_case_rows", lambda aid: [
+        {"E": "test_env", "F": "routera", "G": "dig @172.16.34.70 autotest.com A +short"}])
+    rec_bad = {"device_context": "; <<>> DiG 9.16.1 <<>> @172.16.34.71 autotest.com A +short\n"
+                                 ";; connection timed out"}
+    s = N._evidence_suspect(rec_bad, "a1")
+    assert s and s["evidence_targets"] == ["172.16.34.71"]
+    assert s["sheet_targets"] == ["172.16.34.70"]
+    rec_ok = {"device_context": "; <<>> DiG 9.16.1 <<>> @172.16.34.70 autotest.com A +short"}
+    assert N._evidence_suspect(rec_ok, "a1") is None          # 相交=正常
+    assert N._evidence_suspect({"device_context": "no dig here"}, "a1") is None  # 单侧空
+
+
+def test_heartbeat_begin_case_semantic_line():
+    """#66:进度序号首选框架语义行 begin case(路径行被排除后仍有信号)。"""
+    import re
+    autoids = ["203601753067655154", "203601753067655173"]
+    log = ("cmd: pytest smoke_test/sdns/ist_staging_sdns/203601753067655154/test_xlsx.py\n"
+           "#######   begin case: 203601753067655173\nsome output")
+    begins = re.findall(r"begin case:\s*(\d{18})", log)
+    assert begins and autoids.index(begins[-1]) + 1 == 2      # 第2/2,不再恒0

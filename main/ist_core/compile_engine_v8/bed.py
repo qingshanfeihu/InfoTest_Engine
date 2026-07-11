@@ -201,7 +201,9 @@ def entity_gate(cmds: list[str], diff_own: dict) -> tuple[list[str], list[str]]:
     rejected: list[str] = []
     for c in cmds:
         toks = _identity_tokens(str(c))
-        (ok if all(t in allowed for t in toks) else rejected).append(str(c))
+        # 无实体 token 的命令(clear all/reboot 类全局命令)一律拒——恢复命令必须
+        # 指向 diff 内的具体实体(回归审查 R-7:all([]) 恒真曾让全局命令穿门)
+        (ok if toks and all(t in allowed for t in toks) else rejected).append(str(c))
     return ok, rejected
 
 

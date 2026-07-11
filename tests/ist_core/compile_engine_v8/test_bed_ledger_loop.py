@@ -68,9 +68,9 @@ def test_entity_gate_blocks_out_of_scope_commands():
     own, _ = B.own_writes(d, CORPUS)
     ok, rejected = B.entity_gate(
         ["no ip address vlan100 4", "no ip address port3 4", "clear slb all"], own)
-    assert "no ip address vlan100 4" in ok
+    assert ok == ["no ip address vlan100 4"]
     assert "no ip address port3 4" in rejected        # port3 不在 diff 实体集
-    assert "clear slb all" in ok or "clear slb all" in rejected  # 无实体 token=不越界放行
+    assert "clear slb all" in rejected                 # R-7:无实体的全局命令一律拒
 
 
 def test_restore_via_llm_unparseable_is_conservative_empty():
@@ -195,3 +195,32 @@ def test_bed_gate_relay_restores_from_ledger(rig):
     assert out["phase_status"] == "ok"                 # 零问询直达放行
     assert executed == ["no ip address vlan100 4", "ip address port2 172.16.34.70 24"]
     assert B.bed_unrestored(tmp, H) == []              # 账配平
+
+
+def test_bed_gate_stuck_ledger_escalates_to_ask(rig):
+    """R-9:账内项恢复穷尽仍未成 → 并入呈报(needs_ask),绝不静默悬账。"""
+    N, mp, tmp = rig["N"], rig["mp"], rig["tmp"]
+    B.bed_record(tmp, H, "created", "interface_addresses", "b0:interface_addresses",
+                 batch="b0", payload={"commands": [], "added": ["x 1"], "removed": []})
+    mp.setattr(N, "_bed_llm_fn", lambda s, u: "[]")     # 生成失败(空)
+    mp.setattr(N, "_exec_fn", lambda c: "status: success")
+    mp.setattr(N, "_probe_fn", lambda c: (
+        " Software Version : InfosecOS Beta.APV-HG-K.10.5.0.585" if "version" in c
+        else "--- output ---\nAPV#"))
+    asked = {}
+    mp.setattr(N, "interrupt", lambda p: asked.update(p) or {"decision": "停止"})
+    import main.case_compiler.config as CFG
+
+    class _J:
+        host = H
+
+    class _C:
+        jumphost = _J()
+        build = "InfosecOS_Beta_APV_HG_K_10_5_0_568"
+
+    mp.setattr(CFG, "get_config", lambda: _C())
+    out = N.bed_gate({"out_name": "b1"})
+    assert out["phase_status"] == "bed_blocked"        # 用户答停止
+    finds = asked.get("report", {}).get("findings") or []
+    assert any(f.get("ledger_stuck") for f in finds)   # 悬账进了呈报
+    assert B.bed_unrestored(tmp, H)                    # 账仍在(留待人工/下批)

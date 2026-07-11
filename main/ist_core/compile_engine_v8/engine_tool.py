@@ -55,8 +55,8 @@ def _bridge(payload: dict) -> dict:
         anchor = rep.get("anchor") or {}
         cu = rep.get("cleanup") or {}
         _CHAN_CN = {"segments": "分区配置", "sdns_config_files": "SDNS 配置文件",
-                    "sync_peers": "同步对端配置"}
-        kinds, failed_probes = [], []
+                    "sync_peers": "同步对端配置", "interface_addresses": "接口地址"}
+        kinds, failed_probes, stuck = [], [], []
         for f in (rep.get("findings") or []):
             k = str(f.get("kind"))
             if k == "build_anchor":
@@ -64,11 +64,16 @@ def _bridge(payload: dict) -> dict:
             cn = _CHAN_CN.get(k, k)
             if f.get("probe_failed"):
                 failed_probes.append(cn)
+            elif f.get("ledger_stuck"):
+                stuck.append(cn)
             else:
                 kinds.append(cn + "残留")
         parts = []
         if kinds:
             parts.append(f"测试床上仍有残留:{'、'.join(kinds)}")
+        if stuck:
+            parts.append(f"上批留下的{'、'.join(stuck)}改动,自动恢复尝试未成"
+                         f"(命令被拒或生成失败)——需要人工恢复后继续")
         if failed_probes:
             parts.append(f"{'、'.join(failed_probes)}通道探测未完成(探针命令被设备拒绝,"
                          f"该通道床态未知——「继续」为床态不明自担风险,或「停止」后重跑重探/人工核查)")

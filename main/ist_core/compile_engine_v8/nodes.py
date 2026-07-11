@@ -56,9 +56,14 @@ def _digest_fn(xlsx_path: str, autoids: list[str]) -> str:
 
 def _bed_llm_fn(system_prompt: str, user_prompt: str) -> str:
     """床态恢复命令生成的轻 LLM 直调(flash 档,单次 completion,思考关——数据变换级
-    微调用,与 fork 孔区分;kms_classifier/dream 同类先例)。测试经模块 hook 替换。"""
-    from main.ist_core.agents._llm import build_explore_model
-    m = build_explore_model(thinking="off")
+    微调用,与 fork 孔区分;kms_classifier/dream 同类先例)。测试经模块 hook 替换。
+    思考关走 extra_body.thinking 按族注入(裸 thinking kwarg 会被转 model_kwargs
+    以字面字段进请求体——回归审查 R-4 抓获,不赌端点容忍)。"""
+    from main.ist_core.agents._llm import build_explore_model, ist_core_flash_model
+    from main.common.llm_helpers import thinking_param_for_model
+    param = thinking_param_for_model(ist_core_flash_model(), False)
+    kw = {"extra_body": {"thinking": param}} if param is not None else {}
+    m = build_explore_model(**kw)
     out = m.invoke([("system", system_prompt), ("human", user_prompt)])
     return str(getattr(out, "content", out) or "")
 
@@ -131,6 +136,7 @@ def bed_gate(state: dict) -> dict:
     # 有命令账项=上批已验证记录,机械回放(R4-G3 本义);无命令账项=上批生成失败的
     # 残余,LLM 现生成+实体门(判断开放,门闭合)——失败则留账,由 bed_check 残留
     # 判定自然进问询(合法 ask:尝试已穷尽)
+    stuck_ledger: list[dict] = []
     try:
         for item in B.bed_unrestored(sh.project_root(), host):
             pl = item.get("payload") or {}
@@ -139,10 +145,7 @@ def bed_gate(state: dict) -> dict:
                 d = {str(item.get("kind")): {"added": pl.get("added") or [],
                                              "removed": pl.get("removed") or []}}
                 cmds, _rej = B.entity_gate(B.restore_via_llm(d, _bed_llm_fn), d)
-            if not cmds:
-                sh.emit(f"床账接力:无可用恢复命令({item.get('kind')}:{item.get('id')}),留账")
-                continue
-            ok = all(not B._probe_failed(_exec_fn(c)) for c in cmds)
+            ok = bool(cmds) and all(not B._probe_failed(_exec_fn(c)) for c in cmds)
             if ok:
                 B.bed_record(sh.project_root(), host, "restored",
                              str(item.get("kind")), str(item.get("id")),
@@ -150,11 +153,20 @@ def bed_gate(state: dict) -> dict:
                              payload={"commands": cmds})
                 sh.emit(f"床账接力:上批未复原产物已恢复({item.get('kind')}:{item.get('id')})")
             else:
-                sh.emit(f"床账接力:恢复失败({item.get('kind')}:{item.get('id')}),留账")
+                # 尝试穷尽(生成失败/执行被拒)→进呈报——interface 类漂移不在
+                # bed_check 残留判定内,静默留账=账永不清也永不问(回归审查 R-9)
+                stuck_ledger.append({"kind": str(item.get("kind")),
+                                     "id": str(item.get("id")),
+                                     "probe_failed": False, "ledger_stuck": True,
+                                     "detail": json.dumps(pl, ensure_ascii=False)[:300]})
+                sh.emit(f"床账接力:恢复未成({item.get('kind')}:{item.get('id')}),进问询")
     except Exception:  # noqa: BLE001
         logger.debug("床账接力失败", exc_info=True)
 
     rep = B.bed_check(_probe_fn, cfg_build, root=sh.project_root(), host=host)
+    if stuck_ledger:
+        rep["findings"] = list(rep.get("findings") or []) + stuck_ledger
+        rep["needs_ask"] = True
     device_build = str((rep.get("anchor") or {}).get("device") or "")
     updates = {"bed_host": host, "device_build": device_build}
     # 批前床态快照(X11:批后 diff 的基线;观测不解析意图)

@@ -313,5 +313,16 @@
    "\\bdoes\\s*n[o']t\\s+exist",
    "不存在"
   ]
+ },
+ "restore_leak_teardown": {
+  "_provenance": "run13 (local 2026-07-12; device log ts 2026-07-13, jumphost report dir 2026-07-13-02:40:13) 668000 live evidence (backup yzg_v8.5_run13_acceptance_20260712): `config memory` restore registers an internal SLB DNS listener-occupancy object on the device — invisible in `show sdns listener`, NOT removed by `no sdns listener`/`clear sdns listener`, only cleared by clear-slb-scope cleanup. Downstream cases configuring the same listener IP:port are rejected with 'occupied by an SLB virtual service' (668015/668030/668044 all failed with this exact signature; the same subset without 668000 passed twice). Product defect candidate filed in run13 delivery report. Consequence: any config-restore command needs a clear-slb-scope teardown AFTER the restore, inside the case.",
+  "trigger_pattern": "^config\\s+(memory|file|all|net)\\b",
+  "trigger_excluded_prefixes": [
+   "clear",
+   "show",
+   "no"
+  ],
+  "required_teardown_pattern": "^clear\\s+slb\\b",
+  "suggested_teardown": "clear slb all"
  }
 }

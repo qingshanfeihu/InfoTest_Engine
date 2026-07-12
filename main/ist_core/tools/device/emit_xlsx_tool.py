@@ -1499,6 +1499,35 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
             f"Compilation ends here; on-device verification is triggered by the separate ist-verify flow.")
 
 
+def precheck_merge_case(aid: str) -> str | None:
+    """单案合并就绪预检(V8 引擎 merge 节点消费;#74-② run13 二次实证驱动)。
+
+    与 compile_emit_merged 的 autoids 门同构三查:xlsx 在盘/lint 凭证新鲜/成品卷
+    lint 干净。返回 None=就绪;str=不就绪原因(进 emit_invalid 事实与用户面叙述)。
+    引擎在合并前逐案预检,把不就绪案踢出本卷打回重编——单案违例不再拖死全批
+    (run13 实证:一案凭证过期曾致 merge error→closing,26 案零上机收口)。
+    工具本体的全拒行为不变(手动编排的最后防线)。
+    """
+    root = Path(__file__).resolve().parents[4]
+    xp = root / "workspace" / "outputs" / str(aid).strip() / "case.xlsx"
+    if not xp.is_file():
+        return "case.xlsx 不在盘(编写未产出或已被挪走)"
+    sj = xp.parent / ".grade_credential.json"
+    if not sj.is_file():
+        return "缺 lint 凭证(未经 compile_emit 过门产出)"
+    try:
+        cred = json.loads(sj.read_text(encoding="utf-8"))
+        if abs(float(cred.get("xlsx_mtime", -1)) - xp.stat().st_mtime) >= 1e-6:
+            return "lint 凭证过期(卷面在 emit 之后被修改——须重新 compile_emit 过门)"
+    except Exception:  # noqa: BLE001
+        return "lint 凭证不可读"
+    from main.ist_core.tools.device.structural_gate import lint_xlsx_case
+    lr = lint_xlsx_case(xp)
+    if not lr.ok:
+        return "成品卷 lint 违例:" + "; ".join(f"[{it.code}]" for it in lr.violations)[:200]
+    return None
+
+
 @tool(parse_docstring=True)
 def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: str = "", autoids: str | list[str] = "") -> str:
     """Merge **multiple cases into one xlsx** (the packaging tool for one excel per mindmap).

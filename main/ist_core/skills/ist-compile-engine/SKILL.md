@@ -38,6 +38,14 @@ checkpoint; completed device rounds are not re-burned. Batch truth lives in
 `workspace/outputs/<batch>/facts.jsonl` (append-only); machine contracts are documented in
 `references/contracts.md`.
 
+If the engine stops early or errors, your only recovery moves are: re-call with the same
+arguments (checkpoint resume), or report the stall to the user and wait. Do NOT hand-merge
+sheets with compile_emit_merged, hand-run dev_run_batch on engine artifacts, or edit
+case.xlsx directly to "finish the job" — those bypass the credential/lint gates, the fact
+ledger, and attribution, so the delivery loses its audit chain and the next resume
+mis-reads the batch state (run13: a bypassed edit invalidated a credential and stalled the
+whole batch).
+
 Keep the user-facing summary **short**: the engine already wrote the full report to
 `delivery_report.md` (path in its return). One or two sentences plus the report path is
 enough; never replay the report inline. When restating device behavior, quote only from the

@@ -51,6 +51,10 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(sh, "outputs_root", lambda: outputs)
     monkeypatch.setattr(sh, "emit", lambda t: None)
     monkeypatch.setattr(sh, "emit_tick", lambda *a, **k: None)
+    # 合并预检豁免(#74-②):rig 假 worker 产的卷无 lint 凭证语义,预检会全拒;
+    # 预检真实行为由 test_merge_precheck.py 单元覆盖
+    from main.ist_core.tools.device import emit_xlsx_tool as _ex
+    monkeypatch.setattr(_ex, "precheck_merge_case", lambda a: None)
     signals: list[tuple] = []
     monkeypatch.setattr(sh, "signal", lambda name, subj, **p: signals.append((name, subj, p)))
 

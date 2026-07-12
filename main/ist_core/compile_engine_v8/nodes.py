@@ -455,6 +455,29 @@ def merge(state: dict) -> dict:
     else:
         comp, is_delivery = need_verify, False
 
+    # 合并预检单案化(#74-②,run13 二次实证):凭证过期/lint 违例的案落 emit_invalid
+    # 事实打回重编(fold:最新 authored 之后的 emit_invalid → 回待编写),其余照常
+    # 合并——单案违例不再拖死全批(曾 error→closing,26 案零上机收口)。被踢案
+    # 重编后经新 merge 换组成指纹,INV-8 自动强制重新终验。
+    from main.ist_core.tools.device.emit_xlsx_tool import precheck_merge_case
+    comp = list(comp)
+    _invalid: dict[str, str] = {}
+    for a in list(comp):
+        reason = precheck_merge_case(a)
+        if reason:
+            _invalid[a] = reason
+            comp.remove(a)
+    if _invalid:
+        sh.append(state, [{"ev": "emit_invalid", "aid": a, "reason": r[:300],
+                           "artifact": vw["cases"][a]["artifact"]}
+                          for a, r in _invalid.items()])
+        fs = sh.load_facts(state)
+        sh.emit(f"合并预检:{len(_invalid)} 案卷面未过门"
+                f"({'; '.join(f'…{a[-6:]} {r[:40]}' for a, r in list(_invalid.items())[:3])})"
+                f"——已踢出本卷打回重编,{len(comp)} 案照常合并")
+        if not comp:
+            return {"phase_status": "nothing_to_merge", **sh.counts_update(state, fs)}
+
     # 通道①排序(交付报告须声明)+ 通道④共存检查
     cases_steps = []
     for aid in comp:
@@ -784,10 +807,13 @@ def attribute(state: dict) -> dict:
                 continue
             todo.remove(aid)
             prescreened.append(aid)
+            # run_id 带 verdict run(#74-⑤,run13 实证):曾用 diag:pre:{volume}:{aid},
+            # 同 volume 二次 fail 的新诊断被幂等键静默去重 → 复跑闸读到旧
+            # user_cleared 多放行一圈复跑
             pre_facts += [
                 {"ev": "diagnosis", "aid": aid, "h_position": "h_s0",
                  "polluters": polluters[:5], "basis": basis,
-                 "run_id": f"diag:pre:{volume}:{aid}"},
+                 "run_id": _g6_diag_key(last, volume, aid)},
                 {"ev": "attribution", "aid": aid,
                  "round": F.rounds_used(mine, aid),
                  "run_id": str(last.get("run_id") or ""),
@@ -1023,6 +1049,13 @@ def _diag_grammar():
         return [], [], ([], [])
 
 
+def _g6_diag_key(last: dict, volume: str, aid: str) -> str:
+    """G6 前筛 diagnosis 的幂等键(#74-⑤:带 verdict run 序,同 volume 二次 fail 的
+    新诊断不再被去重;写入与去重检查共用本函数——两处手拼曾不对称,run_id 为空时
+    去重失配多落同构账)。"""
+    return f"diag:pre:{last.get('run_id') or volume + ':' + aid}"
+
+
 def _case_touch_profile(aid: str) -> dict:
     """从成品卷机械提取:持久面写/L2-L3 写/实体 token(S10 交换子配对的 I6 近似输入)。"""
     rows = _load_case_rows(aid) or []
@@ -1135,8 +1168,9 @@ def diagnose(state: dict) -> dict:
         sig = " ".join(sigs)[:400]
         sig_by_aid[aid] = " ".join(sigs[:1])
         if any(f.get("ev") == "diagnosis"
-               and str(f.get("run_id")) == f"diag:pre:{volume}:{aid}" for f in mine):
-            continue   # G6 前筛已判(同卷),结论同构——不重复落账(词干聚类照算)
+               and str(f.get("run_id")) == _g6_diag_key(last, volume, aid)
+               for f in mine):
+            continue   # G6 前筛已判(同一 fail 裁决),结论同构——不重复落账(词干聚类照算)
         h_pos, polluters, basis = _s0_pair(aid, comp, _prof, sig)
         if not h_pos:
             att = [f for f in mine if f.get("ev") == "attribution"]

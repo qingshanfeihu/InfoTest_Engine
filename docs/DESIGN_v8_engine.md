@@ -839,3 +839,25 @@ bed 面板/G2 出口消费链原样接通;验收测试断言床污染案零 attr
   前提——G1 保证补 τ 的重编真的补上了）。
 - G6 前移不动 attribute 的 LLM 孔本身（非 s₀ 案照旧深归因）——改的是派发前筛,
   X1 的「代表案深归因+成员轻校验」在 s₀ 族上退化为「零派发」（机械证据已足）。
+
+### 17.4 run13 实弹修正（2026-07-13,#74 修复批）
+
+- **merge 预检单案化**（缺陷②,二次实证:单案凭证拒绝曾 error→closing 全批 26 案
+  零上机）:merge 节点合并前逐案预检（`precheck_merge_case`:凭证新鲜+成品卷
+  lint,与 emit_merged 门同构）,不就绪案落 **emit_invalid 事实**踢出本卷,其余
+  照常合并;fold 新语义「最新 authored 之后有 emit_invalid → 回 S_PENDING 重编」
+  （优先级低于终态/挂起/awaiting——打回不覆盖用户裁决）。被踢案重编后经新
+  merge 换组成指纹,INV-8 自动强制重新终验。工具本体 compile_emit_merged 的
+  全拒行为不变（手动编排最后防线）。
+- **G6 诊断幂等键带 verdict run**（缺陷⑤）:diag:pre:{volume}:{aid} 改
+  diag:pre:{verdict run_id}——同 volume 二次 fail 的新诊断曾被幂等键静默去重,
+  复跑闸读到旧 user_cleared 多放行一圈。
+- **恢复类命令泄漏清理**（缺陷⑥第一版,数据驱动）:domain_grammar 新增
+  `restore_leak_teardown`（run13 668000 实证 provenance:config 恢复在设备内部
+  注册 SLB 占用对象,对象级 no/clear 不消,仅 clear-slb 级清理可清——产品缺陷
+  候选已报）;tau_coverage 消费该条目:恢复步后案内无 required_teardown 形态
+  → G1 呈报（suggested 来自数据）。G1/G2/G3 既有消费链自动覆盖此族。残余
+  课题（pass 案 quarantine 入口/框架 per-case clear 加强）仍在 #74 登记。
+- **skill 禁旁路**（缺陷④）:ist-compile-engine SKILL.md 增引擎异常处置约束
+  （只能同参续跑或如实上报;禁手动合并/手动上机/直改 xlsx——绕门断审计链,
+  run13 实证直改致凭证失效全批停摆）。

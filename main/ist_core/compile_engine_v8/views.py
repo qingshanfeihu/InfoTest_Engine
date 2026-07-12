@@ -60,6 +60,14 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
     if any(f.get("ev") == "needs_decision" for f in mine) and not any(
             f.get("ev") == "decision" for f in mine):
         return S_AWAITING_USER
+    # emit_invalid 打回(#74-②):最新 authored 之后被合并预检拒(凭证过期/lint 违例,
+    # 常见成因=emit 后绕门直改卷面)→ 当前卷面不可信,回待编写(author 重派,
+    # rounds_used 不变、重编 round+1 自然升思考深度)
+    last_auth_i = max((i for i, f in enumerate(mine) if f.get("ev") == "authored"),
+                      default=-1)
+    if last_auth_i >= 0 and any(f.get("ev") == "emit_invalid"
+                                for f in mine[last_auth_i + 1:]):
+        return S_PENDING
     if F.deliverable(mine, aid, current_artifact, current_volume):
         return S_DELIVERABLE
     # 标签跟**当前卷面**走(重编即重置标签;矛盾计数保全史供 ask 策略)

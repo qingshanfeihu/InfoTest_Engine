@@ -68,14 +68,50 @@ def _apv_config_lines(steps: list, init: str = "") -> list[str]:
     return out
 
 
+def _restore_leak_rule() -> dict | None:
+    """恢复类命令的泄漏清理要求(文法数据,run13 668000 实证)。呈报侧 fail-open
+    (读失败不判、不拦编译),但必须留声——坏 JSON 让泄漏检查无声消失=门形同虚设。"""
+    try:
+        from main.case_compiler.domain_grammar import load_grammar
+        rule = dict(load_grammar().get("restore_leak_teardown") or {})
+        if rule.get("trigger_pattern") and rule.get("required_teardown_pattern"):
+            return rule
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(
+            "restore_leak_teardown 文法条目读取失败——恢复类泄漏清理检查本次禁用",
+            exc_info=True)
+    return None
+
+
 def check_tau_coverage(steps: list, init: str = "") -> TauReport:
     """卷面 τ 覆盖判定:每条创建型 L2/L3 写,其后(执行序)须有配对恢复。
 
     配对判据(机械):逆元命令的字面形态(模板实例化后)在**后续行**出现,
     或后续行以 `no <首关键字>` 开头且含同一实体 token(宽松侧:少误报呈报,
-    漏检由 diagnose/上机兜底——方向同 D5)。"""
+    漏检由 diagnose/上机兜底——方向同 D5)。
+
+    另判**恢复类命令的泄漏清理**(#74-⑥,文法数据 restore_leak_teardown 驱动):
+    config 恢复在设备内部注册的占用对象不随对象级 no/clear 消失(run13 668000
+    实证:后继案被 occupied 拒),恢复步之后案内须有 required_teardown_pattern
+    形态的清理步;建议命令与判据全部来自文法数据,本模块零领域词。"""
     lines = _apv_config_lines(steps, init)
     rep = TauReport()
+    leak = _restore_leak_rule()
+    if leak:
+        trig = re.compile(str(leak["trigger_pattern"]), re.IGNORECASE)
+        req = re.compile(str(leak["required_teardown_pattern"]), re.IGNORECASE)
+        excl = tuple(str(x).lower() for x in (leak.get("trigger_excluded_prefixes") or []))
+        for i, line in enumerate(lines):
+            if excl and line.lower().split()[:1] and line.lower().split()[0] in excl:
+                continue
+            if not trig.match(line):
+                continue
+            if not any(req.match(l) for l in lines[i + 1:]):
+                rep.missing.append({
+                    "cmd": line, "entity": "",
+                    "suggested_inverse": str(leak.get("suggested_teardown") or ""),
+                    "kind": "restore_leak"})
     for i, line in enumerate(lines):
         if _PERSIST_RE.match(line):
             rep.out_of_scope.append(line)

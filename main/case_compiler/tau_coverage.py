@@ -84,6 +84,85 @@ def _restore_leak_rule() -> dict | None:
     return None
 
 
+def _derivation_data() -> tuple[dict, tuple]:
+    """τ 推导数据(§18.4):inverse_forms(inventory 机械派生 860 对)+F2 框架清理辖区。
+    读失败=(空,空)→调用方留声降级词表(式③)。"""
+    try:
+        from main.case_compiler.domain_grammar import load_grammar
+        g = load_grammar()
+        pairs = dict((g.get("inverse_forms") or {}).get("pairs") or {})
+        scopes = tuple(str(x).lower() for x in
+                       (g.get("framework_cleanup_scopes") or {}).get("scopes") or [])
+        return pairs, scopes
+    except Exception:  # noqa: BLE001
+        return {}, ()
+
+
+def _head_match(line: str, pairs: dict) -> str | None:
+    """token 最长前缀匹配 pairs 键(纯词法,零 inventory 运行时依赖)。"""
+    ws = line.split()
+    for k in range(min(len(ws), 5), 0, -1):
+        cand = " ".join(ws[:k]).lower()
+        if cand in pairs:
+            return cand
+    return None
+
+
+def _entities(line: str) -> set:
+    return {t for t in re.findall(r"[\w.-]+", line)
+            if (any(c.isdigit() for c in t) and not t.replace(".", "").isdigit()
+                and not all(seg in {"0", "128", "192", "224", "240", "248", "252",
+                                    "254", "255"} for seg in t.split(".")))
+            or re.fullmatch(r"\d+\.\d+\.\d+\.\d+", t)}
+
+
+def _derived_tau(lines: list[str], pairs: dict, scopes: tuple, rep: "TauReport") -> None:
+    """推导版 τ 判定(替代 3 族词表;run13 推导实验验证):
+    τ 责任集 = 构造写 − 持久面(PERSIST 分流) − F2 框架清理辖区 − 案内已逆。
+    3 公理:no=否定/clear=聚合复位/show=观测;逆元从 inventory 配对表查,零硬编码。"""
+    pairs_lc = {k.lower(): v for k, v in pairs.items()}
+    lo = [l.lower() for l in lines]
+    for i, line in enumerate(lines):
+        ll = lo[i]
+        if ll.startswith(("no ", "clear ", "show ")):
+            continue
+        if _PERSIST_RE.match(line):
+            rep.out_of_scope.append(line)
+            continue
+        head = _head_match(line, pairs_lc)
+        if head is None:
+            continue   # 非配对构造头(观测/枚举参数/未知)——不判(词法未命中≠写)
+        first = head.split()[0]
+        if scopes and first in scopes:
+            continue   # F2:框架 per-case 清理辖区,案内不担 τ
+        pair = pairs_lc[head]
+        inv_no = str(pair.get("no") or "").lower()
+        inv_clear = str(pair.get("clear") or "").lower()
+        ents = _entities(line)
+        # delete-then-restore:前文同头 no 删过同实体 → 本写=恢复动作,即 τ 一部分
+        if inv_no and ents and any(
+                lo[j].startswith(inv_no) and (ents & _entities(lines[j]))
+                for j in range(i)):
+            rep.covered.append({"cmd": line, "entity": ", ".join(sorted(ents)[:2]),
+                                "suggested_inverse": "(restore write, itself part of τ)"})
+            continue
+        covered = any(
+            (inv_no and lo[j].startswith(inv_no)
+             and (not ents or (ents & _entities(lines[j]))))
+            or (inv_clear and lo[j].startswith(inv_clear))
+            for j in range(i + 1, len(lines)))
+        # 建议实体启发:对象名在 CLI 惯例靠后参数位,且命名 token 优先于 IP
+        # (vlan <if> <name> <id> → name;ip address <if> <ip> <mask> → if)
+        ordered = [t for t in re.findall(r"[\w.-]+", line) if t in ents]
+        named = [t for t in ordered if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", t)]
+        ent = (named[-1] if named else (ordered[-1] if ordered else ""))
+        item = {"cmd": line, "entity": ent,
+                "suggested_inverse": (f"{pair.get('no')} {ent}".strip()
+                                      if pair.get("no") else str(pair.get("clear") or "")),
+                "src": str(pair.get("src") or "")}
+        (rep.covered if covered else rep.missing).append(item)
+
+
 def check_tau_coverage(steps: list, init: str = "") -> TauReport:
     """卷面 τ 覆盖判定:每条创建型 L2/L3 写,其后(执行序)须有配对恢复。
 
@@ -112,6 +191,15 @@ def check_tau_coverage(steps: list, init: str = "") -> TauReport:
                     "cmd": line, "entity": "",
                     "suggested_inverse": str(leak.get("suggested_teardown") or ""),
                     "kind": "restore_leak"})
+    pairs, scopes = _derivation_data()
+    if pairs:
+        _derived_tau(lines, pairs, scopes, rep)
+        return rep
+    # fallback:推导数据缺席=留声降级到 3 族词表(INV-11 式③;词表版同时是推导版的
+    # 回归对照——等价断言见 test_tau_coverage_gate)
+    import logging
+    logging.getLogger(__name__).warning(
+        "inverse_forms 文法数据缺席——τ 判定降级为 3 族词表(覆盖收窄)")
     for i, line in enumerate(lines):
         if _PERSIST_RE.match(line):
             rep.out_of_scope.append(line)

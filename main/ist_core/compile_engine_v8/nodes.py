@@ -60,6 +60,28 @@ def _digest_fn(xlsx_path: str, autoids: list[str]) -> str:
     return dev_run_batch_digest.func(xlsx_path, autoids)
 
 
+def _jh_exec_fn(cmd: str) -> str:
+    """跳板机 shell(mirror 锚对账用;15s 超时,失败返回 error: 前缀)。"""
+    try:
+        import os
+        import paramiko
+        from main.case_compiler.config import get_config
+        cfg = get_config()
+        host = str(getattr(cfg.jumphost, "host", "") or "")
+        c = paramiko.SSHClient()
+        c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        c.connect(host, username=getattr(cfg.jumphost, "user", None) or "test",
+                  password=getattr(cfg.jumphost, "password", None)
+                  or os.environ.get("IST_JUMPHOST_PASS", ""), timeout=15)
+        try:
+            _i, o, _e = c.exec_command(cmd, timeout=20)
+            return o.read().decode("utf-8", "replace")
+        finally:
+            c.close()
+    except Exception as e:  # noqa: BLE001
+        return f"error: {e}"
+
+
 def _bed_llm_fn(system_prompt: str, user_prompt: str) -> str:
     """床态恢复命令生成的轻 LLM 直调(flash 档,单次 completion,思考关——数据变换级
     微调用,与 fork 孔区分;kms_classifier/dream 同类先例)。测试经模块 hook 替换。
@@ -170,6 +192,25 @@ def bed_gate(state: dict) -> dict:
         logger.debug("床账接力失败", exc_info=True)
 
     rep = B.bed_check(_probe_fn, cfg_build, root=sh.project_root(), host=host)
+    # mirror 同步锚(§18.3,公式审计 D 级最危险项):恒真门/found 语义门/τ 责任集
+    # 全族从盘上 mirror 推导——与真机框架失配=整族门前提静默失效。mismatch=呈报;
+    # unknown(SSH 抖动/远端无文件)=告警+入 findings 不拦批(锚未验证入账可见)
+    try:
+        from main.ist_core.compile_engine_v8 import mirror_anchor as MA
+        _sync = MA.check_sync(_jh_exec_fn)
+        if _sync.get("status") == "mismatch":
+            rep["needs_ask"] = True
+            rep["findings"] = list(rep.get("findings") or []) + [{
+                "kind": "mirror_sync", "probe_failed": False,
+                "detail": ("盘上框架镜像与真机框架不一致(文件:"
+                           + ", ".join(_sync.get("diffs") or []) + ")——恒真断言门/"
+                           "窗口语义门/τ 责任集的推导前提失效,请确认框架是否升级"
+                           "并更新镜像")}]
+            sh.emit("⚠ mirror 同步锚失配:" + ", ".join(_sync.get("diffs") or []))
+        elif _sync.get("status") == "unknown":
+            sh.emit(f"mirror 锚未验证({str(_sync.get('reason'))[:60]})——门前提本轮未对账")
+    except Exception:  # noqa: BLE001
+        logger.warning("mirror 锚对账异常", exc_info=True)
     if stuck_ledger:
         rep["findings"] = list(rep.get("findings") or []) + stuck_ledger
         rep["needs_ask"] = True

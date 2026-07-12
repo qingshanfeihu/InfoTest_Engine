@@ -15,6 +15,9 @@ S_PENDING = "pending"                 # 无 authored 事实
 S_AWAITING_USER = "awaiting_user"     # 有未答的 needs_decision
 S_AUTHORED = "authored"               # 有当前轮卷面,未上机
 S_FAILED = "failed"                   # 最新裁决 fail(同卷面),未终态
+S_BROKEN = "broken"                   # 最新裁决 broken/not_run:案没跑成(级联崩溃/
+                                      # stale/超时/执行相位失败),结论无效≠断言红
+                                      # ——(44) 断言有效性/xUnit ERROR;处置=复跑
 S_SUBSET_VERIFIED = "subset_verified" # 子集 pass,待终验
 S_DELIVERABLE = "deliverable"         # delivery-ctx pass 且三重匹配
 S_CONTRADICTED = "contradicted"       # 矛盾计数>0 且当前不可交付
@@ -75,6 +78,10 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
     if last:
         if last.get("result") == "pass":
             return S_SUBSET_VERIFIED
+        if last.get("result") in ("broken", "not_run"):
+            # (44) 断言有效性:案没跑成,结论无效——非 fail(不计签名/不深归因),
+            # 处置=复跑;连续未跑成的护栏在 reconcile(streak≥2 落 escalated)
+            return S_BROKEN
         if last.get("ctx") == F.CTX_DELIVERY and F.contradictions(mine, aid) > 0:
             return S_CONTRADICTED
         return S_FAILED

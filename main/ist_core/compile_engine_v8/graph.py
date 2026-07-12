@@ -83,13 +83,16 @@ def _after_run(s: dict) -> str:
 
 
 def _after_reconcile(s: dict) -> str:
+    if s.get("phase_status") == "error":
+        return "closing"        # INV-2 残差/last_run 不可读:硬停如实收口(§18.2)
     if s.get("n_ask_contradiction", 0) > 0:
         return "ask_contradiction"
     if s.get("n_failed", 0) > 0:
         return "attribute"
-    live = s.get("n_authored", 0) + s.get("n_subset_verified", 0)
+    live = (s.get("n_authored", 0) + s.get("n_subset_verified", 0)
+            + s.get("n_broken", 0))   # broken=没跑成,处置=复跑((44));连击护栏在 reconcile
     if live > 0:
-        return "merge"          # 待终验(子集过)或新卷待验
+        return "merge"          # 待终验(子集过)/新卷待验/broken 复跑
     return _gather_or_close(s)
 
 

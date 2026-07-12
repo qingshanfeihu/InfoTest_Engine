@@ -159,6 +159,8 @@ def frozen(facts: list[dict], aid: str, current_artifact: str | None = None) -> 
     vs = _facts_of(facts, aid, "verdict")
     if current_artifact is not None:
         vs = [v for v in vs if str(v.get("artifact")) == current_artifact]
+    # (44) broken/not_run 不构成证据:案没跑成的轮次既不延续也不打断同法证伪序列
+    vs = [v for v in vs if v.get("result") in ("pass", "fail")]
     if len(vs) < 2:
         return False
     a, b = vs[-2], vs[-1]

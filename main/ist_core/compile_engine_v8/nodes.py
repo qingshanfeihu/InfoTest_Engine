@@ -416,7 +416,7 @@ def merge(state: dict) -> dict:
 
     ready = [a for a, c in vw["cases"].items()
              if c["status"] in (V.S_AUTHORED, V.S_SUBSET_VERIFIED, V.S_DELIVERABLE,
-                                V.S_CONTRADICTED, V.S_FAILED)
+                                V.S_CONTRADICTED, V.S_FAILED, V.S_BROKEN)
              and not (c["status"] in (V.S_FAILED, V.S_CONTRADICTED) and _s0_parked(a))]
     # V8.5 片2:挂起/待决案不得扣押其余案的 delivery 语境(§14-R4)——它们无卷可入,
     # 留在 live 里会让「待验=全体」永不成立、终验被结构性扣押。复活后经新 merge 换
@@ -442,7 +442,8 @@ def merge(state: dict) -> dict:
         return True
 
     need_verify = [a for a in ready
-                   if vw["cases"][a]["status"] in (V.S_AUTHORED, V.S_CONTRADICTED)
+                   if vw["cases"][a]["status"] in (V.S_AUTHORED, V.S_CONTRADICTED,
+                                                   V.S_BROKEN)
                    or (vw["cases"][a]["status"] == V.S_FAILED and _rerun_disposed(a))]
     if not ready:
         return {"phase_status": "nothing_to_merge", **sh.counts_update(state, fs)}
@@ -570,8 +571,32 @@ def reconcile(state: dict) -> dict:
     comp = set(mf[-1].get("composition") or []) if mf else set()
     ctx = str(state.get("run_ctx") or F.CTX_SUBSET)
     lr_ref = str(state.get("last_run_ref") or "")
-    data = sh.read_json(sh.project_root() / lr_ref, []) or []
+    # INV-11 式①(坑#3):输入解析失败=error 硬停,禁 default-空——read_json 的
+    # fail-open 曾使 last_run 损坏/半写等价于整轮裁决静默蒸发,「吞裁决不可能」
+    # 的声称被输入端击穿
+    lr_path = sh.project_root() / lr_ref
+    try:
+        data = json.loads(lr_path.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            raise ValueError(f"last_run not a list: {type(data).__name__}")
+    except Exception as e:  # noqa: BLE001
+        return {"phase_status": "error",
+                "error": f"last_run unreadable ({lr_ref}): {e}"[:300],
+                **sh.counts_update(state, fs)}
+    # INV-2 残差门(坑#2,真实计算——此前仅结构论证无执行体):本卷组成内每个 autoid
+    # 必须在本轮 last_run 有记录(digest 对未执行案也产 unknown 兜底记录,正常恒满射);
+    # 缺失=采集断裂/裁决蒸发,error 硬停不是 warning
+    seen_aids = {str(r.get("autoid")) for r in data if isinstance(r, dict)}
+    unconsumed = sorted(a for a in comp if a not in seen_aids)
+    if unconsumed:
+        return {"phase_status": "error",
+                "error": ("verdict_unconsumed non-empty (INV-2): "
+                          + ", ".join(a[-6:] for a in unconsumed[:8]))[:300],
+                **sh.counts_update(state, fs)}
     run_id = f"run:{volume}:{ctx}:{len([f for f in fs if f.get('ev') == 'verdict'])}"
+    # (43)(44) 三值透传(坑#1):digest 的 unknown(stale/级联/未执行)=not_run——案没
+    # 跑成,结论无效,禁折叠成 fail(假签名→误 frozen→假归因;审计三路共振第一洞)
+    _RESULT_MAP = {"pass": "pass", "fail": "fail"}
     verdicts = []
     for rec in data:
         aid = str(rec.get("autoid") or "")
@@ -583,7 +608,7 @@ def reconcile(state: dict) -> dict:
             continue
         verdicts.append({
             "aid": aid, "run_id": f"{run_id}:{aid}", "ctx": ctx,
-            "result": "pass" if rec.get("verdict") == "pass" else "fail",
+            "result": _RESULT_MAP.get(str(rec.get("verdict")), "not_run"),
             "artifact": sh.artifact_fingerprint(aid), "volume": volume,
             "signatures": list(rec.get("_fail_signatures") or []),
             "bed": str(state.get("bed_host") or ""),
@@ -593,6 +618,30 @@ def reconcile(state: dict) -> dict:
     r = F.reconcile(fs, verdicts)
     sh.append(state, r["append"])
     fs2 = sh.load_facts(state)
+    # broken 连击护栏:同案同卷面连续≥2 轮没跑成(broken/not_run)——复跑救不了
+    # (每轮同因),升级人工;单次 not_run 照常入复跑集(级联崩溃的受害者复跑常能过)
+    esc_facts = []
+    for v in verdicts:
+        if v["result"] not in ("broken", "not_run"):
+            continue
+        streak = 0
+        for f in reversed([f for f in fs2 if f.get("ev") == "verdict"
+                           and str(f.get("aid")) == v["aid"]
+                           and str(f.get("artifact")) == v["artifact"]]):
+            if f.get("result") in ("broken", "not_run"):
+                streak += 1
+            else:
+                break
+        if streak >= 2 and not any(f.get("ev") == "escalated"
+                                   and str(f.get("aid")) == v["aid"] for f in fs2):
+            esc_facts.append({"ev": "escalated", "aid": v["aid"],
+                              "reason": f"case did not execute for {streak} consecutive "
+                                        "runs (broken/not_run) — rerun cannot help, "
+                                        "needs human attention"})
+    if esc_facts:
+        sh.append(state, esc_facts)
+        fs2 = sh.load_facts(state)
+        sh.emit(f"⚠ {len(esc_facts)} 案连续多轮未跑成——复跑无效,升级人工")
 
     # 结局审计:每条裁决有显式结局(结构保证);写回/回滚随视图变化执行
     wb_facts: list[dict] = []
@@ -611,8 +660,9 @@ def reconcile(state: dict) -> dict:
                                  "voucher_run": last.get("run_id"),
                                  "provisional": ctx != F.CTX_DELIVERY})
                 sh.signal("writeback_done", aid, precedent=True)
-        elif ctx == F.CTX_DELIVERY:
-            # 终验 fail:若此前有 writeback → 回滚(半毒先例撤销)
+        elif last.get("result") == "fail" and ctx == F.CTX_DELIVERY:
+            # 终验 fail:若此前有 writeback → 回滚(半毒先例撤销)。
+            # broken/not_run 不触发回滚——案没跑成不构成对 pass 的反证((44))
             had = [f for f in fs2 if f.get("ev") == "writeback" and f.get("aid") == aid]
             rolled = [f for f in fs2 if f.get("ev") == "rollback" and f.get("aid") == aid]
             if had and len(rolled) < len(had):

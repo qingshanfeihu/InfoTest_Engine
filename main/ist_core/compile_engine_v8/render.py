@@ -30,6 +30,7 @@ STATUS_CN = {
     "suspended": "挂起(下批继续)",
     "pending": "未开始",
     "delivery_blocked": "验证通过但卷面缺案尾清理——暂不交付(重编补自清后可交付)",
+    "broken": "未跑成(执行中断/日志陈腐/级联受害)——结论无效,已安排复跑",
 }
 CTX_CN = {"delivery": "整卷连跑复验", "subset": "单独验证"}
 LAYER_CN = {"G": "设备拒绝了命令(语法/能力)", "E": "环境/测试床问题",
@@ -81,7 +82,9 @@ def case_timeline(mine: list[dict]) -> list[str]:
             out.append(f"第 {r} 次编写完成" + ("(重新编写)" if r > 1 else ""))
         elif ev == "verdict":
             ctx = CTX_CN.get(str(f.get("ctx")), str(f.get("ctx")))
-            out.append(f"{ctx}:{'通过' if f.get('result') == 'pass' else '未通过'}")
+            res = str(f.get("result"))
+            word = {"pass": "通过", "fail": "未通过"}.get(res, "未跑成(结论无效)")
+            out.append(f"{ctx}:{word}")
         elif ev == "rollback":
             out.append("此前的通过结论被复验推翻,已从先例知识库撤销")
         elif ev == "ask_panel":
@@ -223,6 +226,10 @@ def render_delivery_report(report: dict, fs: list[dict], manifest: dict,
              "",
              f"本批 {total} 个用例:**{ok} 个通过整卷复验,已入交付卷**"
              + (f";其余 {total - ok} 个的情况逐一说明如下。" if total > ok else "。"), ""]
+    n_broken = int(t.get("broken") or 0)
+    if n_broken:
+        lines.append(f"- ⚠ 有 {n_broken} 个用例本轮**未跑成**(执行中断/日志陈腐/级联"
+                     f"受害)——它们的结果是「无结论」而非「未通过」,不计入通过率分母叙事")
     moved = report.get("moved_tail") or []
     if moved:
         names = [str((mcases.get(a) or {}).get("title") or ("…" + a[-6:])) for a in moved]
@@ -280,6 +287,7 @@ def render_unsuccessful_md(report: dict, fs: list[dict], manifest: dict,
 
 _LEAK = re.compile(
     r"\b(deliverable|contradicted|failed_terminal|subset_verified|awaiting_user|escalated|"
+    r"broken|not_run|"
     r"reflow|env_blocked|defect_candidate|rerun_isolated|delivery|subset|ask_panel|adopted|"
     r"manual_vs_device|expected_vs_observed|method_vs_implementation|ordering_vs_persistence)\b"
     r"|\b[0-9a-f]{16}\b")

@@ -34,6 +34,7 @@ class V8State(TypedDict, total=False):
     n_authored: int
     n_failed: int
     n_subset_verified: int
+    n_broken: int
     n_deliverable: int
     n_contradicted: int
     n_settled_bad: int       # escalated + failed_terminal

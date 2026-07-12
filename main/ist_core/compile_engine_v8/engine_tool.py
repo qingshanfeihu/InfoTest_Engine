@@ -190,6 +190,19 @@ def _contradiction_question(c: dict) -> dict:
                     {"label": "不认可,隔离复跑", "description": "单独再跑一次验证这个判断"}],
                 "_tokens": {"确认环境问题,停止该案": "stop", "不认可,隔离复跑": "retry"},
                 "_key": aid}
+    if kind == "bed":
+        q = (f"{who} 被批级诊断判为**测试床状态残留污染**"
+             + (f"(依据:{str(c.get('evidence') or '')[:200]})" if c.get("evidence") else "")
+             + "。该类污染复跑洗不掉(复跑只能救采集噪声),卷面本身没有错;"
+               "唯一根治是清理测试床上的残留配置/持久文件(床权在你)。如何处置?")
+        return {"question": q, "header": f"床态{aid[-4:]}",
+                "options": [
+                    {"label": "挂起到下批", "description": "床治理后下批续跑该案(重跑同参数时会询问恢复)"},
+                    {"label": "床已处理,复跑验证", "description": "你已清理残留——引擎复跑一次验证"},
+                    {"label": "如实降级", "description": "该案不入交付卷,以未通过如实报告"}],
+                "_tokens": {"挂起到下批": "suspend", "床已处理,复跑验证": "retry",
+                            "如实降级": "downgrade"},
+                "_key": aid}
     if kind == "suspended":
         q = f"{who} 上批被挂起。本批如何处理?"
         return {"question": q, "header": f"挂起{aid[-4:]}",

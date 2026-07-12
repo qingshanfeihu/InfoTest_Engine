@@ -170,7 +170,8 @@ def compile_attribute(verdict_detail: str, failing_assertion_layer: str = "",
 def submit_attribution(xlsx_path: str, autoid: str, layer: str,
                        disposition: str, evidence: str,
                        fix_direction: str = "",
-                       defect_candidate: dict | str | None = None) -> str:
+                       defect_candidate: dict | str | None = None,
+                       h_position: str = "") -> str:
     """Land your attribution **conclusion** for one failed case into last_run.json (the judgement itself is still yours, made from the raw evidence).
 
     **When to use**: the raw device evidence has been read and the layer verdict has formed —
@@ -208,6 +209,16 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
             repro (reproduction steps), expected_with_source (expectation + manual source),
             actual (actual + device evidence), version, optionally ticket_id. Pass a JSON
             object; a JSON-encoded string of the same object is also accepted.
+        h_position: optional **candidate** for where the hidden degree of freedom sits
+            (the batch-level diagnose step adjudicates; you only propose, never sentence).
+            One of — h_lambda (the expected value itself depends on non-deterministic
+            behavior, e.g. rotation position), h_s0 (evidence suggests leftover state on
+            the shared bed — something occupied/existing that this case never configured),
+            h_pi (evidence-collection noise — a second look at the same state reads
+            differently), none (fully deterministic failure, e.g. a syntax rejection).
+            Leave empty when unsure — empty means unknown, and a wrong guess is worse
+            than none. Key implication measured on-device — rerunning only helps h_pi
+            (a rerun re-samples the noise); for h_s0 the dirt persists across reruns.
 
     Returns:
         Confirmation (path written + field echo); error when the autoid is absent from
@@ -274,6 +285,11 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
                 "key fragment **within a single line** instead (whitespace is normalized, no "
                 "byte-exact cross-line alignment needed).")
 
+    _HPOS = ("", "h_lambda", "h_s0", "h_pi", "none")
+    hp = (h_position or "").strip()
+    if hp not in _HPOS:
+        return f"error: h_position must be one of {'/'.join(p for p in _HPOS if p)} or empty, got {hp!r}"
+
     import time as _time
     entry = {
         "layer": layer,
@@ -283,6 +299,8 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
         "ts": _time.time(),
         "round": rec.get("_round"),
     }
+    if hp:
+        entry["h_position"] = hp
     if disposition == "defect_candidate":
         dc = defect_candidate
         if isinstance(dc, str):

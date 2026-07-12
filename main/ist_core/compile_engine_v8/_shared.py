@@ -157,11 +157,35 @@ def suspended_resume_waiting(fs: list[dict], vw: dict) -> list[str]:
     return out
 
 
+def bed_treatment_waiting(fs: list[dict], vw: dict) -> list[str]:
+    """s₀ 停车案待呈报(V8.5 片3;§11.7:唯一可行修法=床治理,床权在用户——必问,
+    redline 实证缺口②的修复):批级诊断判 h_s0 ∧ 复跑处方(复跑闸已挡) ∧ 本次
+    诊断未获裁决 → 进 ask 边。未答自动挂起(既有安全件),不静默停车。"""
+    out = []
+    for aid, c in vw["cases"].items():
+        if c["status"] not in (V.S_FAILED, V.S_CONTRADICTED):
+            continue
+        mine = [f for f in fs if str(f.get("aid")) == aid]
+        diag = [f for f in mine if f.get("ev") == "diagnosis"]
+        if not diag or not str(diag[-1].get("h_position", "")).startswith("h_s0"):
+            continue
+        atts = [f for f in mine if f.get("ev") == "attribution"]
+        if not atts or str(atts[-1].get("disposition")) not in ("rerun_isolated",
+                                                                "transient"):
+            continue
+        qid = f"bed:{aid}:{len(diag)}"
+        if not any(d.get("ev") == "decision" and d.get("question_id") == qid
+                   for d in fs):
+            out.append(aid)
+    return out
+
+
 def ask_targets(state: dict, fs: list[dict], vw: dict) -> dict:
     """ask 边目标(§11.11 构件六;B 片再加采信失败队列):
     panel = 归因孔 ought-欠定呈报待确认;contra = 矛盾≥2 且本次矛盾未获裁决;
     cap = 轮次封顶待授权(有 panel 呈报之/无则工程故障呈报——二分在题面层);
-    env = 归因器止损判断待确认;suspended = 挂起案新批恢复问询。"""
+    env = 归因器止损判断待确认;bed = s₀ 停车案床治理呈报(片3);
+    suspended = 挂起案新批恢复问询。"""
     contra = []
     for aid, c in vw["cases"].items():
         if c["status"] == V.S_CONTRADICTED and c["contradictions"] >= 2:
@@ -171,6 +195,7 @@ def ask_targets(state: dict, fs: list[dict], vw: dict) -> dict:
                 contra.append(aid)
     return {"panel": panel_waiting(fs, vw), "contra": contra,
             "cap": cap_waiting(fs), "env": env_confirm_waiting(fs, vw),
+            "bed": bed_treatment_waiting(fs, vw),
             "suspended": suspended_resume_waiting(fs, vw)}
 
 
@@ -193,7 +218,8 @@ def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
                           + c.get(V.S_SUSPENDED, 0)),
         # 去重计数(一个案可能同时命中 panel 与 cap,题面层合并成一题)
         "n_ask_contradiction": len(set(t["panel"]) | set(t["contra"]) | set(t["cap"])
-                                   | set(t["env"]) | set(t["suspended"])),
+                                   | set(t["env"]) | set(t["bed"])
+                                   | set(t["suspended"])),
     }
 
 

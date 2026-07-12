@@ -67,6 +67,30 @@ def dns_record_types() -> tuple[str, ...]:
     return tuple(load_grammar()["dns_record_types"]["words"])
 
 
+def persistence_patterns() -> tuple[str, ...]:
+    """全部持久化通道识别正则(local_disk/peer_node/segment_fs…patterns 并集)。
+    消费方:diagnose 批级 s₀ 配对——通道枚举在数据层,新通道加条目零代码。"""
+    chans = load_grammar().get("persistence_channels") or {}
+    out: list[str] = []
+    for key, ch in chans.items():
+        if key.startswith("_") or not isinstance(ch, dict):
+            continue
+        out.extend(str(p) for p in (ch.get("patterns") or []))
+    return tuple(out)
+
+
+def l23_write_patterns() -> tuple[str, ...]:
+    """L2/L3 系统对象写形态(复位差集 (32) 内分量;diagnose s₀ 配对用)。"""
+    return tuple((load_grammar().get("bed_l23_write_forms") or {}).get("patterns") or ())
+
+
+def occupancy_semantics() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """「已占用/已存在」回显语义 (patterns, negations)——diagnose 自扰判定用
+    (词带边界+否定排除,数据带出处;防 marker 关键字表回潮)。"""
+    oc = load_grammar().get("occupancy_semantics") or {}
+    return (tuple(oc.get("patterns") or ()), tuple(oc.get("negations") or ()))
+
+
 def reference_closures() -> list[dict]:
     return list(load_grammar().get("reference_closures", []))
 

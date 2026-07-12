@@ -374,9 +374,21 @@ def merge(state: dict) -> dict:
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
     m = sh.manifest(state)
+
+    def _s0_parked(aid: str) -> bool:
+        """s₀ 停车位(V8.5 片3):复跑处方 ∧ 批级诊断判床态残留——复跑不可救、重编
+        无对象(卷面没错),入卷只会无限重跑同一失败(实测 livelock)。停在未通过卷,
+        叙事说清「床治理后下批续跑」;L3 落地后此位自动清空。"""
+        att = [f for f in fs if f.get("aid") == aid and f.get("ev") == "attribution"]
+        if not (att and str(att[-1].get("disposition")) in ("rerun_isolated", "transient")):
+            return False
+        diag = [f for f in fs if f.get("aid") == aid and f.get("ev") == "diagnosis"]
+        return bool(diag) and str(diag[-1].get("h_position", "")).startswith("h_s0")
+
     ready = [a for a, c in vw["cases"].items()
              if c["status"] in (V.S_AUTHORED, V.S_SUBSET_VERIFIED, V.S_DELIVERABLE,
-                                V.S_CONTRADICTED, V.S_FAILED)]
+                                V.S_CONTRADICTED, V.S_FAILED)
+             and not (c["status"] in (V.S_FAILED, V.S_CONTRADICTED) and _s0_parked(a))]
     # V8.5 片2:挂起/待决案不得扣押其余案的 delivery 语境(§14-R4)——它们无卷可入,
     # 留在 live 里会让「待验=全体」永不成立、终验被结构性扣押。复活后经新 merge 换
     # 卷组成指纹,composition 锚自动强制整卷重新终验(INV-8 不破,答题→子集重跑→终验)。
@@ -385,7 +397,15 @@ def merge(state: dict) -> dict:
                                    V.S_AWAITING_USER, V.S_SUSPENDED)]
     def _rerun_disposed(aid: str) -> bool:
         att = [f for f in fs if f.get("aid") == aid and f.get("ev") == "attribution"]
-        return bool(att) and str(att[-1].get("disposition")) in ("rerun_isolated", "transient")
+        if not (att and str(att[-1].get("disposition")) in ("rerun_isolated", "transient")):
+            return False
+        # V8.5 片3 复跑闸:批级诊断判 s₀(床态残留)的案,隔离复跑不可救——
+        # 复跑=h 重采样只救 π 噪声;s₀ 的 h 冻结在脏床上(run11 668030 实证:
+        # 重排复验×3 全部再翻挂)。s₀ 案不进复跑集,走排尾/床治理/矛盾呈报。
+        diag = [f for f in fs if f.get("aid") == aid and f.get("ev") == "diagnosis"]
+        if diag and str(diag[-1].get("h_position", "")).startswith("h_s0"):
+            return False
+        return True
 
     need_verify = [a for a in ready
                    if vw["cases"][a]["status"] in (V.S_AUTHORED, V.S_CONTRADICTED)
@@ -410,6 +430,20 @@ def merge(state: dict) -> dict:
     comp_ordered = [c["autoid"] for c in ordered]
     coexist = P.coexist_violations(cases_steps)
 
+    pairs = [(a, sh.artifact_fingerprint(a)) for a in comp_ordered]
+    volume = sh.volume_fingerprint(pairs)
+    # 终验幂等闸(V8.5 片3):同卷组成指纹的 delivery 裁决已在事实流、且组成内没有
+    # 待升格案(subset_verified——子集过待终验确认,如瞬态复跑恢复案:卷面与组成都
+    # 没变但**必须**重跑终验拿 delivery-pass,redline 实证回归) → 不重跑。
+    # 没有它,s₀ 停车案保持 failed 会驱动 reconcile→attribute→merge 循环把兄弟案
+    # 无限重复终验(实测 livelock);组成/卷面/待升格三者都没变时重跑零信息。
+    _has_upgrade = any(vw["cases"][a]["status"] == V.S_SUBSET_VERIFIED
+                       for a in comp_ordered)
+    if is_delivery and not _has_upgrade and any(
+            f.get("ev") == "verdict" and f.get("ctx") == F.CTX_DELIVERY
+            and str(f.get("volume")) == volume for f in fs):
+        return {"phase_status": "nothing_to_merge", **sh.counts_update(state, fs)}
+
     seq = int(state.get("vol_seq") or 0) + 1
     out_name = str(state.get("out_name"))
     vol_name = out_name if is_delivery else f"{out_name}__sub{seq}"
@@ -418,15 +452,17 @@ def merge(state: dict) -> dict:
     if str(res).startswith("error"):
         return {"phase_status": "error", "error": str(res)[:300],
                 **sh.counts_update(state, fs)}
-    pairs = [(a, sh.artifact_fingerprint(a)) for a in comp_ordered]
-    volume = sh.volume_fingerprint(pairs)
     merged = sh.outputs_root() / vol_name / "case.xlsx"
+    # run_id 带 seq(V8.5 片3 实测地雷):同 volume 的 merged 事实曾按内容键被跨轮
+    # 去重——「子集复跑后重合并同一 delivery 组成」的新 merged 被丢弃,run/reconcile
+    # 读 mf[-1] 拿到子集组成,delivery 裁决落错 volume → deliverable 永不成立、
+    # 无限终验循环。seq 来自 state(崩溃重放同 seq 仍去重,真新合并不误并)。
     sh.append(state, [{"ev": "merged", "aid": "", "volume": volume,
                        "ctx": F.CTX_DELIVERY if is_delivery else F.CTX_SUBSET,
                        "composition": comp_ordered, "moved_tail": moved,
                        "coexist_violations": coexist,
                        "path": str(merged.relative_to(sh.project_root())),
-                       "run_id": f"merge:{volume}"}])
+                       "run_id": f"merge:{volume}:{seq}"}])
     if moved:
         sh.emit(f"持久化家族 {len(moved)} 案排卷尾(交付报告将声明)")
     if coexist:
@@ -758,6 +794,7 @@ def attribute(state: dict) -> dict:
                               "round": F.rounds_used(mine, aid),
                               "run_id": (last or {}).get("run_id", ""),
                               "layer": att.get("layer"), "disposition": att.get("disposition"),
+                              "h_position": str(att.get("h_position") or ""),
                               "fix_direction": str(att.get("fix_direction") or "")[:800],
                               "evidence": str(att.get("evidence") or "")[:500]})
             if att.get("disposition") == "env_blocked":
@@ -859,11 +896,173 @@ def _answer_token(kind: str, a: str) -> str:
         return "continue"
     if kind == "env":
         return "stop" if "确认环境" in a else "retry"
+    if kind == "bed":
+        if "降级" in a:
+            return "downgrade"
+        if "已处理" in a or "复跑" in a or "已清" in a:
+            return "retry"
+        return "suspend"   # 不明确=默认挂起到下批(床治理是外部动作,宁等勿猜)
     if kind == "contra":
         if "降级" in a or "接受单跑" in a:
             return "downgrade"
         return "reorder"
     return "correct"
+
+
+# --------------------------------------------------------------- [mech] diagnose
+# 判定形态全部来自文法数据(redline 建议③④:persistence_channels 既有,synconfig 等
+# 跨设备通道随数据生效;新通道/新形态=加 JSON 条目零代码,防三份手抄副本漂移)。
+# 实体正则属形态级(IPv4/IPv6 压缩形/接口名——IPv6 全写形暂不识别,如实标注)。
+_DIAG_ENTITY_RE = re.compile(
+    r"(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]*::[0-9a-fA-F:]+|(?:port|vlan|bond|eth)\d+")
+
+
+def _diag_grammar():
+    """文法数据 → 编译后的判定器(进程内随 grammar 缓存;数据缺失 fail-open 空判定)。"""
+    try:
+        from main.case_compiler.domain_grammar import (l23_write_patterns,
+                                                       occupancy_semantics,
+                                                       persistence_patterns)
+        pers = [re.compile(p, re.IGNORECASE) for p in persistence_patterns()]
+        l23 = [re.compile(p, re.IGNORECASE) for p in l23_write_patterns()]
+        occ_p, occ_n = occupancy_semantics()
+        occ = ([re.compile(p, re.IGNORECASE) for p in occ_p],
+               [re.compile(p, re.IGNORECASE) for p in occ_n])
+        return pers, l23, occ
+    except Exception:  # noqa: BLE001
+        logger.debug("diagnose 文法加载失败(fail-open 空判定)", exc_info=True)
+        return [], [], ([], [])
+
+
+def _case_touch_profile(aid: str) -> dict:
+    """从成品卷机械提取:持久面写/L2-L3 写/实体 token(S10 交换子配对的 I6 近似输入)。"""
+    rows = _load_case_rows(aid) or []
+    pers_res, l23_res, _ = _diag_grammar()
+    persist, l23, ents = [], [], set()
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        g = str(r.get("G") or "")
+        ents.update(_DIAG_ENTITY_RE.findall(g))
+        if str(r.get("E", "")).startswith("APV") and str(r.get("F", "")) in (
+                "cmd_config", "cmds_config"):
+            for line in g.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if any(p.search(line) for p in pers_res):
+                    persist.append(line)
+                elif any(p.search(line) for p in l23_res):
+                    l23.append(line)
+    return {"persist": persist, "l23": l23, "entities": ents}
+
+
+def _occupancy_hit(sig: str) -> bool:
+    """占用/已存在语义(文法数据,带否定排除——'does not exist' 不得命中)。"""
+    _, _, (occ_p, occ_n) = _diag_grammar()
+    if any(n.search(sig) for n in occ_n):
+        return False
+    return any(p.search(sig) for p in occ_p)
+
+
+def diagnose(state: dict) -> dict:
+    """批级诊断(V8.5 片3;X3 的机械半:LLM 观察者/common_cause 提案留片4)。
+
+    单案归因 fork 只有本案视野——run11 实证 17 个 fork 各讲各的故事、无一触发横向
+    对账(归因版本感知 2/19)。本节点吃批级事实做机械裁决:
+    ① 交换子配对(S10 的 I6 近似):卷序前驱案的持久面写(全局配置存储分量=全机耦合)
+      或 L2/L3 写实体 ∩ 受害案触碰实体 → h_position=h_s0 裁决+污染者点名;
+    ② 自扰:本案自己有持久面写且签名呈「已占用/已存在」形态 → h_s0(668044 tftp 型);
+    ③ 同签名词干聚类 ≥2 → common_cause 事实(机械前筛 (24) 的产物,片4 提案消费)。
+    裁决只落 diagnosis 事实(append-only,不改归因事实);消费点=merge 复跑闸
+    (复跑可救=h 重采样定理:s₀ 冻结复跑不可救——run11 668030 同签名三 run 三标签、
+    重排复验×3 全部再翻挂的机理)与渲染层叙事。fork 候选(attribution.h_position)
+    与本裁决并存,分工=D8(fork 只降不判死,批级裁决在此)。"""
+    fs = sh.load_facts(state)
+    vw = sh.view(state, fs)
+    merges = [f for f in fs if f.get("ev") == "merged"]
+    if not merges:
+        return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
+    comp = [str(a) for a in (merges[-1].get("composition") or [])]
+    volume = str(merges[-1].get("volume") or "")
+    failed = [a for a, c in vw["cases"].items()
+              if c["status"] in (V.S_FAILED, V.S_CONTRADICTED)]
+    if not failed:
+        return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
+
+    profiles: dict[str, dict] = {}
+
+    def _prof(aid: str) -> dict:
+        if aid not in profiles:
+            try:
+                profiles[aid] = _case_touch_profile(aid)
+            except Exception:  # noqa: BLE001
+                profiles[aid] = {"persist": [], "l23": [], "entities": set()}
+        return profiles[aid]
+
+    new_facts: list[dict] = []
+    sig_by_aid: dict[str, str] = {}
+    for aid in failed:
+        mine = [f for f in fs if f.get("aid") == aid]
+        last = F.latest_verdict(mine, aid) or {}
+        sigs = [str(s) for s in (last.get("signatures") or [])]
+        sig = " ".join(sigs)[:400]
+        sig_by_aid[aid] = " ".join(sigs[:1])
+        vict = _prof(aid)
+        polluters: list[dict] = []
+        idx = comp.index(aid) if aid in comp else len(comp)
+        for a in comp:
+            if a == aid:
+                continue
+            p = _prof(a)
+            if p["persist"]:
+                # 持久面写=全局配置存储分量(全机耦合),**不受卷序限制**——快照跨轮/
+                # 跨 run 存活复活(保存族跨面洗白路径,预言1 反扫 VC 规则);排尾只降低
+                # 卷内暴露,消不掉跨轮通路(run11 668030 排尾后仍三轮翻挂即此)
+                polluters.append({"aid": a, "via": "persistent-plane write",
+                                  "cmds": p["persist"][:2]})
+            elif comp.index(a) < idx:
+                # 配置面 L2/L3 写按卷序(前驱写、后继读)——I6 近似,跨轮形态由
+                # 持久面分支与床账兜
+                p_ents = {e for line in p["l23"]
+                          for e in _DIAG_ENTITY_RE.findall(line)}
+                shared = sorted(p_ents & vict["entities"])[:4]
+                if shared:
+                    polluters.append({"aid": a, "via": "shared L2/L3 entity",
+                                      "shared": shared})
+        self_persist = bool(vict["persist"]) and _occupancy_hit(sig)
+        h_pos, basis = "", ""
+        if polluters or self_persist:
+            h_pos = "h_s0"
+            basis = ("self persistent-plane write + occupied/exists signature"
+                     if self_persist and not polluters else
+                     "upstream writer(s) in volume order touch shared bottom-layer/persistent state")
+        else:
+            att = [f for f in mine if f.get("ev") == "attribution"]
+            h_pos = str((att[-1] if att else {}).get("h_position") or "")
+            basis = "fork candidate (no batch-level counter-evidence)" if h_pos else ""
+        if not h_pos:
+            continue   # unknown 不落账(空裁决无信息)
+        new_facts.append({"ev": "diagnosis", "aid": aid, "h_position": h_pos,
+                          "polluters": polluters[:5], "basis": basis,
+                          "run_id": f"diag:{volume}:{aid}"})
+    # 同签名词干聚类(机械前筛 (24)):≥2 案同稳定词干 → common_cause 事实
+    stems: dict[str, list[str]] = {}
+    for aid, s in sig_by_aid.items():
+        stem = re.sub(r"\d{6,}", "<id>", " ".join(s.lower().split()))[:160]
+        if stem:
+            stems.setdefault(stem, []).append(aid)
+    for stem, aids in stems.items():
+        if len(aids) >= 2:
+            new_facts.append({"ev": "common_cause", "aid": "", "key": stem,
+                              "aids": sorted(aids), "run_id": f"cc:{volume}:{stem[:40]}"})
+    if new_facts:
+        sh.append(state, new_facts)
+        n_s0 = sum(1 for f in new_facts if f.get("h_position") == "h_s0")
+        if n_s0:
+            sh.emit(f"批级诊断:{n_s0} 案判床态残留(s₀)——复跑不可救,复跑闸已按此收紧")
+    fs2 = sh.load_facts(state)
+    return {"phase_status": "ok", **sh.counts_update(state, fs2)}
 
 
 def ask_contradiction(state: dict) -> dict:
@@ -875,9 +1074,10 @@ def ask_contradiction(state: dict) -> dict:
     vw = sh.view(state, fs)
     t = sh.ask_targets(state, fs, vw)
     cap_set = set(t["cap"])
-    # 优先序 panel>contra>cap>env>suspended;panel∩cap 合并一题(cap 语境附注)
+    # 优先序 panel>contra>cap>env>bed>suspended;panel∩cap 合并一题(cap 语境附注)
     ordered = ([(a, "panel") for a in t["panel"]] + [(a, "contra") for a in t["contra"]]
                + [(a, "cap") for a in t["cap"]] + [(a, "env") for a in t["env"]]
+               + [(a, "bed") for a in t.get("bed", [])]
                + [(a, "suspended") for a in t["suspended"]])
     seen: set = set()
     targets = [(a, k) for a, k in ordered if not (a in seen or seen.add(a))]
@@ -911,6 +1111,13 @@ def ask_contradiction(state: dict) -> dict:
             atts = [f for f in mine if f.get("ev") == "attribution"]
             item["evidence"] = str((atts[-1] if atts else {}).get("evidence") or "")[:300]
             qids[aid] = f"env:{aid}:{int((atts[-1] if atts else {}).get('round') or 0)}"
+        elif kind == "bed":
+            diags = [f for f in mine if f.get("ev") == "diagnosis"]
+            d = diags[-1] if diags else {}
+            pol = [str(p.get("aid", ""))[-6:] for p in (d.get("polluters") or [])][:3]
+            item["evidence"] = (str(d.get("basis") or "")
+                                + (f";polluter(s): {'、'.join(pol)}" if pol else ""))[:300]
+            qids[aid] = f"bed:{aid}:{len(diags)}"
         elif kind == "suspended":
             n_runs = sum(1 for f in fs if f.get("ev") == "run_start")
             qids[aid] = f"resume:{aid}:{n_runs}"
@@ -970,6 +1177,13 @@ def ask_contradiction(state: dict) -> dict:
                               "layer": "E", "disposition": "rerun_isolated",
                               "fix_direction": f"user overrode env_blocked: {a}",
                               "evidence": "user"})
+            if kind == "bed":
+                # 床已治理(用户声明)→ 覆盖 s₀ 诊断(diagnosis 事实 append-only 叠加,
+                # 最新条生效),复跑闸与停车位随之放行——复跑一次验证治理效果
+                new_facts.append({"ev": "diagnosis", "aid": aid,
+                                  "h_position": "user_cleared",
+                                  "polluters": [], "basis": f"user attests bed treated: {a}"[:200],
+                                  "run_id": f"user:bed_retry:{qid}"})
         elif tok == "resume":
             new_facts.append({"ev": "resumed", "aid": aid, "of": qid})
         elif tok == "keep":

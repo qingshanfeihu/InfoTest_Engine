@@ -761,6 +761,21 @@ prep ─▶ bed_gate ─▶ author ─▶ merge(可用子集) ─▶ run ─▶ 
 | 片1 | F（S6 呈报门，数据来自 S1 管道） | S1 命令集（原型已在） | 668059 形态回放：emit 期转 needs_decision |
 | 片2 | A+E（suspend-and-continue + gather，图语义主改） | 无 | 欠定案不阻塞兄弟案；批末聚合面板；夜跑演练 |
 | 片3 | B+C（h 轴+diagnose） | 无（S10 配对可先用 I6 近似） | 668030 形态回放：s₀ 裁决非 rerun_isolated |
+
+**片3 实施定形（2026-07-12 落地+redline 四修，超出原草图的部分如实记）**：
+①判定形态全部文法数据化（persistence_channels 复用+新增 bed_l23_write_forms/
+occupancy_semantics 两键带 provenance，加载器三函数——手抄闭集三副本漂移被
+redline 拦下，synconfig 跨设备通道随数据自动生效）；②持久面写配对**不受卷序限制**
+（快照跨轮存活，排尾只降卷内暴露——668030 排尾后仍翻挂的机理），L2/L3 共享实体
+保留卷序条件（I6 近似）；③ **s₀ 停车位+bed 呈报**：复跑处方∧h_s0 裁决 → 不入
+merge ready（复跑不可救，防 livelock），且**必进 bed 问询**（§11.7 床权在用户：
+挂起到下批[默认]/床已处理复跑验证[落 user_cleared 诊断覆盖，闸自动放行]/如实
+降级；未答走自动挂起安全件——不静默停车）；④ **终验幂等闸**：同卷组成指纹的
+delivery 裁决在案∧组成内无 subset_verified 待升格案 → 不重跑（livelock 防护；
+瞬态恢复的升格终验放行——redline 实证回归）；⑤附带根治既有地雷：merged 事实
+run_id 带 seq——同 volume 重合并曾被内容幂等键跨轮去重，run/reconcile 读 mf[-1]
+拿到陈腐子集组成 → delivery 裁决落错 volume 无限循环（纯复跑不重编路径必现，
+生产被「通常有重编」掩盖）。
 | 片4 | D（remedies 队列+选项约束） | 片3（common_cause 来源） | 队列非空零 ask；选项全部携判例/队列空证明 |
 
 顺序 1→2→3→4；片间全量测试+对照轮。落地前现行 interrupt 机制不动（过渡期无

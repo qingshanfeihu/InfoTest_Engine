@@ -110,19 +110,28 @@ def _latest_panel_dict(mine: list[dict], read_json) -> dict:
 
 
 def diagnosis_text(mine: list[dict], panel: dict | None = None) -> str:
-    """怎么判断的:优先 panel 的 hypothesis(归因孔判断时刻写下的中文);
-    次之归因词表+关键证据引文;两者皆无=如实说明未完成分析。"""
+    """怎么判断的:批级诊断(s₀ 配对,片3)优先——它有单案归因没有的批级视野;
+    次之 panel 的 hypothesis(归因孔判断时刻写下的中文);再次归因词表+关键证据
+    引文;皆无=如实说明未完成分析。"""
     att = _latest_attribution(mine)
     parts = []
+    diags = [f for f in mine if f.get("ev") == "diagnosis"]
+    diag = diags[-1] if diags else {}
+    if str(diag.get("h_position", "")).startswith("h_s0"):
+        pol = [str(p.get("aid", ""))[-6:] for p in (diag.get("polluters") or [])][:3]
+        parts.append("判断:测试床状态残留污染(批级诊断)——"
+                     + (f"卷内前驱案(尾号 {'、'.join(pol)})的持久/底层配置写跨案存活,"
+                        if pol else "本案自身的持久化产物跨轮存活,")
+                     + "该类污染复跑洗不掉(复跑只能救采集噪声),须床态治理/排卷尾。")
     hyp = str((panel or {}).get("hypothesis") or "").strip()
     shape = str((panel or {}).get("conflict_shape") or "")
-    if hyp:
+    if hyp and not parts:
         parts.append((f"{SHAPE_CN.get(shape, SHAPE_CN['other'])}:" if shape else "") + hyp)
-    elif att:
+    elif att and not parts:
         cn = LAYER_CN.get(str(att.get("layer") or ""), "")
         if cn:
             parts.append(f"判断:{cn}。")
-    if not att and not hyp:
+    if not att and not hyp and not parts:
         return "本轮收口前未能完成原因分析(证据在案,可续跑补齐)。"
     if att.get("evidence") and str(att.get("evidence")) != "user":
         parts.append(f"关键证据:「{clean_device_echo(str(att.get('evidence')), 200)}」。")

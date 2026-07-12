@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from main.ist_core.compile_engine_v8.graph import (_after_author, _after_attribute,
+from main.ist_core.compile_engine_v8.graph import (_after_author, _after_diagnose,
                                                    _after_merge, _after_reconcile,
                                                    _gather_or_close)
 
@@ -35,7 +35,7 @@ def test_terminal_points_gather_when_pending():
     assert _gather_or_close(s) == "ask_decision"
     assert _gather_or_close({}) == "closing"
     assert _after_reconcile(s) == "ask_decision"          # 全 deliverable+欠定
-    assert _after_attribute(s) == "ask_decision"          # 全终局+欠定
+    assert _after_diagnose(s) == "ask_decision"           # 全终局+欠定
     assert _after_merge({"phase_status": "nothing_to_merge",
                          "n_awaiting_user": 1}) == "ask_decision"
     assert _after_merge({"phase_status": "error",

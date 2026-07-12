@@ -11,7 +11,7 @@ when_to_use: |
   SKIP when: re-verifying an existing excel only (ist-verify); looking up a single CLI (dev_probe).
 engine:
   graph: main.ist_core.compile_engine_v8.graph:graph
-  phases: [prep, bed_gate, author, ask_decision, merge, run, reconcile, attribute, ask_contradiction, closing]
+  phases: [prep, bed_gate, author, ask_decision, merge, run, reconcile, attribute, diagnose, ask_contradiction, closing]
   holes:
     worker: compile-worker
     attributor: compile-attributor

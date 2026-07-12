@@ -285,5 +285,33 @@
    "provenance": "CLI Ch3 ip address;平台状态面(THEORY 2.7.7 R4-G2):接口地址表,床态快照 diff 投影——2026-07-11 run9 vlan100 跨批污染实证;snapshot_only:合法地址恒在,非空≠残留,只进快照 diff 不进残留判定",
    "snapshot_only": true
   }
+ },
+ "bed_l23_write_forms": {
+  "_provenance": "2026-07-12 V8.5 片3(redline 建议③):L2/L3 系统对象写=复位差集 (32) 内分量——框架 per-case 清理(clear slb/sdns 功能域)不含 interface/vlan/route(CLI Ch2/Ch3 系统配置章;233 vlan 迁移灭 9 案实证)。用途:diagnose 批级 s₀ 配对(交换子 I6 近似)。新形态=加 pattern 零代码。",
+  "patterns": [
+   "^\\s*(?:no\\s+)?vlan\\b",
+   "^\\s*(?:no\\s+)?ip\\s+address\\b",
+   "^\\s*(?:no\\s+)?ip\\s+route\\b",
+   "^\\s*(?:no\\s+)?interface\\b",
+   "^\\s*(?:no\\s+)?bond\\s+interface\\b"
+  ]
+ },
+ "occupancy_semantics": {
+  "_provenance": "2026-07-12 V8.5 片3(redline 建议④,防 marker 表回潮:词带边界+否定排除,数据带出处非 .py 关键字表):设备「资源已被占用/已存在」类回显语义——write memory/file 快照把功能域残留冻结、config 恢复复活后典型报错形态(run11 668030 实证:'IP/port pair may already be occupied by an SLB virtual service';RTNETLINK 'File exists' 同族)。用途:diagnose 自扰判定(本案持久写+占用回显=s₀)。",
+  "patterns": [
+   "\\balready\\b",
+   "\\boccupied\\b",
+   "\\bexists?\\b",
+   "\\bin\\s+use\\b",
+   "已存在",
+   "已占用",
+   "已被使用"
+  ],
+  "negations": [
+   "\\bnot?\\s+exist",
+   "\\bno\\s+such\\b",
+   "\\bdoes\\s*n[o']t\\s+exist",
+   "不存在"
+  ]
  }
 }

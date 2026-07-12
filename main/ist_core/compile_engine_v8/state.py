@@ -50,6 +50,7 @@ NODE_TYPES: dict[str, str] = {
     "run": "mech",
     "reconcile": "mech",
     "attribute": "llm",
+    "diagnose": "mech",
     "ask_contradiction": "user",
     "closing": "mech",
 }

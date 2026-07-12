@@ -1087,14 +1087,24 @@ def ask_contradiction(state: dict) -> dict:
     titles = {str(c.get("autoid")): str(c.get("title") or "") for c in (m.get("cases") or [])}
     payload = []
     qids: dict[str, str] = {}
+    from main.ist_core.compile_engine_v8 import remedies as RM
+    _maxr = int(state.get("max_rounds") or 3)
     for aid, kind in targets:
         mine = [f for f in fs if f.get("aid") == aid]
+        # 队列空证明(片4,§11.7「队列非空禁 ask」的题面侧):已试修法清单+当前队列。
+        # 队列非空却进 ask 边=路由缺陷,如实告警(fail-open 照常问,人比闸权威)
+        _q = RM.derive_queue(fs, vw, aid, _maxr, sh.granted_rounds(fs, aid))
+        if _q and kind in ("cap", "env", "bed", "contra"):
+            logger.warning("ask 目标 %s(%s) 的导出修法队列非空(%s)——路由应先自愈",
+                           aid[-6:], kind, [x.get("action") for x in _q])
         item = {"autoid": aid, "kind": kind,
                 "title": titles.get(aid, ""),
                 "rounds": vw["cases"][aid]["rounds"],
                 "contradictions": vw["cases"][aid]["contradictions"],
                 "timeline": _case_story(mine),
                 "diagnosis": _case_diag(mine)[:300],
+                "tried": RM.tried_actions(fs, aid),
+                "queue_empty": not _q,
                 "prior_choices": [f.get("answer") for f in mine if f.get("ev") == "decision"]}
         if kind == "panel":
             panel, prnd = _latest_panel(mine, aid)
@@ -1155,7 +1165,10 @@ def ask_contradiction(state: dict) -> dict:
         # 精确 token 优先(引擎产 label 的同源映射);Other 自由输入才走语义兜底
         tok = tok_exact or _answer_token(kind, a)
         new_facts.append({"ev": "decision", "aid": aid, "question_id": qid,
-                          "answer": a, "token": tok})
+                          "answer": a, "token": tok,
+                          # R5① 代理(片4):走了语义兜底=用户没选引擎给的选项
+                          # (Other 自由输入)——选项不适配的机械信号
+                          "freeform": not bool(tok_exact)})
         if tok == "suspend":
             new_facts.append({"ev": "suspended", "aid": aid, "reason": qid})
         elif tok in ("stop", "downgrade"):
@@ -1355,7 +1368,35 @@ def closing(state: dict) -> dict:
             data = sh.read_json(sh.project_root() / str(last.get("evidence_ref") or ""), []) or []
             rec = next((r for r in data if str(r.get("autoid")) == aid), {})
             evidence[aid] = str(rec.get("device_context") or "")
-    queues: dict[str, list] = {}
+    # 修法队列接线(V8.5 片4:§11.7 队列头=唯一导出修法,报告陈述句不设选项)
+    from main.ist_core.compile_engine_v8 import remedies as RM
+    _maxr = int(state.get("max_rounds") or 3)
+    queues: dict[str, list] = {
+        aid: RM.derive_queue(fs, vw, aid, _maxr, sh.granted_rounds(fs, aid))
+        for aid in others}
+    # R5 两布尔度量(§14-R5/§16.3:随裁决机械回填,零额外问询成本):
+    # effective=裁决后该案达成终局(交付/按裁决收尾/挂起),未达=选项没解决问题;
+    # freeform=用户走了 Other 自由输入(引擎选项不适配的信号,R5①题面质量代理)。
+    _oc_facts = []
+    for f in fs:
+        if f.get("ev") != "decision" or not f.get("answer"):
+            continue
+        aid = str(f.get("aid"))
+        st = str((vw["cases"].get(aid) or {}).get("status") or "")
+        settled = st in (V.S_DELIVERABLE, V.S_TERMINAL, V.S_SUSPENDED, V.S_ESCALATED)
+        _oc_facts.append({"ev": "decision_outcome", "aid": aid,
+                          "question_id": f.get("question_id"),
+                          "effective": bool(settled),
+                          "freeform": bool(f.get("freeform"))})
+    if _oc_facts:
+        sh.append(state, _oc_facts)
+        fs = sh.load_facts(state)
+        report["totals"]["ask"] = {
+            "answered": len(_oc_facts),
+            "effective": sum(1 for x in _oc_facts if x["effective"]),
+            "freeform": sum(1 for x in _oc_facts if x["freeform"])}
+        (mdir / "engine_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     dmd = RD.render_delivery_report(report, fs, m, queues, panels)
     (mdir / "delivery_report.md").write_text(dmd, encoding="utf-8")
     deliver_files = ["case.xlsx", "delivery_report.md", "engine_report.json", "facts.jsonl"]

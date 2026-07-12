@@ -145,11 +145,16 @@ def _side_cn(s: dict) -> str:
 
 
 def _contradiction_question(c: dict) -> dict:
-    """问询目标 → 面板一题(§11.11 构件六:题面渲染自 panel,自然中文,零内部术语)。"""
+    """问询目标 → 面板一题(§11.11 构件六:题面渲染自 panel,自然中文,零内部术语)。
+    片4:题面携「已试修法」清单(队列空证明的用户可见半——问到你不是因为没试,
+    是引擎侧导出修法已试尽/修法在引擎权限外)。"""
     aid = str(c.get("autoid"))
     kind = str(c.get("kind") or "contra")
     title = str(c.get("title") or "")
     who = f"用例 …{aid[-6:]}" + (f"({title[:24]})" if title else "")
+    tried = [str(x) for x in (c.get("tried") or []) if x]
+    if tried and kind in ("cap", "env", "bed", "contra"):
+        who += f"[引擎已试:{ '、'.join(tried[:3]) }]"
     if kind == "panel":
         p = c.get("panel") or {}
         sides = "；".join(_side_cn(s) for s in (p.get("sides") or [])[:3])

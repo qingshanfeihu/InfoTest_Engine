@@ -367,6 +367,24 @@ def ask_decision(state: dict) -> dict:
     return {"phase_status": "ok", **sh.counts_update(state, fs2)}
 
 
+def _user_retry_after_s0(fs: list[dict], aid: str) -> bool:
+    """用户 retry 裁决(床已处理/不认可,复跑)是否晚于该案最新 h_s0 诊断。
+
+    (36) 写权律的执行体(run12 实弹修复):用户对床状态的声明权威高于机械诊断——
+    subset 复跑 fail 后 diagnose 会重新判 h_s0(当时判得对),但其后用户答 retry
+    即为对「床现已治理」的新声明;停车位/复跑闸若仍按旧诊断挡,用户复跑指令被
+    静默吞(run12 实测:8 案 retry 后零复跑直接收口)。按 fold 哲学改派生逻辑,
+    历史事实流在新代码下自动解释正确(续跑即生效,无需补事实)。"""
+    diag_idx = max((i for i, f in enumerate(fs)
+                    if f.get("ev") == "diagnosis" and str(f.get("aid")) == aid
+                    and str(f.get("h_position", "")).startswith("h_s0")), default=-1)
+    if diag_idx < 0:
+        return False
+    return any(i > diag_idx for i, f in enumerate(fs)
+               if f.get("ev") == "decision" and str(f.get("aid")) == aid
+               and str(f.get("token")) == "retry")
+
+
 # --------------------------------------------------------------- [mech] merge
 def merge(state: dict) -> dict:
     """组卷:确定语境(全部非终态案就绪=delivery,否则 subset)+ 通道①排序 + ④共存检查
@@ -378,9 +396,12 @@ def merge(state: dict) -> dict:
     def _s0_parked(aid: str) -> bool:
         """s₀ 停车位(V8.5 片3):复跑处方 ∧ 批级诊断判床态残留——复跑不可救、重编
         无对象(卷面没错),入卷只会无限重跑同一失败(实测 livelock)。停在未通过卷,
-        叙事说清「床治理后下批续跑」;L3 落地后此位自动清空。"""
+        叙事说清「床治理后下批续跑」;L3 落地后此位自动清空。
+        用户 retry 晚于最新 h_s0 诊断 → 不停车((36) 写权律,run12 实弹修复)。"""
         att = [f for f in fs if f.get("aid") == aid and f.get("ev") == "attribution"]
         if not (att and str(att[-1].get("disposition")) in ("rerun_isolated", "transient")):
+            return False
+        if _user_retry_after_s0(fs, aid):
             return False
         diag = [f for f in fs if f.get("aid") == aid and f.get("ev") == "diagnosis"]
         return bool(diag) and str(diag[-1].get("h_position", "")).startswith("h_s0")
@@ -402,6 +423,11 @@ def merge(state: dict) -> dict:
         # V8.5 片3 复跑闸:批级诊断判 s₀(床态残留)的案,隔离复跑不可救——
         # 复跑=h 重采样只救 π 噪声;s₀ 的 h 冻结在脏床上(run11 668030 实证:
         # 重排复验×3 全部再翻挂)。s₀ 案不进复跑集,走排尾/床治理/矛盾呈报。
+        # 例外(run12 实弹修复,(36) 写权律:用户裁决权威>机械闸):最新 h_s0 诊断
+        # **之后**用户答过 retry(床已处理/不认可,复跑)→ 放行——用户对床状态的
+        # 声明覆盖机械诊断;否决它=用户复跑指令被闸静默吞(run12 实测 8 案零复跑收口)。
+        if _user_retry_after_s0(fs, aid):
+            return True
         diag = [f for f in fs if f.get("aid") == aid and f.get("ev") == "diagnosis"]
         if diag and str(diag[-1].get("h_position", "")).startswith("h_s0"):
             return False

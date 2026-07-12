@@ -218,3 +218,21 @@ def test_diagnose_common_cause_cluster(rig):
     ccs = [f for f in facts if f.get("ev") == "common_cause"]
     assert ccs, "同签名双 fail 未产 common_cause 事实"
     assert set(ccs[-1]["aids"]) == {AIDS[0], AIDS[1]}, ccs[-1]
+
+
+def test_user_retry_overrides_s0_gate():
+    """(36) 写权律(run12 实弹修复):最新 h_s0 诊断之后的用户 retry 裁决必须放行
+    复跑——机械闸不得否决用户对床状态的声明(实测 8 案 retry 后零复跑收口)。"""
+    from main.ist_core.compile_engine_v8.nodes import _user_retry_after_s0
+    aid = AIDS[1]
+    fs = [
+        {"ev": "diagnosis", "aid": aid, "h_position": "h_s0"},
+        {"ev": "decision", "aid": aid, "token": "retry",
+         "question_id": f"env:{aid}:1", "answer": "不认可,隔离复跑"},
+    ]
+    assert _user_retry_after_s0(fs, aid) is True
+    # 反向:retry 在诊断之前(旧裁决不背新诊断的书)
+    fs_rev = list(reversed(fs))
+    assert _user_retry_after_s0(fs_rev, aid) is False
+    # 无诊断:不适用
+    assert _user_retry_after_s0([fs[1]], aid) is False

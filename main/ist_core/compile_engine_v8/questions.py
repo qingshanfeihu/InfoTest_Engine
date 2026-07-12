@@ -50,6 +50,24 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
         kinds = [str(c.get("claim_kind", "")) for c in claims]
         form = next((FORM_BY_KIND[k] for k in kinds if k in FORM_BY_KIND), "dist")
 
+        if all(k == "command_existence" for k in kinds):
+            # S6 存在性呈报(V8.5 片1):题面带检索证明,选项语义按「换形态/挂起」而非可验性
+            cmds = "、".join(f"『{c.get('command', '')}』" for c in claims[:3])
+            q_text = (f"用例 {aid}(尾号 {aid[-6:]})使用的命令在被测版本专属 CLI 手册"
+                      f"命令集中查无记载:{reasons}。")
+            opt_process = {"label": "改过程",
+                           "description": f"换用版本内存在的等价命令/形态重写 {cmds}(引擎继续编写)。"}
+            opt_expect = {"label": "改预期",
+                          "description": "保留过程,改用版本内可观测的替代验证形态。"}
+            opt_desc = {"label": "改描述",
+                        "description": ("确认该功能不属本版本/记载互斥(fulldns 先例)——"
+                                        "本轮不产出,挂起待适用版本;文档不一致如实写报告。")}
+            questions.append({"question": q_text, "header": f"存在性·{aid[-6:]}",
+                              "options": [opt_process, opt_expect, opt_desc],
+                              "multiSelect": False, "_autoid": aid,
+                              "_ordering": False, "_form": form})
+            continue
+
         q_text = (f"用例 {aid}(尾号 {aid[-6:]})按原始写法验证不出目标行为:{reasons}。"
                   + (f"最小可验请求数 {min_req} 次。" if min_req else "")
                   + "你希望怎么改?")

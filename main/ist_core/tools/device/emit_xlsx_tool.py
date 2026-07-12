@@ -499,6 +499,174 @@ _EMIT_REASON_PATTERNS = (
 )
 
 
+def _verify_command_evidence(evidence: str, missing_cmds: list[str]) -> tuple[bool, str]:
+    """机械核验存在性证据。两种形态:
+    ① `<file>.md:<line>`(可多个,逗号/空格分隔)——该行 ±3 行内须含对应命令前两个
+      词(每条 miss 至少被一个引用覆盖);② `dev_help: <一句>`——设备 `?`/`^` 实测
+    声明,按 attestation 接受并记信号(离线无法复核,如实标注)。"""
+    ev = (evidence or "").strip()
+    if ev.lower().startswith("dev_help:"):
+        return True, f"device attestation accepted: {ev[:120]}"
+    refs = [r for r in re.split(r"[,\s]+", ev) if ":" in r and ".md" in r]
+    if not refs:
+        return False, "evidence must be `<file>.md:<line>` (manual line ref) or `dev_help: <one line>`"
+    root = Path(__file__).resolve().parents[4]
+    from main.case_compiler.command_inventory import load_inventory
+    inv = load_inventory() or {}
+    src_dir = root / str(inv.get("source_dir", "knowledge/data/markdown/product"))
+    windows: list[str] = []
+    for r in refs:
+        fname, _, lno = r.rpartition(":")
+        try:
+            lines = (src_dir / Path(fname).name).read_text(encoding="utf-8").splitlines()
+            n = int(lno)
+            windows.append("\n".join(lines[max(0, n - 4):n + 3]).lower())
+        except Exception:  # noqa: BLE001
+            return False, f"evidence ref unreadable: {r}"
+    for cmd in missing_cmds:
+        toks = re.sub(r"\s+", " ", cmd.strip().lower()).split(" ")[:2]
+        if not any(all(t in w for t in toks) for w in windows):
+            return False, (f"evidence does not cover command {cmd!r} — the referenced line "
+                           "vicinity must actually contain its leading words")
+    return True, f"manual line evidence verified for {len(missing_cmds)} command(s)"
+
+
+def _gate_command_existence(autoid: str, steps: list, init: str = "",
+                            evidence: str = "") -> str | None:
+    """S6 命令存在性呈报门(理论 (33) 版本参数化;DESIGN §15-S6/§16.2-F 片1)。
+
+    「测本版本不存在的功能」在 v8 曾烧 3 编写轮+多次上机+1 个封顶面板才到人
+    (668059 fulldns,10.5 专属手册零记载而设备 585 拒绝=行为正确、记载互斥)。
+    本门在 emit 期做版本命令集成员判定,未命中**呈报不硬拒**(D5):写 needs_decision
+    台账(问询节点消费)+拒落卷面与凭证,给 worker 两条出路——行级证据重 emit
+    (手册记载有 MinerU 截断上限,合法命令可能查无记载),或尾块 NEEDS_USER_DECISION。
+    误报校准:48 个真机 PASS 卷 865 条命令误报 0、唯一 MISS=fulldns(2026-07-12)。"""
+    if os.getenv("IST_COMMAND_EXISTENCE_GATE", "1") == "0":
+        return None
+    try:
+        from main.case_compiler.command_inventory import (load_inventory, match_command,
+                                                          nearest_heads)
+    except Exception:  # noqa: BLE001
+        return None
+    inv = load_inventory()
+    if inv is None:
+        return None  # 清单不可用:fail-open,如实不判
+    seen: set[str] = set()
+    misses: list[tuple[str, list[str]]] = []
+    for cmd in _ordered_apv_cmds(steps, init):
+        if cmd in seen:
+            continue
+        seen.add(cmd)
+        r = match_command(cmd)
+        if r["decided"] and not r["hit"]:
+            misses.append((cmd, nearest_heads(cmd)))
+    if not misses:
+        return None
+    ver = str(inv.get("version", ""))
+    stats = inv.get("stats") or {}
+    # 逃生①:worker 携行级证据(机械核验)
+    if (evidence or "").strip():
+        ok, note = _verify_command_evidence(evidence, [c for c, _ in misses])
+        if ok:
+            try:
+                from main.ist_core.memory.footprint.signals import emit_signal
+                emit_signal("command_existence_evidence_accepted", autoid,
+                            source="compile_emit", commands=[c for c, _ in misses],
+                            evidence=evidence[:200])
+            except Exception:  # noqa: BLE001
+                pass
+            # 剔除此前同命令落下的 stale claims——证据已坐实,别让过期题面
+            # 在该案后续因他因进问询流时被带出(redline 评审建议②)
+            try:
+                root = Path(__file__).resolve().parents[4]
+                ndp = root / "workspace" / "outputs" / (autoid or "").strip() / "needs_decision.json"
+                if ndp.is_file():
+                    _nd = json.loads(ndp.read_text(encoding="utf-8"))
+                    _cl = [c for c in (_nd.get("claims") or [])
+                           if not (c.get("claim_kind") == "command_existence"
+                                   and c.get("command") in {m[0] for m in misses})]
+                    if _cl != _nd.get("claims"):
+                        if _cl:
+                            _nd["claims"] = _cl
+                            ndp.write_text(json.dumps(_nd, ensure_ascii=False, indent=2),
+                                           encoding="utf-8")
+                        else:
+                            ndp.unlink()
+            except Exception:  # noqa: BLE001
+                logger.debug("stale command_existence claims 清理失败", exc_info=True)
+            return None
+        return (f"error: command-existence evidence rejected — {note}. Commands still "
+                f"unmatched: {[c for c, _ in misses]}.")
+    # 逃生②:该案已有用户裁决(同键不复问,(20) 收敛律)
+    try:
+        root = Path(__file__).resolve().parents[4]
+        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        udp, ndp = outd / "user_decision.json", outd / "needs_decision.json"
+        if udp.is_file() and ndp.is_file():
+            _ud = json.loads(udp.read_text(encoding="utf-8"))
+            _nd = json.loads(ndp.read_text(encoding="utf-8"))
+            if (_ud.get("decision") in ("改过程", "改预期")
+                    and any(c.get("claim_kind") == "command_existence"
+                            for c in (_nd.get("claims") or []))):
+                return None
+    except Exception:  # noqa: BLE001
+        logger.debug("command_existence 用户裁决检查失败(按未裁决)", exc_info=True)
+    # 呈报:写 needs_decision 台账(问询节点按 questions.py 组题)+信号,拒落卷
+    try:
+        root = Path(__file__).resolve().parents[4]
+        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        outd.mkdir(parents=True, exist_ok=True)
+        ndp = outd / "needs_decision.json"
+        data: dict = {"autoid": (autoid or "").strip(), "claims": []}
+        if ndp.is_file():
+            try:
+                loaded = json.loads(ndp.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and isinstance(loaded.get("claims"), list):
+                    data = loaded
+            except Exception:  # noqa: BLE001
+                pass
+        old = [c for c in data["claims"]
+               if not (c.get("claim_kind") == "command_existence"
+                       and c.get("command") in {m[0] for m in misses})]
+        for cmd, near in misses:
+            old.append({
+                "claim_kind": "command_existence", "command": cmd,
+                "reason": (f"命令『{cmd}』在 {ver} 版本专属 CLI 手册命令集"
+                           f"({stats.get('signatures', '?')} 签名,解析覆盖率 "
+                           f"{stats.get('coverage_excl_noise', '?')})未命中;最近似记载:"
+                           f"{('、'.join(near) if near else '无')}。已检索:"
+                           f"{inv.get('source_dir', '')} 全分册。手册抽取有已知截断上限,"
+                           "也可能该功能不属本版本(记载互斥类,fulldns 先例)"),
+                "suggested_fix": "换用版本内存在的等价命令/形态,或确认功能不属本版本后挂起",
+                "min_requests": 0, "ordering_sensitive": False,
+            })
+        data["claims"] = old
+        ndp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        logger.debug("command_existence needs_decision 落盘失败", exc_info=True)
+    try:
+        from main.ist_core.memory.footprint.signals import emit_signal
+        emit_signal("command_existence_miss", autoid, source="compile_emit",
+                    commands=[c for c, _ in misses], version=ver)
+    except Exception:  # noqa: BLE001
+        pass
+    lines = "\n".join(f"  - {c!r}  (nearest recorded: {', '.join(n) if n else 'none'})"
+                      for c, n in misses)
+    return ("error: command-existence gate — the following command(s) are not found in the "
+            f"version-specific CLI manual command set for {ver} "
+            f"({stats.get('signatures', '?')} signatures parsed, coverage "
+            f"{stats.get('coverage_excl_noise', '?')}):\n{lines}\n"
+            "This burned 3 authoring rounds + multiple device runs once (a feature absent "
+            "from this build). Two exits:\n"
+            "1) The command may genuinely exist (manual extraction has a truncation "
+            "ceiling): verify via the device `?` syntax reflection (dev_probe) or locate "
+            "the manual line, then re-emit with command_existence_evidence="
+            "'<file>.md:<line>' or 'dev_help: <what you verified>'.\n"
+            "2) If it truly does not exist on this build (or records conflict), the "
+            "needs_decision ledger entry is already written — end your reply with "
+            "状态：NEEDS_USER_DECISION and the engine will bring it to the user.")
+
+
 def _emit_stat(autoid: str, out: str, channel: str) -> None:
     """emit 出口台账(runtime/logs/emit_stats.jsonl)——打回率的机读事实源
     (E2 基线 48-52% 来自 fastlog 解析;此后量化门直接聚合本文件)。追加失败静默。"""
@@ -597,7 +765,8 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                  coverage_reduction_reason: str = "",
                  provenance: dict | list | str | None = None,
                  provenance_path: str = "",
-                 blocks: list | str | None = None) -> str:
+                 blocks: list | str | None = None,
+                 command_existence_evidence: str = "") -> str:
     """Produce a structurally correct case.xlsx from a step list (clones the framework-native template; you never deal with template structure/column alignment).
 
     **When to use**: the semantic design of a single case (config/trigger/assertions) is settled
@@ -654,6 +823,16 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
             (which kind of assertion/config/trigger). Without it, re-emitting is refused;
             this is not a formality — it prevents slamming the exact same write-up into
             another round.
+        command_existence_evidence: Only needed when the command-existence gate reported
+            commands missing from the version-specific CLI manual command set. Give either
+            a manual line reference (file name and line number joined by a colon; exact
+            format is shown in the gate message) whose vicinity must actually contain the
+            command words (mechanically verified), or a ``dev_help`` attestation that you
+            verified the syntax on the device via the ``?`` reflection. The manual
+            extraction has a known truncation ceiling, so a genuinely existing command can
+            be unrecorded — verify first, then re-emit with evidence. If the command truly
+            does not exist on this build (or records conflict), end your reply with the
+            NEEDS_USER_DECISION tail instead — the ledger entry is already written.
         coverage_reduction_reason: Required only when a **recompile** removes an observation
             dimension the previous volume had (an observation-verb class or a DNS record type
             that appeared in the old volume's observe commands but not in the new one).
@@ -1058,6 +1237,13 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     _ftres = check_crash_gates_mandatory(_gate_steps)
     if not _ftres.ok:
         return f"error: {_ftres.render(autoid)}"
+
+    # S6 命令存在性呈报门(V8.5 片1):版本命令集成员判定,未命中呈报不硬拒——
+    # 写 needs_decision 台账+拒落卷,worker 出路=行级证据重 emit 或 NEEDS_USER_DECISION。
+    gate = _gate_command_existence(autoid, steps, init=init_g,
+                                   evidence=command_existence_evidence)
+    if gate:
+        return gate
 
     # v2 结构约束门(opt-in,命题3.18 correct-by-construction):命令∈allowlist + 断言非悬空。
     # 与 grade 独立的确定性强制;v1(strict_structural=False)跳过,行为零变化。

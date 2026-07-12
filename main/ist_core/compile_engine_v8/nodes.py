@@ -1465,9 +1465,38 @@ def ask_contradiction(state: dict) -> dict:
     _cc_note = [{"key": str(c.get("key"))[:120],
                  "aids": [str(a)[-6:] for a in (c.get("aids") or [])]}
                 for c in _ccs[-3:]]
-    ans = interrupt({"kind": "ask_contradiction", "cases": payload,
+    # 共因合题(run14 实弹修:11 案同因曾呈 11 题分 3 页——「回答一次」的机械保证):
+    # bed 类目标按 (诊断依据, 污染者集) 分组,同组只出组长一题(题面注明代表案集),
+    # 答案经 _group_leader 广播到组员;非 bed 题不折叠
+    _group_leader: dict[str, str] = {}
+    _folded: list[dict] = []
+    _bed_groups: dict[tuple, dict] = {}
+    for it in payload:
+        if it["kind"] != "bed":
+            _folded.append(it)
+            continue
+        _d = next((f for f in reversed(fs) if f.get("ev") == "diagnosis"
+                   and str(f.get("aid")) == it["autoid"]), {})
+        _key = (str(_d.get("basis") or ""),
+                tuple(sorted(str(pp.get("aid")) for pp in (_d.get("polluters") or []))))
+        if _key in _bed_groups and _key != ("", ()):
+            leader = _bed_groups[_key]
+            leader.setdefault("group_aids", [leader["autoid"]]).append(it["autoid"])
+            _group_leader[it["autoid"]] = leader["autoid"]
+        else:
+            _bed_groups[_key] = it
+            _folded.append(it)
+    if _group_leader:
+        sh.emit(f"共因合题:{len(payload) - len(_folded)} 题并入代表题"
+                f"(同诊断依据+同污染者集),答案将广播")
+    ans = interrupt({"kind": "ask_contradiction", "cases": _folded,
                      # 批级共因摘要(§18.6 坑#8:common_cause 产出后曾零消费方)
                      "common_causes": _cc_note})
+    # 组员答案回填:沿用组长(消化循环遍历原始 payload,组员据此拿到答案)
+    if isinstance(ans, dict) and _group_leader:
+        for member, leader in _group_leader.items():
+            if member not in ans and leader in ans:
+                ans[member] = ans[leader]
     new_facts = []
     for item in payload:
         aid, kind, qid = item["autoid"], item["kind"], qids[item["autoid"]]

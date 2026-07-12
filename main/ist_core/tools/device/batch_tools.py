@@ -81,6 +81,37 @@ def _probe_stale_pytest(env=None) -> str | None:
     return None
 
 
+def _probe_device_reachable(env=None) -> bool | None:
+    """经跳板机 ping 被测设备((30) 承载链第零层;run14 实弹:设备批中失联,
+    11 案 fail 被 s₀ 配对批量误诊为床污染——污染诊断的前提是设备活着)。
+
+    True=可达 False=不可达 None=探测自身失败(未知,不改判——护栏不是闸门)。
+    """
+    import os
+    ip = os.environ.get("APV_DEVICE_IP", "")
+    if not ip:
+        return None
+    try:
+        from main.case_compiler.device_mcp_client import _connect
+        c = _connect(env)
+        try:
+            _, out, _ = c.exec_command(f"ping -c 2 -W 2 {ip} | tail -1", timeout=15)
+            txt = out.read().decode(errors="replace")
+        finally:
+            try:
+                c.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if "0% packet loss" in txt and " 0%" in txt:
+            return True
+        if "100% packet loss" in txt:
+            return False
+        return None
+    except Exception:  # noqa: BLE001
+        logger.debug("设备可达性探测失败(未知,不改判)", exc_info=True)
+        return None
+
+
 def _kill_stale_pytest(env=None) -> None:
     """清理设备床上残留的 ist_staging pytest(force_clean=True 的执行动作)。"""
     try:
@@ -558,6 +589,15 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
             # 此时 deliver 新卷会两份并发互踩配置,产出大片真实但无意义的 fail,且新
             # digest 可能收割到旧执行的日志(2026-07-04 三轮实证)。有残留默认拒绝;
             # 确认残留是弃跑后用 force_clean=True 清场重跑。
+            # (30) 承载链第零层前置:设备不可达时上机=整轮盲跑零信息(run14 实弹:
+            # 设备批中失联后若再复跑,只会产一批 broken 烧 12min 设备轮)。拒跑+
+            # 人话指引;探测自身失败(None)不拦(护栏不是闸门)
+            if _probe_device_reachable(env) is False:
+                return json.dumps({"error": "device_unreachable", "busy": False, "message": (
+                    "the device under test is unreachable from the jumphost (ping 100% "
+                    "loss) — running now would burn a full device round producing only "
+                    "broken results. Restore the device (console/power), verify with "
+                    "ping, then re-run.")}, ensure_ascii=False)
             stale = _probe_stale_pytest(env)
             if stale and force_clean:
                 _kill_stale_pytest(env)
@@ -720,6 +760,21 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                     if run_err and not d:
                         rec["detail_tail"] = (f"(no case log; run state={run_err})\n" + rec["detail_tail"])
                 out.append(rec)
+            # (30) 承载链第零层(run14 实弹修):批内出现 fail 时探设备可达性——
+            # 不可达=fail 全是设备失联的下游症状,非案缺陷非床污染,全部降 broken
+            # (device_unreachable);禁 s₀ 配对在死设备批上批量误诊(11 案实证)
+            if any(r["verdict"] == "fail" for r in out):
+                _reach = _probe_device_reachable()
+                if _reach is False:
+                    for r in out:
+                        if r["verdict"] != "pass":
+                            r["verdict"] = "broken"
+                            r["device_unreachable"] = True
+                            r["broken_reason"] = (
+                                "device unreachable (ping 100% loss from jumphost) — "
+                                "this failure is a downstream symptom of device loss, "
+                                "not a case defect nor bed pollution; restore the "
+                                "device, then resume")
             # 文件级崩溃可见性：有 unknown（某 case 把整份 pytest 搞崩、后续全不跑）→ 取框架 task 日志
             # 的 traceback 附到 unknown 上，让 agent 看到“崩在哪一行/什么异常”，而非只看到一堆无解释的 unknown。
             if task_id and any(r["verdict"] == "unknown" for r in out):

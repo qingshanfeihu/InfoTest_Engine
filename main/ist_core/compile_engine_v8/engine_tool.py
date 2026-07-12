@@ -213,10 +213,17 @@ def _contradiction_question(c: dict) -> dict:
                     "_tokens": {"重编补自清": "reflow_tau", "挂起到下批": "suspend",
                                 "如实降级": "downgrade"},
                     "_key": aid}
-        q = (f"{who} 被批级诊断判为**测试床状态残留污染**"
+        # 文案与证据强度匹配(run14 实弹修:交换子配对是必要条件推断,假阳 20-26%
+        # 理论自认;设备失联/命令失败呈同样症状——「唯一根治」类断言语气曾在
+        # 11 案设备失联批上全部乱断言)
+        _grp = [str(a)[-6:] for a in (c.get("group_aids") or []) if str(a) != str(aid)]
+        _grp_note = (f"本题代表 {len(_grp) + 1} 个同因用例(另含尾号 {'、'.join(_grp[:6])})"
+                     f",你的答案将应用到全部。" if _grp else "")
+        q = (f"{who} 被批级配对判为**疑似测试床状态污染**"
              + (f"(依据:{str(c.get('evidence') or '')[:200]})" if c.get("evidence") else "")
-             + "。该类污染复跑洗不掉(复跑只能救采集噪声),卷面本身没有错;"
-               "唯一根治是清理测试床上的残留配置/持久文件(床权在你)。如何处置?")
+             + "。注意:此判定是必要条件推断(非确证)——若设备/环境本身有异常,"
+               "症状与污染同形。若判定属实:整卷复跑洗不掉,须清理床上残留(床权在你)。"
+             + _grp_note + "如何处置?")
         return {"question": q, "header": f"床态{aid[-4:]}",
                 "options": [
                     {"label": "挂起到下批", "description": "床治理后下批续跑该案(重跑同参数时会询问恢复)"},

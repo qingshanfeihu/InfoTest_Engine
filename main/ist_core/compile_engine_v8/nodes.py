@@ -949,12 +949,21 @@ def attribute(state: dict) -> dict:
 
         pre_facts: list[dict] = []
         prescreened: list[str] = []
+        recs_pre = {str(r.get("autoid")): r for r in
+                    (sh.read_json(sh.project_root() / str(state.get("last_run_ref") or ""),
+                                  []) or []) if isinstance(r, dict)}
         for aid in list(todo):
             mine = [f for f in fs if f.get("aid") == aid]
             last = F.latest_verdict(mine, aid) or {}
             sig = " ".join(str(s) for s in (last.get("signatures") or []))[:400]
             h_pos, polluters, basis = _s0_pair(aid, comp, _prof, sig)
             if h_pos != "h_s0":
+                continue
+            # 多因保护(§18.6,坑#9 双故障遮蔽——668030 实证:s₀ 命中之外还有 TFTP
+            # 独立故障被叙事淹没):日志有独立执行失败行(anomaly_lines)时不免派,
+            # 深归因照常(diagnosis 照落,fork 能看到 s₀ 判定+异常行两份证据)
+            if (recs_pre.get(aid) or {}).get("anomaly_lines"):
+                sh.emit(f"…{aid[-6:]} s₀ 配对命中但日志含独立异常行——保留深归因(多因)")
                 continue
             todo.remove(aid)
             prescreened.append(aid)
@@ -1328,7 +1337,7 @@ def diagnose(state: dict) -> dict:
         last = F.latest_verdict(mine, aid) or {}
         sigs = [str(s) for s in (last.get("signatures") or [])]
         sig = " ".join(sigs)[:400]
-        sig_by_aid[aid] = " ".join(sigs[:1])
+        sig_by_aid[aid] = sigs   # 全签名集(坑#25:双签名故障只按第一签名归簇=第二故障族不可见)
         if any(f.get("ev") == "diagnosis"
                and str(f.get("run_id")) == _g6_diag_key(last, volume, aid)
                for f in mine):
@@ -1345,10 +1354,11 @@ def diagnose(state: dict) -> dict:
                           "run_id": f"diag:{volume}:{aid}"})
     # 同签名词干聚类(机械前筛 (24)):≥2 案同稳定词干 → common_cause 事实
     stems: dict[str, list[str]] = {}
-    for aid, s in sig_by_aid.items():
-        stem = re.sub(r"\d{6,}", "<id>", " ".join(s.lower().split()))[:160]
-        if stem:
-            stems.setdefault(stem, []).append(aid)
+    for aid, sig_list in sig_by_aid.items():
+        for one in sig_list or []:
+            stem = re.sub(r"\d{6,}", "<id>", " ".join(str(one).lower().split()))[:160]
+            if stem and aid not in stems.get(stem, []):
+                stems.setdefault(stem, []).append(aid)
     for stem, aids in stems.items():
         if len(aids) >= 2:
             new_facts.append({"ev": "common_cause", "aid": "", "key": stem,
@@ -1450,7 +1460,13 @@ def ask_contradiction(state: dict) -> dict:
                        "question_id": qids[it["autoid"]], "kind": it["kind"],
                        "question": str(it.get("evidence") or it.get("hypothesis") or "")[:300]}
                       for it in payload])
-    ans = interrupt({"kind": "ask_contradiction", "cases": payload})
+    _ccs = [f for f in fs if f.get("ev") == "common_cause"]
+    _cc_note = [{"key": str(c.get("key"))[:120],
+                 "aids": [str(a)[-6:] for a in (c.get("aids") or [])]}
+                for c in _ccs[-3:]]
+    ans = interrupt({"kind": "ask_contradiction", "cases": payload,
+                     # 批级共因摘要(§18.6 坑#8:common_cause 产出后曾零消费方)
+                     "common_causes": _cc_note})
     new_facts = []
     for item in payload:
         aid, kind, qid = item["autoid"], item["kind"], qids[item["autoid"]]
@@ -1832,9 +1848,29 @@ def closing(state: dict) -> dict:
     # 交付对账断言(§11.9:报告说有=盘上真有)+ 收口卡
     missing = [f for f in deliver_files if not (mdir / f).is_file()]
     if missing:
+        # 坑#26:报告说有=盘上真有,失配不再只是 warning——outcome 降级如实声明
         logger.warning("交付物清单与磁盘不一致:缺 %s", missing)
+        if str(report.get("outcome", "")).startswith("delivered"):
+            report["outcome"] = "delivery_incomplete"   # report_mismatch 更严重,不覆盖
+        try:
+            (mdir / "engine_report.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+        sh.emit(f"⚠ 交付物缺失({', '.join(missing)})——收口结论降级为交付不完整")
+    # G4 echo 入收口卡(§18.6 坑#21:此前仅流水行,收口卡无痕):每条用户裁决带
+    # 「引擎理解为」复述,截断/兜底误判在收口卡上可核对
+    _decision_echo = []
+    for f in fs:
+        if f.get("ev") == "decision" and f.get("answer"):
+            tok = str(f.get("token") or "")
+            _decision_echo.append({
+                "autoid": str(f.get("aid") or ""),
+                "answer": str(f.get("answer"))[:80],
+                "understood": _TOKEN_CN.get(tok, str(f.get("answer"))[:40])})
     sh.emit_summary(state, {
         "outcome": report["outcome"],
+        "decisions": _decision_echo,
         "ok": len(deliverable), "total": len(vw["cases"]),
         "labels": [{"autoid": a, "text": RD.STATUS_CN.get(str(c["status"]), str(c["status"]))}
                    for a, c in sorted(others.items())],

@@ -285,12 +285,22 @@ def render_unsuccessful_md(report: dict, fs: list[dict], manifest: dict,
 
 # ── 报告机械门:零术语泄漏(测试与 closing 断言共用) ───────────────────────────
 
-_LEAK = re.compile(
-    r"\b(deliverable|contradicted|failed_terminal|subset_verified|awaiting_user|escalated|"
-    r"broken|not_run|"
-    r"reflow|env_blocked|defect_candidate|rerun_isolated|delivery|subset|ask_panel|adopted|"
-    r"manual_vs_device|expected_vs_observed|method_vs_implementation|ordering_vs_persistence)\b"
-    r"|\b[0-9a-f]{16}\b")
+def _leak_pattern() -> "re.Pattern":
+    """denylist 从枚举源机械生成(§18.6 坑#23:硬编码 20 词表随枚举新增静默漂移——
+    新状态/处置/形态词自动入表,零人工记账)。豁免 pending/failed(常见英文单词,
+    误伤面大于泄漏面;它们的中文词条由 STATUS_CN 结构门保证)。"""
+    from main.ist_core.compile_engine_v8 import views as _V
+    words = {getattr(_V, n) for n in dir(_V) if n.startswith("S_")}
+    words |= set(STATUS_CN) | set(DISP_CN) | set(SHAPE_CN) | set(ACTION_CN) | set(CTX_CN)
+    words |= {"ask_panel", "adopted", "not_run", "gate_disabled",
+              "writeback_failed", "rollback_failed", "emit_invalid",
+              "report_mismatch", "delivery_incomplete"}
+    words -= {"pending", "failed", "other"}
+    pat = "|".join(sorted((re.escape(w) for w in words if w), key=len, reverse=True))
+    return re.compile(r"\b(" + pat + r")\b|\b[0-9a-f]{16}\b")
+
+
+_LEAK = _leak_pattern()
 
 
 def leak_scan(text: str) -> list[str]:

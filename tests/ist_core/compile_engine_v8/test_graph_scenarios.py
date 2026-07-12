@@ -55,6 +55,12 @@ def rig(tmp_path, monkeypatch):
     # 预检真实行为由 test_merge_precheck.py 单元覆盖
     from main.ist_core.tools.device import emit_xlsx_tool as _ex
     monkeypatch.setattr(_ex, "precheck_merge_case", lambda a: None)
+    # user_decision 落盘 stub(§18.2 坑#14):真语义=落盘失败则 decision 不落账重问;
+    # rig 假案无 workspace 目录,落盘必败会把「改描述→挂起」场景全变成重问——
+    # stub 成功路径;失败语义由专项单元覆盖
+    from main.ist_core.tools.device import verifiability_tool as _vt
+    monkeypatch.setattr(_vt.compile_user_decision, "func",
+                        lambda autoid, decision: f"ok: {autoid} {decision}")
     signals: list[tuple] = []
     monkeypatch.setattr(sh, "signal", lambda name, subj, **p: signals.append((name, subj, p)))
 

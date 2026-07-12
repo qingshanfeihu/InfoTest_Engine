@@ -342,6 +342,8 @@ def _probe_failed(out: str) -> bool:
     """探针自身失败(床态未知)的协议/契约级判定——不是内容关键字猜测:
     设备拒绝标记(% Invalid + ^ 行)/fastmcp status 契约行/工具 error 前缀。"""
     t = str(out or "")
+    if not t.strip():
+        return True   # 空回显=探针没跑到(超时/通道断),床态未知≠干净(审计坑#12 盲区)
     if t.startswith("error"):
         return True
     if re.search(r"^status:\s*error", t, re.MULTILINE):

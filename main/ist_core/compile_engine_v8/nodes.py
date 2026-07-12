@@ -173,6 +173,18 @@ def bed_gate(state: dict) -> dict:
     if stuck_ledger:
         rep["findings"] = list(rep.get("findings") or []) + stuck_ledger
         rep["needs_ask"] = True
+    # 上批床态收敛失败(bed_closure_failed,INV-11 式② 坑#12)=床离场态未知——
+    # 本批体检即使探针干净也要向用户呈报一次(残留可能在探针投影集外)
+    _fs_boot = sh.load_facts(state)
+    _closure_fails = [f for f in _fs_boot if f.get("ev") == "bed_closure_failed"
+                      and not any(g.get("ev") == "decision"
+                                  and str(g.get("question_id")) == f"bedclosure:{f.get('run_id') or ''}"
+                                  for g in _fs_boot)]
+    if _closure_fails:
+        rep["findings"] = list(rep.get("findings") or []) + [{
+            "kind": "bed_closure_failed", "probe_failed": False,
+            "detail": "上批批后床态收敛中途失败,床离场状态未知(残留可能在探针投影集之外)"}]
+        rep["needs_ask"] = True
     device_build = str((rep.get("anchor") or {}).get("device") or "")
     updates = {"bed_host": host, "device_build": device_build}
     # 批前床态快照(X11:批后 diff 的基线;观测不解析意图)
@@ -355,6 +367,20 @@ def ask_decision(state: dict) -> dict:
         decision = next((d for d in ("改过程", "改预期", "改描述") if d in a), "")
         if not decision:
             continue
+        # INV-11 式②(坑#14):先落盘后落账——emit 的 A 层 user_decision 硬门以盘上
+        # 文件为凭据;落盘失败时 decision 事实照落=用户拍板从「代码强制」静默退化
+        # 成散文约束。失败=本案本轮不落 decision(留在 needs_decision,下轮 gather
+        # 重问),如实告警
+        try:  # emit 门的 user_decision 契约(工具层不变;先问后落由本节点次序保证)
+            from main.ist_core.tools.device.verifiability_tool import compile_user_decision
+            out = compile_user_decision.func(autoid=aid, decision=decision)
+            if str(out).startswith("error"):
+                raise RuntimeError(str(out)[:200])
+        except Exception:  # noqa: BLE001
+            logger.warning("user_decision 落盘失败 %s——decision 不落账,下轮重问",
+                           aid, exc_info=True)
+            sh.emit(f"⚠ …{aid[-6:]} 裁决落盘失败,本轮不生效(下轮会重新询问)")
+            continue
         new_facts.append({"ev": "decision", "aid": aid,
                           "question_id": f.get("question_id"), "answer": decision})
         if decision == "改描述":
@@ -364,11 +390,6 @@ def ask_decision(state: dict) -> dict:
             new_facts.append({"ev": "suspended", "aid": aid,
                               "reason": "user_decision:改描述",
                               "question_id": f.get("question_id")})
-        try:  # emit 门的 user_decision 契约(工具层不变;先问后落由本节点次序保证)
-            from main.ist_core.tools.device.verifiability_tool import compile_user_decision
-            compile_user_decision.func(autoid=aid, decision=decision)
-        except Exception:  # noqa: BLE001
-            logger.debug("user_decision 落盘失败 %s", aid, exc_info=True)
         sh.signal("user_decided", aid)
     sh.append(state, new_facts)
     fs2 = sh.load_facts(state)
@@ -464,7 +485,13 @@ def merge(state: dict) -> dict:
     comp = list(comp)
     _invalid: dict[str, str] = {}
     for a in list(comp):
-        reason = precheck_merge_case(a)
+        try:
+            reason = precheck_merge_case(a)
+        except Exception as e:  # noqa: BLE001
+            # INV-11 式②(坑#11):预检自身异常=该案 emit_invalid,不杀全批——
+            # 防「单案杀批」的门不得在上一层复活同型坑
+            logger.warning("合并预检异常 %s", a, exc_info=True)
+            reason = f"precheck_error: {e}"[:200]
         if reason:
             _invalid[a] = reason
             comp.remove(a)
@@ -654,22 +681,40 @@ def reconcile(state: dict) -> dict:
             done = any(f.get("ev") == "writeback" and f.get("voucher_run") == last.get("run_id")
                        for f in fs2)
             if not done:
-                _writeback_one(aid, lr_ref)
-                wb_facts.append({"ev": "writeback", "aid": aid,
-                                 "targets": ["precedent", "footprint"],
-                                 "voucher_run": last.get("run_id"),
-                                 "provisional": ctx != F.CTX_DELIVERY})
-                sh.signal("writeback_done", aid, precedent=True)
+                wb_failed = _writeback_one(aid, lr_ref) or []
+                ok_targets = [t for t in ("precedent", "footprint") if t not in wb_failed]
+                if ok_targets:
+                    wb_facts.append({"ev": "writeback", "aid": aid,
+                                     "targets": ok_targets,
+                                     "voucher_run": last.get("run_id"),
+                                     "provisional": ctx != F.CTX_DELIVERY})
+                if wb_failed:
+                    # INV-11 式②(坑#4):失败不落成功事实——台账只为真发生的动作背书
+                    wb_facts.append({"ev": "writeback_failed", "aid": aid,
+                                     "targets": wb_failed,
+                                     "voucher_run": last.get("run_id")})
+                    sh.emit(f"⚠ …{aid[-6:]} 写回失败({','.join(wb_failed)}),已入账待补")
+                if ok_targets:
+                    sh.signal("writeback_done", aid, precedent="precedent" in ok_targets)
         elif last.get("result") == "fail" and ctx == F.CTX_DELIVERY:
             # 终验 fail:若此前有 writeback → 回滚(半毒先例撤销)。
             # broken/not_run 不触发回滚——案没跑成不构成对 pass 的反证((44))
             had = [f for f in fs2 if f.get("ev") == "writeback" and f.get("aid") == aid]
             rolled = [f for f in fs2 if f.get("ev") == "rollback" and f.get("aid") == aid]
             if had and len(rolled) < len(had):
-                _rollback_one(aid)
-                wb_facts.append({"ev": "rollback", "aid": aid, "of": "writeback",
-                                 "reason": "contradicted_at_delivery",
-                                 "voucher_run": last.get("run_id")})
+                rb_failed = _rollback_one(aid) or []
+                if rb_failed:
+                    # INV-11 式②:回滚失败=半毒残留仍在库,显式入账(禁伪成功背书)
+                    wb_facts.append({"ev": "rollback_failed", "aid": aid,
+                                     "targets": rb_failed,
+                                     "reason": "contradicted_at_delivery",
+                                     "voucher_run": last.get("run_id")})
+                    sh.emit(f"⚠ …{aid[-6:]} 先例回滚失败({','.join(rb_failed)}),"
+                            f"半毒残留在库——需人工清污")
+                else:
+                    wb_facts.append({"ev": "rollback", "aid": aid, "of": "writeback",
+                                     "reason": "contradicted_at_delivery",
+                                     "voucher_run": last.get("run_id")})
             had_pass = any(f.get("ev") == "verdict" and f.get("aid") == aid
                            and f.get("result") == "pass" for f in fs2)
             if had_pass:
@@ -685,19 +730,28 @@ def reconcile(state: dict) -> dict:
     return {"phase_status": "ok", **sh.counts_update(state, fs3)}
 
 
-def _writeback_one(aid: str, lr_ref: str) -> None:
+def _writeback_one(aid: str, lr_ref: str) -> list[str]:
+    """真 PASS 双写回。返回失败目标清单(INV-11 式②,坑#4):失败不再静默——
+    调用方据此落 writeback_failed 事实,台账只为真发生的动作背书。"""
+    failed: list[str] = []
     try:
         from main.ist_core.tools.device.precedent_tools import compile_writeback
-        compile_writeback.func(autoid=aid, last_run_path=lr_ref)
+        out = compile_writeback.func(autoid=aid, last_run_path=lr_ref)
+        if str(out).startswith("error"):
+            failed.append("precedent")
     except Exception:  # noqa: BLE001
-        logger.debug("先例写回失败 %s", aid, exc_info=True)
+        logger.warning("先例写回失败 %s", aid, exc_info=True)
+        failed.append("precedent")
     try:
         from main.ist_core.tools.knowledge.footprint_writeback import compile_footprint_writeback
-        compile_footprint_writeback.func(
+        out = compile_footprint_writeback.func(
             autoid=aid, provenance_path=f"workspace/outputs/{aid}/case.provenance.json",
             on_device_passed=True)
+        if str(out).startswith("error"):
+            failed.append("footprint")
     except Exception:  # noqa: BLE001
-        logger.debug("footprint 写回失败 %s", aid, exc_info=True)
+        logger.warning("footprint 写回失败 %s", aid, exc_info=True)
+        failed.append("footprint")
     try:  # 行为知识晋升(V6 writeback 三连的第三件,验收后补齐)
         from main.ist_core.compile_engine_v8.uncertain import _promote_behavior_candidates
         class _NoLed:
@@ -705,10 +759,13 @@ def _writeback_one(aid: str, lr_ref: str) -> None:
         _promote_behavior_candidates(aid, _NoLed())
     except Exception:  # noqa: BLE001
         logger.debug("行为晋升失败 %s", aid, exc_info=True)
+    return failed
 
 
-def _rollback_one(aid: str) -> None:
-    """写回回滚(清污脚本机制化):mirror 卷删除 + 意图索引摘键 + footprint 按 device_run 锚摘条。"""
+def _rollback_one(aid: str) -> list[str]:
+    """写回回滚(清污脚本机制化):mirror 卷删除 + 意图索引摘键 + footprint 按 device_run 锚摘条。
+    返回失败目标清单(INV-11 式②):失败=半毒残留仍在库,必须显式入账。"""
+    failed: list[str] = []
     try:
         from main.ist_core.tools.device import precedent_tools as PT
         fn = f"verified_{aid}.xlsx"
@@ -723,7 +780,8 @@ def _rollback_one(aid: str) -> None:
         PT._INTENT_INDEX_CACHE = None
         PT._MIRROR_CORPUS_CACHE = None
     except Exception:  # noqa: BLE001
-        logger.debug("mirror 回滚失败 %s", aid, exc_info=True)
+        logger.warning("mirror 回滚失败 %s", aid, exc_info=True)
+        failed.append("precedent")
     try:
         from main.knowledge_paths import KNOWLEDGE_FOOTPRINTS
         nodes = Path(KNOWLEDGE_FOOTPRINTS) / "nodes"
@@ -746,7 +804,9 @@ def _rollback_one(aid: str) -> None:
             if ch:
                 np.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:  # noqa: BLE001
-        logger.debug("footprint 回滚失败 %s", aid, exc_info=True)
+        logger.warning("footprint 回滚失败 %s", aid, exc_info=True)
+        failed.append("footprint")
+    return failed
 
 
 _DIG_HEAD_RE = re.compile(r"<<>> DiG [^\n]*?@(\S+)")
@@ -1095,7 +1155,10 @@ def _diag_grammar():
                [re.compile(p, re.IGNORECASE) for p in occ_n])
         return pers, l23, occ
     except Exception:  # noqa: BLE001
-        logger.debug("diagnose 文法加载失败(fail-open 空判定)", exc_info=True)
+        # INV-11 式③(坑#18):门数据面缺席=门静默消失——必须留声。s₀ 污染诊断/
+        # 自扰判定/触碰画像全族依赖本数据;缺席时诊断层整体失效
+        logger.warning("diagnose 文法加载失败——s₀ 污染诊断门本次禁用(gate_disabled)",
+                       exc_info=True)
         return [], [], ([], [])
 
 
@@ -1198,6 +1261,14 @@ def diagnose(state: dict) -> dict:
               if c["status"] in (V.S_FAILED, V.S_CONTRADICTED)]
     if not failed:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
+    # INV-11 式③(坑#18):门数据面缺席=显式入账,禁静默 no-op——s₀ 污染诊断全族
+    # 依赖文法数据,缺席时诊断门整体失效,用户必须在报告里看得见
+    pers_chk, l23_chk, _occ = _diag_grammar()
+    if not pers_chk and not l23_chk:
+        sh.append(state, [{"ev": "gate_disabled", "aid": "", "gate": "diagnose_s0",
+                           "reason": "domain_grammar unavailable — batch-level "
+                                     "pollution diagnosis disabled this run"}])
+        sh.emit("⚠ 文法数据不可用——批级污染诊断门本轮禁用(已入账)")
 
     profiles: dict[str, dict] = {}
 
@@ -1553,7 +1624,16 @@ def closing(state: dict) -> dict:
                 bed_note = ";".join(parts)
                 sh.emit(f"批后床态收敛:{bed_note or '干净'}")
     except Exception:  # noqa: BLE001
-        logger.debug("批后床态收敛失败", exc_info=True)
+        # INV-11 式②(坑#12):床态收敛整块失败曾完全无痕——54% T1 根治线的失败
+        # 模式必须入账;下批 bed_gate 读到该事实转 needs_ask(床态未知)
+        logger.warning("批后床态收敛失败", exc_info=True)
+        try:
+            sh.append(state, [{"ev": "bed_closure_failed", "aid": "",
+                               "host": str(state.get("bed_host") or ""),
+                               "reason": "post-batch bed convergence crashed; bed state unknown"}])
+            sh.emit("⚠ 批后床态收敛失败——床态未知,已入账(下批体检将呈报)")
+        except Exception:  # noqa: BLE001
+            logger.error("bed_closure_failed 入账也失败", exc_info=True)
 
     deliverable = [a for a, c in vw["cases"].items() if c["status"] == V.S_DELIVERABLE]
     others = {a: c for a, c in vw["cases"].items() if c["status"] != V.S_DELIVERABLE}

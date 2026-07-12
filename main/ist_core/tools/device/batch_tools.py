@@ -615,6 +615,19 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                                 _cur_idx = autoids.index(_id) + 1
                                 break
                     _env_host = getattr(client, "host", "") or ""
+                    # case 级超时嫌疑(§18.5,xUnit per-case timeout 的采集面近似):
+                    # 心跳能定位当前案——同案持续超阈=hang 嫌疑,记入 _prog_state
+                    # 供 digest 出口附 timeout_suspect(T1 三症状 hang/污染/真fail
+                    # 机械可分的第一信号;框架无 per-case 预算,只能采集侧判)
+                    _thresh = int(os.environ.get("IST_CASE_TIMEOUT_SUSPECT", "300"))
+                    if _cur_idx and _cur_idx == _prog_state.get("case_idx"):
+                        if now - _prog_state.get("case_t0", now) > _thresh:
+                            _sus = _prog_state.setdefault("timeout_suspects", {})
+                            _aid_cur = autoids[_cur_idx - 1]
+                            _sus[_aid_cur] = int(now - _prog_state.get("case_t0", now))
+                    elif _cur_idx:
+                        _prog_state["case_idx"] = _cur_idx
+                        _prog_state["case_t0"] = now
                     sig = f"{tail_txt}|{_cur_idx}"
                     if sig == _prog_state["sig"] and now - _prog_state["ts"] < 30:
                         return
@@ -681,9 +694,27 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                 causality = [ln.rstrip() for ln in d.splitlines()
                              if _re.search(r"(Success|Fail)\s*Num|fail to find|successed to find",
                                            ln, _re.IGNORECASE)]
+                # (43) ok(g) 谓词扫描(§18.5,文法数据 exec_failure_markers,零硬编码):
+                # pass 案日志含执行失败标记=空真嫌疑((44)违例,668030 形态)→降 broken;
+                # fail 案的标记行提取为 anomaly_lines(独立共因对归因可见,坑#24 平权)
+                _markers = _exec_failure_markers()
+                _anom = ([ln.strip() for ln in d.splitlines()
+                          if any(m in ln for m in _markers)][:8] if _markers else [])
+                if _anom and verdict == "pass":
+                    verdict = "broken"
                 rec = {"autoid": autoid, "verdict": verdict, "task_id": task_id,
                        "causality": "\n".join(causality[-12:]) if causality else "",
                        "detail_tail": d[-2500:]}
+                if _anom:
+                    rec["anomaly_lines"] = _anom
+                    if verdict == "broken":
+                        rec["broken_reason"] = (
+                            "execution-failure marker in a passing case's log — the "
+                            "assertions after the failed step are vacuous ((44)); the "
+                            "case's target behavior was not actually verified")
+                _sus = (_prog_state.get("timeout_suspects") or {}).get(autoid)
+                if _sus:
+                    rec["timeout_suspect_s"] = _sus   # 心跳同案超阈(§18.5,hang 嫌疑)
                 if verdict != "pass":
                     rec["device_context"] = client.fetch_device_context_under(submit, autoid)
                     if run_err and not d:
@@ -795,6 +826,28 @@ def _append_verified_runs(xlsx_path, results: list, cur_round: int, run_ts: floa
                 "build": (build or "").strip(),
                 "apv_cmds": apv.get(aid, []),
             }, ensure_ascii=False) + "\n")
+
+
+_EXEC_MARKERS_CACHE: list | None = None
+
+
+def _exec_failure_markers() -> list:
+    """(43) ok(g) 判据(文法数据 exec_failure_markers.patterns;读失败留声返回空)。"""
+    global _EXEC_MARKERS_CACHE
+    if _EXEC_MARKERS_CACHE is not None:
+        return _EXEC_MARKERS_CACHE
+    try:
+        from main.case_compiler.domain_grammar import load_grammar
+        _EXEC_MARKERS_CACHE = [str(x) for x in
+                               (load_grammar().get("exec_failure_markers") or {})
+                               .get("patterns") or []]
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(
+            "exec_failure_markers 文法读取失败——空真嫌疑扫描本次禁用", exc_info=True)
+        _EXEC_MARKERS_CACHE = []
+    return _EXEC_MARKERS_CACHE
+
 
 
 @tool(parse_docstring=True)

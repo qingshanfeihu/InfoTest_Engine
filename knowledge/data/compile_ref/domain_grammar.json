@@ -4637,5 +4637,14 @@
    "sdns",
    "slb"
   ]
+ },
+ "exec_failure_markers": {
+  "_provenance": "(43) ok(g) predicate grounding — execution-failure echo forms, machine-scanned by digest. run13 668030 live evidence: 'Failed to get the file from tftp server' + 'Failed to execute the command' after `config all tftp` — the restore silently failed and the subsequent not_found assertion passed vacuously (formula (44) violation; the case's target behavior was never actually verified across ALL rounds). RTNETLINK forms: framework IP restore contract violations (run history, e.g. cross-case duplicate ip add). Effect: markers in a PASSING case's log demote its verdict to broken (vacuous-pass suspicion, needs rerun/review); in FAILING cases they are extracted as anomaly_lines so attribution sees independent co-faults (audit pit #24: raw evidence must have equal standing with structured diagnosis). New marker form = add a pattern here, zero code.",
+  "patterns": [
+   "Failed to execute the command",
+   "Failed to get the file from",
+   "RTNETLINK answers: File exists",
+   "RTNETLINK answers: Cannot assign"
+  ]
  }
 }

@@ -664,7 +664,7 @@ def reconcile(state: dict) -> dict:
     run_id = f"run:{volume}:{ctx}:{len([f for f in fs if f.get('ev') == 'verdict'])}"
     # (43)(44) 三值透传(坑#1):digest 的 unknown(stale/级联/未执行)=not_run——案没
     # 跑成,结论无效,禁折叠成 fail(假签名→误 frozen→假归因;审计三路共振第一洞)
-    _RESULT_MAP = {"pass": "pass", "fail": "fail"}
+    _RESULT_MAP = {"pass": "pass", "fail": "fail", "broken": "broken"}
     verdicts = []
     for rec in data:
         aid = str(rec.get("autoid") or "")

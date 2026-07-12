@@ -81,5 +81,5 @@ def check_sync(remote_exec) -> dict:
         anchor.write_text(json.dumps({"local": loc, "remote": rem, "status": status},
                                      ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:  # noqa: BLE001
-        logger.debug("锚基线落盘失败(不阻断)", exc_info=True)
+        logger.warning("锚基线落盘失败(不阻断,漂移历史缺一笔)", exc_info=True)
     return rep

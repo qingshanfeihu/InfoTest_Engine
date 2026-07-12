@@ -211,6 +211,7 @@ def bed_gate(state: dict) -> dict:
             sh.emit(f"mirror 锚未验证({str(_sync.get('reason'))[:60]})——门前提本轮未对账")
     except Exception:  # noqa: BLE001
         logger.warning("mirror 锚对账异常", exc_info=True)
+        sh.emit("mirror 锚对账异常——门前提本轮未验证(详见日志)")
     if stuck_ledger:
         rep["findings"] = list(rep.get("findings") or []) + stuck_ledger
         rep["needs_ask"] = True

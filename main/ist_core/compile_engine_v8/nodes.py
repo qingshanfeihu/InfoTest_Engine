@@ -974,6 +974,9 @@ def attribute(state: dict) -> dict:
             h_pos, polluters, basis = _s0_pair(aid, comp, _prof, sig)
             if h_pos != "h_s0":
                 continue
+            if _cross_bed_refuted(mine, last):
+                sh.emit(f"…{aid[-6:]} 同签名 fail 跨床复现——s₀ 假设被反驳,保留深归因")
+                continue
             # 多因保护(§18.6,坑#9 双故障遮蔽——668030 实证:s₀ 命中之外还有 TFTP
             # 独立故障被叙事淹没):日志有独立执行失败行(anomaly_lines)时不免派,
             # 深归因照常(diagnosis 照落,fork 能看到 s₀ 判定+异常行两份证据)
@@ -1266,6 +1269,21 @@ def _occupancy_hit(sig: str) -> bool:
     return any(p.search(sig) for p in occ_p)
 
 
+def _cross_bed_refuted(mine: list[dict], last: dict) -> bool:
+    """跨床对照(run16 实弹:9 案同签名 fail 跨 93/105 两床复现,s₀ 判定第三次
+    方向错):s₀ 是床状态属性——同卷面同签名 fail 出现在 ≥2 个不同床=污染假设
+    被反驳(污染不跨床),真因在 λ/V 域,必须深归因而非床面板。"""
+    sigs = set(str(x) for x in (last.get("signatures") or []))
+    if not sigs:
+        return False
+    beds = {str(f.get("bed")) for f in mine
+            if f.get("ev") == "verdict" and f.get("result") == "fail"
+            and str(f.get("artifact")) == str(last.get("artifact"))
+            and sigs & {str(x) for x in (f.get("signatures") or [])}
+            and f.get("bed")}
+    return len(beds) >= 2
+
+
 def _s0_pair(aid: str, comp: list[str], prof, sig: str) -> tuple[str, list[dict], str]:
     """s₀ 配对机械判定(S10 交换子 I6 近似;diagnose 与 G6 前筛共用同一判定核)。
 
@@ -1359,6 +1377,8 @@ def diagnose(state: dict) -> dict:
                for f in mine):
             continue   # G6 前筛已判(同一 fail 裁决),结论同构——不重复落账(词干聚类照算)
         h_pos, polluters, basis = _s0_pair(aid, comp, _prof, sig)
+        if h_pos == "h_s0" and _cross_bed_refuted(mine, last):
+            h_pos, polluters, basis = "", [], ""   # 跨床反驳:s₀ 不成立
         if not h_pos:
             att = [f for f in mine if f.get("ev") == "attribution"]
             h_pos = str((att[-1] if att else {}).get("h_position") or "")

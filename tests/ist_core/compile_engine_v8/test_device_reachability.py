@@ -130,3 +130,20 @@ def test_s0_diagnosis_bed_anchor():
     assert parked("93", "105") is False   # 换床:旧床诊断失效
     assert parked("93", "93") is True     # 同床:照旧停车
     assert parked("", "105") is True      # 旧账无锚:保守停车
+
+
+def test_cross_bed_refutes_s0():
+    """run16 实弹:同卷面同签名 fail 跨两床复现=s₀(床属性)被反驳,须深归因。"""
+    from main.ist_core.compile_engine_v8.nodes import _cross_bed_refuted
+    aid = "203600000000000001"
+    last = {"ev": "verdict", "aid": aid, "result": "fail", "artifact": "a1",
+            "signatures": ["sig-X"], "bed": "105"}
+    mine = [{"ev": "verdict", "aid": aid, "result": "fail", "artifact": "a1",
+             "signatures": ["sig-X"], "bed": "93"}, last]
+    assert _cross_bed_refuted(mine, last) is True
+    # 单床:不反驳(照常 s₀ 候选)
+    mine_same = [dict(mine[0], bed="105"), last]
+    assert _cross_bed_refuted(mine_same, last) is False
+    # 不同签名:不反驳(不是同一故障)
+    mine_diff = [dict(mine[0], signatures=["sig-Y"]), last]
+    assert _cross_bed_refuted(mine_diff, last) is False

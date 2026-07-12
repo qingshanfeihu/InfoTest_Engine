@@ -267,7 +267,11 @@ def _gate_destructive_commands(autoid: str, steps: list, init: str = "") -> str 
 
 
 _SAVE_RE = _re_dev.compile(r"\bwrite\s+(memory|mem|file|all|net)\b", _re_dev.IGNORECASE)
-_RESTORE_RE = _re_dev.compile(r"\bconfig\s+(memory|file|all|net)\b", _re_dev.IGNORECASE)
+# clear/show 前缀排除:`clear config file X` 是删除保存文件(清理写)、`show config …`
+# 是只读,都不是恢复动作——run13 实证:worker 把 `clear config file` 放进 init 防残留,
+# 被误判 restore 触发 P0b/P1a 双报错,worker 被迫绕门直改 xlsx → 凭证过期 → merge 拒
+_RESTORE_RE = _re_dev.compile(r"(?<!clear\s)(?<!show\s)\bconfig\s+(memory|file|all|net)\b",
+                              _re_dev.IGNORECASE)
 _LISTENER_CFG_RE = _re_dev.compile(r"^sdns\s+listener\s+\S", _re_dev.IGNORECASE)  # 配置形态(show/no 不算)
 _CLEAR_RE = _re_dev.compile(r"\b(no\s+sdns\s+listener|clear\s+sdns)\b", _re_dev.IGNORECASE)
 _SAVE_REMOTE = ("file", "all", "net")  # 这些保存/恢复变体需带参数(文件名/目标);memory 无参合法

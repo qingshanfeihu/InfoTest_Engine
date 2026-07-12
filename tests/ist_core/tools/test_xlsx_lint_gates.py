@@ -418,3 +418,24 @@ def test_autoid_prefix_agnostic_204(tmp_path):
     assert lines.get(aid) == ["sdns on", "sdns listener 1.1.1.1"]
     got_aid, steps = steps_from_xlsx(p)
     assert got_aid == aid and len(steps) == 2
+
+
+def test_clear_config_file_is_cleanup_not_restore():
+    """run13 实证回归:`clear config file X` 是删除保存文件(清理写),不是恢复——
+    误判 restore 曾触发 P0b/P1a 双误报,把 worker 逼成绕门直改(凭证过期→merge 拒)。
+    show config 只读同理。"""
+    from main.ist_core.tools.device.emit_xlsx_tool import (
+        _restore_family, _gate_save_restore_pairing)
+    assert _restore_family("clear config file sdns_file_save_015") is None
+    assert _restore_family("show config file x") is None
+    assert _restore_family("config file sdns_file_save_015") == "file"
+    # 668015 真实卷面形态:init 含 clear config file(防上轮残留)+ 案内 write→clear→config
+    steps = [
+        {"E": "APV_0", "F": "cmds_config", "G": "clear config file f015"},
+        {"E": "APV_0", "F": "cmds_config", "G": "sdns on\nsdns listener 172.16.34.70 53"},
+        {"E": "APV_0", "F": "cmd_config", "G": "write file f015"},
+        {"E": "APV_0", "F": "cmd_config", "G": "clear sdns listener"},
+        {"E": "APV_0", "F": "cmd_config", "G": "config file f015"},
+        {"E": "check_point", "F": "not_found", "G": r"172\.16\.34\.70"},
+    ]
+    assert _gate_save_restore_pairing("203600000000000900", steps) is None

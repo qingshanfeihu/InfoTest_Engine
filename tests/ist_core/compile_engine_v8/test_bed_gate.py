@@ -227,3 +227,85 @@ def test_probe_failed_findings_never_enter_cleanup(tmp_path, monkeypatch):
     monkeypatch.setattr(N, "interrupt", lambda p: {"decision": "停止"})
     out = N.bed_gate({"out_name": "b1"})
     assert out["phase_status"] == "bed_blocked"   # 用户答停止;cleanup 从未被调
+
+
+# ── C1 维护日志通道((38) 写者全集;run12 五次修床误判形态回放) ─────────────────
+
+def _log_maint(root, host="h"):
+    """run12 真实修床命令面:拆 vlan/bond+恢复 port2 基线。"""
+    from main.ist_core.compile_engine_v8.bed import bed_record
+    bed_record(root, host, "maintenance", "manual", "maint:t1",
+               payload={"who": "jiangyongze", "why": "run12 拆床",
+                        "commands": ["no vlan vlan100", "no bond interface bond1",
+                                     "ip address port2 172.16.34.70 255.255.255.0"]})
+
+
+def test_c1_maintenance_tokens_roundtrip(tmp_path):
+    from main.ist_core.compile_engine_v8.bed import maintenance_tokens
+    _log_maint(tmp_path)
+    toks = maintenance_tokens(tmp_path, "h")
+    assert {"vlan100", "bond1", "port2", "172.16.34.70"} <= toks
+    assert "255.255.255.0" not in toks                    # 掩码不算身份
+    assert maintenance_tokens(tmp_path, "other-host") == set()
+
+
+def test_c1_maintained_residue_explained_no_ask(tmp_path):
+    """维护写 ≠ 非己方残留:登记后 bed_check 不再为它弹问询(finding 保留+标注)。"""
+    from main.ist_core.compile_engine_v8.bed import bed_record
+    bed_record(tmp_path, "h", "maintenance", "manual", "maint:t2",
+               payload={"commands": ["no segment maint_seg1"]})
+    extra = {"show segment name": "segment: maint_seg1  status: active"}
+    rep = bed_check(_probe(DEV_585, extra), CFG, root=tmp_path, host="h")
+    f = next(f for f in rep["findings"] if f["kind"] == "segments")
+    assert f.get("maintenance_explained") is True         # 如实标注,非静默丢弃
+    assert rep["needs_ask"] is False
+
+
+def test_c1_unlogged_residue_still_asks(tmp_path):
+    """没登记就没解释:同形态残留照旧走非己方 ask(修完必登记的纪律有牙齿)。"""
+    extra = {"show segment name": "segment: maint_seg1  status: active"}
+    rep = bed_check(_probe(DEV_585, extra), CFG, root=tmp_path, host="h")
+    assert rep["needs_ask"] is True
+
+
+def test_c1_partial_overlap_not_explained(tmp_path):
+    """finding 里混有维护面之外的实体 → 不解释(全覆盖判据,宽松侧防漏报)。"""
+    from main.ist_core.compile_engine_v8.bed import bed_record
+    bed_record(tmp_path, "h", "maintenance", "manual", "maint:t3",
+               payload={"commands": ["no segment maint_seg1"]})
+    extra = {"show segment name": "segment: maint_seg1\nsegment: rogue_seg9"}
+    rep = bed_check(_probe(DEV_585, extra), CFG, root=tmp_path, host="h")
+    f = next(f for f in rep["findings"] if f["kind"] == "segments")
+    assert not f.get("maintenance_explained")
+    assert rep["needs_ask"] is True
+
+
+def test_c1_split_maintained_closing_diff(tmp_path):
+    """closing 批后收敛:port2 恢复行从 foreign 分流为 maintained(run12 误报封堵)。"""
+    from main.ist_core.compile_engine_v8.bed import maintenance_tokens, split_maintained
+    _log_maint(tmp_path)
+    maint = maintenance_tokens(tmp_path, "h")
+    foreign = {"interface_addresses": {
+        "added": ["port2 172.16.34.70 255.255.255.0"],
+        "removed": ["vlan100 172.16.34.70 255.255.255.0",
+                    "colleague0 10.9.9.9 255.255.255.0"]}}
+    left, maintained = split_maintained(foreign, maint)
+    assert maintained["interface_addresses"]["added"] == ["port2 172.16.34.70 255.255.255.0"]
+    assert "vlan100 172.16.34.70 255.255.255.0" in maintained["interface_addresses"]["removed"]
+    assert left["interface_addresses"]["removed"] == ["colleague0 10.9.9.9 255.255.255.0"]
+    # 无维护记录 → 原样返回,零行为变化
+    l2, m2 = split_maintained(foreign, set())
+    assert l2 == foreign and m2 == {}
+
+
+def test_c1_digit_free_residue_not_whitewashed(tmp_path):
+    """redline 抓漏回归:纯字母实体名产零 token,聚合判定对它失明——按行判定后,
+    混入 digit-free 真残留(rogue)的 finding 必不解释、照旧弹 ask。"""
+    from main.ist_core.compile_engine_v8.bed import bed_record
+    bed_record(tmp_path, "h", "maintenance", "manual", "maint:t4",
+               payload={"commands": ["no segment maint_seg1"]})
+    extra = {"show segment name": "segment: maint_seg1\nsegment: rogue"}
+    rep = bed_check(_probe(DEV_585, extra), CFG, root=tmp_path, host="h")
+    f = next(f for f in rep["findings"] if f["kind"] == "segments")
+    assert not f.get("maintenance_explained")
+    assert rep["needs_ask"] is True

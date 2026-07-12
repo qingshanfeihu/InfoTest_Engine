@@ -94,6 +94,8 @@ def case_timeline(mine: list[dict]) -> list[str]:
             out.append("挂起,留待下批继续")
         elif ev == "resumed":
             out.append("恢复处理")
+        elif ev == "delivery_blocked":
+            out.append("验证通过,但卷面缺案尾清理(会污染后续用例),暂不交付")
     return out
 
 
@@ -178,6 +180,10 @@ def remedy_text(queue: list[dict], mine: list[dict], panel: dict | None = None) 
         if not answered:
             return ("**去向**:已向你呈报差异待确认" + (f"(问题:{ask})" if ask else "")
                     + ",答复后按你的裁决继续。")
+    blocked = [f for f in mine if f.get("ev") == "delivery_blocked"]
+    if blocked and not any(f.get("ev") == "authored" for f in mine[mine.index(blocked[-1]):]):
+        return ("**去向**:功能验证已通过,只差案尾清理步(自己留下的网络层配置要在"
+                "案内恢复);下批续跑会带此反馈重新编写,补上后即可交付。")
     from main.ist_core.compile_engine_v8.views import _is_suspended
     if _is_suspended(mine):
         return "**去向**:已挂起;重跑同参数时会再次询问是否恢复。"

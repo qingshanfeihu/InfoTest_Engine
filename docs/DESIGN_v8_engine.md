@@ -811,13 +811,25 @@ run12 实弹+R10 审计产出的七项理论修正（commit 20fd56b6）的工程
 | G6 | **域分诊前筛**（判定树第零层） | Ω⑥/§3.2 | diagnose 的 s₀ 配对**前移**到归因派发之前（attribute 节点先跑机械前筛：s₀ 配对命中的案不派深归因 fork，直接落 h_s0 诊断+轻量归因事实）——run12 的 22 个归因 fork 大半可省（X1 批级前筛的正名落地） | 床污染批：归因 fork 数 ≈ 非 s₀ fail 数；诊断正确率不降 |
 | C1 | **维护日志通道**（(38)） | (38) 写者全集 | 运维写入账：`scripts/maintenance/log_bed_maintenance.py`（谁/何时/何命令/为何,append 进 runtime/bed_ledger/<host>.jsonl 的 maintenance 事实）；bed_gate diff 解释时消费（维护写≠非己方残留≠案残留）；人工修床纪律=修完必登记 | run12 五次修床形态回放：下批 bed_gate 对 port2 恢复不再误判 |
 
-### 17.2 落地序（并入队列 v3 → v4）
+### 17.2 落地序（并入队列 v3 → v4）——**已全部落地（2026-07-12）**
 
 **片4.5**（G2+G3+G4，面板与交付语义,一次改）→ **G1 配对恢复门**（emit,独立）
 → **G5 报告重算门**（closing,半天）→ **C1 维护日志**（脚本+bed_gate 消费,半天）
 → **G6 域分诊前筛**（attribute 重构,与序② X1 合并）。
 队列 v3 其余外围项（L3/S1 正式版/I3/quarantine）顺延,优先级不变——G1/G3 是
 L3 未落地期的止血带,L3 落地后二者从「必需」降为「纵深」。
+
+落地记录：G1-G4 见 commit 6ec5de43（tau_coverage.py 判定核+emit 门,26 卷校准
+仅 655203 命中零误伤;bed 面板自污染者出口;closing delivery_blocked;决策
+echo-back）。G5=report_gate.py（独立重算路径,故意不复用 views/facts 派生函数;
+失配→REPORT_MISMATCH.json+outcome 翻转+报告顶警示条;顺带修复 G3 接线缺陷——
+封堵案状态未写回 vw 本体致报告仍计通过,恰为 G5 目标形态的活证）。C1=
+log_bed_maintenance.py 登记 ev=maintenance 床账+三消费点（bed_check 残留解释/
+bed_cleanup 圈定排除【维护写=合法基线不可清】/closing 批后 foreign 分流）,全覆盖
+才解释、部分命中不解释（宽松侧防洗白）;run12 六次修床已按新纪律补账@93。G6=
+attribute 派发前 _s0_pair 前筛（与 diagnose 共用判定核）,命中案免深归因 fork、
+机械落 diagnosis(diag:pre:)+轻量 attribution(E/rerun_isolated/h_s0),停车位/
+bed 面板/G2 出口消费链原样接通;验收测试断言床污染案零 attributor fork。
 
 ### 17.3 设计决策记录
 

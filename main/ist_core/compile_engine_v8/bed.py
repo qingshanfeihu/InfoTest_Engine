@@ -65,7 +65,8 @@ def _ledger_path(root: Path, host: str) -> Path:
 
 def bed_record(root: Path, host: str, ev: str, kind: str, ident: str,
                batch: str = "", payload: dict | None = None) -> None:
-    """记一笔床账。ev ∈ {created, restored};kind ∈ {segment, sdns_config_file, sync_peer, …}。
+    """记一笔床账。ev ∈ {created, restored, cleaned, maintenance};
+    kind ∈ {segment, sdns_config_file, sync_peer, manual, …}。
     payload 承载机械恢复所需数据(如逆放命令列表——(25) 通路一:恢复=回放账本)。
     追加失败静默告警(床账是护栏,不阻断主流程——但 unrestored 差额会在下批体检露头)。"""
     try:
@@ -79,6 +80,69 @@ def bed_record(root: Path, host: str, ev: str, kind: str, ident: str,
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:  # noqa: BLE001
         logger.warning("床账追加失败 host=%s %s %s", host, ev, ident, exc_info=True)
+
+
+def maintenance_tokens(root: Path, host: str) -> set:
+    """维护写的身份 token 集(C1 通道,(38) 写者全集的「运维写」入账消费端)。
+
+    人工修床经 scripts/maintenance/log_bed_maintenance.py 登记(谁/何时/何命令/为何,
+    ev=maintenance);此集合供两处解释 diff:①bed_check 残留判定(维护写≠非己方残留,
+    不弹 ask)②closing 批后收敛(维护写≠案残留,不入 foreign 告警)。run12 实证:
+    五次人工修床(拆桥接层配置、恢复接口基线地址)未入账 → 批后被判非己方漂移误告警。
+    """
+    p = _ledger_path(root, host)
+    toks: set = set()
+    if not p.is_file():
+        return toks
+    for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+        try:
+            d = json.loads(line)
+        except Exception:  # noqa: BLE001
+            continue
+        if d.get("ev") != "maintenance":
+            continue
+        for c in (d.get("payload") or {}).get("commands") or []:
+            toks.update(_identity_tokens(str(c)))
+    return toks
+
+
+def annotate_maintenance(findings: list[dict], maint: set) -> None:
+    """就地标注:finding 的**每一内容行**身份 token 非空且 ⊆ 维护命令面 →
+    maintenance_explained。按行判定(与 split_maintained 同型)——聚合判定对
+    零 token 行(纯字母实体名)失明,部分真残留会被静默洗白(redline 实测复现:
+    维护面只有 maint_seg1,detail 混入 "segment: rogue" 仍被解释)。零 token 的
+    非空行=不可解释(保守侧:漏解释多问一次,好过洗白)。保留 finding 本体
+    (如实呈报,非静默丢弃);probe_failed(床态未知)不解释。"""
+    if not maint:
+        return
+    for f in findings or []:
+        if f.get("kind") == "build_anchor" or f.get("probe_failed"):
+            continue
+        lines = [ln for ln in str(f.get("detail") or "").splitlines() if ln.strip()]
+        if lines and all(
+                (toks := set(_identity_tokens(ln))) and toks <= maint for ln in lines):
+            f["maintenance_explained"] = True
+
+
+def split_maintained(foreign: dict, maint: set) -> tuple[dict, dict]:
+    """closing 批后收敛:foreign diff 里能被维护命令面解释的行分流为 maintained
+    (只报「维护写已解释」,不告警不动手)。判据与 own_writes 同型(行级全覆盖)。"""
+    if not maint:
+        return foreign, {}
+    left: dict = {}
+    maintained: dict = {}
+    for name, d in (foreign or {}).items():
+        l = {"added": [], "removed": []}
+        m = {"added": [], "removed": []}
+        for side in ("added", "removed"):
+            for ln in d.get(side) or []:
+                toks = set(_identity_tokens(ln))
+                (m if toks and toks <= maint else l)[side].append(ln)
+        if l["added"] or l["removed"]:
+            left[name] = l
+        if m["added"] or m["removed"]:
+            maintained[name] = m
+    return left, maintained
 
 
 def bed_unrestored(root: Path, host: str) -> list[dict]:
@@ -345,10 +409,13 @@ def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
         if body.strip() and "(no output)" not in out:
             report["findings"].append({"kind": name, "detail": body[:300]})
 
-    # ③ 床账差额:己方未复原 → 可自动恢复;其余发现 → ask
+    # ③ 床账差额:己方未复原 → 可自动恢复;维护写(C1 通道)→ 已解释只标注;
+    # 其余发现 → ask
     ours = bed_unrestored(root, host)
     report["ours_unrestored"] = ours
-    foreign = [f for f in report["findings"] if f["kind"] != "build_anchor"]
+    annotate_maintenance(report["findings"], maintenance_tokens(root, host))
+    foreign = [f for f in report["findings"] if f["kind"] != "build_anchor"
+               and not f.get("maintenance_explained")]
     if foreign and not ours:
         report["needs_ask"] = True          # 非己方残留:只报不清
     return report

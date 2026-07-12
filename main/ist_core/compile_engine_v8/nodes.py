@@ -190,8 +190,10 @@ def bed_gate(state: dict) -> dict:
     # 初始化清理(2026-07-10 用户裁决:开工必净):有文法清理引用的残留先清后复检;
     # 清不掉/无引用的仍走 ask。R1 12/26 崩盘(¥96)最大嫌疑=两天床残留,此门止损。
     # probe_failed 项不进清理(床态未知,没有清理对象;题面单独如实呈报)
+    # maintenance_explained(C1):维护写是合法床基线——决不能被清理引用误清
     residue = [f for f in (rep.get("findings") or [])
-               if f.get("kind") != "build_anchor" and not f.get("probe_failed")]
+               if f.get("kind") != "build_anchor" and not f.get("probe_failed")
+               and not f.get("maintenance_explained")]
     clean: dict = {"cleaned": [], "failed": [], "skipped": []}
     if residue:
         clean = B.bed_cleanup(_exec_fn, residue, root=sh.project_root(), host=host,
@@ -750,6 +752,59 @@ def attribute(state: dict) -> dict:
         todo.append(aid)
     if not todo:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
+
+    # G6 域分诊前筛(§17,判定树第零层 Ω⑥):s₀ 配对命中的案机械证据已足——不派
+    # 深归因 fork(run12 实测 22 个归因 fork 大半烧在床污染案上,单案视野还判不出
+    # 批级污染),直接落 h_s0 诊断+轻量归因事实;停车位/bed 面板/G2 出口消费链与
+    # diagnose 同构。非 s₀ 案照旧深归因(前筛只筛派发,不动 LLM 孔本身)。复跑后
+    # 再 fail 会产新裁决重新进 todo——彼时新诊断晚于用户 retry,写权律语义自洽
+    # (每轮新 fail 都要新声明,非一次 retry 永久免检)。
+    merges = [f for f in fs if f.get("ev") == "merged"]
+    comp = [str(a) for a in (merges[-1].get("composition") or [])] if merges else []
+    volume = str(merges[-1].get("volume") or "") if merges else ""
+    if comp:
+        profiles: dict[str, dict] = {}
+
+        def _prof(aid: str) -> dict:
+            if aid not in profiles:
+                try:
+                    profiles[aid] = _case_touch_profile(aid)
+                except Exception:  # noqa: BLE001
+                    profiles[aid] = {"persist": [], "l23": [], "entities": set()}
+            return profiles[aid]
+
+        pre_facts: list[dict] = []
+        prescreened: list[str] = []
+        for aid in list(todo):
+            mine = [f for f in fs if f.get("aid") == aid]
+            last = F.latest_verdict(mine, aid) or {}
+            sig = " ".join(str(s) for s in (last.get("signatures") or []))[:400]
+            h_pos, polluters, basis = _s0_pair(aid, comp, _prof, sig)
+            if h_pos != "h_s0":
+                continue
+            todo.remove(aid)
+            prescreened.append(aid)
+            pre_facts += [
+                {"ev": "diagnosis", "aid": aid, "h_position": "h_s0",
+                 "polluters": polluters[:5], "basis": basis,
+                 "run_id": f"diag:pre:{volume}:{aid}"},
+                {"ev": "attribution", "aid": aid,
+                 "round": F.rounds_used(mine, aid),
+                 "run_id": str(last.get("run_id") or ""),
+                 "layer": "E", "disposition": "rerun_isolated",
+                 "h_position": "h_s0",
+                 "fix_direction": ("batch-level s0 pairing hit: testbed-state pollution; "
+                                   "deep attribution fork skipped (mechanical evidence "
+                                   "sufficient). Route: bed treatment / tail placement / "
+                                   "self-cleanup recompile."),
+                 "evidence": basis}]
+        if pre_facts:
+            sh.append(state, pre_facts)
+            fs = sh.load_facts(state)
+            sh.emit(f"域分诊前筛:{len(prescreened)} 案批级 s₀ 配对命中(床态污染),"
+                    f"免深归因派发;{len(todo)} 案照常归因")
+    if not todo:
+        return {"phase_status": "ok", **sh.counts_update(state, fs)}
     lr_ref = str(state.get("last_run_ref") or "")
     data = sh.read_json(sh.project_root() / lr_ref, []) or []
     recs = {str(r.get("autoid")): r for r in data if isinstance(r, dict)}
@@ -999,6 +1054,43 @@ def _occupancy_hit(sig: str) -> bool:
     return any(p.search(sig) for p in occ_p)
 
 
+def _s0_pair(aid: str, comp: list[str], prof, sig: str) -> tuple[str, list[dict], str]:
+    """s₀ 配对机械判定(S10 交换子 I6 近似;diagnose 与 G6 前筛共用同一判定核)。
+
+    返回 (h_position, polluters, basis);未命中返回 ("", [], "")。
+    prof(aid)->触碰画像({persist, l23, entities}),调用方带缓存注入。
+    """
+    vict = prof(aid)
+    polluters: list[dict] = []
+    idx = comp.index(aid) if aid in comp else len(comp)
+    for a in comp:
+        if a == aid:
+            continue
+        p = prof(a)
+        if p["persist"]:
+            # 持久面写=全局配置存储分量(全机耦合),**不受卷序限制**——快照跨轮/
+            # 跨 run 存活复活(保存族跨面洗白路径,预言1 反扫 VC 规则);排尾只降低
+            # 卷内暴露,消不掉跨轮通路(run11 668030 排尾后仍三轮翻挂即此)
+            polluters.append({"aid": a, "via": "persistent-plane write",
+                              "cmds": p["persist"][:2]})
+        elif comp.index(a) < idx:
+            # 配置面 L2/L3 写按卷序(前驱写、后继读)——I6 近似,跨轮形态由
+            # 持久面分支与床账兜
+            p_ents = {e for line in p["l23"]
+                      for e in _DIAG_ENTITY_RE.findall(line)}
+            shared = sorted(p_ents & vict["entities"])[:4]
+            if shared:
+                polluters.append({"aid": a, "via": "shared L2/L3 entity",
+                                  "shared": shared})
+    self_persist = bool(vict["persist"]) and _occupancy_hit(sig)
+    if polluters or self_persist:
+        basis = ("self persistent-plane write + occupied/exists signature"
+                 if self_persist and not polluters else
+                 "upstream writer(s) in volume order touch shared bottom-layer/persistent state")
+        return "h_s0", polluters, basis
+    return "", [], ""
+
+
 def diagnose(state: dict) -> dict:
     """批级诊断(V8.5 片3;X3 的机械半:LLM 观察者/common_cause 提案留片4)。
 
@@ -1042,36 +1134,11 @@ def diagnose(state: dict) -> dict:
         sigs = [str(s) for s in (last.get("signatures") or [])]
         sig = " ".join(sigs)[:400]
         sig_by_aid[aid] = " ".join(sigs[:1])
-        vict = _prof(aid)
-        polluters: list[dict] = []
-        idx = comp.index(aid) if aid in comp else len(comp)
-        for a in comp:
-            if a == aid:
-                continue
-            p = _prof(a)
-            if p["persist"]:
-                # 持久面写=全局配置存储分量(全机耦合),**不受卷序限制**——快照跨轮/
-                # 跨 run 存活复活(保存族跨面洗白路径,预言1 反扫 VC 规则);排尾只降低
-                # 卷内暴露,消不掉跨轮通路(run11 668030 排尾后仍三轮翻挂即此)
-                polluters.append({"aid": a, "via": "persistent-plane write",
-                                  "cmds": p["persist"][:2]})
-            elif comp.index(a) < idx:
-                # 配置面 L2/L3 写按卷序(前驱写、后继读)——I6 近似,跨轮形态由
-                # 持久面分支与床账兜
-                p_ents = {e for line in p["l23"]
-                          for e in _DIAG_ENTITY_RE.findall(line)}
-                shared = sorted(p_ents & vict["entities"])[:4]
-                if shared:
-                    polluters.append({"aid": a, "via": "shared L2/L3 entity",
-                                      "shared": shared})
-        self_persist = bool(vict["persist"]) and _occupancy_hit(sig)
-        h_pos, basis = "", ""
-        if polluters or self_persist:
-            h_pos = "h_s0"
-            basis = ("self persistent-plane write + occupied/exists signature"
-                     if self_persist and not polluters else
-                     "upstream writer(s) in volume order touch shared bottom-layer/persistent state")
-        else:
+        if any(f.get("ev") == "diagnosis"
+               and str(f.get("run_id")) == f"diag:pre:{volume}:{aid}" for f in mine):
+            continue   # G6 前筛已判(同卷),结论同构——不重复落账(词干聚类照算)
+        h_pos, polluters, basis = _s0_pair(aid, comp, _prof, sig)
+        if not h_pos:
             att = [f for f in mine if f.get("ev") == "attribution"]
             h_pos = str((att[-1] if att else {}).get("h_position") or "")
             basis = "fork candidate (no batch-level counter-evidence)" if h_pos else ""
@@ -1364,6 +1431,10 @@ def closing(state: dict) -> dict:
                 corpus = "\n".join(str(r.get("device_context") or "") for r in lr
                                    if isinstance(r, dict))
                 own, foreign = B.own_writes(diff, corpus)
+                # C1 维护通道:人工修床已登记的写 ≠ 案残留 ≠ 非己方漂移(run12
+                # 五次修床被判 foreign 误告警的封堵)——分流只标注,不动手
+                foreign, maintained = B.split_maintained(
+                    foreign, B.maintenance_tokens(sh.project_root(), host))
                 # 恢复命令:生成归 LLM(懂任何状态面,零模板);机械双门=实体越界门
                 # +执行后复探验证(行动论 (22):判断开放,入库门闭合)
                 cmds, rejected = [], []
@@ -1391,6 +1462,8 @@ def closing(state: dict) -> dict:
                     parts.append(f"{len(rejected)} 条越界命令被门拒")
                 if residual:
                     parts.append(f"{len(residual)} 通道残余入床账(下批接力)")
+                if maintained:
+                    parts.append(f"{len(maintained)} 通道为已登记的维护写(已解释)")
                 if foreign:
                     parts.append(f"{len(foreign)} 通道非己方漂移(只报不动,INV-9)")
                 bed_note = ";".join(parts)
@@ -1418,9 +1491,14 @@ def closing(state: dict) -> dict:
                            "reason": "missing in-case teardown for network-layer writes",
                            "run_id": f"g3:{a}"} for a in _blocked])
         fs = sh.load_facts(state)
+        # 状态改写必须落到 vw["cases"] 本体并重算 counts——report 的 cases/totals
+        # 都引用 vw,只改 others 副本会让报告继续把封堵案算进通过数(G5 即拦此形态)
+        from collections import Counter as _Counter
         for a in _blocked:
-            others[a] = {**vw["cases"][a], "status": "delivery_blocked"}
+            vw["cases"][a] = {**vw["cases"][a], "status": "delivery_blocked"}
+            others[a] = vw["cases"][a]
             deliverable.remove(a)
+        vw["counts"] = dict(_Counter(str(v["status"]) for v in vw["cases"].values()))
         sh.emit(f"污染者交付门:{len(_blocked)} 案 pass 但卷面缺案尾清理——"
                 f"不入交付卷(重编补自清后可交付)")
     mf = [f for f in fs if f.get("ev") == "merged"]
@@ -1429,8 +1507,8 @@ def closing(state: dict) -> dict:
     report = {
         "engine": "v8",
         "outcome": ("delivered_all_pass" if not others else "delivered_with_labels"),
-        "totals": {"cases": len(vw["cases"]), "deliverable": len(deliverable),
-                   **vw["counts"]},
+        "totals": {"cases": len(vw["cases"]), **vw["counts"],
+                   "deliverable": len(deliverable)},
         "volume": vw.get("volume"),
         "moved_tail": moved, "coexist_violations": coexist,
         "bed": {"host": state.get("bed_host"), "device_build": state.get("device_build"),
@@ -1485,6 +1563,24 @@ def closing(state: dict) -> dict:
         (mdir / "engine_report.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     dmd = RD.render_delivery_report(report, fs, m, queues, panels)
+    # G5 报告重算门(§17,(42) 报告保真):独立路径从 facts 重算计数与终态陈述,
+    # 与 engine_report+人话报告逐项比对;失配=拒绝交付+告警(名义 26/26 前科封堵)
+    from main.ist_core.compile_engine_v8 import report_gate as RG
+    g5_issues, g5_detail = RG.check_report(report, dmd, fs, m)
+    if g5_issues:
+        (mdir / "REPORT_MISMATCH.json").write_text(
+            json.dumps({"issues": g5_issues, "detail": g5_detail},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
+        report["outcome"] = "report_mismatch"
+        (mdir / "engine_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        dmd = RG.mismatch_banner(g5_issues) + dmd
+        sh.append(state, [{"ev": "report_mismatch", "aid": "",
+                           "issues": g5_issues, "run_id": "g5"}])
+        fs = sh.load_facts(state)
+        logger.warning("G5 报告重算门失配:%s", g5_issues)
+        sh.emit(f"⚠ 报告重算门:发现 {len(g5_issues)} 处报告与事实台账不一致,"
+                f"本批暂不可作为交付依据(详见 REPORT_MISMATCH.json)")
     (mdir / "delivery_report.md").write_text(dmd, encoding="utf-8")
     deliver_files = ["case.xlsx", "delivery_report.md", "engine_report.json", "facts.jsonl"]
     if others:
@@ -1539,6 +1635,7 @@ def closing(state: dict) -> dict:
                    for a, c in sorted(others.items())],
         "report": f"workspace/outputs/{out_name}/delivery_report.md",
         "files": deliver_files, "missing": missing,
+        "report_mismatch": bool(g5_issues),
     })
     sh.emit(f"交付:{len(deliverable)}/{len(vw['cases'])} 可交付"
             + (f",{len(others)} 案带标注" if others else "")

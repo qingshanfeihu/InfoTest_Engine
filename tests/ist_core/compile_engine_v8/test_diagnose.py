@@ -236,3 +236,60 @@ def test_user_retry_overrides_s0_gate():
     assert _user_retry_after_s0(fs_rev, aid) is False
     # 无诊断:不适用
     assert _user_retry_after_s0([fs[1]], aid) is False
+
+
+def test_g6_prescreen_skips_attribution_fork(rig):
+    """G6 域分诊前筛(§17,判定树第零层):s₀ 配对命中的案**零归因 fork 派发**
+    (run12 实测 22 fork 大半烧在床污染案上;验收判据=归因 fork 数≈非 s₀ fail 数),
+    机械落 h_s0 诊断+轻量归因事实,停车位/bed 面板消费链照常走通。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+
+    rows_by_aid = {
+        AIDS[0]: [{"E": "APV_0", "F": "cmds_config",
+                   "G": "slb virtual http v1 172.16.34.70 80\nwrite memory"}],
+        AIDS[1]: [{"E": "APV_0", "F": "cmds_config",
+                   "G": "sdns on\nsdns listener 172.16.34.70"}],
+        AIDS[2]: [{"E": "APV_0", "F": "cmds_config", "G": "sdns on"}],
+    }
+    rig["monkeypatch"].setattr(
+        N, "_load_case_rows",
+        lambda aid: rows_by_aid.get(aid, [{"E": "APV_0", "F": "cmds_config", "G": "sdns on"}]))
+
+    orig_fork = N._FORK_OVERRIDE
+    attr_forks: list[str] = []
+
+    def fork(skill, brief, *, tag="", effort=""):
+        if skill == "compile-attributor":
+            env = json.loads(brief.splitlines()[0])
+            attr_forks.append(str(env.get("autoid")))
+            return "VERDICT: V/reflow"   # 若被派到,行为无害
+        return orig_fork(skill, brief, tag=tag, effort=effort)
+
+    rig["monkeypatch"].setattr(N, "_FORK_OVERRIDE", fork)
+
+    def script(aid, ctx, n):
+        return "fail" if aid == AIDS[1] and ctx == "delivery" else "pass"
+
+    device = FakeDevice(script)
+    res, g, cfgd = _run_graph(rig, device, resume_answers=lambda p: {"__dismiss__": ""})
+
+    # 验收核心:床污染案(102)未派深归因 fork(s₀ 配对机械证据已足)
+    assert AIDS[1] not in attr_forks, f"s₀ 案仍被派归因 fork: {attr_forks}"
+    facts = [json.loads(l) for l in
+             (rig["outputs"] / rig["out_name"] / "facts.jsonl").read_text(
+                 encoding="utf-8").splitlines()]
+    mine = [f for f in facts if str(f.get("aid")) == AIDS[1]]
+    # 前筛落的轻量归因事实:h_s0 + rerun_isolated(接停车位/bed 面板既有消费链)
+    atts = [f for f in mine if f.get("ev") == "attribution"]
+    assert atts and atts[-1]["h_position"] == "h_s0", atts
+    assert atts[-1]["disposition"] == "rerun_isolated"
+    diags = [f for f in mine if f.get("ev") == "diagnosis"]
+    assert diags and str(diags[-1]["run_id"]).startswith("diag:pre:"), diags
+    # diagnose 节点未重复落账(同卷跳过),但污染者点名在前筛事实里齐全
+    assert len(diags) == 1, diags
+    assert any(p.get("aid") == AIDS[0] for p in diags[-1]["polluters"])
+    # 消费链走通:无「仅 102 的 subset 复跑」+ 收口挂起
+    assert not any(ctx == "subset" and set(comp) == {AIDS[1]}
+                   for ctx, comp in device.calls), device.calls
+    rep = _report(rig)
+    assert rep["cases"][AIDS[1]]["status"] == "suspended", rep["cases"][AIDS[1]]

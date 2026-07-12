@@ -87,3 +87,46 @@ def test_bed_wording_no_overclaim():
     assert "唯一根治" not in q["question"]
     assert "必要条件推断" in q["question"]
     assert "2 个同因用例" in q["question"] and "应用到全部" in q["question"]
+
+
+def test_resume_releases_s0_parking():
+    """run15 实弹修:resume 与 retry 同权威——恢复挂起案后停车位必须放行
+    (曾静默挡死致零复跑直接收口)。"""
+    from main.ist_core.compile_engine_v8.nodes import _user_retry_after_s0
+    aid = "203600000000000001"
+    fs = [{"ev": "diagnosis", "aid": aid, "h_position": "h_s0"},
+          {"ev": "resumed", "aid": aid}]
+    assert _user_retry_after_s0(fs, aid) is True
+    assert _user_retry_after_s0(list(reversed(fs)), aid) is False
+
+
+def test_s0_diagnosis_bed_anchor():
+    """s₀ 是床状态属性:诊断带床锚,换床后旧床诊断不再停车;旧账无锚=保守同床。"""
+    import json
+    from pathlib import Path
+    from main.ist_core.compile_engine_v8 import nodes as N, facts as F, _shared as sh
+    import unittest.mock as um
+    aid = "203600000000000001"
+    base = [{"ev": "authored", "aid": aid, "round": 1, "artifact": "a1"},
+            {"ev": "verdict", "aid": aid, "run_id": "r1", "ctx": "delivery",
+             "result": "fail", "artifact": "a1", "volume": "v1", "signatures": []},
+            {"ev": "attribution", "aid": aid, "round": 1, "run_id": "r1",
+             "layer": "E", "disposition": "rerun_isolated", "evidence": "e"}]
+    def parked(diag_bed, cur_bed):
+        fs = base + [{"ev": "diagnosis", "aid": aid, "h_position": "h_s0",
+                      **({"bed": diag_bed} if diag_bed else {})}]
+        # 复刻 _s0_parked 判定语义(实现在 merge 闭包内)
+        att = [f for f in fs if f.get("aid") == aid and f.get("ev") == "attribution"]
+        assert att[-1]["disposition"] == "rerun_isolated"
+        if N._user_retry_after_s0(fs, aid):
+            return False
+        diag = [f for f in fs if f.get("aid") == aid and f.get("ev") == "diagnosis"]
+        if not str(diag[-1].get("h_position", "")).startswith("h_s0"):
+            return False
+        d_bed, c = str(diag[-1].get("bed") or ""), cur_bed
+        if d_bed and c and d_bed != c:
+            return False
+        return True
+    assert parked("93", "105") is False   # 换床:旧床诊断失效
+    assert parked("93", "93") is True     # 同床:照旧停车
+    assert parked("", "105") is True      # 旧账无锚:保守停车

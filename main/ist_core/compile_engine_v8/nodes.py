@@ -451,9 +451,12 @@ def _user_retry_after_s0(fs: list[dict], aid: str) -> bool:
                     and str(f.get("h_position", "")).startswith("h_s0")), default=-1)
     if diag_idx < 0:
         return False
+    # retry 或 resumed(run15 实弹修:用户恢复挂起案=对「该案应继续」的声明,
+    # 与 retry 同权威——resume 后被停车位静默挡死曾致零复跑直接收口)
     return any(i > diag_idx for i, f in enumerate(fs)
-               if f.get("ev") == "decision" and str(f.get("aid")) == aid
-               and str(f.get("token")) == "retry")
+               if (f.get("ev") == "decision" and str(f.get("aid")) == aid
+                   and str(f.get("token")) == "retry")
+               or (f.get("ev") == "resumed" and str(f.get("aid")) == aid))
 
 
 # --------------------------------------------------------------- [mech] merge
@@ -475,7 +478,15 @@ def merge(state: dict) -> dict:
         if _user_retry_after_s0(fs, aid):
             return False
         diag = [f for f in fs if f.get("aid") == aid and f.get("ev") == "diagnosis"]
-        return bool(diag) and str(diag[-1].get("h_position", "")).startswith("h_s0")
+        if not (diag and str(diag[-1].get("h_position", "")).startswith("h_s0")):
+            return False
+        # 床锚(run15 实弹修):s₀ 是床状态属性——诊断锚定的床≠当前床(换床)时
+        # 诊断失效不停车;旧账无 bed 字段=保守视为同床(停车照旧)
+        d_bed = str(diag[-1].get("bed") or "")
+        cur_bed = str(state.get("bed_host") or "")
+        if d_bed and cur_bed and d_bed != cur_bed:
+            return False
+        return True
 
     ready = [a for a, c in vw["cases"].items()
              if c["status"] in (V.S_AUTHORED, V.S_SUBSET_VERIFIED, V.S_DELIVERABLE,
@@ -501,7 +512,10 @@ def merge(state: dict) -> dict:
             return True
         diag = [f for f in fs if f.get("aid") == aid and f.get("ev") == "diagnosis"]
         if diag and str(diag[-1].get("h_position", "")).startswith("h_s0"):
-            return False
+            d_bed = str(diag[-1].get("bed") or "")
+            cur_bed = str(state.get("bed_host") or "")
+            if not (d_bed and cur_bed and d_bed != cur_bed):
+                return False   # 同床(或旧账无锚):s₀ 复跑不可救照旧挡
         return True
 
     need_verify = [a for a in ready
@@ -974,6 +988,7 @@ def attribute(state: dict) -> dict:
             pre_facts += [
                 {"ev": "diagnosis", "aid": aid, "h_position": "h_s0",
                  "polluters": polluters[:5], "basis": basis,
+                 "bed": str(state.get("bed_host") or ""),
                  "run_id": _g6_diag_key(last, volume, aid)},
                 {"ev": "attribution", "aid": aid,
                  "round": F.rounds_used(mine, aid),
@@ -1352,6 +1367,7 @@ def diagnose(state: dict) -> dict:
             continue   # unknown 不落账(空裁决无信息)
         new_facts.append({"ev": "diagnosis", "aid": aid, "h_position": h_pos,
                           "polluters": polluters[:5], "basis": basis,
+                          "bed": str(state.get("bed_host") or ""),
                           "run_id": f"diag:{volume}:{aid}"})
     # 同签名词干聚类(机械前筛 (24)):≥2 案同稳定词干 → common_cause 事实
     stems: dict[str, list[str]] = {}

@@ -233,7 +233,11 @@ def _contradiction_question(c: dict) -> dict:
                             "如实降级": "downgrade"},
                 "_key": aid}
     if kind == "suspended":
-        q = f"{who} 上批被挂起。本批如何处理?"
+        _g2 = [str(a)[-6:] for a in (c.get("group_aids") or []) if str(a) != str(aid)]
+        q = (f"{who} 上批被挂起。"
+             + (f"本题代表 {len(_g2) + 1} 个同因挂起用例(另含尾号 {'、'.join(_g2[:8])})"
+                f",答案应用到全部。" if _g2 else "")
+             + "本批如何处理?")
         return {"question": q, "header": f"挂起{aid[-4:]}",
                 "options": [
                     {"label": "恢复处理", "description": "回到正常流程继续修"},

@@ -1472,9 +1472,11 @@ def ask_contradiction(state: dict) -> dict:
     _folded: list[dict] = []
     _bed_groups: dict[tuple, dict] = {}
     for it in payload:
-        if it["kind"] != "bed":
+        if it["kind"] not in ("bed", "suspended"):
             _folded.append(it)
             continue
+        # suspended 恢复题同因合并(run15 形态:11 个同因挂起案的恢复问询=一题)——
+        # 分组键同 bed(最新诊断的依据+污染者集;无诊断的挂起案不合并)
         _d = next((f for f in reversed(fs) if f.get("ev") == "diagnosis"
                    and str(f.get("aid")) == it["autoid"]), {})
         _key = (str(_d.get("basis") or ""),

@@ -322,6 +322,15 @@ def ask_decision(state: dict) -> dict:
     from main.ist_core.compile_engine_v8.questions import load_ledgers, build_questions
     aids = [str(f.get("aid")) for f in pending]
     qs = build_questions(load_ledgers(sh.outputs_root(), aids))
+    # 题面入账(run11 体检发现#6:decision×7 而问询题面×0——问了什么没入账,只有
+    # 答案入账;oracle 残差公理 (16) 对称应用到问询侧)。gather 语义(V8.5 片2):
+    # 本节点只在「全批无可推进工作」时到达(graph._gather_or_close),一次聚合呈报。
+    _qid_by_aid = {str(f.get("aid")): f.get("question_id") for f in pending}
+    sh.append(state, [{"ev": "ask_shown", "aid": q.get("_autoid", ""),
+                       "question_id": _qid_by_aid.get(q.get("_autoid", ""), ""),
+                       "question": str(q.get("question", ""))[:300],
+                       "options": [o.get("label") for o in q.get("options", [])],
+                       "gather": True} for q in qs])
     answers: dict[str, str] = {}
     for i in range(0, len(qs), 4):
         if i // 4 >= _MAX_ASK_ROUNDS:
@@ -340,6 +349,13 @@ def ask_decision(state: dict) -> dict:
             continue
         new_facts.append({"ev": "decision", "aid": aid,
                           "question_id": f.get("question_id"), "answer": decision})
+        if decision == "改描述":
+            # 改描述=本轮不产出(题面即此语义:歧义/不属本版本,待人工/适用版本)——
+            # 落 suspended 事实进挂起态(非终态,跨批恢复通道既有)。不落则案回
+            # S_PENDING 被无限重派→每次收敛再问一遍(V8.5 片2 实测堵洞)。
+            new_facts.append({"ev": "suspended", "aid": aid,
+                              "reason": "user_decision:改描述",
+                              "question_id": f.get("question_id")})
         try:  # emit 门的 user_decision 契约(工具层不变;先问后落由本节点次序保证)
             from main.ist_core.tools.device.verifiability_tool import compile_user_decision
             compile_user_decision.func(autoid=aid, decision=decision)
@@ -361,8 +377,12 @@ def merge(state: dict) -> dict:
     ready = [a for a, c in vw["cases"].items()
              if c["status"] in (V.S_AUTHORED, V.S_SUBSET_VERIFIED, V.S_DELIVERABLE,
                                 V.S_CONTRADICTED, V.S_FAILED)]
+    # V8.5 片2:挂起/待决案不得扣押其余案的 delivery 语境(§14-R4)——它们无卷可入,
+    # 留在 live 里会让「待验=全体」永不成立、终验被结构性扣押。复活后经新 merge 换
+    # 卷组成指纹,composition 锚自动强制整卷重新终验(INV-8 不破,答题→子集重跑→终验)。
     live = [a for a, c in vw["cases"].items()
-            if c["status"] not in (V.S_ESCALATED, V.S_TERMINAL)]
+            if c["status"] not in (V.S_ESCALATED, V.S_TERMINAL,
+                                   V.S_AWAITING_USER, V.S_SUSPENDED)]
     def _rerun_disposed(aid: str) -> bool:
         att = [f for f in fs if f.get("aid") == aid and f.get("ev") == "attribution"]
         return bool(att) and str(att[-1].get("disposition")) in ("rerun_isolated", "transient")
@@ -897,6 +917,12 @@ def ask_contradiction(state: dict) -> dict:
         else:
             qids[aid] = f"contra:{aid}:{vw['cases'][aid]['contradictions']}"
         payload.append(item)
+    # 题面入账(run11 体检发现#6:本节点产生了全部 7 次 decision 却零 ask_panel 事实
+    # ——问询侧无痕,违 (16) 残差公理的对称面)。落题面摘要,选项/证据在 payload 原件。
+    sh.append(state, [{"ev": "ask_shown", "aid": it["autoid"],
+                       "question_id": qids[it["autoid"]], "kind": it["kind"],
+                       "question": str(it.get("evidence") or it.get("hypothesis") or "")[:300]}
+                      for it in payload])
     ans = interrupt({"kind": "ask_contradiction", "cases": payload})
     new_facts = []
     for item in payload:

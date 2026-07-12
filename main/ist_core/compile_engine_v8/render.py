@@ -29,6 +29,7 @@ STATUS_CN = {
     "awaiting_user": "等待你的决定",
     "suspended": "挂起(下批继续)",
     "pending": "未开始",
+    "delivery_blocked": "验证通过但卷面缺案尾清理——暂不交付(重编补自清后可交付)",
 }
 CTX_CN = {"delivery": "整卷连跑复验", "subset": "单独验证"}
 LAYER_CN = {"G": "设备拒绝了命令(语法/能力)", "E": "环境/测试床问题",

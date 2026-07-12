@@ -24,6 +24,12 @@ from main.ist_core.compile_engine_v8 import views as V
 logger = logging.getLogger(__name__)
 
 _TAIL_RE = re.compile(r"^STATUS:\s*(produced|needs_user_decision|failed)", re.MULTILINE)
+# G4 echo-back 的 token 人话表(user-facing 中文;引擎动作词表的展示映射,非新枚举)
+_TOKEN_CN = {"confirm": "按呈报理解继续", "correct": "按你的纠正重编", "defect": "确认产品缺陷",
+             "continue": "追加轮次继续", "suspend": "挂起", "stop": "停止该案",
+             "retry": "复跑验证", "resume": "恢复处理", "keep": "保持挂起",
+             "reorder": "重排复验", "downgrade": "如实降级(不入交付卷)",
+             "reflow_tau": "重编并补案尾清理"}
 _MAX_ASK_ROUNDS = 8      # ask 分批上限(每批 ≤4 题;面板硬限)
 
 
@@ -925,6 +931,8 @@ def _answer_token(kind: str, a: str) -> str:
     if kind == "bed":
         if "降级" in a:
             return "downgrade"
+        if "重编" in a or "补自清" in a or "补清理" in a:
+            return "reflow_tau"
         if "已处理" in a or "复跑" in a or "已清" in a:
             return "retry"
         return "suspend"   # 不明确=默认挂起到下批(床治理是外部动作,宁等勿猜)
@@ -1153,6 +1161,19 @@ def ask_contradiction(state: dict) -> dict:
             pol = [str(p.get("aid", ""))[-6:] for p in (d.get("polluters") or [])][:3]
             item["evidence"] = (str(d.get("basis") or "")
                                 + (f";polluter(s): {'、'.join(pol)}" if pol else ""))[:300]
+            # G2(§17):自污染者判定——本案卷面自身含无 τ 的差集内写(每次执行都
+            # 重新污染,复跑=毒药出口,(40) 分类学)→题面换重编出口
+            try:
+                from main.case_compiler.tau_coverage import check_tau_coverage
+                _rows = _load_case_rows(aid)
+                _tr = check_tau_coverage(_rows)
+                if not _tr.ok:
+                    item["self_polluter"] = True
+                    item["missing_tau"] = [m["cmd"] for m in _tr.missing][:3]
+                    item["suggested_tau"] = [m["suggested_inverse"]
+                                             for m in reversed(_tr.missing)][:3]
+            except Exception:  # noqa: BLE001
+                pass
             qids[aid] = f"bed:{aid}:{len(diags)}"
         elif kind == "suspended":
             n_runs = sum(1 for f in fs if f.get("ev") == "run_start")
@@ -1195,6 +1216,12 @@ def ask_contradiction(state: dict) -> dict:
                           # R5① 代理(片4):走了语义兜底=用户没选引擎给的选项
                           # (Other 自由输入)——选项不适配的机械信号
                           "freeform": not bool(tok_exact)})
+        # G4 决策 echo-back((41)③ 消化保真):把 token 化结果即时复述——传输截断/
+        # 对位竞态/语义兜底误判在此一眼可见(run12 实测:「停止:…」被截断兜底成
+        # retry,一圈无效循环;echo 是展示零应答成本)
+        sh.emit(f"…{aid[-6:]} 你的裁决「{a[:24]}」→ 引擎理解为:"
+                f"{_TOKEN_CN.get(tok, tok)}"
+                + ("(语义兜底,非选项原文——请核对)" if not tok_exact else ""))
         if tok == "suspend":
             new_facts.append({"ev": "suspended", "aid": aid, "reason": qid})
         elif tok in ("stop", "downgrade"):
@@ -1223,6 +1250,17 @@ def ask_contradiction(state: dict) -> dict:
                                   "h_position": "user_cleared",
                                   "polluters": [], "basis": f"user attests bed treated: {a}"[:200],
                                   "run_id": f"user:bed_retry:{qid}"})
+        elif tok == "reflow_tau":
+            # G2((40)):自污染者→重编补 τ(唯一非绕路出口;fix_direction 携机械
+            # 派生的恢复序列,briefs 注入重编 brief;G1 门核对重编结果——R11-P2)
+            _tau = "; ".join(str(t) for t in (item.get("suggested_tau") or []))
+            new_facts.append({"ev": "attribution", "aid": aid,
+                              "round": F.rounds_used(mine, aid),
+                              "run_id": f"user:reflow_tau:{qid}",
+                              "layer": "V", "disposition": "reflow",
+                              "fix_direction": ("append in-case teardown AFTER assertions "
+                                                f"(suggested inverse replay: {_tau})"),
+                              "evidence": "user"})
         elif tok == "resume":
             new_facts.append({"ev": "resumed", "aid": aid, "of": qid})
         elif tok == "keep":
@@ -1362,6 +1400,29 @@ def closing(state: dict) -> dict:
 
     deliverable = [a for a, c in vw["cases"].items() if c["status"] == V.S_DELIVERABLE]
     others = {a: c for a, c in vw["cases"].items() if c["status"] != V.S_DELIVERABLE}
+    # G3 污染者交付门(§17,(40)/(35) 对象×过程链接缝):卷面自身带无 τ 的网络层写的
+    # 案,pass 也不入交付卷——「每次执行都拆床的卷」交付出去=把污染批发给所有
+    # 未来使用者(run12 实测 655203 subset pass 差点带病交付)。呈报式:落
+    # delivery_blocked 事实+挪入未通过卷,报告如实声明,非静默剔除。
+    _blocked: list[str] = []
+    for aid in list(deliverable):
+        try:
+            from main.case_compiler.tau_coverage import check_tau_coverage
+            _tr = check_tau_coverage(_load_case_rows(aid))
+            if not _tr.ok:
+                _blocked.append(aid)
+        except Exception:  # noqa: BLE001
+            continue
+    if _blocked:
+        sh.append(state, [{"ev": "delivery_blocked", "aid": a,
+                           "reason": "missing in-case teardown for network-layer writes",
+                           "run_id": f"g3:{a}"} for a in _blocked])
+        fs = sh.load_facts(state)
+        for a in _blocked:
+            others[a] = {**vw["cases"][a], "status": "delivery_blocked"}
+            deliverable.remove(a)
+        sh.emit(f"污染者交付门:{len(_blocked)} 案 pass 但卷面缺案尾清理——"
+                f"不入交付卷(重编补自清后可交付)")
     mf = [f for f in fs if f.get("ev") == "merged"]
     moved = list(mf[-1].get("moved_tail") or []) if mf else []
     coexist = list(mf[-1].get("coexist_violations") or []) if mf else []

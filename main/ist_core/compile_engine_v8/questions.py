@@ -50,6 +50,24 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
         kinds = [str(c.get("claim_kind", "")) for c in claims]
         form = next((FORM_BY_KIND[k] for k in kinds if k in FORM_BY_KIND), "dist")
 
+        if all(k == "missing_teardown" for k in kinds):
+            # G1 配对恢复呈报(V8.5 片5):写是被测行为本身 vs 该补恢复步
+            c0 = claims[0]
+            tau = "；".join(str(t) for t in (c0.get("suggested_tau") or [])[:3])
+            q_text = (f"用例 {aid}(尾号 {aid[-6:]})的配置写会在测试床留下框架清理"
+                      f"够不着的网络层残留(同类残留曾一批内六次弄坏共享床):{reasons}。")
+            opt_process = {"label": "改过程",
+                           "description": f"案尾追加恢复步(建议:{tau or '逆序 no 回放'}),断言之后执行——推荐。"}
+            opt_expect = {"label": "改预期",
+                          "description": "该写是被测行为本身、必须保留残留——按此意图重编(残留将由批末床态收敛处理,交付报告声明)。"}
+            opt_desc = {"label": "改描述",
+                        "description": "用例意图待人工厘清,本轮不产出(挂起)。"}
+            questions.append({"question": q_text, "header": f"清理·{aid[-6:]}",
+                              "options": [opt_process, opt_expect, opt_desc],
+                              "multiSelect": False, "_autoid": aid,
+                              "_ordering": False, "_form": form})
+            continue
+
         if all(k == "command_existence" for k in kinds):
             # S6 存在性呈报(V8.5 片1):题面带检索证明,选项语义按「换形态/挂起」而非可验性
             cmds = "、".join(f"『{c.get('command', '')}』" for c in claims[:3])

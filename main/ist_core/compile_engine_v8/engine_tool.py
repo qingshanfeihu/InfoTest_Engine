@@ -196,6 +196,23 @@ def _contradiction_question(c: dict) -> dict:
                 "_tokens": {"确认环境问题,停止该案": "stop", "不认可,隔离复跑": "retry"},
                 "_key": aid}
     if kind == "bed":
+        if c.get("self_polluter"):
+            # G2((40) 分类学):自污染者——卷面自身含无恢复步的网络层写,复跑=
+            # 再污染(run12 六次拆床实证),「复跑」出口对此类是毒药,不提供
+            tau = "；".join(str(t) for t in (c.get("suggested_tau") or [])[:3])
+            q = (f"{who} 的卷面自身含网络层配置写而**无案尾恢复步**"
+                 + (f"(缺恢复:{('、'.join(str(x) for x in c.get('missing_tau') or [])[:60])})"
+                    if c.get("missing_tau") else "")
+                 + "——每次执行都会重新污染共享床(复跑只会再拆一次,不是出路)。如何处置?")
+            return {"question": q, "header": f"缺清理{aid[-4:]}",
+                    "options": [
+                        {"label": "重编补自清", "description":
+                            f"重新编写并在断言后追加恢复步(建议:{tau or '逆序 no 回放'})——推荐"},
+                        {"label": "挂起到下批", "description": "本批不动它,下批处理"},
+                        {"label": "如实降级", "description": "该案不入交付卷,以未通过如实报告"}],
+                    "_tokens": {"重编补自清": "reflow_tau", "挂起到下批": "suspend",
+                                "如实降级": "downgrade"},
+                    "_key": aid}
         q = (f"{who} 被批级诊断判为**测试床状态残留污染**"
              + (f"(依据:{str(c.get('evidence') or '')[:200]})" if c.get("evidence") else "")
              + "。该类污染复跑洗不掉(复跑只能救采集噪声),卷面本身没有错;"

@@ -667,6 +667,90 @@ def _gate_command_existence(autoid: str, steps: list, init: str = "",
             "状态：NEEDS_USER_DECISION and the engine will bring it to the user.")
 
 
+def _gate_tau_coverage(autoid: str, steps: list, init: str = "") -> str | None:
+    """G1 配对恢复门(V8.5 片5;理论锚 (39) 六元组 τ/(32) 复位差集;DESIGN §17-G1)。
+
+    创建型 L2/L3 写(vlan/bond/ip address——框架 per-case 清理够不着的复位差集
+    分量)无案内恢复步 → 呈报不硬拒:写 needs_decision(missing_teardown claim,
+    携机械派生的逆元建议序列),拒落卷与凭证。实证:655203/233 两案六次拆床
+    (run12),共同上游=卷面无 τ 且 L 无 teardown 槽位、门无物可检。
+    逃生:①卷面补恢复步自然过 ②用户已裁决(同键不复问) ③IST_TAU_GATE=0。"""
+    if os.getenv("IST_TAU_GATE", "1") == "0":
+        return None
+    try:
+        from main.case_compiler.tau_coverage import check_tau_coverage
+    except Exception:  # noqa: BLE001
+        return None
+    rep = check_tau_coverage(steps if isinstance(steps, list) else [], init)
+    if rep.ok:
+        return None
+    # 逃生②:该案已有用户裁决(missing_teardown claim 已答)
+    try:
+        root = Path(__file__).resolve().parents[4]
+        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        udp, ndp = outd / "user_decision.json", outd / "needs_decision.json"
+        if udp.is_file() and ndp.is_file():
+            _ud = json.loads(udp.read_text(encoding="utf-8"))
+            _nd = json.loads(ndp.read_text(encoding="utf-8"))
+            if (_ud.get("decision") in ("改过程", "改预期")
+                    and any(c.get("claim_kind") == "missing_teardown"
+                            for c in (_nd.get("claims") or []))):
+                return None
+    except Exception:  # noqa: BLE001
+        logger.debug("missing_teardown 用户裁决检查失败(按未裁决)", exc_info=True)
+    # 呈报:needs_decision 台账+信号
+    try:
+        root = Path(__file__).resolve().parents[4]
+        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        outd.mkdir(parents=True, exist_ok=True)
+        ndp = outd / "needs_decision.json"
+        data: dict = {"autoid": (autoid or "").strip(), "claims": []}
+        if ndp.is_file():
+            try:
+                loaded = json.loads(ndp.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and isinstance(loaded.get("claims"), list):
+                    data = loaded
+            except Exception:  # noqa: BLE001
+                pass
+        data["claims"] = [c for c in data["claims"]
+                          if c.get("claim_kind") != "missing_teardown"]
+        inv_seq = [m["suggested_inverse"] for m in reversed(rep.missing)]
+        data["claims"].append({
+            "claim_kind": "missing_teardown",
+            "commands": [m["cmd"] for m in rep.missing],
+            "suggested_tau": inv_seq,
+            "reason": (f"卷面有 {len(rep.missing)} 条网络层配置写(框架自动清理"
+                       f"够不着的分量),但没有案尾恢复步——该类残留会污染同批后续"
+                       f"用例(233/203 两案六次拆床实证)。机械派生的恢复序列:"
+                       + "；".join(inv_seq)),
+            "suggested_fix": "案尾追加恢复序列(逆序 no 回放),或确认该写是被测行为本身需保留",
+            "min_requests": 0, "ordering_sensitive": False,
+        })
+        ndp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        logger.debug("missing_teardown needs_decision 落盘失败", exc_info=True)
+    try:
+        from main.ist_core.memory.footprint.signals import emit_signal
+        emit_signal("missing_teardown", autoid, source="compile_emit",
+                    commands=[m["cmd"] for m in rep.missing])
+    except Exception:  # noqa: BLE001
+        pass
+    lines = "\n".join(f"  - {m['cmd']!r}  → suggested inverse: {m['suggested_inverse']!r}"
+                      for m in rep.missing)
+    return ("error: paired-teardown gate — this case writes network-layer config that the "
+            "framework's per-case cleanup cannot reach, with no in-case restore step:\n"
+            f"{lines}\n"
+            "Leftovers of this kind poisoned the shared bed six times in one batch "
+            "(measured: two cases repeatedly moved a listener IP onto a vlan/empty bond, "
+            "killing every downstream case). Two exits:\n"
+            "1) Append the restore steps at the end of the case (reverse-order `no` "
+            "replay as suggested above; place them AFTER your assertions so they do not "
+            "destroy what you are verifying), then re-emit.\n"
+            "2) If the write itself IS the behavior under test and must persist, the "
+            "needs_decision ledger entry is already written — end your reply with the "
+            "NEEDS_USER_DECISION tail and the engine will bring it to the user.")
+
+
 def _emit_stat(autoid: str, out: str, channel: str) -> None:
     """emit 出口台账(runtime/logs/emit_stats.jsonl)——打回率的机读事实源
     (E2 基线 48-52% 来自 fastlog 解析;此后量化门直接聚合本文件)。追加失败静默。"""
@@ -1242,6 +1326,11 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     # 写 needs_decision 台账+拒落卷,worker 出路=行级证据重 emit 或 NEEDS_USER_DECISION。
     gate = _gate_command_existence(autoid, steps, init=init_g,
                                    evidence=command_existence_evidence)
+    if gate:
+        return gate
+
+    # G1 配对恢复门(V8.5 片5,(39) τ):创建型 L2/L3 写须有案内恢复步,缺失呈报。
+    gate = _gate_tau_coverage(autoid, steps, init=init_g)
     if gate:
         return gate
 

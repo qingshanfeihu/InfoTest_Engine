@@ -299,7 +299,7 @@
   ]
  },
  "occupancy_semantics": {
-  "_provenance": "2026-07-12 V8.5 片3(redline 建议④,防 marker 表回潮:词带边界+否定排除,数据带出处非 .py 关键字表):设备「资源已被占用/已存在」类回显语义——write memory/file 快照把功能域残留冻结、config 恢复复活后典型报错形态(run11 668030 实证:'IP/port pair may already be occupied by an SLB virtual service';RTNETLINK 'File exists' 同族)。用途:diagnose 自扰判定(本案持久写+占用回显=s₀)。",
+  "_provenance": "2026-07-12 V8.5 片3(redline 建议④,防 marker 表回潮:词带边界+否定排除,数据带出处非 .py 关键字表):设备「资源已被占用/已存在」类回显语义——write memory/file 快照把功能域残留冻结、config 恢复复活后典型报错形态(run11 668030 实证:'IP/port pair may already be occupied by an SLB virtual service';RTNETLINK 'File exists' 同族)。用途:diagnose 自扰判定(本案持久写+占用回显=s₀)。|2026-07-14 出处更正(run20 窗口失真彻查):'This IP/port pair may already be occupied by an SLB virtual service. Please check and confirm' 是 sdns listener 配置时的**例行 advisory**(用户 172.16.6.86 干净床实测:警告出现且 listener 配置成功;79 床 show slb virtual all 为空亦证无占用者),非占用陈述——本条目 2026-07-12 的种子例证正是这句 advisory,系当时窗口失真下的误读。负向排除该形态后,echo_confirmed 只认真实占用陈述(already exists/in use/RTNETLINK File exists 等)。",
   "patterns": [
    "\\balready\\b",
    "\\boccupied\\b",
@@ -313,7 +313,8 @@
    "\\bnot?\\s+exist",
    "\\bno\\s+such\\b",
    "\\bdoes\\s*n[o']t\\s+exist",
-   "不存在"
+   "不存在",
+   "may already be occupied"
   ]
  },
  "inverse_forms": {

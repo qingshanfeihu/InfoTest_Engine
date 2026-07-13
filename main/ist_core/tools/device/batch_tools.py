@@ -21,6 +21,7 @@ import concurrent.futures as cf
 import json
 import logging
 import os
+import re as _re
 import time
 from pathlib import Path
 
@@ -751,16 +752,50 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                           if any(m in ln for m in _markers)][:8] if _markers else [])
                 if _anom and verdict == "pass":
                     verdict = "broken"
+                # oracle 残差门(§18.10,2026-07-14):框架判定不再是公理——旁路取
+                # 原始 inner+apv 全文,按提示符重分段对账。方向矛盾(found 判 fail 但
+                # 对齐块含期望值/not_found 判过但块含该值)=采集面失真 → verdict 降
+                # broken(第三态:挡写回/挡归因/挡 s₀ 配对——668000 假 PASS 三连写回
+                # 投毒的直接防线)。块级 ^ 拒绝(设备解析器标记,闭集)并入 anomaly_lines
+                # (G 族自身异常:喂 G6 否决免派 + brief 高亮)。pass 案也审(假 PASS
+                # 不呼救,症状驱动的流程结构性漏掉静默类)。旧 client/测试替身无此方法
+                # → 审计不可用,rec 显式标注(INV-11:不静默 fail-open)。
+                _dist: list = []
+                _wa_note = ""
+                try:
+                    _raw = client.fetch_case_raw(submit, autoid)
+                except (AttributeError, TypeError):
+                    _raw = None
+                if _raw and _raw.get("inner"):
+                    _dist, _caret = _window_audit(_raw["inner"], _raw.get("apv") or {})
+                    for _a in _caret:
+                        if _a not in _anom and len(_anom) < 8:
+                            _anom.append(_a)
+                else:
+                    _wa_note = "unavailable (no raw case files or legacy client)"
+                if _dist and verdict in ("pass", "fail"):
+                    if verdict == "pass" and not _dev_ctx:
+                        _dev_ctx = client.fetch_device_context_under(submit, autoid)
+                    verdict = "broken"
                 rec = {"autoid": autoid, "verdict": verdict, "task_id": task_id,
                        "causality": "\n".join(causality[-12:]) if causality else "",
                        "detail_tail": d[-2500:]}
                 if _anom:
                     rec["anomaly_lines"] = _anom
-                    if verdict == "broken":
+                    if verdict == "broken" and not _dist:
                         rec["broken_reason"] = (
                             "execution-failure marker in a passing case's log — the "
                             "assertions after the failed step are vacuous ((44)); the "
                             "case's target behavior was not actually verified")
+                if _dist:
+                    rec["window_distortion"] = _dist[:4]
+                    rec["broken_reason"] = (
+                        "assertion-window distortion: the framework's check window "
+                        "disagrees with the raw device stream (re-segmented by prompt) "
+                        "— the verdict direction contradicts the aligned response "
+                        "block; neither the pass nor the fail is trustworthy here")
+                if _wa_note:
+                    rec["window_audit"] = _wa_note
                 _sus = (_prog_state.get("timeout_suspects") or {}).get(autoid)
                 if _sus:
                     rec["timeout_suspect_s"] = _sus   # 心跳同案超阈(§18.5,hang 嫌疑)
@@ -893,6 +928,93 @@ def _append_verified_runs(xlsx_path, results: list, cur_round: int, run_ts: floa
 
 
 _EXEC_MARKERS_CACHE: list | None = None
+
+
+_WA_TS_RE = _re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ")
+_WA_CHECK_RE = _re.compile(
+    r"^#### (Fail|Success) Num \d+: (fail to find|successed to find):? (.*?) in ?: ?(.*)$")
+_WA_SEND_RE = _re.compile(r"^\S+ - sends command in (?:config|enable): (.*)$")
+_WA_PROMPT_RE = _re.compile(r"^APV(?:\(config\))?#(.*)$")
+_WA_CARET_RE = _re.compile(r"^\s+\^\s*$")
+
+
+def _apv_blocks(apv_text: str) -> dict:
+    """设备会话原始流按提示符旁路重分段 → {命令: [按序响应块]}。
+
+    这是对框架读窗的**异构冗余**:框架 read_until(prompt) 的窗口边界可因异常回显
+    (^ 拒绝/慢响应/交互提示)整体错位,但 pty 流的内容与顺序是设备真值——按提示符行
+    重新切块得到真实的 命令→响应 映射,与框架窗口对账。"""
+    out: dict = {}
+    cur_cmd, cur = None, []
+    for ln in apv_text.splitlines():
+        m = _WA_PROMPT_RE.match(ln.strip())
+        if m:
+            if cur_cmd is not None:
+                out.setdefault(cur_cmd, []).append("\n".join(cur))
+            cur_cmd = m.group(1).strip()
+            cur = []
+        else:
+            cur.append(ln)
+    if cur_cmd is not None:
+        out.setdefault(cur_cmd, []).append("\n".join(cur))
+    return out
+
+
+def _window_audit(inner_txt: str, apv_by_file: dict) -> tuple:
+    """oracle 残差门(§18.10,采集面第四扫描器):框架断言窗 vs 旁路对齐响应块对账。
+
+    框架判定不再是公理——(π,R) 忠实投影是三合取的独立一元,投影自身可失真
+    (2026-07-14 实证:写保存族 3 run 假 FAIL 7 起/假 PASS 12 起,668000 假 PASS
+    三连已写回投毒)。对每个 check:第 k 次针对命令 C 的断言 ↔ C 的第 k 个旁路
+    响应块;方向矛盾即失真:
+      - found 判 fail 但对齐块含期望值 → false_fail
+      - not_found 判过但对齐块含该值   → false_pass
+    另做块级 G 拒绝检测:响应块含裸 ^ 行=设备解析拒绝(闭合于设备解析器标记,
+    非关键字表)→ 记自身执行异常(喂 anomaly_lines:G6 否决 s₀ 免派 + brief 高亮)。
+    范围:只对源命令能在 apv 会话定位的 check 对账(dig/RouterA 源不在,如实跳过)。
+    返回 (distortions: list[dict], caret_anomalies: list[str])。"""
+    body = [_WA_TS_RE.sub("", ln) for ln in (inner_txt or "").splitlines()]
+    blocks: dict = {}
+    for txt in (apv_by_file or {}).values():
+        for cmd, bl in _apv_blocks(txt).items():
+            blocks.setdefault(cmd, []).extend(bl)
+    distortions: list = []
+    caret: list = []
+    for cmd, bl in blocks.items():
+        for b in bl:
+            if any(_WA_CARET_RE.match(x) for x in b.splitlines()):
+                s = f"syntax rejected (^): {cmd}"
+                if s not in caret:
+                    caret.append(s)
+    seen: dict = {}
+    for i, ln in enumerate(body):
+        m = _WA_CHECK_RE.match(ln)
+        if not m:
+            continue
+        verdict, kind, pat = m.group(1), m.group(2), m.group(3).strip()
+        src = ""
+        for j in range(i - 1, max(-1, i - 10), -1):
+            sm = _WA_SEND_RE.match(body[j])
+            if sm:
+                src = sm.group(1).strip()
+                break
+        if not src or src not in blocks:
+            continue   # dig/触发端源或会话缺失:审计范围外,如实跳过
+        k = seen.get(src, 0)
+        seen[src] = k + 1
+        bl = blocks[src]
+        blk = bl[k] if k < len(bl) else (bl[-1] if bl else "")
+        try:
+            hit = _re.search(pat, blk) is not None
+        except _re.error:
+            hit = pat.replace("\\", "") in blk
+        if verdict == "Fail" and kind == "fail to find" and hit:
+            distortions.append({"kind": "false_fail", "cmd": src, "pattern": pat[:60],
+                                "evidence": blk.strip()[:200]})
+        elif verdict == "Success" and kind == "fail to find" and hit:
+            distortions.append({"kind": "false_pass", "cmd": src, "pattern": pat[:60],
+                                "evidence": blk.strip()[:200]})
+    return distortions, caret
 
 
 def _exec_failure_markers() -> list:

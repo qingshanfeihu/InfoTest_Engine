@@ -1182,7 +1182,7 @@ Schema（每 run 一行）：`{run, new_keys, recur_keys, recur_auto_resolved, h
 | latent 消除 | PASS 即时写回（已落地） |
 | stale 检测 | build 锚最小段已落（verified_runs→条目 device_run；**源②记提交值会失真**——yzg 实证 568vs585，源①设备自述+锚差判定未建） |
 | poisoned 拦截 | 体检为手动、拦截门未建——唯二之二 |
-| **case 状态机语境锚/oracle 残差（§5.5 四公理）** | **全部未落**——yzg #10 终验吞 fail 实证；与 #7、瞬态护栏 dead code 同根（缺口 E，当前最高优先） |
+| **case 状态机语境锚/oracle 残差（§5.5 四公理）** | **窗口出处面已落（2026-07-14）**:digest 旁路重分段原始流与断言窗对账,方向矛盾=broken(DESIGN §18.10,`_window_audit`+`test_window_audit.py`)——实弹坐实公理预言:3 run 假 FAIL 7/假 PASS 12,668000 假 PASS 三连写回投毒后被本门反扫揪出。语境锚其余面(#10 终验吞 fail 同根)仍未落 |
 | 矛盾即问（第三条 ask 边） | 未建（前提=oracle 残差公理先落地） |
 
 ## 9. 对理论的挑战与未决问题（诚实清单）

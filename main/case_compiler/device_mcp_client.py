@@ -1123,6 +1123,35 @@ class FrameworkMCPClient:
             return ""
         return _redact("\n\n".join(parts))
 
+    def fetch_case_raw(self, submit_autoid: str, inner_autoid: str,
+                       max_inner: int = 120000, max_apv_each: int = 150000) -> dict:
+        """oracle 残差门取证(§18.10 窗口出处对账):某内层 case 的原始步骤日志 + 各主机
+        设备会话**全文**。与 fetch_device_context_under 的本质区别:不混流、不尾截优选、
+        不做标记行提取——对账审计必须走旁路拿未经预处理的文本(衍生视图与被审窗口共享
+        失真,用失真通道审失真只会自洽;2026-07-14 写保存族 3 run 假 FAIL/假 PASS 实证)。
+        返回 {"inner": str, "apv": {文件名: 全文}};取不到=空骨架(调用方记审计不可用)。"""
+        out: dict = {"inner": "", "apv": {}}
+        base = (f"/home/test/apv_src/report/*/*/ist_staging_*/{submit_autoid}"
+                f"/test_xlsx/case.xlsx/{inner_autoid}")
+        try:
+            _i, o, _e = self._c.exec_command(
+                f"ls -t {base}/{inner_autoid}.txt 2>/dev/null | head -1", timeout=20)
+            ipath = o.read().decode("utf-8", "replace").strip()
+            if not ipath:
+                return out
+            _i, o, _e = self._c.exec_command(f"tail -c {int(max_inner)} '{ipath}'", timeout=25)
+            out["inner"] = _redact(o.read().decode("utf-8", "replace"))
+            d = ipath.rsplit("/", 1)[0]
+            _i, o, _e = self._c.exec_command(
+                f"ls '{d}' 2>/dev/null | grep '^apv_.*\\.txt$'", timeout=20)
+            for name in o.read().decode("utf-8", "replace").split():
+                _i, o2, _e = self._c.exec_command(
+                    f"tail -c {int(max_apv_each)} '{d}/{name}'", timeout=25)
+                out["apv"][name] = _redact(o2.read().decode("utf-8", "replace"))
+        except Exception:  # noqa: BLE001
+            return out
+        return out
+
     def fetch_device_context(self, autoid: str, max_chars: int = 9000) -> str:
         """拉**完整设备上下文**（上机失败诊断用，喂给 agent 让它知道怎么改/怎么填）。
 

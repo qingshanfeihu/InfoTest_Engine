@@ -19,10 +19,21 @@ from main.ist_core.compile_engine_v8 import nodes as N
 # ── echo_support 判定(正证:占用形态回显佐证)──────────────────────────────────
 
 def test_echo_support_confirmed_on_occupancy_echo():
-    """run13 型:回显含占用语义(occupied/already)→ echo_confirmed(必要条件+回显佐证)。"""
+    """真实占用陈述(already exists/has been used)→ echo_confirmed(必要条件+回显佐证)。
+    2026-07-14 出处更正:例行 advisory「may already be occupied…please check」不算正证
+    (用户干净床实测:警告出现且配置成功)——文法负向已排除,见下一测试。"""
+    rec = {"device_context": 'A configuration file named "sdns_file_save_030" already exists.\n'
+                             "The list: adc has been used, please use another name"}
+    assert N._echo_support(rec) == "echo_confirmed"
+
+
+def test_echo_support_routine_advisory_is_not_occupancy():
+    """例行 advisory(may already be occupied…Please check)≠占用陈述 → necessity_only。
+    run18-20 实证:该警告在干净床上也出现且 listener 配置成功;它作 echo_confirmed 正证
+    曾撑起 668015 的错误床污染强档题面。"""
     rec = {"device_context": "Warning: This IP/port pair may already be occupied by an "
                              "SLB virtual service. Please check and confirm."}
-    assert N._echo_support(rec) == "echo_confirmed"
+    assert N._echo_support(rec) == "necessity_only"
 
 
 def test_echo_support_necessity_only_without_occupancy():
@@ -131,7 +142,7 @@ def test_echo_support_desc_banner_negation_does_not_veto():
     全窗否决 Warning 行 → echo_confirmed。修前被错降 necessity_only(保守向,无害但错)。"""
     rec = {"device_context":
            "#######   step10: 验证sdns listener配置未被write all保存，恢复后应不存在\n"
-           "Warning: This IP/port pair may already be occupied by an SLB virtual service.\n"
+           'A configuration file named "sdns_file_save_030" already exists.\n'
            "#### Fail Num 1: fail to find 172.16.34.70"}
     assert N._echo_support(rec) == "echo_confirmed"
 

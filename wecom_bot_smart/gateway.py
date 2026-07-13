@@ -351,10 +351,10 @@ def _format_markdown(query: str, answer: str, elapsed_min: int,
             f"> <font color=\"warning\">系统提示：由于当前会话{split_reason}，"
             f"已自动为您开启新对话以保障响应速度与准确度。</font>\n\n"
         )
-    turn_info = f"会话轮数: {turn_count}/{MAX_TURNS}" if turn_count > 0 else ""
-    ft = (f"<font color=\"comment\">总耗时约 {elapsed_min} 分钟</font>"
+    turn_info = f"🔄 会话轮数: {turn_count}/{MAX_TURNS}" if turn_count > 0 else ""
+    ft = (f"⏱ 总耗时约 {elapsed_min} 分钟"
           if elapsed_min > 0
-          else "<font color=\"comment\">Powered by IST-Core</font>")
+          else "🚀 Powered by IST-Core")
     footer = f"{turn_info} | {ft}" if turn_info else ft
     process_section = f"\n{process_summary}\n" if process_summary else ""
     return (f"## InfoTest Engine 结果\n{prefix}"
@@ -763,6 +763,7 @@ class SmartBotGateway:
 
         written_files: list[str] = []
         tool_names: list[str] = []
+        tool_details: dict[str, str] = {}
         ask_user_triggered = False
         gen = _call_ist_core_stream(query, user_id, thread_id=tid, written_files=written_files)
         try:
@@ -807,10 +808,7 @@ class SmartBotGateway:
 
         # 完成通知（红点）
         try:
-            brief = answer[:200].replace("\n", " ").strip()
-            if len(answer) > 200:
-                brief += "…"
-            self._reply_markdown(frame, f"✅ **回答完成**（{total_min}分钟）\n\n{brief}")
+            self._reply_markdown(frame, f"✅ **回答完成**（{total_min}分钟）")
         except Exception:
             logger.debug("完成通知发送失败", exc_info=True)
 

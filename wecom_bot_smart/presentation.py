@@ -422,7 +422,6 @@ class ThoughtRenderer:
         if not steps:
             return ""
         return (
-            '<details><summary>📋 处理过程</summary>\n\n'
-            + " · ".join(steps)
-            + "\n\n</details>"
+            '\n---\n📋 处理过程\n'
+            + "\n".join(f"• {step}" for step in steps)
         )

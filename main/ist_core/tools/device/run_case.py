@@ -539,31 +539,51 @@ def dev_help(command: str) -> str:
 
 
 @tool(parse_docstring=True)
-def dev_init_device(jumphost: str, device_count: int = 0, device_index: int = -1) -> str:
+def dev_init_device(jumphost: str, device_count: int = 0, device_index: int = -1,
+                    confirm_wipe_reason: str = "") -> str:
     """Initialize the device under test over the serial console: wipe all config + reconfigure interface IPs.
 
     Runs on the jumphost, connects to the device over serial (cu -s 9600 -l ttyS{n}), issues
-    clear config all, then configures the IPv4/IPv6 addresses of port1 (172.16.35.7{n}),
-    port2 (172.16.34.7{n}) and port3 (172.16.32.7{n}).
+    clear config all, then configures the interface IPv4/IPv6 addresses from the testbed conf.
 
-    **When to use**: device config is in disarray and needs a factory reset, a new device is
-    being racked for the first time, or a clean baseline is needed before an on-device run.
-    **When not to use**: you only want to change one piece of config → run a case via
-    dev_run_case or inspect state via dev_probe.
+    **DESTRUCTIVE — whole-device config wipe on a SHARED testbed.** This erases ALL config
+    (including anything another run is mid-way through) and can only be justified by an
+    explicit human decision. It requires ``confirm_wipe_reason``; called without it (the
+    default for an autonomous agent) it refuses and does nothing. A wrong wipe on a shared
+    bed is the exact class of accident that killed two beds — see the destructive-command
+    ban (§18.4.1). Recovering a dirty bed is normally the human's call; do not self-authorize.
+
+    **When to use**: a human has decided the device needs a factory reset (config in disarray,
+    a newly-racked device, a clean baseline before a run) AND passes the reason.
+    **When not to use**: to change one piece of config → dev_run_case; to inspect state →
+    dev_probe. Never call this to "clean up" on your own initiative.
 
     Args:
         jumphost: jumphost IP (e.g. 10.4.127.103), required.
         device_count: number of devices to initialize (1/2/3); 0 = infer from conf (default all).
         device_index: initialize one specific device (0=APV0, 1=APV1, 2=APV2); takes precedence over device_count.
+        confirm_wipe_reason: REQUIRED human-authorized reason for the whole-device wipe; empty = refuse.
 
     Returns:
-        Per-device initialization result (ok/failed + log).
+        Per-device initialization result (ok/failed + log), or a refusal if confirm_wipe_reason is empty.
     """
+    # 确认闸(2026-07-13,两床事故后):整机清配是「误判即毁床」操作,非交互 agent 直调
+    # 无 reason 一律拒——保留运维/受控点带 reason 的调用能力(与 emit override_frozen_reason
+    # 同型:高危动作强制显式声明)。作用域=共享床,授权归人(§18.4.1 destructive 红线)。
+    if not str(confirm_wipe_reason or "").strip():
+        return ("=== dev_init_device ===\nstatus: refused\n"
+                "This wipes ALL config on a shared device (clear config all over serial) and "
+                "requires an explicit human-authorized reason. Pass confirm_wipe_reason=... only "
+                "when a human has decided a factory reset is warranted. Do NOT self-authorize a "
+                "wipe to 'clean up' — recovering a dirty bed is the human's call. To change one "
+                "piece of config use dev_run_case; to inspect state use dev_probe.")
     try:
         from main.case_compiler.device_mcp_client import FrameworkMCPClient
         from main.case_compiler.config import Environment
     except Exception as exc:
         return f"error: failed to load modules: {exc}"
+    logger.warning("dev_init_device 整机清配授权执行: jumphost=%s reason=%s",
+                   jumphost, str(confirm_wipe_reason)[:120])
 
     env = Environment(id="adhoc", jumphost=jumphost)
 

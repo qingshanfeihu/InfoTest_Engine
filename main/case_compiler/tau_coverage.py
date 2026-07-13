@@ -46,10 +46,31 @@ class TauReport:
         return not self.missing
 
 
-_PERSIST_RE = re.compile(r"^(?:write|config)\s+(?:all|file|memory|net|segment)\b",
-                         re.IGNORECASE)
+def _persist_res() -> list:
+    """持久面写形态(2026-07-13 双源合流:读 grammar persistence_channels.local_disk
+    .patterns 单一源——原 py 内联 _PERSIST_RE 与 grammar 各写一份)。读失败留声回落
+    硬编集(τ 呈报侧 fail-open,不拦编译,但形态判定不能静默消失)。"""
+    try:
+        from main.case_compiler.domain_grammar import load_grammar
+        ld = ((load_grammar().get("persistence_channels") or {}).get("local_disk") or {})
+        pats = ld.get("patterns") or []
+        if pats:
+            return [re.compile(p, re.IGNORECASE) for p in pats]
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(
+            "persistence_channels 文法读取失败——τ 持久面分流回落硬编集", exc_info=True)
+    return [re.compile(r"^\s*(?:write|config)\s+(?:all|file|memory|net|segment)\b",
+                       re.IGNORECASE)]
+
+
+_PERSIST_RES = _persist_res()
 _DELETE_L23_RE = re.compile(r"^no\s+(?:vlan|ip\s+address|ip\s+route|interface|bond)\b",
                             re.IGNORECASE)
+
+
+def _is_persist(line: str) -> bool:
+    return any(r.match(line) for r in _PERSIST_RES)
 
 
 def _apv_config_lines(steps: list, init: str = "") -> list[str]:
@@ -110,7 +131,7 @@ def _derived_tau(lines: list[str], pairs: dict, scopes: tuple, rep: "TauReport")
         ll = lo[i]
         if ll.startswith(("no ", "clear ", "show ")):
             continue
-        if _PERSIST_RE.match(line):
+        if _is_persist(line):
             rep.out_of_scope.append(line)
             continue
         head = _head_match(line, pairs_lc)
@@ -173,7 +194,7 @@ def check_tau_coverage(steps: list, init: str = "") -> TauReport:
     logging.getLogger(__name__).warning(
         "inverse_forms 文法数据缺席——τ 判定降级为 3 族词表(覆盖收窄)")
     for i, line in enumerate(lines):
-        if _PERSIST_RE.match(line):
+        if _is_persist(line):
             rep.out_of_scope.append(line)
             continue
         if _DELETE_L23_RE.match(line):

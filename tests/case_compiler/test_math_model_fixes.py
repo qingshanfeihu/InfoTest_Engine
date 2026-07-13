@@ -1,9 +1,8 @@
-"""数学公式模型三处修复的回归锁定：
+"""数学公式模型修复的回归锁定：
 F1 先例分数读结构化分（不再正则抠显示文本，修 config-only 轴误判 0）;
-F2 observe_ops 单一事实源（confidence_f 与 grade_extract 共用）;
-F3 confidence_f.score_case 的 min() 只对贡献覆盖的 V 段行取（配置存在性检查不拖垮行为类
-   case，但全配置存在性的配置验证类 case 退回全行 min 不误杀）。
-全部确定性可断言（F3 mock LLM 判分器）。
+F2 observe_ops 单一事实源（grade_extract 共用；原 confidence_f 消费方已随死代码删除）。
+（F3 score_case 三测随 confidence_f 删除——grade 链 2026-07-07 已删,生产零调用。）
+全部确定性可断言。
 """
 from __future__ import annotations
 
@@ -50,15 +49,6 @@ def test_observe_ops_classification():
     assert not is_ce2                                             # dig 行为观测 → 非配置存在性
 
 
-def test_confidence_f_uses_shared_observe_ops():
-    """confidence_f 直接绑定 observe_ops 的函数（单一事实源，非自己另写一份）。"""
-    import main.case_compiler.confidence_f as cf
-    from main.case_compiler import observe_ops
-    assert cf.observe_kind is observe_ops.observe_kind
-    assert cf.config_existence_check is observe_ops.config_existence_check
-    assert cf.is_observe_command is observe_ops.is_observe_command   # F4 观测步检测收口
-
-
 def test_is_observe_command_covers_display():
     """F4(Q4-fix): display 算观测步；get/list 已从算子词表移除(避免 access-list 误匹配)。"""
     from main.case_compiler.observe_ops import is_observe_command
@@ -70,51 +60,9 @@ def test_is_observe_command_covers_display():
         assert not is_observe_command(c), c
 
 
-# ── F3: min() 只对贡献覆盖的 V 段行取 ─────────────────────────────────────────
-class _FakeResp:
-    def __init__(self, content):
-        self.content = content
-
-
-class _FakeModel:
-    def __init__(self, content):
-        self._c = content
-
-    def invoke(self, msgs):
-        return _FakeResp(self._c)
-
-
-def test_score_case_config_existence_not_drag_down_behavioral(monkeypatch):
-    """行为类 case：强 V(dig 断言 0.9) + 弱配置存在性检查(0.1) → overall=0.9（配置存在性不拖垮）。"""
-    from main.case_compiler import confidence_f as cf
-    rows = [
-        {"E": "test_env", "F": "routera", "G": "dig @1.2.3.4 foo A +short", "H": ""},
-        {"E": "check_point", "F": "found", "G": "1.2.3.4", "H": ""},                 # V 行为断言
-        {"E": "APV_0", "F": "cmd_config", "G": "sdns host persistence 3600 x", "H": ""},
-        {"E": "APV_0", "F": "cmd_config", "G": "show sdns host persistence", "H": ""},
-        {"E": "check_point", "F": "found", "G": "sdns host persistence", "H": ""},   # G 配置存在性(弱)
-    ]
-    model = _FakeModel('{"rows":[{"idx":0,"score":0.9,"reason":"v"},'
-                       '{"idx":1,"score":0.1,"reason":"cfg-exist"}]}')
-    res = cf.score_case(rows, need_intent="会话保持", model=model)
-    assert res["overall"] == 0.9         # 旧 min=0.1 被配置存在性拖垮；新 min over V = 0.9
-    assert res["abstain"] is False
-
-
-def test_score_case_config_verification_fallback(monkeypatch):
-    """配置验证类 case：唯一断言就是配置存在性 → cov_scores 空 → 退回全行 min(不误杀成 0)。"""
-    from main.case_compiler import confidence_f as cf
-    rows = [
-        {"E": "APV_0", "F": "cmd_config", "G": "sdns host persistence 3600 x", "H": ""},
-        {"E": "APV_0", "F": "cmd_config", "G": "show sdns host persistence", "H": ""},
-        {"E": "check_point", "F": "found", "G": "sdns host persistence", "H": ""},
-    ]
-    model = _FakeModel('{"rows":[{"idx":0,"score":0.7,"reason":"cfg-verify-ok"}]}')
-    res = cf.score_case(rows, need_intent="验证配置生效", model=model)
-    assert res["overall"] == 0.7         # 不被误杀成 0；配置验证类 case 的配置存在性就是其覆盖
-
-
 # ── 强字典→结构化事实：问题12(失败 config 回显) + 问题13(not_found 状态变更) ────────
+# (F3 score_case 三测随 confidence_f 死代码删除,2026-07-13——grade 链 2026-07-07 已删,
+#  score_case 生产零调用;observe_ops 单一事实源由上方 test_observe_ops_classification 覆盖)
 def test_config_existence_distinguishes_found_vs_not_found():
     """问题13：config_existence_check 按 F 列算子定性——found(配置)=恒真存在性(True,cfg)；
     not_found(配置)=验移除/覆盖、非恒真(False)，但 cfg 非空保留「该配置配过」供状态变更判定。"""

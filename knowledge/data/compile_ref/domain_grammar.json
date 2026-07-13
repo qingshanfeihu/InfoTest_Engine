@@ -204,11 +204,13 @@
   "local_disk": {
    "patterns": [
     "^\\s*write\\s+(memory|file|net|all)\\b",
-    "^\\s*config\\s+(memory|file|net|all)\\b"
+    "^\\s*config\\s+(memory|file|net|all)\\b",
+    "^\\s*write\\s+segment\\b",
+    "^\\s*config\\s+segment\\b"
    ],
    "scope": "volume",
    "mitigation": "order_tail",
-   "provenance": "CLI Ch20:『clear sdns all 不会清除SDNS配置文件』;保存快照/文件在本机磁盘跨案存活(yzg 保存族三案整卷互扰实测)"
+   "provenance": "CLI Ch20:『clear sdns all 不会清除SDNS配置文件』;保存快照/文件在本机磁盘跨案存活(yzg 保存族三案整卷互扰实测) 2026-07-13:并入 tau_coverage._PERSIST_RE 的 segment 变体(tau 持久面分流与本通道同读单一源)。"
   },
   "peer_node": {
    "patterns": [
@@ -4637,13 +4639,16 @@
   ]
  },
  "destructive_commands": {
-  "_provenance": "Device-killing commands — banned from case sheets unconditionally (structural_gate._check_no_destructive_commands). Live evidence 2026-07-13: `clear config all` appeared in 668030's sheet (generated as a 'leak cleanup' step after write/config all); the batches that ran it killed BOTH beds (93 after run14, 105 after run16) — management + data ports down, peer APV_1 on the same bed unaffected, 93 still dead 2h later. It wipes the entire running config including the management IP, so the bed cannot even be probed afterwards. A test case never has a legitimate reason to wipe the whole device: object-scoped `clear <object>` or the paired `no` form is always the correct teardown. New destructive form = add a pattern here, zero code.",
+  "_provenance": "Device-killing commands — banned from case sheets unconditionally (structural_gate._check_no_destructive_commands). Live evidence 2026-07-13: `clear config all` appeared in 668030's sheet (generated as a 'leak cleanup' step after write/config all); the batches that ran it killed BOTH beds (93 after run14, 105 after run16) — management + data ports down, peer APV_1 on the same bed unaffected, 93 still dead 2h later. It wipes the entire running config including the management IP, so the bed cannot even be probed afterwards. A test case never has a legitimate reason to wipe the whole device: object-scoped `clear <object>` or the paired `no` form is always the correct teardown. New destructive form = add a pattern here, zero code. 2026-07-13 双源合流:并入原 emit_xlsx_tool._DESTRUCTIVE_RE 的 shutdown/halt/poweroff(emit 自毁门与 structural_gate 同读此单一源,不再各写一份)。 2026-07-13 锚形态:生命周期动词(reboot/reload/shutdown/halt/poweroff)用词边界(匹配 `system reboot` 等带命名空间前缀的形态,顺带修 structural_gate 原 `^reboot` 漏检 system reboot);配置清除(clear config all/restore factory)保持行首锚。",
   "patterns": [
    "^clear\\s+config\\s+all\\b",
    "^clear\\s+config\\s*$",
    "^restore\\s+factory\\b",
-   "^reload\\b",
-   "^reboot\\b"
+   "\\breboot\\b",
+   "\\breload\\b",
+   "\\bshutdown\\b",
+   "\\bhalt\\b",
+   "\\bpoweroff\\b"
   ]
  }
 }

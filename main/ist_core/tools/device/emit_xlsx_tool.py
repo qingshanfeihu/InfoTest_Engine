@@ -224,8 +224,24 @@ def _gate_unreachable_ips(autoid: str, steps: list, init: str = "") -> str | Non
 
 
 import re as _re_dev
-# 设备生命周期类破坏性命令:重启/重载/关机。命令词匹配(词边界),不碰 clear/config(持久化范式要用)。
-_DESTRUCTIVE_RE = _re_dev.compile(r"\b(reboot|reload|shutdown|halt|poweroff)\b", _re_dev.IGNORECASE)
+
+
+def _destructive_res() -> list:
+    """自毁命令形态(2026-07-13 双源合流:与 structural_gate 同读 grammar
+    destructive_commands.patterns 单一源——原 emit 与 structural_gate 各写一份、覆盖面
+    不等已实漂移)。读失败留声回落硬编集(安全门不能因数据不可读而消失,INV-11)。"""
+    try:
+        from main.case_compiler.domain_grammar import load_grammar
+        pats = (load_grammar().get("destructive_commands") or {}).get("patterns") or []
+        if pats:
+            return [_re_dev.compile(p, _re_dev.IGNORECASE) for p in pats]
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(
+            "destructive_commands 文法读取失败——emit 自毁门回落硬编集", exc_info=True)
+    return [_re_dev.compile(
+        r"^\s*(reboot|reload|shutdown|halt|poweroff|clear\s+config\s+all|restore\s+factory)\b",
+        _re_dev.IGNORECASE)]
 
 
 def _gate_destructive_commands(autoid: str, steps: list, init: str = "") -> str | None:
@@ -235,16 +251,21 @@ def _gate_destructive_commands(autoid: str, steps: list, init: str = "") -> str 
     1. 共享设备:上机 verify 跑到 `system reboot` 会真把别人在用的 APV 重启/关机;
     2. 框架不支持:apv_ssh 单连接、read_until 5s、无重连——重启后必在死通道上读空 → 必 fail。
 
-    持久化/配置保存类用例**不该真重启**:用 clear→恢复→show 范式(write → clear sdns all →
-    config memory/file/all/net 从存盘恢复 → show → 断言),先例 log_backup 已验证。
-    本门只拦设备生命周期命令,**不碰** clear/config(范式本身要用)。
+    持久化/配置保存类用例**不该真重启**:用 clear→恢复→show 范式(write → 对象级
+    clear → config memory/file/all/net 从存盘恢复 → show → 断言)。
+    2026-07-13 双源合流后本门读 grammar destructive_commands.patterns(与 structural_gate
+    同源):拦生命周期命令(reboot/reload/shutdown/halt/poweroff,含 `system reboot` 形态)
+    **加** `clear config all`/`restore factory` 整机清配(两床被跑死的形态);**对象级**
+    clear(clear sdns/slb all)不匹配、照常放行(范式要用)。
     """
     bad: list[tuple[int, str]] = []
+
+    _res = _destructive_res()
 
     def _scan(text: str, idx: int) -> None:
         for line in (text or "").splitlines():
             line = line.strip()
-            if line and _DESTRUCTIVE_RE.search(line):
+            if line and any(r.search(line) for r in _res):
                 bad.append((idx, line))
 
     _scan(init, -1)

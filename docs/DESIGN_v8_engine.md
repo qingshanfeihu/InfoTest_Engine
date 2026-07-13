@@ -1037,6 +1037,20 @@ created(批后快照垃圾 diff 入账,下批接力会驱动 restore_via_llm 自
   用户,而床是干净的(run18 实测三通道复探全空)。bed_check/bed_snapshot 双消费。
   测试锚:`test_bed_gate.py::test_probe_transient_invalid_retried_not_asked` /
   `test_probe_persistent_failure_still_reported` / `test_probe_resilient_returns_first_echo_on_double_failure`。
+- **平台基线面不自动删接口 IP**(run18 实弹;本轮最高危 bug——差点删管理 IP):
+  批后床态收敛(bed_snapshot diff → own_writes → restore_via_llm → entity_gate →
+  exec)对「本批漂移」自动生成恢复命令。批前 `show ip address` 探针被 SSH 读窗串位
+  截断成 1 行(status:success 未判 failed,probe_resilient 救不了截断),批后完整 6 个
+  基线地址 − 残缺 1 个 = 5 个纯 added 被误判漂移 → own_writes 因案面配过 port2/port3
+  归己方 → 生成 `no ip address port2 172.16.34.70`(删管理 IP)→ entity_gate 放行
+  (实体确在错误 diff 里)→ 执行。**四道防线因源头 diff 错而全失效**,设备靠框架 IP
+  恢复契约侥幸存活。根治(`restorable_diff` 方案 C):**snapshot_only 平台基线面
+  (接口地址等,test_env 拓扑+框架契约管理)只有 diff 含 `removed`(批前快照见证消失=
+  完整可信,真替换如 run9 vlan100)才可自动恢复;纯 `added` 无 `removed`(截断嫌疑/
+  纯新增)一律只呈报入 foreign**。批后收敛 + bed_gate 床账接力两条 restore 路径都过
+  此判据;历史账里的假漂移接力时跳过。测试锚:`test_baseline_face_no_autorestore.py`(6 项,
+  含 run9 有-removed 仍恢复的不伤回归)。删接口 IP 是「误判即断设备」操作,与
+  destructive_commands 同类红线(§18.4.1):引擎对共享设备发删除命令必须极度保守。
 - **迟到产出回收**(run18 实弹;资源与交付双重损失):fork 墙钟超时 ≠ worker 无产出
   ——看门狗超时只是**引擎放弃等待**,fork 线程在 Python 里杀不掉。实录:655233 派发后
   600s 超时判 `escalated: no output`,worker 在 **935s** 时 `compile_emit` 成功,合格卷

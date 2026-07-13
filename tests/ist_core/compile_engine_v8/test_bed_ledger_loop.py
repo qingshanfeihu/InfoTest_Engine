@@ -198,10 +198,12 @@ def test_bed_gate_relay_restores_from_ledger(rig):
 
 
 def test_bed_gate_stuck_ledger_escalates_to_ask(rig):
-    """R-9:账内项恢复穷尽仍未成 → 并入呈报(needs_ask),绝不静默悬账。"""
+    """R-9:账内项恢复穷尽仍未成 → 并入呈报(needs_ask),绝不静默悬账。
+    用 segments(非 snapshot_only 残留面)——interface_addresses 纯 added 已由 run18
+    修复改为「跳过不自动删」,不再走恢复→stuck 路径(见 test_baseline_face_*)。"""
     N, mp, tmp = rig["N"], rig["mp"], rig["tmp"]
-    B.bed_record(tmp, H, "created", "interface_addresses", "b0:interface_addresses",
-                 batch="b0", payload={"commands": [], "added": ["x 1"], "removed": []})
+    B.bed_record(tmp, H, "created", "segments", "b0:segments",
+                 batch="b0", payload={"commands": [], "added": ["segment x 1"], "removed": []})
     mp.setattr(N, "_bed_llm_fn", lambda s, u: "[]")     # 生成失败(空)
     mp.setattr(N, "_exec_fn", lambda c: "status: success")
     mp.setattr(N, "_probe_fn", lambda c: (

@@ -165,10 +165,19 @@ def bed_gate(state: dict) -> dict:
     # 残余,LLM 现生成+实体门(判断开放,门闭合)——失败则留账,由 bed_check 残留
     # 判定自然进问询(合法 ask:尝试已穷尽)
     stuck_ledger: list[dict] = []
+    _so_channels = B.snapshot_only_channels()
     try:
         for item in B.bed_unrestored(sh.project_root(), host):
             pl = item.get("payload") or {}
             cmds = list(pl.get("commands") or [])
+            # 无预存命令、需现生成时:基线面(snapshot_only)纯 added 无 removed 的账项=
+            # 截断嫌疑假漂移(run18 前的历史账),不生成删除命令,只留账不动手(与
+            # restorable_diff 同判据);有预存 commands 的(已验证)照常回放
+            if (not cmds and str(item.get("kind")) in _so_channels
+                    and pl.get("added") and not pl.get("removed")):
+                sh.emit(f"床账接力:跳过基线面纯新增账项(不自动删接口地址),"
+                        f"{item.get('kind')}:{item.get('id')} 留账")
+                continue
             if not cmds and (pl.get("added") or pl.get("removed")):
                 d = {str(item.get("kind")): {"added": pl.get("added") or [],
                                              "removed": pl.get("removed") or []}}
@@ -1785,12 +1794,22 @@ def closing(state: dict) -> dict:
         if host and isinstance(before, dict):
             after = B.bed_snapshot(_probe_fn)
             diff = B.bed_diff(before, after)
-            if diff:
+            # 平台基线面(snapshot_only:接口地址等)的漂移剥离出自动恢复通路——
+            # 只呈报/入账,绝不生成删除命令(run18 实弹:批前探针截断致基线地址被
+            # 误判漂移,险些删掉 port2 管理 IP;这类面由框架 IP 恢复契约管理,引擎越界)
+            diff, observe_only = B.restorable_diff(diff)
+            if observe_only:
+                sh.emit("平台基线面漂移(接口地址等)仅呈报不自动恢复:"
+                        + "、".join(observe_only.keys()))
+            if diff or observe_only:
                 lr = sh.read_json(sh.project_root() / str(state.get("last_run_ref") or ""),
                                   []) or []
                 corpus = "\n".join(str(r.get("device_context") or "") for r in lr
                                    if isinstance(r, dict))
                 own, foreign = B.own_writes(diff, corpus)
+                # 基线面漂移并入 foreign(只报不动,INV-9)——入账供下批 bed_gate 呈报
+                for name, d in observe_only.items():
+                    foreign[name] = d
                 # C1 维护通道:人工修床已登记的写 ≠ 案残留 ≠ 非己方漂移(run12
                 # 五次修床被判 foreign 误告警的封堵)——分流只标注,不动手
                 foreign, maintained = B.split_maintained(
@@ -1804,8 +1823,15 @@ def closing(state: dict) -> dict:
                 if cmds:
                     for c in cmds:
                         _exec_fn(c)
-                residual = B.bed_diff(before, B.bed_snapshot(_probe_fn)) if cmds else \
-                    {k: v for k, v in diff.items() if k in own} if own else {}
+                # residual 也剥离 snapshot_only:否则重拍 diff 会再引入基线面假漂移并
+                # bed_record 入账,下批 bed_gate 床账接力(另一条 restore 路径)又删它
+                if cmds:
+                    residual, _ = B.restorable_diff(
+                        B.bed_diff(before, B.bed_snapshot(_probe_fn)))
+                elif own:
+                    residual = {k: v for k, v in diff.items() if k in own}  # diff 已剥离
+                else:
+                    residual = {}
                 verified = [c for c in cmds] if cmds and not residual else []
                 for name, d in residual.items():
                     B.bed_record(sh.project_root(), host, "created", name,

@@ -201,6 +201,38 @@ def bed_snapshot(probe_fn: Callable[[str], str]) -> dict:
     return snap
 
 
+def snapshot_only_channels() -> set:
+    """snapshot_only 通道名集合(平台基线状态面:接口地址等)。批后收敛的自动恢复
+    绝不触碰它们——只观测呈报/入账,不生成删除命令(见 restorable_diff)。"""
+    probes = dict(load_grammar().get("bed_probes") or {})
+    return {name for name, spec in probes.items()
+            if isinstance(spec, dict) and spec.get("snapshot_only")}
+
+
+def restorable_diff(diff: dict) -> tuple[dict, dict]:
+    """把快照 diff 拆成 (可自动恢复的, 只呈报不动手的)。
+
+    平台基线面(snapshot_only:接口地址等)的判据比普通残留面严一档——**只有 diff 含
+    `removed`(批前快照见证了地址消失,证明快照完整、漂移是真替换)才可自动恢复;纯
+    `added` 无 `removed` 一律只呈报**。理由(2026-07-13 run18 实弹):批前 `show ip
+    address` 探针被 SSH 读窗串位截断成 1 行(status:success 故未判 failed,
+    probe_resilient 救不了截断),批后完整 6 个基线地址 − 残缺的 1 个 = 5 个纯 `added`,
+    被误判成「本批漂移」→ own_writes 因案面配过 port2/port3 归己方 → restore_via_llm
+    生成 `no ip address port2 <管理IP>`(删基线)→ entity_gate 放行(实体确在错误的
+    diff 里)→ 执行(设备靠框架 IP 恢复契约侥幸存活)。纯 added 有两种成因,都不该删:
+    ①批前截断(基线本就在,删=断设备)②案纯新增地址(框架 IP 恢复契约下 case 开头自清)。
+    含 removed 的真替换(run9 vlan100:removed port2 + added vlan100)不受影响,照常恢复。"""
+    so = snapshot_only_channels()
+    restorable: dict = {}
+    observe_only: dict = {}
+    for k, v in diff.items():
+        if k not in so or v.get("removed"):
+            restorable[k] = v          # 普通残留面 / 基线面但有 removed(快照完整可信)
+        else:
+            observe_only[k] = v        # 基线面纯 added:截断嫌疑或纯新增,只呈报
+    return restorable, observe_only
+
+
 def bed_diff(before: dict, after: dict) -> dict:
     """快照差分:{probe: {added: […], removed: […]}}(任一侧探测失败的通道跳过——
     比不出=未知,不误报;R4-G2 的诚实边界)。"""

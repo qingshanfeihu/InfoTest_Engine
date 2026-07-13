@@ -327,6 +327,116 @@ def restore_via_llm(diff_own: dict, llm_fn: Callable[[str, str], str]) -> list[s
         return []
 
 
+# ── S4 兑现②:机械逆放先行(#76,run18 根因修复) ──────────────────────────────
+# 恢复命令从案面真发的 config 命令机械派生(config X → no X,inverse_forms 的 no 公理),
+# 而非 LLM 凭 diff 猜。根因修复 run18:own_writes 旧判据「diff 行 token 在 corpus 文本
+# 出现」把 dig 访问过的 172.16.34.70 误当成「案面创建了 port2」→ 删基线。机械逆放只逆
+# 案面真发过创建命令的 diff 行——port2 案面无 `ip address port2` 命令(只被 dig 访问),
+# 派生不出 `no ip address port2`,基线不碰。
+
+
+def _inverse_pairs() -> dict:
+    """inverse_forms 配对表(head→{no,clear,src});读失败=空(调用方回落 LLM)。"""
+    try:
+        return dict((load_grammar().get("inverse_forms") or {}).get("pairs") or {})
+    except Exception:  # noqa: BLE001
+        logger.warning("inverse_forms 读取失败——机械逆放本次禁用,回落 LLM", exc_info=True)
+        return {}
+
+
+def _head_match(cmd: str, pairs_lc: dict) -> str | None:
+    """命令 token 最长前缀匹配 inverse_forms 键(纯词法,与 tau_coverage._head_match 同型)。"""
+    ws = cmd.lower().split()
+    for k in range(min(len(ws), 5), 0, -1):
+        cand = " ".join(ws[:k])
+        if cand in pairs_lc:
+            return cand
+    return None
+
+
+def parse_config_commands(corpus: str) -> list[str]:
+    """从设备回显 corpus 解析案面真发的**配置命令**——框架
+    `<name> - sends command in config: <cmd>` 行(mirror apv_ccypher.py:152 权威格式)。
+    只取 config 通道:test/enable 通道的命令(dig 访问等)不是配置写,不参与恢复判据。"""
+    out: list[str] = []
+    for ln in str(corpus or "").splitlines():
+        m = re.search(r"sends command in config:\s*(.+?)\s*$", ln)
+        if m:
+            out.append(m.group(1).strip())
+    return out
+
+
+def _creating_command(diff_line: str, config_cmds: list, pairs_lc: dict) -> str | None:
+    """找案面真发的、创建 diff_line 所述对象的配置命令:head 是可逆构造(命中
+    inverse_forms)∧ 实体 token ⊇ diff 行实体。找不到=案面没创建过该对象(基线/
+    他人写/仅被访问)——这正是 run18 与 run9 的分界:port2 只被 dig 访问(无创建命令),
+    vlan100 被 `ip address vlan100 …` 创建(有)。"""
+    d_ents = set(_identity_tokens(diff_line))
+    if not d_ents:
+        return None
+    for cmd in config_cmds:
+        cl = cmd.lower()
+        if cl.startswith(("no ", "clear ", "show ")):
+            continue                       # 逆元/观测命令不是创建命令
+        if _head_match(cmd, pairs_lc) is None:
+            continue                       # 非可逆构造头
+        if d_ents <= set(_identity_tokens(cmd)):
+            return cmd
+    return None
+
+
+def own_writes_by_command(diff: dict, config_cmds: list, pairs: dict) -> tuple[dict, dict]:
+    """己方判定(S4 兑现②,升级 own_writes 判据):diff 行「己方」iff 案面 config 命令
+    里有创建该对象的命令——而非旧版「token 在 corpus 文本出现」(被 dig 访问等非配置写
+    污染,run18 删基线的直接成因)。返回 (own, foreign);foreign=案面没创建过(基线/
+    他人写),只报不动(INV-9)。pairs 空(inverse_forms 读失败)→ 全归 foreign(保守:
+    宁可不恢复也不误删)。"""
+    pairs_lc = {k.lower(): v for k, v in (pairs or {}).items()}
+    own: dict = {}
+    foreign: dict = {}
+    for name, d in diff.items():
+        o = {"added": [], "removed": []}
+        f = {"added": [], "removed": []}
+        for side in ("added", "removed"):
+            for ln in d.get(side) or []:
+                (o if _creating_command(ln, config_cmds, pairs_lc) else f)[side].append(ln)
+        if o["added"] or o["removed"]:
+            own[name] = o
+        if f["added"] or f["removed"]:
+            foreign[name] = f
+    return own, foreign
+
+
+def restore_mechanical(diff_own: dict, config_cmds: list, pairs: dict) -> tuple[list, dict]:
+    """己方漂移 → 机械逆放命令(S4 兑现②首选路径):
+    - added 行(对象多出,需删):取创建命令的 negation `no <创建命令全文>`(作用域恒等于
+      原命令,inverse_forms 的 no 公理;仅当该 head 有 no 逆元——只有 clear 的不机械逆放,
+      clear 是聚合复位会误伤旁邻对象);
+    - removed 行(对象消失,需重建):重放案面创建命令。
+    返回 (机械命令列表, 派生不出的残余 diff)——残余走 LLM 后备/入账。零 LLM、零模板。"""
+    pairs_lc = {k.lower(): v for k, v in (pairs or {}).items()}
+    cmds: list[str] = []
+    residual: dict = {}
+    for name, d in diff_own.items():
+        left = {"added": [], "removed": []}
+        for ln in d.get("added") or []:
+            create = _creating_command(ln, config_cmds, pairs_lc)
+            head = _head_match(create, pairs_lc) if create else None
+            if create and head and (pairs_lc.get(head) or {}).get("no"):
+                cmds.append(f"no {create}")          # negation,作用域=原命令
+            else:
+                left["added"].append(ln)             # 无 no 逆元(只 clear/未匹配)→ 残余
+        for ln in d.get("removed") or []:
+            create = _creating_command(ln, config_cmds, pairs_lc)
+            if create:
+                cmds.append(create)                  # 重放创建命令
+            else:
+                left["removed"].append(ln)
+        if left["added"] or left["removed"]:
+            residual[name] = left
+    return cmds, residual
+
+
 # ── 初始化清理(2026-07-10 用户裁决:开工必净) ─────────────────────────────────
 
 

@@ -1806,7 +1806,12 @@ def closing(state: dict) -> dict:
                                   []) or []
                 corpus = "\n".join(str(r.get("device_context") or "") for r in lr
                                    if isinstance(r, dict))
-                own, foreign = B.own_writes(diff, corpus)
+                # S4 兑现②(#76,run18 根因修复):己方判据=案面 config 命令里有创建该
+                # 对象的命令(而非旧 own_writes 的「token 在 corpus 文本出现」——被 dig
+                # 访问污染,误把 port2 判己方致删基线);pairs 空则全归 foreign(保守)
+                config_cmds = B.parse_config_commands(corpus)
+                pairs = B._inverse_pairs()
+                own, foreign = B.own_writes_by_command(diff, config_cmds, pairs)
                 # 基线面漂移并入 foreign(只报不动,INV-9)——入账供下批 bed_gate 呈报
                 for name, d in observe_only.items():
                     foreign[name] = d
@@ -1814,12 +1819,16 @@ def closing(state: dict) -> dict:
                 # 五次修床被判 foreign 误告警的封堵)——分流只标注,不动手
                 foreign, maintained = B.split_maintained(
                     foreign, B.maintenance_tokens(sh.project_root(), host))
-                # 恢复命令:生成归 LLM(懂任何状态面,零模板);机械双门=实体越界门
-                # +执行后复探验证(行动论 (22):判断开放,入库门闭合)
+                # 恢复命令:**机械逆放先行**(从案面创建命令取 no 逆元,零 LLM 零模板;
+                # 作用域恒等于原命令,天然不越界)——机械派生不出的残余(inverse_forms
+                # 缺 no 逆元)才走 LLM 后备,过实体越界门+执行后复探验证双门
                 cmds, rejected = [], []
                 if own:
-                    raw = B.restore_via_llm(own, _bed_llm_fn)
-                    cmds, rejected = B.entity_gate(raw, own)
+                    cmds, residual_own = B.restore_mechanical(own, config_cmds, pairs)
+                    if residual_own:
+                        raw = B.restore_via_llm(residual_own, _bed_llm_fn)
+                        llm_ok, rejected = B.entity_gate(raw, residual_own)
+                        cmds = cmds + llm_ok
                 if cmds:
                     for c in cmds:
                         _exec_fn(c)

@@ -151,7 +151,13 @@ def test_closing_converges_own_drift_and_ledgers_residue(rig):
              "last_run_ref": str(lr.relative_to(tmp))}
     out = N.closing(state)
     assert out["phase_status"] == "done"
-    assert "no ip address vlan100 4" in executed
+    # S4 兑现②(#76):vlan100 有案面创建命令 `ip address vlan100 172.16.34.70 24`,
+    # 走机械逆放(negation of the create cmd,作用域=原命令全文),不再是 LLM 猜的
+    # `no ip address vlan100 4`。port2 removed 无案面创建命令(案面只 `no ip address
+    # port2`——案主动删的基线),归 foreign 只报不动:引擎不猜着重建基线(交框架 IP
+    # 恢复契约),这正是 run18 根因修复的对称面——恢复只碰案面真创建过的对象。
+    assert "no ip address vlan100 172.16.34.70 24" in executed        # 己方漂移机械逆放
+    assert not any(c.startswith("ip address port2") for c in executed)  # 不猜重建基线
     items = B.bed_unrestored(tmp, H)
     assert items and items[0]["kind"] == "interface_addresses"
     assert items[0]["payload"]["added"]               # diff 随账(下批接力再生成)

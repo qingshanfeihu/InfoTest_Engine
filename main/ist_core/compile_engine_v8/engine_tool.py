@@ -267,11 +267,22 @@ def _contradiction_question(c: dict) -> dict:
         _grp = [str(a)[-6:] for a in (c.get("group_aids") or []) if str(a) != str(aid)]
         _grp_note = (f"本题代表 {len(_grp) + 1} 个同因用例(另含尾号 {'、'.join(_grp[:6])})"
                      f",你的答案将应用到全部。" if _grp else "")
+        # 证据强度分档(echo-grounding,2026-07-13):回显有占用形态佐证=echo_confirmed
+        # (必要条件+回显直接佐证,语气可强些);无=necessity_only(仅交换子必要条件推断,
+        # 假阳 20-26%,须提醒「也可能是本案自身命令写法问题,完整回显里查」)。负门(自身
+        # 执行失败)已在归因侧由 anomaly_lines 拦下不进本问询。
+        _es = str(c.get("echo_support") or "necessity_only")
+        if _es == "echo_confirmed":
+            _strength = ("此判定=交换子配对必要条件 + 受害者回显含占用/已存在形态直接佐证。"
+                         "若属实:整卷复跑洗不掉,须清理床上残留(床权在你)。")
+        else:
+            _strength = ("注意:此判定仅为交换子配对的**必要条件推断(非确证,假阳约 1/4)**——"
+                         "受害者回显里**未见**占用/已存在形态佐证。同样的症状也可能来自"
+                         "**本案自身的命令写法**(如撞交互确认、加载全配置冲突)或设备/环境异常;"
+                         "下结论前建议看该案完整设备回显确认失败机理。")
         q = (f"{who} 被批级配对判为**疑似测试床状态污染**"
              + (f"(依据:{str(c.get('evidence') or '')[:200]})" if c.get("evidence") else "")
-             + "。注意:此判定是必要条件推断(非确证)——若设备/环境本身有异常,"
-               "症状与污染同形。若判定属实:整卷复跑洗不掉,须清理床上残留(床权在你)。"
-             + _grp_note + "如何处置?")
+             + "。" + _strength + _grp_note + "如何处置?")
         return {"question": q, "header": f"床态{aid[-4:]}",
                 "options": [
                     {"label": "挂起到下批", "description": "床治理后下批续跑该案(重跑同参数时会询问恢复)"},

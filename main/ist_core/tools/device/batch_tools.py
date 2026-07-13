@@ -736,9 +736,18 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                                            ln, _re.IGNORECASE)]
                 # (43) ok(g) 谓词扫描(§18.5,文法数据 exec_failure_markers,零硬编码):
                 # pass 案日志含执行失败标记=空真嫌疑((44)违例,668030 形态)→降 broken;
-                # fail 案的标记行提取为 anomaly_lines(独立共因对归因可见,坑#24 平权)
+                # fail 案的标记行提取为 anomaly_lines(独立共因对归因可见,坑#24 平权)。
+                # echo-grounding 修(2026-07-13):扫描范围含**主设备完整会话**——失败机理
+                # (如 write all 撞文件的 'Failed to execute the command'/'Type YES')在
+                # apv_*.txt,不在断言摘要 d 里;只扫 d 会漏掉自身执行失败,让 s₀ 归因把
+                # 「自身命令流错位」误判成床污染(668030 实证)。fail 案 device_context 提前
+                # 拉一次(含 apv 会话),复用给 anomaly 扫描与 rec——不增 SSH 往返。
+                _dev_ctx = ""
+                if verdict != "pass":
+                    _dev_ctx = client.fetch_device_context_under(submit, autoid)
                 _markers = _exec_failure_markers()
-                _anom = ([ln.strip() for ln in d.splitlines()
+                _scan = d + ("\n" + _dev_ctx if _dev_ctx else "")
+                _anom = ([ln.strip() for ln in _scan.splitlines()
                           if any(m in ln for m in _markers)][:8] if _markers else [])
                 if _anom and verdict == "pass":
                     verdict = "broken"
@@ -756,7 +765,7 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                 if _sus:
                     rec["timeout_suspect_s"] = _sus   # 心跳同案超阈(§18.5,hang 嫌疑)
                 if verdict != "pass":
-                    rec["device_context"] = client.fetch_device_context_under(submit, autoid)
+                    rec["device_context"] = _dev_ctx
                     if run_err and not d:
                         rec["detail_tail"] = (f"(no case log; run state={run_err})\n" + rec["detail_tail"])
                 out.append(rec)

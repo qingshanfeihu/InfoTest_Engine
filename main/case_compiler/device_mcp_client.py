@@ -1096,6 +1096,12 @@ class FrameworkMCPClient:
             ("触发端会话 clientc", f"{base}/clientc.txt"),
         ]
         per = max(1500, max_chars // max(1, len(sources)))
+        # 失败机理/交互提示行优先保留(2026-07-13 echo-grounding):纯尾截会把会话**中段**的
+        # 'Failed to execute'/'Type YES'/'Error:' 丢掉(668030 主设备会话实证),使归因扫不到
+        # 自身执行失败。此为**采集面宽扫**(多留无害)——判定仍在消费侧文法 exec_failure_markers。
+        _KEEP = re.compile(
+            r'Failed to (execute|get)|RTNETLINK|aborted|Error:|Type\s+"?YES|'
+            r'occupied|already (exist|used|in use)', re.IGNORECASE)
         parts: list[str] = []
         try:
             for label, g in sources:
@@ -1105,8 +1111,14 @@ class FrameworkMCPClient:
                     continue
                 _i, o, _e = self._c.exec_command(f"cat '{path}'", timeout=20)
                 text = o.read().decode("utf-8", "replace")
-                if text.strip():
-                    parts.append(f"=== {label} ({path.split('/')[-1]}) ===\n{text[-per:]}")
+                if not text.strip():
+                    continue
+                tail = text[-per:]
+                keep = [ln for ln in text.splitlines()
+                        if _KEEP.search(ln) and ln not in tail][:12]
+                body = ("[执行失败/交互标记行(防中段截断保留)]\n" + "\n".join(keep)
+                        + "\n[会话尾]\n" + tail) if keep else tail
+                parts.append(f"=== {label} ({path.split('/')[-1]}) ===\n{body}")
         except Exception:
             return ""
         return _redact("\n\n".join(parts))
@@ -1128,6 +1140,12 @@ class FrameworkMCPClient:
             ("触发端会话 clientc", f"{base}/clientc.txt"),
         ]
         per = max(1500, max_chars // max(1, len(sources)))
+        # 失败机理/交互提示行优先保留(2026-07-13 echo-grounding):纯尾截会把会话**中段**的
+        # 'Failed to execute'/'Type YES'/'Error:' 丢掉(668030 主设备会话实证),使归因扫不到
+        # 自身执行失败。此为**采集面宽扫**(多留无害)——判定仍在消费侧文法 exec_failure_markers。
+        _KEEP = re.compile(
+            r'Failed to (execute|get)|RTNETLINK|aborted|Error:|Type\s+"?YES|'
+            r'occupied|already (exist|used|in use)', re.IGNORECASE)
         parts: list[str] = []
         try:
             for label, g in sources:
@@ -1137,8 +1155,14 @@ class FrameworkMCPClient:
                     continue
                 _i, o, _e = self._c.exec_command(f"cat '{path}'", timeout=20)
                 text = o.read().decode("utf-8", "replace")
-                if text.strip():
-                    parts.append(f"=== {label} ({path.split('/')[-1]}) ===\n{text[-per:]}")
+                if not text.strip():
+                    continue
+                tail = text[-per:]
+                keep = [ln for ln in text.splitlines()
+                        if _KEEP.search(ln) and ln not in tail][:12]
+                body = ("[执行失败/交互标记行(防中段截断保留)]\n" + "\n".join(keep)
+                        + "\n[会话尾]\n" + tail) if keep else tail
+                parts.append(f"=== {label} ({path.split('/')[-1]}) ===\n{body}")
         except Exception:
             return ""
         return _redact("\n\n".join(parts))

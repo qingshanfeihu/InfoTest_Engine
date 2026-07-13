@@ -1054,12 +1054,16 @@ def attribute(state: dict) -> dict:
                 continue
             todo.remove(aid)
             prescreened.append(aid)
+            # echo-grounding 正证(2026-07-13):s₀ 判定落回显佐证强度——受害者回显有占用
+            # 语义=echo_confirmed(必要条件+回显直接佐证),无=necessity_only(仅必要条件推断)。
+            # 题面据此校准语气;负门(自身执行失败)已由上方 anomaly_lines 保留深归因兜住。
+            _es = _echo_support(recs_pre.get(aid) or {})
             # run_id 带 verdict run(#74-⑤,run13 实证):曾用 diag:pre:{volume}:{aid},
             # 同 volume 二次 fail 的新诊断被幂等键静默去重 → 复跑闸读到旧
             # user_cleared 多放行一圈复跑
             pre_facts += [
                 {"ev": "diagnosis", "aid": aid, "h_position": "h_s0",
-                 "polluters": polluters[:5], "basis": basis,
+                 "polluters": polluters[:5], "basis": basis, "echo_support": _es,
                  "bed": str(state.get("bed_host") or ""),
                  "run_id": _g6_diag_key(last, volume, aid)},
                 {"ev": "attribution", "aid": aid,
@@ -1390,6 +1394,21 @@ def _s0_pair(aid: str, comp: list[str], prof, sig: str) -> tuple[str, list[dict]
     return "", [], ""
 
 
+def _echo_support(rec: dict) -> str:
+    """s₀ 判定的回显佐证强度(echo-grounding 正证,2026-07-13):受害者完整回显里有没有
+    占用/已存在语义(run13 「occupied by SLB virtual service」型)——有=echo_confirmed(交换子
+    必要条件之外还有回显直接佐证污染形态),无=necessity_only(仅必要条件推断,题面据此校准
+    语气)。判据是文法 occupancy_semantics(带否定排除),不硬编码;负门(自身执行失败)另由
+    anomaly_lines 走。rec 缺回显=necessity_only(不猜)。"""
+    ctx = str((rec or {}).get("device_context") or (rec or {}).get("detail_tail") or "")
+    if not ctx:
+        return "necessity_only"
+    occ_p, occ_n = _diag_grammar()[2]
+    if occ_p and any(p.search(ctx) for p in occ_p) and not any(n.search(ctx) for n in occ_n):
+        return "echo_confirmed"
+    return "necessity_only"
+
+
 def diagnose(state: dict) -> dict:
     """批级诊断(V8.5 片3;X3 的机械半:LLM 观察者/common_cause 提案留片4)。
 
@@ -1455,6 +1474,10 @@ def diagnose(state: dict) -> dict:
 
     new_facts: list[dict] = []
     sig_by_aid: dict[str, str] = {}
+    # echo-grounding:回显佐证强度需读受害者完整回显(与 G6 前筛同源)
+    _recs = {str(r.get("autoid")): r for r in
+             (sh.read_json(sh.project_root() / str(state.get("last_run_ref") or ""), [])
+              or []) if isinstance(r, dict)}
     for aid in failed:
         mine = [f for f in fs if f.get("aid") == aid]
         last = F.latest_verdict(mine, aid) or {}
@@ -1474,10 +1497,13 @@ def diagnose(state: dict) -> dict:
             basis = "fork candidate (no batch-level counter-evidence)" if h_pos else ""
         if not h_pos:
             continue   # unknown 不落账(空裁决无信息)
-        new_facts.append({"ev": "diagnosis", "aid": aid, "h_position": h_pos,
-                          "polluters": polluters[:5], "basis": basis,
-                          "bed": str(state.get("bed_host") or ""),
-                          "run_id": f"diag:{volume}:{aid}"})
+        _df = {"ev": "diagnosis", "aid": aid, "h_position": h_pos,
+               "polluters": polluters[:5], "basis": basis,
+               "bed": str(state.get("bed_host") or ""),
+               "run_id": f"diag:{volume}:{aid}"}
+        if h_pos == "h_s0":
+            _df["echo_support"] = _echo_support(_recs.get(aid) or {})
+        new_facts.append(_df)
     # 同签名词干聚类(机械前筛 (24)):≥2 案同稳定词干 → common_cause 事实
     stems: dict[str, list[str]] = {}
     for aid, sig_list in sig_by_aid.items():
@@ -1567,6 +1593,7 @@ def ask_contradiction(state: dict) -> dict:
             pol = [str(p.get("aid", ""))[-6:] for p in (d.get("polluters") or [])][:3]
             item["evidence"] = (str(d.get("basis") or "")
                                 + (f";polluter(s): {'、'.join(pol)}" if pol else ""))[:300]
+            item["echo_support"] = str(d.get("echo_support") or "necessity_only")   # 回显佐证强度
             # G2(§17):自污染者判定——本案卷面自身含无 τ 的差集内写(每次执行都
             # 重新污染,复跑=毒药出口,(40) 分类学)→题面换重编出口
             try:

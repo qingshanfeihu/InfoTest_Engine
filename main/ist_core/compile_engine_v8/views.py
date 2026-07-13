@@ -47,11 +47,29 @@ def _is_suspended(mine: list[dict]) -> bool:
     return last_susp >= 0 and last_resume < last_susp
 
 
+def _is_escalated(mine: list[dict]) -> bool:
+    """升级非绝对终态(run18 实弹修,与 suspended/resumed 同型):最后一个 escalated
+    之后出现 authored 即解除。
+
+    escalated 的成因是「本轮无产出」(fork 墙钟超时/空转)或「连续未跑成」——两者
+    都是关于**当时**的判断。fork 超时后 worker 线程未死、迟到落盘合格卷(run18:
+    655233 在 935s 时 emit 成功,凭证有效),或重编产出新卷,都使该判断的前提不再
+    成立;新 authored 事实即解除信号。真·无产出的案不会有 authored,原样升级人工。"""
+    last_esc = -1
+    last_auth = -1
+    for i, f in enumerate(mine):
+        if f.get("ev") == "escalated":
+            last_esc = i
+        elif f.get("ev") == "authored":
+            last_auth = i
+    return last_esc >= 0 and last_auth < last_esc
+
+
 def case_status(fs: list[dict], aid: str, current_artifact: str,
                 current_volume: str) -> str:
     """单案派生状态(全函数:任何事实组合都落入且仅落入一个标签)。优先级从终到始。"""
     mine = [f for f in fs if str(f.get("aid")) == aid]
-    if any(f.get("ev") == "escalated" for f in mine):
+    if _is_escalated(mine):
         return S_ESCALATED
     if _is_suspended(mine):
         return S_SUSPENDED

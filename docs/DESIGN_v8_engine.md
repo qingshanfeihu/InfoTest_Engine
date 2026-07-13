@@ -1037,7 +1037,26 @@ created(批后快照垃圾 diff 入账,下批接力会驱动 restore_via_llm 自
   用户,而床是干净的(run18 实测三通道复探全空)。bed_check/bed_snapshot 双消费。
   测试锚:`test_bed_gate.py::test_probe_transient_invalid_retried_not_asked` /
   `test_probe_persistent_failure_still_reported` / `test_probe_resilient_returns_first_echo_on_double_failure`。
-- **(41)④ 提交保真门(登记待建,TUI 侧)**:多题 ask 面板按键语义(数字只高亮、Tab
+- **迟到产出回收**(run18 实弹;资源与交付双重损失):fork 墙钟超时 ≠ worker 无产出
+  ——看门狗超时只是**引擎放弃等待**,fork 线程在 Python 里杀不掉。实录:655233 派发后
+  600s 超时判 `escalated: no output`,worker 在 **935s** 时 `compile_emit` 成功,合格卷
+  (11KB)+ lint 凭证躺在盘上,案已被标 escalated 永不再看——烧掉 15 分钟与整案 token,
+  产出被丢弃。修两处:①**escalated 语义**改「最后一个 escalated 之后有 authored 即
+  解除」(与 suspended/resumed 同型——escalated 是关于**当时**无产出的判断,新产出使
+  其前提失效;真·无产出案永远等不到 authored,升级人工语义不削弱);②**merge 开工
+  回收**(`_reclaim_late_artifacts`):扫 escalated 案的盘上产出,xlsx 在 ∧ lint 凭证
+  有效(=emit 全门已过的物理证据)∧ 该卷面未入账 → 落 authored 收回。裸 xlsx 无凭证
+  不收(门不可绕),已入账不重收(幂等)。测试锚:`test_late_artifact_reclaim.py`(5 项)。
+  **运维旁注**:26 案并发+深思考时 600s 单次墙钟偏紧(`IST_FORK_WALLCLOCK_S` 可调),
+  回收是兜底不是许可——墙钟仍应按实际编写耗时校准。
+- **欠定台账通道缺口(登记,DESIGN §19.5)**:worker md 声明两类欠定——①分布类断言
+  不可验(`compile_check_verifiability` 判定时**自落** needs_decision.json)②**意图的
+  验证路径在本床不存在**(如触发主机发不出意图要求的流量形态)。但该工具入参只有
+  `(autoid, algo, n_requests, n_pools)`,**承载不了第②类**——worker 按 md 停手并返回
+  `STATUS: needs_user_decision`,台账却无从落，引擎按 A 层「先问后落」不认散文声称,
+  判 escalated。run18 实录 655173 即此形态。当前处置:reason 说真话(呈报 worker 原文
+  供人判读),不再谎报 "no output"。根治方向:通用欠定上报工具(claim_kind 开放,
+  worker 落结构化台账)——需拍板后实施。:多题 ask 面板按键语义(数字只高亮、Tab
   切题不落答案、Enter 只提交聚焦题)使 run15 与 run17 两次 3 题各丢 2 答——失真
   发生在 (41)①②③ 之前,echo 缺失行是唯一事后信号。门形态:Enter 确认时存在未答
   题 → 挡板提示「还有 N 题未答」,不静默部分提交;落地前的操作纪律=逐题

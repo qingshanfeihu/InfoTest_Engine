@@ -350,8 +350,21 @@ def author(state: dict) -> dict:
             results[aid] = ("authored", "")
         elif tailv == "needs_user_decision" and (sh.outputs_root() / aid / "needs_decision.json").is_file():
             results[aid] = ("needs_decision", "")
+        elif tailv == "needs_user_decision":
+            # worker 声称欠定但台账缺失(run18 实证 655173):A 层不许散文冒充结构化
+            # 事实(先问后落),故仍升级——但 reason 必须说真话。真因两类:①worker 没走
+            # compile_check_verifiability(该工具判定欠定时自落台账)②**本类欠定无落账
+            # 通道**——worker md 声明「意图的验证路径在本床不存在」也是欠定,而该工具
+            # 入参只表达分布类断言可验性(algo/n_requests/n_pools),承载不了它(设计
+            # 缺口,DESIGN §19.5 登记)。呈报保留 worker 原文供人判读。
+            results[aid] = ("escalated",
+                            f"worker declared underdetermined but no needs_decision.json ledger "
+                            f"(no landing channel for this claim kind, or the falsify tool was "
+                            f"not called); worker said: {(out or '').strip()[-400:]}")
         else:
-            results[aid] = ("escalated", f"no output (tail={tailv or 'none'})")
+            results[aid] = ("escalated", f"no output from fork (tail={tailv or 'none'}); "
+                                         f"fork may have hit the wallclock watchdog — a late "
+                                         f"artifact, if any, is reclaimed at merge")
 
     import concurrent.futures as cf
     with cf.ThreadPoolExecutor(max_workers=max(2, min(8, len(todo)))) as ex:
@@ -463,11 +476,54 @@ def _user_retry_after_s0(fs: list[dict], aid: str) -> bool:
                or (f.get("ev") == "resumed" and str(f.get("aid")) == aid))
 
 
+def _reclaim_late_artifacts(state: dict, fs: list[dict]) -> list[dict]:
+    """迟到产出回收(run18 实弹):fork 墙钟超时 ≠ worker 无产出。
+
+    看门狗超时只是**引擎放弃等待**——fork 线程在 Python 里杀不掉,worker 继续跑完
+    并落盘。run18 实录:655233 派发后 600s 墙钟超时判 escalated("no output"),
+    worker 在 935s 时 compile_emit 成功,合格卷+lint 凭证静静躺在盘上,案却已被
+    标成 escalated 永不再看——烧掉 15 分钟与整案 token,产出被丢弃。
+
+    回收判据全部机械:xlsx 在 ∧ lint 凭证在且签名匹配当前卷面(emit 全门已过的
+    物理证据)∧ 产出晚于本批开工——满足即落 authored 事实(escalated 语义随之
+    解除:视图按「最后 escalated 之后有无 authored」判,与 suspended/resumed 同型)。
+    不满足的 escalated 案原样保留(真·无产出仍升级人工)。"""
+    esc = [a for a, c in sh.view(state, fs)["cases"].items()
+           if c["status"] == V.S_ESCALATED]
+    if not esc:
+        return []
+    # 本批开工锚:最近一次 run_start 的时刻(facts 无 ts 字段时回落 0=不卡时间)
+    out: list[dict] = []
+    for aid in esc:
+        try:
+            xlsx = sh.outputs_root() / aid / "case.xlsx"
+            if not xlsx.is_file():
+                continue
+            art = sh.artifact_fingerprint(aid)   # 凭证内的 xlsx_mtime 签名(无凭证=空)
+            if not art:
+                continue                          # 无 lint 凭证:未过 emit 门,不收
+            mine = [f for f in fs if str(f.get("aid")) == aid]
+            if any(f.get("ev") == "authored" and str(f.get("artifact")) == art
+                   for f in mine):
+                continue                          # 该卷面已入账,不重复
+            rnd = F.rounds_used(mine, aid) + 1
+            out.append({"ev": "authored", "aid": aid, "round": rnd, "artifact": art,
+                        "note": "late artifact reclaimed after fork wallclock timeout"})
+            sh.emit(f"迟到产出回收:…{aid[-6:]} 超时后 worker 仍产出合格卷(凭证有效),收回本卷")
+        except Exception:  # noqa: BLE001
+            logger.debug("迟到产出回收失败 %s", aid, exc_info=True)
+    return out
+
+
 # --------------------------------------------------------------- [mech] merge
 def merge(state: dict) -> dict:
     """组卷:确定语境(全部非终态案就绪=delivery,否则 subset)+ 通道①排序 + ④共存检查
-    + 卷组成指纹 + merged 事实。"""
+    + 卷组成指纹 + merged 事实。开工先回收 fork 超时后迟到落盘的合格卷(run18)。"""
     fs = sh.load_facts(state)
+    _late = _reclaim_late_artifacts(state, fs)
+    if _late:
+        sh.append(state, _late)
+        fs = sh.load_facts(state)
     vw = sh.view(state, fs)
     m = sh.manifest(state)
 

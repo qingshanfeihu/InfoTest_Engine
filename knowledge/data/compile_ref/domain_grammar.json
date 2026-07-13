@@ -315,7 +315,7 @@
   ]
  },
  "restore_leak_teardown": {
-  "_provenance": "run13 (local 2026-07-12; device log ts 2026-07-13, jumphost report dir 2026-07-13-02:40:13) 668000 live evidence (backup yzg_v8.5_run13_acceptance_20260712): `config memory` restore registers an internal SLB DNS listener-occupancy object on the device — invisible in `show sdns listener`, NOT removed by `no sdns listener`/`clear sdns listener`, only cleared by clear-slb-scope cleanup. Downstream cases configuring the same listener IP:port are rejected with 'occupied by an SLB virtual service' (668015/668030/668044 all failed with this exact signature; the same subset without 668000 passed twice). Product defect candidate filed in run13 delivery report. Consequence: any config-restore command needs a clear-slb-scope teardown AFTER the restore, inside the case.",
+  "_provenance": "run13 (local 2026-07-12; device log ts 2026-07-13, jumphost report dir 2026-07-13-02:40:13) 668000 live evidence (backup yzg_v8.5_run13_acceptance_20260712): `config memory` restore registers an internal SLB DNS listener-occupancy object on the device — invisible in `show sdns listener`, NOT removed by `no sdns listener`/`clear sdns listener`, only cleared by clear-slb-scope cleanup. Downstream cases configuring the same listener IP:port are rejected with 'occupied by an SLB virtual service' (668015/668030/668044 all failed with this exact signature; the same subset without 668000 passed twice). Product defect candidate filed in run13 delivery report. Consequence: any config-restore command needs a clear-slb-scope teardown AFTER the restore, inside the case. NOTE 2026-07-13: the suggested teardown must stay OBJECT-SCOPED (clear slb all) — a worker once escalated it to `clear config all` (whole-device wipe) and killed two beds; whole-config wipes are banned by destructive_commands.",
   "trigger_pattern": "^config\\s+(memory|file|all|net)\\b",
   "trigger_excluded_prefixes": [
    "clear",
@@ -4645,6 +4645,16 @@
    "Failed to get the file from",
    "RTNETLINK answers: File exists",
    "RTNETLINK answers: Cannot assign"
+  ]
+ },
+ "destructive_commands": {
+  "_provenance": "Device-killing commands — banned from case sheets unconditionally (structural_gate._check_no_destructive_commands). Live evidence 2026-07-13: `clear config all` appeared in 668030's sheet (generated as a 'leak cleanup' step after write/config all); the batches that ran it killed BOTH beds (93 after run14, 105 after run16) — management + data ports down, peer APV_1 on the same bed unaffected, 93 still dead 2h later. It wipes the entire running config including the management IP, so the bed cannot even be probed afterwards. A test case never has a legitimate reason to wipe the whole device: object-scoped `clear <object>` or the paired `no` form is always the correct teardown. New destructive form = add a pattern here, zero code.",
+  "patterns": [
+   "^clear\\s+config\\s+all\\b",
+   "^clear\\s+config\\s*$",
+   "^restore\\s+factory\\b",
+   "^reload\\b",
+   "^reboot\\b"
   ]
  }
 }

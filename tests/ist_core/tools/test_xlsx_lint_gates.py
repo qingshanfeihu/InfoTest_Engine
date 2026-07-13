@@ -439,3 +439,47 @@ def test_clear_config_file_is_cleanup_not_restore():
         {"E": "check_point", "F": "not_found", "G": r"172\.16\.34\.70"},
     ]
     assert _gate_save_restore_pairing("203600000000000900", steps) is None
+
+
+# ---------------------------------------------- 自毁命令门(2026-07-13 两床被跑死)
+def test_destructive_command_blocked():
+    """clear config all 清空整机配置(含管理口 IP)——93/105 两床 2/2 实证死亡。
+    无条件门:emit 拒 + 成品卷 lint 拒(绕门直改也挡)。"""
+    from main.ist_core.tools.device.structural_gate import (
+        check_crash_gates_mandatory, _destructive_patterns)
+    assert _destructive_patterns(), "文法数据未加载"
+    steps = [
+        {"E": "APV_0", "F": "cmds_config", "G": "sdns on\nsdns listener 172.16.34.70 53"},
+        {"E": "APV_0", "F": "cmd_config", "G": "show sdns listener"},
+        {"E": "check_point", "F": "found", "G": r"172\.16\.34\.70"},
+        {"E": "APV_0", "F": "cmds_config", "G": "no sdns listener\nclear config all"},
+    ]
+    r = check_crash_gates_mandatory(steps)
+    assert not r.ok
+    codes = [v.code for v in r.violations]
+    assert "destructive_command" in codes
+    msg = next(v.detail for v in r.violations if v.code == "destructive_command")
+    assert "management IP" in msg and "object-scoped" in msg
+
+
+def test_object_scoped_clear_allowed():
+    """对象级清理是正确 teardown,不得误杀(clear slb all / clear sdns all)。"""
+    from main.ist_core.tools.device.structural_gate import check_crash_gates_mandatory
+    steps = [
+        {"E": "APV_0", "F": "cmds_config", "G": "sdns on\nsdns listener 172.16.34.70 53"},
+        {"E": "APV_0", "F": "cmd_config", "G": "show sdns listener"},
+        {"E": "check_point", "F": "found", "G": r"172\.16\.34\.70"},
+        {"E": "APV_0", "F": "cmds_config",
+         "G": "no sdns listener\nclear slb all\nclear sdns all\nclear config file f1"},
+    ]
+    r = check_crash_gates_mandatory(steps)
+    assert [v.code for v in r.violations] == [] or "destructive_command" not in [
+        v.code for v in r.violations]
+
+
+def test_restore_leak_suggestion_stays_object_scoped():
+    """文法建议必须保持对象级——worker 曾把它升级成整机清理并跑死两床。"""
+    from main.case_compiler.domain_grammar import load_grammar
+    rule = load_grammar()["restore_leak_teardown"]
+    assert rule["suggested_teardown"] == "clear slb all"
+    assert "config all" not in rule["suggested_teardown"]

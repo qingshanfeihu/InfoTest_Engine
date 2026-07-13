@@ -442,6 +442,53 @@ def check_no_found_times_mandatory(steps: list) -> StructuralResult:
     return result
 
 
+def _destructive_patterns():
+    """自毁命令形态(文法数据 destructive_commands.patterns;读失败留声返回空)。"""
+    try:
+        from main.case_compiler.domain_grammar import load_grammar
+        import re as _re
+        pats = (load_grammar().get("destructive_commands") or {}).get("patterns") or []
+        return [_re.compile(str(p), _re.IGNORECASE) for p in pats]
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(
+            "destructive_commands 文法读取失败——自毁命令门本次禁用", exc_info=True)
+        return []
+
+
+def _check_no_destructive_commands(steps: list, result: StructuralResult) -> None:
+    """自毁命令无条件拒(2026-07-13 实弹取证:两台设备被跑死)。
+
+    `clear config all` 清空整机配置——含管理口 IP,设备当场失联、需 console 恢复。
+    93/105 两床 2/2 复现:卷面出现该命令的批次跑完后设备双口 DOWN(同床 APV_1 完好,
+    排除机房/网络因素)。命令进了卷面 = 每次执行都毁一台床,且下批 bed_gate 探不到
+    (设备已经不在了)。同族:恢复出厂/重启类。收录标准=「误判即真错」——测试用例
+    没有任何正当理由清空整机配置(要清理自己的产物用对象级 clear <object>)。
+    """
+    pats = _destructive_patterns()
+    if not pats:
+        return
+    for i, s in enumerate(steps or []):
+        if not isinstance(s, dict):
+            continue
+        if not (str(s.get("E", "")).startswith("APV")
+                and str(s.get("F", "")) in ("cmd_config", "cmds_config")):
+            continue
+        for line in str(s.get("G", "") or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if any(p.match(line) for p in pats):
+                result.add(
+                    "destructive_command",
+                    f"step {i + 1}: {line!r} wipes the device's whole configuration "
+                    f"(including its management IP) — the bed goes offline and needs "
+                    f"console recovery. Two beds were killed this way (2026-07-13). "
+                    f"A test case must never issue it: to clean up your own artifacts "
+                    f"use an object-scoped clear (clear <object> …) or the paired "
+                    f"`no` form of what you created.")
+
+
 def _check_no_manual_ip_cleanup(steps: list, result: StructuralResult) -> None:
     """test_env / 主机直连槽步禁止 ``ip addr add/del``(主机网络状态变更)——框架契约的机械事实。
 
@@ -611,6 +658,9 @@ def check_crash_gates_mandatory(steps: list) -> StructuralResult:
         # ValueError/KeyError/IndexError 崩卷、H 撞框架名字空间=覆盖执行器状态——全部
         # 必崩/必污染类,按本门收录标准(必崩类不躲后置卡点)进 emit 无条件门。
         _check_capture_refs_defined(steps, result)
+        # 2026-07-13 实弹取证:clear config all 清空整机配置(含管理口 IP)——
+        # 93/105 两床 2/2 被跑死。测试用例无正当理由清整机,进无条件门。
+        _check_no_destructive_commands(steps, result)
     return result
 
 

@@ -310,6 +310,36 @@ def _norm_family(tok: str) -> str:
     return "memory" if t in ("memory", "mem") else t
 
 
+# 意图文本里的保存族词(中文语境 "执行write all后重启":族词后紧邻 CJK,\b 在 \w(CJK 也算
+# \w)间不成立,故用 (?![a-z0-9]) 显式收尾;前侧防 rewrite 类粘连)
+_INTENT_SAVE_RE = _re_dev.compile(
+    r"(?<![a-z])(?:write|config)\s*(all|mem(?:ory)?|file|net)(?![a-z0-9])",
+    _re_dev.IGNORECASE)
+
+
+def _intent_save_variant(autoid: str) -> str:
+    """从引擎盖章的意图侧写(outputs/<autoid>/intent.json,author 派发时从 manifest 原文落)
+    推导本案应测的保存变体——P1c 的证据源修正(2026-07-14 run20 实弹)。
+
+    此前 expected_save_variant 仅由 worker 自我申报:漂移的 worker 恰恰不会申报——668030
+    把 write all 静默换成 write memory,P1c no-op 放行、与 668000 撞题,若非床污染挡下将
+    交付假覆盖并把 write-memory 内容以 write-all 标题写回成投毒先例。盖章文件缺失或意图
+    无保存族词 → 返回 ""(回退 no-op:非引擎路径/非持久化用例零回归)。"""
+    try:
+        root = Path(__file__).resolve().parents[4]
+        p = root / "workspace" / "outputs" / (autoid or "").strip() / "intent.json"
+        if not p.is_file():
+            return ""
+        d = json.loads(p.read_text(encoding="utf-8"))
+        text = " ".join([str(d.get("title") or "")]
+                        + [f"{si.get('desc') or ''} {si.get('expected') or ''}"
+                           for si in (d.get("step_intents") or []) if isinstance(si, dict)])
+        m = _INTENT_SAVE_RE.search(text)
+        return _norm_family(m.group(1)) if m else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _save_family(cmd: str) -> str | None:
     m = _SAVE_RE.search(cmd)
     return _norm_family(m.group(1)) if m else None
@@ -1340,7 +1370,8 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
 
     # 持久化门:config 恢复类用例的有序结构校验(基线污染/紧邻配对/清除步/参数/意图变体)
     gate = _gate_save_restore_pairing(autoid, steps, init=init_g,
-                                      expected_save_variant=expected_save_variant)
+                                      expected_save_variant=(_intent_save_variant(autoid)
+                                                             or expected_save_variant))
     if gate:
         return f"error: {gate}"
 
@@ -1758,7 +1789,9 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
 
         # 持久化门:config 恢复类用例的有序结构校验(意图变体可逐 case 透传)
         gate = _gate_save_restore_pairing(autoid, steps, init=case_init,
-                                          expected_save_variant=str(c.get("expected_save_variant", "") or ""))
+                                          expected_save_variant=(
+                                              _intent_save_variant(autoid)
+                                              or str(c.get("expected_save_variant", "") or "")))
         if gate:
             return f"error: cases[{idx}] {gate}"
 

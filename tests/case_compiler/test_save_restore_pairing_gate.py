@@ -126,3 +126,72 @@ def test_intent_variant_correct_passes():
         "show sdns listener",
     )
     assert gate("c", steps, expected_save_variant="all") is None
+
+
+# ── P1c 证据源修正(2026-07-14 run20 实弹):expected 从引擎盖章的 intent.json 推导 ──
+# 此前仅 worker 自我申报——漂移的 worker 恰恰不会申报(668030 write all→memory 静默
+# 换机制,P1c no-op 放行)。现 emit 消费端从 outputs/<autoid>/intent.json(author 派发
+# 时从 manifest 原文盖章)用闭集词表自行推导,申报降级为兜底。
+
+import json as _json
+import shutil as _shutil
+from pathlib import Path as _Path
+
+from main.ist_core.tools.device.emit_xlsx_tool import _intent_save_variant
+
+_OUT = _Path(__file__).resolve().parents[2] / "workspace" / "outputs"
+
+
+def _stamp(autoid: str, title: str):
+    d = _OUT / autoid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "intent.json").write_text(_json.dumps(
+        {"autoid": autoid, "title": title, "step_intents": [],
+         "source": "manifest", "stamped_by": "engine.author"}, ensure_ascii=False),
+        encoding="utf-8")
+    return d
+
+
+def test_intent_variant_derived_from_stamped_manifest_cjk():
+    """668030 形态:标题「执行write all后重启」(族词后紧邻 CJK)→ 推导 all。"""
+    aid = "t_intent_all"
+    d = _stamp(aid, "1.配置port 为53.执行write all后重启设备\n2.查看sdns listener  [check1]")
+    try:
+        assert _intent_save_variant(aid) == "all"
+        # 卷面用 memory(漂移)→ P1c 必须拦(即便 worker 不申报 expected)
+        steps = _mk("sdns listener 172.16.34.70 53", "show sdns listener",
+                    "write memory", "no sdns listener 172.16.34.70",
+                    "config memory", "show sdns listener")
+        err = gate(aid, steps, expected_save_variant=_intent_save_variant(aid))
+        assert err and "intent variant mismatch" in err and "write all" in err
+    finally:
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+def test_intent_variant_mem_abbrev_normalized():
+    """668000 形态:「执行write mem后重启」→ 推导 memory;卷面 memory → 放行。"""
+    aid = "t_intent_mem"
+    d = _stamp(aid, "1.配置port 为53.执行write mem后重启设备")
+    try:
+        assert _intent_save_variant(aid) == "memory"
+        steps = _mk("sdns listener 172.16.34.70 53", "show sdns listener",
+                    "write memory", "no sdns listener 172.16.34.70",
+                    "config memory", "show sdns listener")
+        assert gate(aid, steps, expected_save_variant=_intent_save_variant(aid)) is None
+    finally:
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+def test_intent_variant_absent_falls_back_noop():
+    """无盖章文件 → 推导空 → P1c 维持既有 no-op(非引擎路径/存量零回归)。"""
+    assert _intent_save_variant("t_intent_absent_xyz") == ""
+
+
+def test_intent_variant_no_save_word_is_empty():
+    """意图无保存族词(如 668059 全域名案)→ 推导空,不误伤。"""
+    aid = "t_intent_nosave"
+    d = _stamp(aid, "1.配置sdns listener,使用全域名功能  [check1]")
+    try:
+        assert _intent_save_variant(aid) == ""
+    finally:
+        _shutil.rmtree(d, ignore_errors=True)

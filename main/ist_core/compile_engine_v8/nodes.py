@@ -297,6 +297,31 @@ def bed_gate(state: dict) -> dict:
 
 
 # --------------------------------------------------------------- [llm] author
+def _stamp_intent(aid: str, state: dict) -> None:
+    """派发前把 manifest 意图原文盖章到 outputs/<aid>/intent.json(引擎侧,数据按引用)。
+
+    P1c 意图变体门的证据源修正(2026-07-14 run20 实弹):expected_save_variant 此前仅由
+    worker 自我申报——漂移的 worker 恰恰不会申报,668030 把 write all 静默换成 write
+    memory,门 no-op 放行、与 668000 撞题;若非床污染挡下将交付假覆盖并写回投毒先例。
+    盖章文件只放原文(title/step_intents),保存族推导在消费端(emit 闭集词表)——
+    产者不解释、消费者不转述,两侧都无发挥空间。"""
+    try:
+        m = sh.manifest(state)
+        c = next((x for x in (m.get("cases") or [])
+                  if str(x.get("autoid")) == aid), None)
+        if not isinstance(c, dict):
+            return
+        d = sh.outputs_root() / aid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "intent.json").write_text(json.dumps(
+            {"autoid": aid, "title": str(c.get("title") or ""),
+             "step_intents": c.get("step_intents") or [],
+             "source": "manifest", "stamped_by": "engine.author"},
+            ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        logger.debug("intent 盖章失败 %s", aid, exc_info=True)
+
+
 def author(state: dict) -> dict:
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
@@ -337,6 +362,7 @@ def author(state: dict) -> dict:
         mine = [f for f in fs if f.get("aid") == aid]
         rn = F.rounds_used(mine, aid)
         eff = "max" if rn >= 1 else ""   # 首败即升
+        _stamp_intent(aid, state)        # 意图盖章(P1c 证据源,worker 不可影响)
         if rn >= 1:   # 重编前存档旧卷(briefs 的 prior_config_rolls 数据源;V6 存档职责迁入)
             try:
                 import shutil
@@ -1071,10 +1097,7 @@ def attribute(state: dict) -> dict:
                  "run_id": str(last.get("run_id") or ""),
                  "layer": "E", "disposition": "rerun_isolated",
                  "h_position": "h_s0",
-                 "fix_direction": ("batch-level s0 pairing hit: testbed-state pollution; "
-                                   "deep attribution fork skipped (mechanical evidence "
-                                   "sufficient). Route: bed treatment / tail placement / "
-                                   "self-cleanup recompile."),
+                 "fix_direction": _g6_fix_direction(_es, polluters),
                  "evidence": basis}]
         if pre_facts:
             sh.append(state, pre_facts)
@@ -1398,6 +1421,24 @@ def _s0_pair(aid: str, comp: list[str], prof, sig: str) -> tuple[str, list[dict]
                  "upstream writer(s) in volume order touch shared bottom-layer/persistent state")
         return "h_s0", polluters, basis
     return "", [], ""
+
+
+def _g6_fix_direction(es: str, polluters: list[dict]) -> str:
+    """G6 免派归因的 fix_direction 文案——断言语气与证据强度匹配(§18.8 题面校准的
+    facts/brief 面;2026-07-14 审计修:旧固定话术对 necessity_only 档也说 evidence
+    sufficient,且对持久面毒源仍推荐 tail placement——run11 已实证排尾消不掉跨轮
+    通路(_s0_pair 注释),代码自相矛盾)。此文案随 attribution 事实流入重编 brief。"""
+    persist = any(str(p.get("via")) == "persistent-plane write" for p in polluters)
+    routes = ("bed treatment / self-cleanup recompile" if persist
+              else "bed treatment / tail placement / self-cleanup recompile")
+    if es == "echo_confirmed":
+        return ("batch-level s0 pairing hit, and the victim's echo shows occupancy/"
+                "already-exists semantics (direct corroboration); deep attribution "
+                f"fork skipped. Route: {routes}.")
+    return ("batch-level s0 pairing hit — a necessary-condition inference, NOT a "
+            "confirmation (a device/env anomaly presents the same symptom); deep "
+            "attribution fork skipped for cost — read the victim's full echo before "
+            f"adopting this direction. Route: {routes}.")
 
 
 def _echo_support(rec: dict) -> str:

@@ -43,30 +43,40 @@ needs_decision/user_decision 结构化对、engine_report+G5 双算、footprint 
 
 ## 2. 未建门(按证据等级排序)
 
-### 2.1 理论已点名 + 实弹已演示(最高优先)
+### 2.1 理论已点名 + 实弹已演示(最高优先)——**保存族最小面已修(2026-07-14)**
 
 - **合取① 闭包检查 = 意图忠实门**(K §8 明文"emit 契约已有链,闭包检查未建")。
   run20 实弹:668030 脑图意图"执行 **write all** 后重启",worker 静默换成 `write memory`
   ——执行干净、结构合法、全部 74 门无一拦截,与 668000(本就是 write mem 案)机制撞车,
   write-all 覆盖轴丢失。**若非床污染恰好挡下,本案将以 write all 之名 PASS 交付假覆盖,
   且写回成 verified 先例(标题 write all、内容 write memory)反向污染未来检索——先例
-  投毒路径**。候选形态:manifest 意图机制词(save 族 write all/net/file/mem 是文法层
-  闭集)与卷面命令族的机械比对,不匹配→呈报(不硬拒,同 S6 姿势)。
+  投毒路径**。
+  **修正结论(审计后复核)**:门其实已存在——P1c 意图变体门注释即写"防 draft 偷换
+  write all→write memory,668030 类",但证据源是 worker **自我申报**(被检方供证),
+  漂移者恰恰不申报 → no-op。修法=引擎盖章 `outputs/<autoid>/intent.json`(manifest
+  原文,author 派发时落)+ emit 消费端闭集词表自行推导 expected,申报降兜底。
+  见 DESIGN §18.9;一般形态(任意等价类)仍属 φ(D) 提取器族,按"数据不支持不立门"
+  纪律待新失效类实弹。
 
 ### 2.2 本次审计新发现(代码级,小而实)
 
-- **interactive_confirm 编写侧序列门**:文法数据已在(`domain_grammar` 槽位),但只有
-  床清理在消费(bed.py:465 诚实跳过)。编写侧无门检查"触发交互确认的命令后必须跟确认步"
-  ——write 族 YES 错位 9 连败的直接机械对应(worker 已自愈,门是防回归)。
-- **G6 固定归因话术三连**(nodes.py:1074-1077):①"mechanical evidence sufficient"
-  对 necessity_only 档(假阳 20-26%)同样硬说——**本清单唯一的活措辞违例**;②同段固定
-  话提供 "tail placement" 路线,而 `_s0_pair` 注释(run11 实证)明说持久面毒源排尾无效
-  ——代码自相矛盾;③该硬话流入重编 brief。修法:fix_direction 按 echo_support 分档渲染,
-  持久面毒源时删 tail placement 路线。
-- **G6 免派下的自愈链饥饿**:s₀ 前筛跳过深归因 fork → 无人写 behavior_candidates.json
-  → uncertain 入库零输入——占用类设备行为观察(run13 缺陷形态)进不了 footprint。
-  run20 三案全走此路径,footprint 增量为零。候选:G6 命中案由引擎机械落一条最小观察
-  (占用行原文+语境),或对 echo_confirmed 案仍派轻量观察 fork。
+- **G6 固定归因话术三连——已修(2026-07-14)**:①"mechanical evidence sufficient"
+  对 necessity_only 档(假阳 20-26%)同样硬说——曾是本清单唯一的活措辞违例;②同段
+  固定话对持久面毒源仍推荐 "tail placement",与 `_s0_pair` 注释(run11 实证:排尾消
+  不掉跨轮通路)自相矛盾;③该硬话流入重编 brief。修:`_g6_fix_direction` 按
+  echo_support 分档渲染,持久面毒源删排尾路线(纯卷序 L2/L3 毒源保留——run11 反驳
+  仅及持久面)。测试:`test_s0_echo_grounding.py` +3。
+- **interactive_confirm 编写侧序列门——决定不建(记录在案)**:文法数据已在,但只有
+  床清理在消费(bed.py:465 诚实跳过)。write 族的交互提示是**条件性设备行为**(文件
+  已存在才提示 overwrite),编写侧硬门会在干净路径上强插确认步反而制造错位——按
+  "经验知识走判例层"架构,该知识归 footprint 行为观察(污点一修复已接通入库链),
+  门不建。
+- **G6 免派下的自愈链饥饿——接受的权衡(记录在案)**:s₀ 前筛跳过深归因 fork → 无
+  behavior_candidates.json → uncertain 入库零输入。占用类知识实际落点=diagnosis
+  事实(facts.jsonl 含 echo_support/polluters)+ 床账 + run13 缺陷候选;跨 run 由
+  机械配对重推(廉价)。引擎机械代写 footprint 观察有误归属风险(占用由毒源命令
+  引起,却会挂到受害者命令节点),故不做;若后续实弹显示重推成本显著,再议
+  echo_confirmed 案派轻量观察 fork。
 
 ### 2.3 文档登记在案的待建(择要;完整清单见 DESIGN §13.1/§15.1/§16/§11 与 K §8)
 

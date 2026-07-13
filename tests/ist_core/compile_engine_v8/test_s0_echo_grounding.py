@@ -149,3 +149,41 @@ def test_occupancy_hit_line_scoped():
     from main.ist_core.compile_engine_v8.nodes import _occupancy_hit
     assert _occupancy_hit("应不存在\nIP already occupied by SLB")
     assert not _occupancy_hit("file does not exist")
+
+
+# ── G6 fix_direction 分档(2026-07-14 审计修:固定硬话是全清单唯一活措辞违例)──────
+
+def test_g6_fix_direction_necessity_only_hedges():
+    """necessity_only(假阳 20-26% 理论自认)→ 明说必要条件推断非确证,不说 sufficient。"""
+    fx = N._g6_fix_direction("necessity_only", [{"via": "persistent-plane write"}])
+    assert "necessary-condition inference" in fx and "NOT a confirmation" in fx
+    assert "sufficient" not in fx
+
+
+def test_g6_fix_direction_persist_polluter_drops_tail_placement():
+    """持久面毒源:run11 实证排尾消不掉跨轮通路(_s0_pair 注释)→ 路线不含 tail placement。"""
+    fx = N._g6_fix_direction("echo_confirmed", [{"via": "persistent-plane write"}])
+    assert "direct corroboration" in fx
+    assert "tail placement" not in fx
+
+
+def test_g6_fix_direction_order_only_polluter_keeps_tail_placement():
+    """纯卷序 L2/L3 毒源(无持久面):排尾仍是合法出路 → 路线保留。"""
+    fx = N._g6_fix_direction("necessity_only", [{"via": "shared L2/L3 entity"}])
+    assert "tail placement" in fx
+
+
+# ── 意图盖章(P1c 证据源,author 派发时引擎侧落盘,worker 不可影响)────────────
+
+def test_stamp_intent_writes_manifest_verbatim(tmp_path, monkeypatch):
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    import json
+    monkeypatch.setattr(sh, "manifest", lambda st: {"cases": [
+        {"autoid": "203600000000000030",
+         "title": "1.配置port 为53.执行write all后重启设备",
+         "step_intents": [{"desc": "[check1]配置未被保存", "expected": ""}]}]})
+    monkeypatch.setattr(sh, "outputs_root", lambda: tmp_path)
+    N._stamp_intent("203600000000000030", {})
+    d = json.loads((tmp_path / "203600000000000030" / "intent.json").read_text())
+    assert d["title"].startswith("1.配置port 为53.执行write all")
+    assert d["source"] == "manifest" and d["stamped_by"] == "engine.author"

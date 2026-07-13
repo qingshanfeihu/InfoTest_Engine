@@ -153,6 +153,12 @@ class FootprintIndex:
         但 agent 常按手册原样查 `no/show/clear <cmd>`（命令本身就这么写）。先按**原样**查
         （护住 `show.statistics` / `clear.config` / `no.acl` 等真以动词起头的节点），原样
         miss 再剥前导动词重试一次，把 `no sdns session persistence` 映回 `sdns.session.persistence`。
+
+        缩写补全：设备 CLI 是 token 级最长前缀解析（`write mem` 在设备上就是 `write memory`
+        的合法写法），worker 也按此习惯查询。exact/前缀/alternation 全 miss 后按同款规则
+        补全重试：逐 token 沿节点命名空间走，唯一前缀候选即补全，零候选或多义（设备同样
+        报错，不猜）即放弃回落模糊搜索。run20 实证：`write mem` 曾 miss 掉进全树模糊，
+        trunk 展开 17 节点把 `write.memory` 淹没。
         """
         self._ensure_loaded()
         if not command:
@@ -160,13 +166,53 @@ class FootprintIndex:
         result = self._lookup_key(command)
         if result is not None:
             return result
+        completed = self._complete_token_prefixes(command)
+        if completed is not None:
+            result = self._lookup_key(completed)
+            if result is not None:
+                return result
         toks = command.lower().split()
         j = 0
         while j < len(toks) and toks[j] in _OP_PREFIXES:
             j += 1
         if 0 < j < len(toks):  # 确有前导动词且剥后非空 → 用裸命令主体再查一次
-            return self._lookup_key(" ".join(toks[j:]))
+            bare = " ".join(toks[j:])
+            result = self._lookup_key(bare)
+            if result is not None:
+                return result
+            completed = self._complete_token_prefixes(bare)
+            if completed is not None:
+                return self._lookup_key(completed)
         return None
+
+    def _complete_token_prefixes(self, command: str) -> str | None:
+        """token 级唯一前缀补全（设备 CLI 解析语义的镜像）。
+
+        逐 token 左→右沿节点 key 命名空间走：该层有精确同名段则取之（精确优先，同设备）；
+        否则收集该层以该 token 起头的候选段——恰一个即补全，零个/多义即整体失败返回 None
+        （多义时设备也拒绝解析，这里不猜、回落调用方的模糊搜索）。至少补全过一个 token
+        才返回（全 token 本就精确时返回 None，避免调用方白查一遍）。
+        """
+        toks = command.lower().split()
+        if len(toks) < 2:
+            return None
+        prefix = ""
+        out: list[str] = []
+        changed = False
+        for t in toks:
+            base = prefix + "." if prefix else ""
+            segs = {k[len(base):].split(".", 1)[0]
+                    for k in self._nodes if k.startswith(base)}
+            if t in segs:
+                out.append(t)
+            else:
+                cands = [s for s in segs if s.startswith(t)]
+                if len(cands) != 1:
+                    return None
+                out.append(cands[0])
+                changed = True
+            prefix = ".".join(out)
+        return " ".join(out) if changed else None
 
     def _lookup_key(self, command: str) -> dict | None:
         """按命令**原样**（不剥动词）做 精确 key → 前缀 branch → alternation 三级查找。"""

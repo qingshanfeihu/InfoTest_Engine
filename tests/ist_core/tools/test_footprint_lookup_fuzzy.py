@@ -218,3 +218,59 @@ def test_recursion_dedup_no_infinite_loop(tmp_path, monkeypatch):
     ])
     r = _lookup("demo a")                       # 不应挂死
     assert "demo b cmd" in r
+
+
+# K. token 级唯一前缀补全(设备 CLI 同款解析,run20 实证:`write mem` 曾被全树模糊
+#    淹没)——`demo mem` 唯一补全到 memory,直接展开该叶,不走模糊。
+def test_K_token_prefix_completion_unique(tmp_path, monkeypatch):
+    _make_index(tmp_path, monkeypatch, [
+        _node("demo.memory", ["demo memory"]),
+        _node("demo.method", ["demo method <m>"]),
+        _node("demo.net", ["demo net <url>"]),
+    ])
+    r = _lookup("demo mem")                     # mem → memory 唯一(method 不以 mem 起头)
+    assert "demo.memory" in r and "demo memory" in r
+    assert "fuzzy-matched" not in r
+
+
+# K2. 多义前缀不猜(设备同样拒绝解析)→ 回落模糊。
+def test_K2_ambiguous_prefix_falls_to_fuzzy(tmp_path, monkeypatch):
+    _make_index(tmp_path, monkeypatch, [
+        _node("demo.memory", ["demo memory"]),
+        _node("demo.method", ["demo method <m>"]),
+    ])
+    r = _lookup("demo me")                      # me → memory/method 多义
+    assert "No exact match" in r
+
+
+# K3. 动词剥离后再补全:`show demo mem` → 剥 show → demo mem → memory。
+def test_K3_verb_strip_then_completion(tmp_path, monkeypatch):
+    _make_index(tmp_path, monkeypatch, [
+        _node("demo.memory", ["demo memory"]),
+        _node("demo.net", ["demo net <url>"]),
+    ])
+    r = _lookup("show demo mem")
+    assert "demo.memory" in r
+    assert "fuzzy-matched" not in r
+
+
+# K4. 多 token 逐级补全:`de mem` → demo.memory(每级唯一)。
+def test_K4_multi_token_completion(tmp_path, monkeypatch):
+    _make_index(tmp_path, monkeypatch, [
+        _node("demo.memory", ["demo memory"]),
+        _node("demo.net", ["demo net <url>"]),
+    ])
+    r = _lookup("de mem")
+    assert "demo.memory" in r
+    assert "fuzzy-matched" not in r
+
+
+# K5. 补全到 branch 前缀同样成立:`demo se fi` → demo.segment.file。
+def test_K5_completion_through_branch(tmp_path, monkeypatch):
+    _make_index(tmp_path, monkeypatch, [
+        _node("demo.segment.file", ["demo segment file <f>"]),
+        _node("demo.net", ["demo net <url>"]),
+    ])
+    r = _lookup("demo se fi")
+    assert "demo segment file <f>" in r
+    assert "fuzzy-matched" not in r

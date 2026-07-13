@@ -1335,11 +1335,17 @@ def _case_touch_profile(aid: str) -> dict:
 
 
 def _occupancy_hit(sig: str) -> bool:
-    """占用/已存在语义(文法数据,带否定排除——'does not exist' 不得命中)。"""
+    """占用/已存在语义(文法数据,带否定排除——'does not exist' 不得命中)。
+
+    行级判定(2026-07-14 run20 实证):否定是行内局部现象——负向模式只否决**同一行**的
+    正向命中,不做全窗一票否决。全窗否决曾被框架步骤描述横幅误伤:668030 回显含用例
+    自己的意图文案「恢复后应不存在」,'不存在' 否决了另一行真实的占用 Warning,
+    echo_confirmed 被错降 necessity_only(方向保守无害,但机械上是错的)。"""
     _, _, (occ_p, occ_n) = _diag_grammar()
-    if any(n.search(sig) for n in occ_n):
-        return False
-    return any(p.search(sig) for p in occ_p)
+    for line in sig.splitlines() or [sig]:
+        if any(p.search(line) for p in occ_p) and not any(n.search(line) for n in occ_n):
+            return True
+    return False
 
 
 def _cross_bed_refuted(mine: list[dict], last: dict) -> bool:
@@ -1403,10 +1409,7 @@ def _echo_support(rec: dict) -> str:
     ctx = str((rec or {}).get("device_context") or (rec or {}).get("detail_tail") or "")
     if not ctx:
         return "necessity_only"
-    occ_p, occ_n = _diag_grammar()[2]
-    if occ_p and any(p.search(ctx) for p in occ_p) and not any(n.search(ctx) for n in occ_n):
-        return "echo_confirmed"
-    return "necessity_only"
+    return "echo_confirmed" if _occupancy_hit(ctx) else "necessity_only"
 
 
 def diagnose(state: dict) -> dict:

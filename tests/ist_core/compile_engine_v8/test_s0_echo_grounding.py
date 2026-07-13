@@ -121,3 +121,31 @@ def test_diagnose_main_body_anomaly_blocks_s0(monkeypatch):
     # A 有自身执行失败 → 不判 h_s0(要么不落 diagnosis,要么非 h_s0)
     assert not any(d.get("h_position") == "h_s0" for d in diags), \
         "diagnose 主体应因 anomaly_lines 不判 s₀(自身执行失败非床污染)"
+
+
+# ── 行级否定(run20 实证,2026-07-14):步骤描述横幅的「不存在」不得否决别行的真占用 ──
+
+def test_echo_support_desc_banner_negation_does_not_veto():
+    """668030 run20 形态:回显同时含 ①用例步骤描述横幅「恢复后应不存在」(意图文案,
+    非设备输出) ②真实占用 Warning 行。否定是行内局部现象——横幅行的 '不存在' 不得
+    全窗否决 Warning 行 → echo_confirmed。修前被错降 necessity_only(保守向,无害但错)。"""
+    rec = {"device_context":
+           "#######   step10: 验证sdns listener配置未被write all保存，恢复后应不存在\n"
+           "Warning: This IP/port pair may already be occupied by an SLB virtual service.\n"
+           "#### Fail Num 1: fail to find 172.16.34.70"}
+    assert N._echo_support(rec) == "echo_confirmed"
+
+
+def test_echo_support_same_line_negation_still_vetoes():
+    """同一行内的否定仍然否决:'configuration file does not exist' 的 exist 是被否定的
+    占用陈述本身,不得计为占用佐证。"""
+    rec = {"device_context": "Error: configuration file sdns_save does not exist\n"
+                             "#### Fail Num 1: fail to find"}
+    assert N._echo_support(rec) == "necessity_only"
+
+
+def test_occupancy_hit_line_scoped():
+    """_occupancy_hit(共用核,_s0_pair 自扰分支同享)行级语义:负向行+正向行并存=命中。"""
+    from main.ist_core.compile_engine_v8.nodes import _occupancy_hit
+    assert _occupancy_hit("应不存在\nIP already occupied by SLB")
+    assert not _occupancy_hit("file does not exist")

@@ -245,6 +245,47 @@ def test_bed_snapshot_fastmcp_banner_error_marks_failed(tmp_path):
     assert snap and all(v.get("failed") is True for v in snap.values())
 
 
+def test_probe_transient_invalid_retried_not_asked(tmp_path):
+    """探针瞬态失败复探消解(run18 实弹;2026-07-11 同型前科):合法 show 命令单次被
+    设备回 `% Invalid input`(框架 SSH 读窗串位),复探即成功——不复探=一次瞬态就产
+    「通道床态未知」假问询打断用户,而床是干净的。"""
+    _INVALID = ("host=1.2.3.4  mode=show\n--- output ---\n"
+                "% Invalid input: command 'show sdns config file' is invalid\n"
+                "show sdns config file\n    ^")
+    calls: dict = {}
+
+    def flaky(cmd: str) -> str:
+        calls[cmd] = calls.get(cmd, 0) + 1
+        if "version" in cmd:
+            return DEV_585
+        # 首探 invalid(瞬态),复探成功(空列表:只有段落头)
+        if calls[cmd] == 1:
+            return _INVALID
+        return ("host=1.2.3.4  mode=show\n--- output ---\n"
+                "Running configuration backup files:\nAPV#")
+
+    rep = bed_check(flaky, CFG, root=tmp_path, host="h")
+    assert rep["needs_ask"] is False           # 复探成功 → 零问询
+    assert not rep["findings"]                 # 既不报残留也不报探测失败
+    assert rep["anchor"]["status"] == "match"
+
+
+def test_probe_persistent_failure_still_reported(tmp_path):
+    """持续失败(复探仍失败)如实报 probe_failed——复探不得掩盖真失败。"""
+    dead = "error: SSH to 1.2.3.4 failed: connection refused"
+    rep = bed_check(lambda cmd: dead, CFG, root=tmp_path, host="h")
+    assert rep["needs_ask"] is True
+    assert rep["findings"] and all(f.get("probe_failed") for f in rep["findings"])
+
+
+def test_probe_resilient_returns_first_echo_on_double_failure():
+    """两次都失败返回首次回显(复探路径的新错误不得覆盖原始诊断信息)。"""
+    from main.ist_core.compile_engine_v8.bed import probe_resilient
+    seq = iter(["error: first failure", "error: second different failure"])
+    out = probe_resilient(lambda cmd: next(seq), "show x")
+    assert out == "error: first failure"
+
+
 def test_bridge_common_cause_merges_dead_device_question(tmp_path):
     """题面共因合题:同一失败签名覆盖 ≥2 路探针(含版本锚)→ 一句"疑似设备不可达",
     不再摊成「残留×3+探测未完成+版本不匹配」五段误导题(105 床实弹形态)。"""

@@ -1030,6 +1030,13 @@ created(批后快照垃圾 diff 入账,下批接力会驱动 restore_via_llm 自
 - **观测自身的韧性同型修**(observability.py):Langfuse auth_check 瞬态超时曾=进程
   终身禁用(02:16 TUI 进程全天两轮 run 零 trace);修:失败冷却重试(默认 300s,
   `IST_OBS_RETRY_COOLDOWN_S`),异常日志升 WARNING 落 tui.log。
+- **探针瞬态复探**(2026-07-13 run18 实弹,同型前科 2026-07-11):合法 show 命令单次
+  被设备回 `% Invalid input`(框架 SSH 读窗串位 P1 的采集面显形),同一通道立即复探
+  即成功——`probe_resilient` 对协议级失败复探一次,两次都失败才算真失败(返回**首次**
+  回显:复探路径的新错误会误导诊断)。不复探=一次瞬态产「通道床态未知」假问询打断
+  用户,而床是干净的(run18 实测三通道复探全空)。bed_check/bed_snapshot 双消费。
+  测试锚:`test_bed_gate.py::test_probe_transient_invalid_retried_not_asked` /
+  `test_probe_persistent_failure_still_reported` / `test_probe_resilient_returns_first_echo_on_double_failure`。
 - **(41)④ 提交保真门(登记待建,TUI 侧)**:多题 ask 面板按键语义(数字只高亮、Tab
   切题不落答案、Enter 只提交聚焦题)使 run15 与 run17 两次 3 题各丢 2 答——失真
   发生在 (41)①②③ 之前,echo 缺失行是唯一事后信号。门形态:Enter 确认时存在未答

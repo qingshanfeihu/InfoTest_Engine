@@ -184,7 +184,8 @@ def _clean_probe_body(out: str) -> list[str]:
 
 def bed_snapshot(probe_fn: Callable[[str], str]) -> dict:
     """床态快照:全部探针(含 snapshot_only 状态面)的内容行。批前/批后各拍一次,
-    diff=本批漂移(观测结果,不解析卷面意图——X5 裁决:不做持久写识别器)。"""
+    diff=本批漂移(观测结果,不解析卷面意图——X5 裁决:不做持久写识别器)。
+    通道经 probe_resilient 复探一次消解瞬态(瞬态失败的通道被跳过 diff=丢一次漂移观察)。"""
     probes = dict(load_grammar().get("bed_probes") or {})
     probes.pop("_provenance", None)
     probes.pop("cleanup_refs", None)
@@ -192,7 +193,7 @@ def bed_snapshot(probe_fn: Callable[[str], str]) -> dict:
     for name, spec in probes.items():
         if name == "build":
             continue
-        out = probe_fn(str(spec.get("cmd") or ""))
+        out = probe_resilient(probe_fn, str(spec.get("cmd") or ""))
         if _probe_failed(out):
             snap[name] = {"failed": True, "lines": []}
         else:
@@ -361,11 +362,33 @@ def _probe_failed(out: str) -> bool:
     return False
 
 
+def probe_resilient(probe_fn: Callable[[str], str], cmd: str) -> str:
+    """探一次;协议级失败即复探一次(瞬态消解)——两次都失败才算真失败。
+
+    实证两例同型(2026-07-11 / 2026-07-13 run18):合法 show 命令单次被设备回
+    `% Invalid input`,同一通道立即复探即成功(空列表)——框架 SSH 读窗串位(P1 已知
+    时序缺陷)使命令被截断/错位解析。不复探=一次瞬态就产「该通道床态未知」的假问询
+    打断用户,而床其实是干净的。复探成本=一次只读 show,可忽略。
+
+    两次都失败返回**首次**回显:首次是正常路径上的观察,复探路径的新错误(如复探时
+    恰好 SSH 断)会误导诊断方向。
+    """
+    out = probe_fn(cmd)
+    if not _probe_failed(out):
+        return out
+    retry = probe_fn(cmd)
+    if not _probe_failed(retry):
+        logger.info("探针瞬态失败,复探成功:%s", cmd)
+        return retry
+    return out
+
+
 def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
               root: Path, host: str, precedent_build: str = "") -> dict:
     """批前床态体检:版本锚三方比对 + 各通道残留探测 + 床账差额。
 
-    probe_fn(cmd)->回显文本(注入;真实现经跳板机只读探针,失败返回 'error:...')。
+    probe_fn(cmd)->回显文本(注入;真实现经跳板机只读探针,失败返回 'error:...');
+    每个通道经 probe_resilient 复探一次消解瞬态。
     返回报告 dict;`needs_ask=True` 时调用方(bed_gate 节点)必须 interrupt 问用户,
     自动清理只允许对 `ours_unrestored` 项执行(INV-9)。
     """
@@ -378,7 +401,7 @@ def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
     # 的空版本被呈报成「⚠ 版本不匹配:设备(空)」——用户拿到的是误导性判断题,真相
     # 是设备不可达);probe_failed 单独归类,题面走"探测失败"形态。
     bspec = probes.get("build") or {}
-    raw = probe_fn(str(bspec.get("cmd") or "show version"))
+    raw = probe_resilient(probe_fn, str(bspec.get("cmd") or "show version"))
     report["probes"]["build"] = raw[:400]
     if _probe_failed(raw):
         report["needs_ask"] = True
@@ -398,7 +421,7 @@ def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
     for name, spec in probes.items():
         if name == "build" or spec.get("snapshot_only"):
             continue   # snapshot_only:合法内容恒在的状态面(非空≠残留),只进快照 diff
-        out = probe_fn(str(spec.get("cmd") or ""))
+        out = probe_resilient(probe_fn, str(spec.get("cmd") or ""))
         report["probes"][name] = (out or "")[:400]
         # 探针失败 ≠ 有残留(2026-07-11 yzg 验收实证:`% Invalid input` 单次瞬态被
         # 报成"分区配置残留"——失败报错文本也是非空回显,混进残留=谎报床上有东西)。

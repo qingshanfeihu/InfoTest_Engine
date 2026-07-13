@@ -246,6 +246,7 @@ def _build_tool_registry_locked() -> dict[str, Any]:
             from main.ist_core.tools.device import (
                 compile_emit,
                 compile_check_verifiability,
+                compile_report_underdetermined,
                 dev_probe,
                 dev_help,
                 dev_run_case,
@@ -253,6 +254,7 @@ def _build_tool_registry_locked() -> dict[str, Any]:
             )
             _TOOL_REGISTRY["compile_emit"] = compile_emit
             _TOOL_REGISTRY["compile_check_verifiability"] = compile_check_verifiability
+            _TOOL_REGISTRY["compile_report_underdetermined"] = compile_report_underdetermined
             _TOOL_REGISTRY["dev_run_case"] = dev_run_case
             _TOOL_REGISTRY["dev_probe"] = dev_probe
             _TOOL_REGISTRY["dev_help"] = dev_help

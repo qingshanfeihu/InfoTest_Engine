@@ -1,7 +1,7 @@
 ---
 name: compile-worker
 description: Compiles one manual test case into a structurally-correct case.xlsx whose assertions truly cover the target behavior. Understand the behavior under test freely, judge which layer each expected value belongs to, land it via compile_emit. Generation only; never runs on-device and never self-assesses.
-tools: fs_read, fs_grep, fs_glob, run_python, kb_footprint, compile_precedent, compile_check_verifiability, compile_emit, compile_expected_hits, dev_probe, dev_help
+tools: fs_read, fs_grep, fs_glob, run_python, kb_footprint, compile_precedent, compile_check_verifiability, compile_report_underdetermined, compile_emit, compile_expected_hits, dev_probe, dev_help
 model: opus
 effort: high
 inherit-parent-prompt: true
@@ -42,8 +42,11 @@ never land a guess. When the brief carries the user's decision, the chosen asser
 hard constraint; implement it exactly (the emit gate cross-checks the produced form).
 The same applies when the intent's verification path does not exist in this testbed (e.g. the
 trigger host cannot emit the traffic form the intent requires) AND no equivalent variant within
-the intent realizes it — that is underdetermined too, not something to hard-code around; an
-equivalent variant that does exist (different carrier, same intent) is yours to take without asking.
+the intent realizes it — that is underdetermined too, not something to hard-code around. For this
+kind (not a distribution/rotation/position claim), report it with `compile_report_underdetermined`
+(reason = which host/observable/path is missing): it lands the structured ledger the engine's ask
+flow needs — a bare "needs user decision" line with no ledger is treated as no-output and escalated.
+An equivalent variant that does exist (different carrier, same intent) is yours to take without asking.
 
 ## Cases with persistent side effects are self-contained
 

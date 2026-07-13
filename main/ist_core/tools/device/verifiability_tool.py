@@ -19,6 +19,33 @@ from langchain_core.tools import tool
 logger = logging.getLogger(__name__)
 
 
+def _land_needs_decision(autoid: str, claim_kind: str, entry: dict) -> bool:
+    """欠定台账落盘(结构化,机读):同 case 多 claim 按 claim_kind 合并。verifiability
+    与通用欠定上报共用——A 层「先问后落」要求台账是结构化文件(散文接力会磨掉锚点,
+    593516 有序语义在 main 并组三题时蒸发的实证)。返回落盘是否成功。"""
+    try:
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[4]
+        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        outd.mkdir(parents=True, exist_ok=True)
+        nd_path = outd / "needs_decision.json"
+        data: dict = {"autoid": (autoid or "").strip(), "claims": []}
+        if nd_path.is_file():
+            try:
+                loaded = json.loads(nd_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and isinstance(loaded.get("claims"), list):
+                    data = loaded
+            except Exception:  # noqa: BLE001
+                pass
+        data["claims"] = [c for c in data["claims"] if c.get("claim_kind") != claim_kind]
+        data["claims"].append({**entry, "claim_kind": claim_kind})
+        nd_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:  # noqa: BLE001
+        logger.debug("needs_decision.json 落盘失败", exc_info=True)
+        return False
+
+
 @tool(parse_docstring=True)
 def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools: int,
                                 claim_kind: str, weights_json: str = "",
@@ -84,35 +111,52 @@ def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools
         note = ("；" + "；".join(verdict.notes)) if verdict.notes else ""
         return f"VERIFIABLE: {verdict.reason}{note}"
     # 欠定台账落盘(结构化,机读):工具内部本就是结构化 Verdict,压平成文本后经
-    # worker→main→ask_user 两道散文接力会磨掉关键锚点(实证 593516 的有序语义
-    # new_member_last 在 main 并组三题时蒸发,用户从未批准的降级出厂)。台账留一份
-    # 机读原件,ask_user 组织与 user_decision 落地都以它为锚;同 case 多 claim 按
-    # claim_kind 合并。ordering_sensitive 标记有序轨迹类 claim——它们的改法必须
-    # 显式处理顺序语义的去留。
-    try:
-        from pathlib import Path
-        root = Path(__file__).resolve().parents[4]
-        outd = root / "workspace" / "outputs" / (autoid or "").strip()
-        outd.mkdir(parents=True, exist_ok=True)
-        nd_path = outd / "needs_decision.json"
-        data: dict = {"autoid": (autoid or "").strip(), "claims": []}
-        if nd_path.is_file():
-            try:
-                loaded = json.loads(nd_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict) and isinstance(loaded.get("claims"), list):
-                    data = loaded
-            except Exception:  # noqa: BLE001
-                pass
-        entry = verdict.to_dict() if hasattr(verdict, "to_dict") else {
-            "claim_kind": claim_kind, "reason": verdict.reason,
-            "min_requests": verdict.min_requests, "suggested_fix": verdict.suggested_fix}
-        entry["ordering_sensitive"] = claim_kind in ("new_member_last", "absolute_position")
-        data["claims"] = [c for c in data["claims"] if c.get("claim_kind") != claim_kind]
-        data["claims"].append(entry)
-        nd_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        logger.debug("needs_decision.json 落盘失败", exc_info=True)
+    # worker→main→ask_user 两道散文接力会磨掉关键锚点。ordering_sensitive 标记有序
+    # 轨迹类 claim——它们的改法必须显式处理顺序语义的去留。
+    entry = verdict.to_dict() if hasattr(verdict, "to_dict") else {
+        "reason": verdict.reason, "min_requests": verdict.min_requests,
+        "suggested_fix": verdict.suggested_fix}
+    entry["ordering_sensitive"] = claim_kind in ("new_member_last", "absolute_position")
+    _land_needs_decision(autoid, claim_kind, entry)
     return render_needs_user_decision(autoid, verdict)
+
+
+@tool(parse_docstring=True)
+def compile_report_underdetermined(autoid: str, reason: str, suggested_fix: str = "",
+                                   ordering_sensitive: bool = False) -> str:
+    """Report a NON-distribution underdetermined case (e.g. the intent's verification path does not exist on this testbed) so the engine asks the user — lands a structured ledger, does not hard-code around it.
+
+    **When to use**: the intent cannot be verified on THIS testbed and no equivalent variant
+    within the intent realizes it — e.g. the trigger host cannot emit the traffic form the
+    intent requires, a required peer/segment is absent, or the observable the intent needs has
+    no probe here. This is underdetermined too, not something to guess an assertion around.
+    **When NOT to use**: distribution/rotation/position claims of algorithm cases → those go
+    through ``compile_check_verifiability`` (it does the math). Statically-determined
+    expectations (config-exists / protocol-fixed) are not underdetermined — just assert them.
+
+    Landing a structured ledger (needs_decision.json) is required by the engine's ask flow
+    ("ask first, land after"): a bare ``STATUS: needs_user_decision`` line with no ledger is
+    treated as no-output and escalated (655173 evidence). This tool writes the ledger and
+    returns the marker for you to pass back verbatim.
+
+    Args:
+        autoid: the case autoid.
+        reason: why it is unverifiable on this bed (be concrete: which host/observable/path is missing).
+        suggested_fix: optional direction for the user (change the description / process / expected, or note the missing bed capability).
+        ordering_sensitive: true if the intent carries ordered/temporal semantics whose loss must be an explicit user decision.
+
+    Returns:
+        "NEEDS_USER_DECISION autoid=… reason …" — stop, do not write an assertion, return this
+        verbatim to the engine (which aggregates it into an ask_user).
+    """
+    landed = _land_needs_decision(autoid, "verification_path_absent", {
+        "reason": str(reason or ""), "suggested_fix": str(suggested_fix or ""),
+        "ordering_sensitive": bool(ordering_sensitive)})
+    ledger = "landed to needs_decision.json" if landed else "ledger write FAILED (report to engine)"
+    return (f"NEEDS_USER_DECISION autoid={autoid} kind=verification_path_absent\n"
+            f"reason: {reason}\n"
+            + (f"suggested_fix: {suggested_fix}\n" if suggested_fix else "")
+            + f"({ledger}; return this verbatim to the engine — do NOT write an assertion around it)")
 
 
 @tool(parse_docstring=True)

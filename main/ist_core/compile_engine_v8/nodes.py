@@ -1414,22 +1414,42 @@ def diagnose(state: dict) -> dict:
               if c["status"] in (V.S_FAILED, V.S_CONTRADICTED)]
     if not failed:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
-    # INV-11 式③(坑#18):门数据面缺席=显式入账,禁静默 no-op——s₀ 污染诊断全族
-    # 依赖文法数据,缺席时诊断门整体失效,用户必须在报告里看得见
+    # INV-11 式③(坑#18):门数据面缺席=显式入账,禁静默 no-op——K 三个数据面
+    # (①grammar 门数据 ②inventory 签名 ③case 画像)缺任一都落 gate_disabled,用户在
+    # 报告 K 健康度行看得见(§18.2 第6行补齐:此前只 grammar 面有门,inventory 静默
+    # 降级、画像 except 静默、报告不渲染)
     pers_chk, l23_chk, _occ = _diag_grammar()
+    _gate_facts: list[dict] = []
     if not pers_chk and not l23_chk:
-        sh.append(state, [{"ev": "gate_disabled", "aid": "", "gate": "diagnose_s0",
-                           "reason": "domain_grammar unavailable — batch-level "
-                                     "pollution diagnosis disabled this run"}])
-        sh.emit("⚠ 文法数据不可用——批级污染诊断门本轮禁用(已入账)")
+        _gate_facts.append({"ev": "gate_disabled", "aid": "", "gate": "diagnose_s0",
+                            "reason": "domain_grammar unavailable — batch-level "
+                                      "pollution diagnosis disabled this run"})
+    # ② inventory 面(inverse_forms):τ 覆盖门与 bed 机械逆放依赖它,缺席=降级词表/LLM
+    try:
+        from main.ist_core.compile_engine_v8.bed import _inverse_pairs
+        if not _inverse_pairs():
+            _gate_facts.append({"ev": "gate_disabled", "aid": "", "gate": "inverse_forms",
+                                "reason": "command_inventory inverse_forms unavailable — "
+                                          "tau-coverage gate and mechanical bed restore degrade"})
+    except Exception:  # noqa: BLE001
+        logger.debug("inverse_forms 健康检查异常", exc_info=True)
+    if _gate_facts:
+        sh.append(state, _gate_facts)
+        for gf in _gate_facts:
+            sh.emit(f"⚠ K 健康度:{gf['gate']} 门本轮禁用(已入账)")
 
     profiles: dict[str, dict] = {}
+    _profile_failures: list[str] = []
 
     def _prof(aid: str) -> dict:
         if aid not in profiles:
             try:
                 profiles[aid] = _case_touch_profile(aid)
             except Exception:  # noqa: BLE001
+                # ③ 画像面缺席:此前静默返回空 profile → s₀ 配对对该案失明。记失败,
+                # 批末落 gate_disabled(不逐案落,避免刷账)
+                logger.debug("触碰画像提取失败 %s", aid, exc_info=True)
+                _profile_failures.append(aid)
                 profiles[aid] = {"persist": [], "l23": [], "entities": set()}
         return profiles[aid]
 
@@ -1469,6 +1489,13 @@ def diagnose(state: dict) -> dict:
         if len(aids) >= 2:
             new_facts.append({"ev": "common_cause", "aid": "", "key": stem,
                               "aids": sorted(aids), "run_id": f"cc:{volume}:{stem[:40]}"})
+    # ③ 画像面缺席批末落一条 gate_disabled(不逐案刷账):s₀ 配对对这些案失明
+    if _profile_failures:
+        new_facts.append({"ev": "gate_disabled", "aid": "", "gate": "touch_profile",
+                          "reason": f"case-touch profile extraction failed for "
+                                    f"{len(_profile_failures)} case(s) — s0 pairing blind to them",
+                          "aids": sorted(_profile_failures)[:20]})
+        sh.emit(f"⚠ K 健康度:{len(_profile_failures)} 案触碰画像提取失败,s₀ 配对对其失明(已入账)")
     if new_facts:
         sh.append(state, new_facts)
         n_s0 = sum(1 for f in new_facts if f.get("h_position") == "h_s0")

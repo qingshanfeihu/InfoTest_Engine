@@ -933,7 +933,7 @@ bed 面板/G2 出口消费链原样接通;验收测试断言床污染案零 attr
 | user_decision 落盘 | 失败吞,decision 照落 | 式②:落盘失败=decision 不落账,面板重问 |
 | 批后床态收敛外壳 | 整块吞 | 式②:落 bed_closure_failed 事实+下批 bed_gate needs_ask |
 | merge 预检调用 | 无保护 | 式②:异常=该案 emit_invalid(reason=precheck_error),不杀批 |
-| 门数据面缺席（grammar/inventory/画像） | 静默 no-op | 式③:落 gate_disabled 事实+报告 K 健康度行。**完成度(2026-07-13 符合性审计如实标注):仅 grammar 面已落(diagnose_s0,nodes.py);inventory 无门、画像静默共享 grammar 回退、报告 K 健康度行未渲染、零测试——本行其余部分「设计中」** |
+| 门数据面缺席（grammar/inventory/画像） | 静默 no-op | 式③:落 gate_disabled 事实+报告 K 健康度行。**完成度(2026-07-13 三面补齐):①grammar 面(diagnose_s0)②inventory 面(inverse_forms 空→gate_disabled,τ 覆盖门/bed 机械恢复降级)③画像面(_case_touch_profile 提取失败→批末 gate_disabled,s₀ 配对对其失明)全部落账;render 渲染「⚠ K 健康度:N 个判定门本轮因数据面缺席而降级」行(用户可见,非只机读)。测试:test_k_health_gates.py** |
 | 探针空回显 | 判"干净" | 式③:空串=probe_failed(床态未知),入 findings |
 
 ### 18.3 mirror 同步锚（公式 D 级最危险项）
@@ -1063,14 +1063,15 @@ created(批后快照垃圾 diff 入账,下批接力会驱动 restore_via_llm 自
   不收(门不可绕),已入账不重收(幂等)。测试锚:`test_late_artifact_reclaim.py`(5 项)。
   **运维旁注**:26 案并发+深思考时 600s 单次墙钟偏紧(`IST_FORK_WALLCLOCK_S` 可调),
   回收是兜底不是许可——墙钟仍应按实际编写耗时校准。
-- **欠定台账通道缺口(登记,DESIGN §19.5)**:worker md 声明两类欠定——①分布类断言
-  不可验(`compile_check_verifiability` 判定时**自落** needs_decision.json)②**意图的
-  验证路径在本床不存在**(如触发主机发不出意图要求的流量形态)。但该工具入参只有
-  `(autoid, algo, n_requests, n_pools)`,**承载不了第②类**——worker 按 md 停手并返回
-  `STATUS: needs_user_decision`,台账却无从落，引擎按 A 层「先问后落」不认散文声称,
-  判 escalated。run18 实录 655173 即此形态。当前处置:reason 说真话(呈报 worker 原文
-  供人判读),不再谎报 "no output"。根治方向:通用欠定上报工具(claim_kind 开放,
-  worker 落结构化台账)——需拍板后实施。:多题 ask 面板按键语义(数字只高亮、Tab
+- **欠定台账通道缺口 → 已补齐(通用欠定上报工具,2026-07-13)**:worker md 声明两类
+  欠定——①分布类断言不可验(`compile_check_verifiability` 自落 needs_decision.json)
+  ②**意图的验证路径在本床不存在**(触发主机发不出意图要求的流量形态)。此前该工具
+  入参只表达①(algo/n_requests/n_pools),承载不了②——worker 返回
+  `STATUS: needs_user_decision` 却无台账,引擎按「先问后落」不认散文声称判 escalated
+  (655173 实录)。补 `compile_report_underdetermined`(claim_kind=verification_path_absent,
+  与 verifiability 共用 `_land_needs_decision` 落结构化 needs_decision.json;worker md
+  白名单+正文指向它,author 消化路径不变)。测试:`test_report_underdetermined.py`。
+- **(41)④ 提交保真门(登记待建,TUI 侧)**:多题 ask 面板按键语义(数字只高亮、Tab
   切题不落答案、Enter 只提交聚焦题)使 run15 与 run17 两次 3 题各丢 2 答——失真
   发生在 (41)①②③ 之前,echo 缺失行是唯一事后信号。门形态:Enter 确认时存在未答
   题 → 挡板提示「还有 N 题未答」,不静默部分提交;落地前的操作纪律=逐题

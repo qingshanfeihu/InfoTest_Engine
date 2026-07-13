@@ -230,6 +230,18 @@ def render_delivery_report(report: dict, fs: list[dict], manifest: dict,
     if n_broken:
         lines.append(f"- ⚠ 有 {n_broken} 个用例本轮**未跑成**(执行中断/日志陈腐/级联"
                      f"受害)——它们的结果是「无结论」而非「未通过」,不计入通过率分母叙事")
+    # K 健康度行(§18.2 第6行式③):门数据面缺席=判定降级,用户必须看得见——诊断/τ/
+    # bed 恢复的可信度取决于三数据面(grammar 门/inventory 签名/case 画像)是否齐备
+    _gd = {}
+    for f in fs:
+        if f.get("ev") == "gate_disabled":
+            _gd[str(f.get("gate"))] = str(f.get("reason") or "")
+    if _gd:
+        _cn = {"diagnose_s0": "批级污染诊断", "inverse_forms": "τ 覆盖门/机械恢复",
+               "touch_profile": "触碰画像(s₀ 配对输入)"}
+        items = "；".join(f"{_cn.get(g, g)}" for g in sorted(_gd))
+        lines.append(f"- ⚠ **K 健康度**:{len(_gd)} 个判定门本轮因数据面缺席而降级({items})"
+                     f"——相关诊断/覆盖判定的可信度下降,详见机读报告 gate_disabled 事实")
     moved = report.get("moved_tail") or []
     if moved:
         names = [str((mcases.get(a) or {}).get("title") or ("…" + a[-6:])) for a in moved]

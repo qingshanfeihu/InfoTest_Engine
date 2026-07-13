@@ -19,6 +19,7 @@ from collections.abc import Generator
 from typing import Any
 
 from .config import smart_config, server_config
+from .presentation import UserVisibleEvent, UserEventType, ThoughtRenderer
 
 logger = logging.getLogger("wecom_bot_smart.gateway")
 
@@ -50,62 +51,69 @@ def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
     final_answer = ""
 
     def _sink(event: IstCoreEvent) -> None:
+        """将 IstCoreEvent 转换为 UserVisibleEvent 推入队列。
+
+        内部工具名、原始参数、LLM 思考文本均不进入队列。
+        written_files 追踪逻辑保留（文件发送功能依赖）。
+        """
         try:
             kind = event.get("kind", "")
             payload = event.get("payload", {})
             logger.debug("sink event: kind=%s", kind)
 
-            if kind == "llm_token":
-                content = payload.get("content", "")
-                if content:
-                    q.put({"type": "delta", "content": content})
-            elif kind == "thought":
-                content = payload.get("content", "")
-                if content:
-                    q.put({"type": "thought", "content": f"💭 {content}"})
-            elif kind == "tool_call" or kind == "tool_start":
-                name = payload.get("name", "工具")
+            # --- 工具调用开始 ---
+            if kind == "tool_call" or kind == "tool_start":
+                name = payload.get("name", "")
+                # written_files 追踪（保留，不因抽象而丢失）
                 inp = payload.get("input", {})
+                wf = ""
                 if written_files is not None and name in ("fs_write", "fs_edit"):
                     fp = inp.get("path") or inp.get("file_path") or ""
                     if fp:
                         written_files.append(fp)
+                        wf = fp
                         logger.info("sink 追踪到文件写入: %s", fp)
-                input_preview = ""
-                if isinstance(inp, dict):
-                    if "skill" in inp:
-                        input_preview = inp.get("skill", "")
-                        brief = inp.get("brief", "")
-                        if brief:
-                            input_preview += f" ({brief[:50]}...)" if len(brief) > 50 else f" ({brief})"
-                    elif "raw" in inp:
-                        raw = inp.get("raw", "")
-                        input_preview = raw[:80] if len(raw) > 80 else raw
-                    elif "query" in inp:
-                        qv = inp.get("query", "")
-                        input_preview = qv[:80] if len(qv) > 80 else qv
-                    else:
-                        keys = list(inp.keys())[:3]
-                        input_preview = ", ".join(keys)
-                elif isinstance(inp, str):
-                    input_preview = inp[:80] if len(inp) > 80 else inp
-                tool_msg = f"🔧 调用 {name}"
-                if input_preview:
-                    tool_msg += f"\n{input_preview}"
-                q.put({"type": "tool", "content": tool_msg})
+                q.put(UserVisibleEvent(
+                        type=UserEventType.TOOL_STATUS,
+                        tool_name=name,
+                        metadata={"input": inp} if isinstance(inp, dict) else {},
+                        written_file=wf,
+                    ))
+
+            # --- 工具调用结束 ---
             elif kind == "tool_result" or kind == "tool_end":
-                name = payload.get("name", "工具")
-                q.put({"type": "tool", "content": f"✅ {name} 完成"})
+                name = payload.get("name", "")
+                q.put(UserVisibleEvent(
+                    type=UserEventType.TOOL_STATUS,
+                    tool_name=name,
+                    metadata={"status": "done"},
+                ))
+
+            # --- LLM 思考（thought / final_thought） ---
+            elif kind == "llm_end" and payload.get("name") in ("thought", "final_thought"):
+                q.put(UserVisibleEvent(type=UserEventType.THINKING))
+
+            # --- 阶段标记 ---
             elif kind == "phase_marker":
-                phase = payload.get("phase", "")
-                if phase:
-                    q.put({"type": "phase", "content": f"📍 {phase}"})
+                q.put(UserVisibleEvent(type=UserEventType.THINKING))
+
+            # --- 错误 ---
             elif kind == "error" or kind == "run_error":
                 error_msg = payload.get("error", "") or payload.get("message", "")
                 if error_msg:
-                    q.put({"type": "error", "content": error_msg})
+                    q.put(UserVisibleEvent(
+                        type=UserEventType.ERROR,
+                        content=error_msg,
+                    ))
+
+            # --- ask_user ---
             elif kind == "ask_user_request":
-                q.put({"type": "ask_user", "content": "", "payload": payload})
+                q.put(UserVisibleEvent(
+                    type=UserEventType.ASK_USER,
+                    metadata=payload,
+                ))
+
+            # llm_token / info / node_start/end → 不进入用户通道
         except Exception as e:
             logger.error("_sink 处理异常: %s", e)
 
@@ -125,8 +133,8 @@ def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
                 )
                 final_answer = result.get("final_answer") or ""
         except Exception as exc:
-            logger.exception("IST-Core 流式异常")
-            q.put({"type": "error", "content": str(exc)})
+            logger.exception("IST-Core 流式异常 (thread)")
+            q.put(UserVisibleEvent(type=UserEventType.ERROR, content=str(exc)))
         finally:
             q.put(None)
 
@@ -140,16 +148,33 @@ def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
                 item = q.get(timeout=15)
             except queue.Empty:
                 elapsed_min = int((time.monotonic() - last_event_ts) / 60) or 1
-                yield {"type": "heartbeat", "content": f"⏳ 仍在处理中（{elapsed_min} 分钟）…"}
+                yield UserVisibleEvent(
+                    type=UserEventType.HEARTBEAT,
+                    content=f"⏳ 仍在处理中（{elapsed_min} 分钟）…",
+                )
                 continue
             if item is None:
                 break
-            if item.get("type") == "error":
-                logger.error("IST-Core 流式错误: %s", item["content"])
-                final_answer = f"执行失败: {item['content']}"
+            if isinstance(item, UserVisibleEvent) and item.type == UserEventType.ERROR:
+                logger.error("IST-Core 流式错误: %s", item.content)
+                final_answer = f"执行失败: {item.content}"
                 break
             last_event_ts = time.monotonic()
             yield item
+        # --- generator 主循环结束 ---
+        # 排空 queue 中剩余事件（防止 race condition：generator 先返回，
+        # ASK_USER 等事件还在 queue 中未被 drain 消费）
+        drained = 0
+        while not q.empty():
+            leftover = q.get_nowait()
+            if leftover is None or not isinstance(leftover, UserVisibleEvent):
+                continue
+            logger.debug("generator: 排空残留事件 type=%s tool=%s",
+                        leftover.type.value, leftover.tool_name)
+            yield leftover
+            drained += 1
+        if drained:
+            logger.debug("generator: 共排空 %d 个残留事件", drained)
     finally:
         t.join(timeout=10)
 
@@ -314,7 +339,8 @@ def _clean_content(raw: str, user_id: str) -> str:
 
 def _format_markdown(query: str, answer: str, elapsed_min: int,
                      split_reason: str | None = None,
-                     turn_count: int = 0) -> str:
+                     turn_count: int = 0,
+                     process_summary: str = "") -> str:
     body = answer
     d = body.encode("utf-8")
     if len(d) > 20000:
@@ -330,8 +356,10 @@ def _format_markdown(query: str, answer: str, elapsed_min: int,
           if elapsed_min > 0
           else "<font color=\"comment\">Powered by IST-Core</font>")
     footer = f"{turn_info} | {ft}" if turn_info else ft
+    process_section = f"\n{process_summary}\n" if process_summary else ""
     return (f"## InfoTest Engine 结果\n{prefix}"
-            f"> **问题：**{query[:100]}\n---\n{body}\n---\n{footer}")
+            f"> **问题：**{query[:100]}\n---\n{body}\n---"
+            f"{process_section}\n---\n{footer}")
 
 
 # MCP 文档客户端
@@ -518,36 +546,56 @@ class SmartBotGateway:
     # ------------------------------------------------------------------
 
     def _run_coro(self, coro) -> Any:
-        """从 sync 线程调 async 方法。"""
+        """从 sync 线程调 async 方法。异常直接传播。"""
         loop = self._loop
         if loop is None or loop.is_closed():
             logger.error("event loop 不可用")
             return None
         future = asyncio.run_coroutine_threadsafe(coro, loop)
-        try:
-            return future.result(timeout=30)
-        except Exception:
-            logger.exception("异步调用失败")
-            return None
+        return future.result(timeout=30)
 
     # ------------------------------------------------------------------
     # 流式推送（SDK reply_stream）
     # ------------------------------------------------------------------
 
     def _reply_stream(self, frame: dict, stream_id: str,
-                      content: str, finish: bool = False) -> bool:
-        """通过 SDK 发流式消息。返回 True 表示成功。"""
-        result = self._run_coro(
-            self._client.reply_stream(frame, stream_id, content, finish=finish)
-        )
-        return result is not None
+                      content: str, finish: bool = False) -> tuple[bool, str]:
+        """通过 SDK 发流式消息。返回 (success, stream_id)。
+
+        企微流式消息 10 分钟过期（errcode=846608），自动用新 stream_id 重试。
+        """
+        try:
+            result = self._run_coro(
+                self._client.reply_stream(frame, stream_id, content, finish=finish)
+            )
+            if result is not None:
+                return True, stream_id
+        except Exception as e:
+            if "846608" in str(e):
+                logger.info("stream 过期（10分钟），创建新 stream 重试")
+                new_sid = str(uuid.uuid4())
+                try:
+                    result = self._run_coro(
+                        self._client.reply_stream(frame, new_sid, content, finish=finish)
+                    )
+                    if result is not None:
+                        return True, new_sid
+                except Exception:
+                    logger.exception("重试发送失败")
+            else:
+                logger.exception("异步调用失败")
+        return False, stream_id
 
     def _reply(self, frame: dict, body: dict) -> bool:
         """通过 SDK 发普通回复。"""
-        result = self._run_coro(
-            self._client.reply(frame, body)
-        )
-        return result is not None
+        try:
+            result = self._run_coro(
+                self._client.reply(frame, body)
+            )
+            return result is not None
+        except Exception:
+            logger.exception("reply 失败")
+            return False
 
     def _reply_markdown(self, frame: dict, content: str) -> bool:
         """发 markdown 普通消息。"""
@@ -714,9 +762,12 @@ class SmartBotGateway:
         self._reply_stream(frame, stream_id, "InfoTest 正在运行，请稍候…")
 
         written_files: list[str] = []
+        tool_names: list[str] = []
+        ask_user_triggered = False
         gen = _call_ist_core_stream(query, user_id, thread_id=tid, written_files=written_files)
         try:
-            answer, stream_id = self._drain_stream(gen, stream_id, cancel_evt, frame, user_id)
+            answer, stream_id, tool_names, tool_details, ask_user_triggered = self._drain_stream(
+                gen, stream_id, cancel_evt, frame, user_id)
         except SystemExit:
             answer = "任务已被终止。"
         except Exception:
@@ -732,14 +783,23 @@ class SmartBotGateway:
             answer = "任务已被终止。"
 
         total_min = int((time.monotonic() - start_ts) / 60) or 0
+        renderer = ThoughtRenderer()
+        process_summary = renderer.render_summary(tool_names, tool_details)
         final_md = _format_markdown(
             query[:100], answer, total_min,
             split_reason=split_reason, turn_count=turn_count,
+            process_summary=process_summary,
         )
         _last_result[user_id] = {"query": query[:100], "answer": answer}
 
+        # ask_user 触发且无答案时，不发空的最终消息（通知已单独发送）
+        if ask_user_triggered and not answer.strip():
+            logger.info("ask_user 已触发，跳过空结果消息")
+            _deregister_task(user_id)
+            return
+
         # 最终流式消息
-        ok = self._reply_stream(frame, stream_id, final_md, finish=True)
+        ok, stream_id = self._reply_stream(frame, stream_id, final_md, finish=True)
         if not ok:
             new_sid = str(uuid.uuid4())
             self._reply_stream(frame, new_sid, final_md, finish=True)
@@ -785,10 +845,28 @@ class SmartBotGateway:
         cancel_evt: threading.Event,
         frame: dict,
         user_id: str = "",
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, list[str]]:
+        """消费 generator，经 ThoughtRenderer 渲染后推送企微流式消息。
+
+        返回 (answer, stream_id, tool_names)。
+        tool_names 用于最终消息的处理过程摘要。
+        """
         answer = ""
-        seq = 0
-        last_send_ts = time.monotonic()
+        renderer = ThoughtRenderer()
+        tool_names: list[str] = []
+        tool_details: dict[str, str] = {}
+        ask_user_triggered = False
+        status_lines: list[str] = []   # 累积状态行
+
+        def _send_status() -> None:
+            """发送累积的状态内容到企微流式消息。"""
+            nonlocal stream_id
+            if status_lines:
+                content = "\n".join(status_lines)
+                ok, stream_id = self._reply_stream(frame, stream_id, content)
+                if not ok:
+                    new_sid = str(uuid.uuid4())
+                    self._reply_stream(frame, new_sid, content)
 
         while True:
             try:
@@ -808,32 +886,79 @@ class SmartBotGateway:
                 answer = "任务已被终止。"
                 break
 
-            etype = event.get("type", "")
-            content = event.get("content", "")
+            # event 现在是 UserVisibleEvent
+            if not isinstance(event, UserVisibleEvent):
+                logger.debug("drain: 非 UserVisibleEvent: %r", type(event))
+                continue
 
-            if etype == "heartbeat":
-                ok = self._reply_stream(frame, stream_id, content)
-            elif etype == "ask_user":
-                self._send_ask_user_notification(frame, event, user_id)
-                ok = True
-            elif etype in ("delta", "thought", "tool", "phase"):
-                seq += 1
-                ok = self._reply_stream(frame, stream_id, content)
-            else:
-                ok = True
+            etype = event.type
 
-            if not ok:
-                logger.info("stream 过期，开新 stream 续推 seq=%d", seq)
-                stream_id = str(uuid.uuid4())
-                seq = 0
-                self._reply_stream(frame, stream_id, content)
+            # --- 保活 ---
+            if etype == UserEventType.HEARTBEAT:
+                if status_lines:
+                    # 耗时追加到累积状态末尾
+                    heartbeat_suffix = event.content  # "⏳ 仍在处理中（X 分钟）…"
+                    combined = "\n".join(status_lines + [heartbeat_suffix])
+                    _, stream_id = self._reply_stream(frame, stream_id, combined)
+                else:
+                    _, stream_id = self._reply_stream(frame, stream_id, event.content)
 
-            last_send_ts = time.monotonic()
+            # --- 等待用户输入 ---
+            elif etype == UserEventType.ASK_USER:
+                ask_user_triggered = True
+                self._send_ask_user_notification(frame, event.metadata, user_id)
 
-        return answer, stream_id
+            # --- 工具状态（经 ThoughtRenderer 渲染） ---
+            elif etype == UserEventType.TOOL_STATUS:
+                tname = event.tool_name
+                if tname:
+                    tool_names.append(tname)
+                inp = event.metadata.get("input")
+                if isinstance(inp, dict):
+                    input_data = inp
+                elif isinstance(inp, str) and inp:
+                    # streaming.py 把 input 转成了字符串，尝试还原
+                    try:
+                        import json as _json
+                        input_data = _json.loads(inp)
+                    except (ValueError, TypeError):
+                        input_data = {"raw": inp}
+                else:
+                    input_data = {}
+                # 收集 detail 用于最终摘要
+                detail = renderer._extract_detail(tname, input_data)
+                if detail and tname and tname not in tool_details:
+                    tool_details[tname] = detail
+                logger.info("drain TOOL_STATUS: name=%s phase=%s last=%s input_keys=%s",
+                            tname, renderer.current_phase.value,
+                            renderer._last_shown_tool,
+                            list(input_data.keys())[:3] if input_data else [])
+                rendered = renderer.process_event(
+                    "tool_call" if not event.metadata.get("status") else "tool_result",
+                    {"name": tname},
+                    input_data=input_data,
+                )
+                if rendered is not None and rendered.content:
+                    status_lines.append(rendered.content)
+                    _send_status()
 
-    def _send_ask_user_notification(self, frame: dict, event: dict, user_id: str) -> None:
-        payload = event.get("payload") or {}
+            # --- 思考阶段（经 ThoughtRenderer 渲染） ---
+            elif etype == UserEventType.THINKING:
+                rendered = renderer.process_event(
+                    "llm_end", {"name": "thought", "content": ""})
+                if rendered is not None and rendered.content:
+                    status_lines.append(rendered.content)
+                    _send_status()
+
+            # --- 错误 ---
+            elif etype == UserEventType.ERROR:
+                answer = f"执行失败: {event.content}"
+                break
+
+        return answer, stream_id, tool_names, tool_details, ask_user_triggered
+
+    def _send_ask_user_notification(self, frame: dict, payload: dict, user_id: str) -> None:
+        """发送 ask_user 通知给用户。payload 为 ask_user_request 的原始 payload。"""
         questions = payload.get("questions") or []
         lines = [f"<@{user_id}> 🚨 【等待您的回答】", ""]
         for i, q_item in enumerate(questions, 1):

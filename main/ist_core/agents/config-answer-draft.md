@@ -32,7 +32,7 @@ inherit-parent-prompt: true
 | group | 每个 pool 一个 group | 不准漏 pool，即使多个 pool 共用同一 backend |
 | virtual 协议 | virtual 的 `profiles` 列表 | **含 http/http1 → slb virtual http；仅 tcp → slb virtual tcp；含 udp → slb virtual udp** |
 | virtual→pool 绑定 | virtual 的 `pool` 字段 | 无 pool 字段 → 不添加绑定 |
-| iRule / epolicy | iRule 全文 | **APV epolicy 支持 F5 iRules 直接导入**——不翻译为 slb policy。将每条 iRule 的**完整 Tcl 脚本原文**保存为独立文件，标注关联的 virtual |
+| iRule / epolicy | iRule 全文 | **APV epolicy 支持 F5 iRules 直接导入**——不翻译为 slb policy。将每条 iRule 的**完整 Tcl 脚本原文**保存为独立文件。然后必须用 `build_command` 生成三条命令：① `epolicy import script`（导入脚本）；② `epolicy attach script`（关联到对应 virtual）；③ 若 iRule 使用了 Class/datagroup，还需 `epolicy class`（创建键值对）。**不准只保存文件而跳过生成命令——缺少 epolicy 命令等同于翻译遗漏** |
 
 ### 生成流程
 

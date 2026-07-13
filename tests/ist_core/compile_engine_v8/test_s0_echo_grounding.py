@@ -83,3 +83,41 @@ def test_bed_question_defaults_necessity_only():
     q = _contradiction_question({"autoid": "203601753067668030", "kind": "bed",
                                  "evidence": "x"})
     assert "必要条件推断" in q["question"]
+
+
+# ── 污点三:问询前提校验——diagnose 主体也有 anomaly 保护(与 G6 一致)──────────
+def test_diagnose_main_body_anomaly_blocks_s0(monkeypatch):
+    """diagnose 主体(G6 未覆盖案)判 s₀ 前:回显含自身执行失败(anomaly_lines)→ 不判 s₀。
+    此前只有 G6 前筛有此门,主体缺 → 是 s₀ 误判缺口(污点三问询前提校验)。"""
+    from main.ist_core.compile_engine_v8 import _shared as sh
+
+    A = "203600000000000030"; PRED = "203600000000000000"
+    # A(受害者,有自身执行失败) + PRED(前驱,有持久面写→_s0_pair 会命中)
+    fs = [{"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+          {"ev": "merged", "aid": "", "volume": "v1", "composition": [PRED, A]},
+          {"ev": "verdict", "aid": A, "result": "fail", "run_id": "r1", "ctx": "delivery",
+           "artifact": "a1", "volume": "v1", "signatures": ["172.16.34.70"]}]
+    monkeypatch.setattr(sh, "load_facts", lambda st: fs)
+    monkeypatch.setattr(sh, "view", lambda st, f=None: {"cases": {
+        A: {"status": "failed", "rounds": 1, "contradictions": 0}}})
+    monkeypatch.setattr(sh, "manifest", lambda st: {"cases": [{"autoid": PRED}, {"autoid": A}]})
+    monkeypatch.setattr(sh, "counts_update", lambda st, f=None: {})
+    monkeypatch.setattr(sh, "emit", lambda t: None)
+    appended = []
+    monkeypatch.setattr(sh, "append", lambda st, facts: appended.extend(facts))
+    # last_run:A 有自身执行失败 anomaly_lines
+    monkeypatch.setattr(sh, "read_json", lambda p, d=None: (
+        [{"autoid": A, "device_context": "…write all…",
+          "anomaly_lines": ["Failed to execute the command"]}]
+        if "last_run" in str(p) else (d if d is not None else [])))
+    # PRED 卷面有持久面写(_s0_pair 命中);A 卷面普通
+    monkeypatch.setattr(N, "_load_case_rows", lambda aid: (
+        [{"E": "APV_0", "F": "cmd_config", "G": "write memory"}] if aid == PRED
+        else [{"E": "APV_0", "F": "cmd_config", "G": "sdns listener 172.16.34.70 53"}]))
+    monkeypatch.setattr(N, "_diag_grammar",
+                        lambda: ([__import__("re").compile(r"write\s+memory", 2)], [], ([], [])))
+    N.diagnose({"out_name": "b1", "last_run_ref": "outputs/b1/last_run.json"})
+    diags = [f for f in appended if f.get("ev") == "diagnosis" and str(f.get("aid")) == A]
+    # A 有自身执行失败 → 不判 h_s0(要么不落 diagnosis,要么非 h_s0)
+    assert not any(d.get("h_position") == "h_s0" for d in diags), \
+        "diagnose 主体应因 anomaly_lines 不判 s₀(自身执行失败非床污染)"

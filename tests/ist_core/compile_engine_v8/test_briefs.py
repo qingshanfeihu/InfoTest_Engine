@@ -104,3 +104,59 @@ def test_multi_round_evidence_latest_inline_earlier_by_ref(rig):
     assert b.count("ROUND1-DEV") == 1                      # 回显全文只出现一次(最新轮)
     assert f'ref="{lr_ref}"' in b and "earlier" in b       # 早轮按引用
     assert "FIX-R1" in b and "FIX-R2" in b                 # 归因结论行全轮保留
+
+
+# ── 污点二落地:执行失败行显式高亮 + 引导查自己序列(2026-07-13) ────────────────
+def test_exec_failure_lines_surfaced_and_guides_sequence_fix(tmp_path, monkeypatch):
+    """last_run 有 anomaly_lines(自身执行失败)→ brief 独立高亮 + round_task 引导
+    「fault 在本案命令序列,不是床污染」——让 worker 重编改写法而非当污染。"""
+    outputs = tmp_path / "outputs"
+    (outputs / "b").mkdir(parents=True)
+    monkeypatch.setattr(sh, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sh, "outputs_root", lambda: outputs)
+    (outputs / "b" / "manifest.json").write_text(json.dumps(
+        {"cases": [{"autoid": A, "title": "t", "group_path": ["g"], "step_intents": []}]},
+        ensure_ascii=False), encoding="utf-8")
+    lr = outputs / "b" / "last_run.json"
+    lr.write_text(json.dumps([{"autoid": A, "device_context": "…write all…",
+                               "anomaly_lines": ["Failed to execute the command",
+                                                 "A configuration file named X already exists"]}]),
+                  encoding="utf-8")
+    lr_ref = str(lr.relative_to(tmp_path))
+    state = {"manifest_ref": "outputs/b/manifest.json", "product_version": "10.5",
+             "max_rounds": 3, "device_build": "10.5.0.585", "out_name": "b"}
+    fs = [{"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+          {"ev": "verdict", "aid": A, "run_id": "r1", "ctx": "delivery", "result": "fail",
+           "artifact": "a1", "volume": "v", "evidence_ref": lr_ref, "signatures": []},
+          {"ev": "attribution", "aid": A, "round": 1, "run_id": "r1",
+           "layer": "V", "disposition": "reflow", "fix_direction": "FIX0"}]
+    b = build_brief(A, state, fs)
+    assert "<execution_failures" in b
+    assert "Failed to execute the command" in b
+    assert "THIS case's own command sequence" in b            # 引导查序列
+    assert "do not treat this as bed cleanup" in b            # 明确不是床污染
+
+
+def test_no_exec_failure_block_when_no_anomaly(tmp_path, monkeypatch):
+    """无 anomaly_lines(普通 fail)→ 不加执行失败块/引导(不噪音)。"""
+    outputs = tmp_path / "outputs"
+    (outputs / "b").mkdir(parents=True)
+    monkeypatch.setattr(sh, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sh, "outputs_root", lambda: outputs)
+    (outputs / "b" / "manifest.json").write_text(json.dumps(
+        {"cases": [{"autoid": A, "title": "t", "step_intents": []}]}, ensure_ascii=False),
+        encoding="utf-8")
+    lr = outputs / "b" / "last_run.json"
+    lr.write_text(json.dumps([{"autoid": A, "device_context": "clean fail, no exec error"}]),
+                  encoding="utf-8")
+    lr_ref = str(lr.relative_to(tmp_path))
+    state = {"manifest_ref": "outputs/b/manifest.json", "product_version": "10.5",
+             "max_rounds": 3, "device_build": "10.5.0.585", "out_name": "b"}
+    fs = [{"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+          {"ev": "verdict", "aid": A, "run_id": "r1", "ctx": "delivery", "result": "fail",
+           "artifact": "a1", "volume": "v", "evidence_ref": lr_ref, "signatures": []},
+          {"ev": "attribution", "aid": A, "round": 1, "run_id": "r1",
+           "layer": "V", "disposition": "reflow", "fix_direction": "FIX0"}]
+    b = build_brief(A, state, fs)
+    assert "<execution_failures" not in b
+    assert "THIS case's own command sequence" not in b

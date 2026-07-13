@@ -40,8 +40,9 @@ def _round_evidence(fs: list[dict], aid: str) -> list[dict]:
             ctxt = str(rec.get("device_context") or rec.get("detail_tail") or "")[:6000]
         att = next((a for a in fs if a.get("aid") == aid and a.get("ev") == "attribution"
                     and a.get("run_id") == f.get("run_id")), {})
+        anom = list(rec.get("anomaly_lines") or [])[:5] if ref else []
         docs.append({"run_id": f.get("run_id"), "ctx": f.get("ctx"), "ref": ref,
-                     "device_context": ctxt,
+                     "device_context": ctxt, "anomaly": anom,
                      "layer": att.get("layer", ""), "disposition": att.get("disposition", ""),
                      "fix_direction": att.get("fix_direction", "")})
     return docs
@@ -76,11 +77,18 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
                     + (f' attribution="{sig}"' if sig else "") + ">\n"
                     + (f"<fix_direction>{e['fix_direction'][:800]}</fix_direction>\n"
                        if e["fix_direction"] else ""))
+            # 执行失败行显式高亮(echo-grounding 编译侧对偶,2026-07-13):device_context
+            # 里的失败机理行(如 write all 撞文件的 Failed to execute)埋在长回显里易被
+            # worker 忽略——独立提到最前,让重编时先看到「上一版是自身执行失败」
+            anom_block = (f"<execution_failures note=\"YOUR previous sequence hit these on "
+                          f"device — fix the sequence, not the bed\">\n"
+                          + "\n".join(str(a) for a in e["anomaly"])
+                          + "\n</execution_failures>\n") if e.get("anomaly") else ""
             if i == len(evs) - 1:
-                docs.append(head + f"<device_context>\n{e['device_context']}\n"
+                docs.append(head + anom_block + f"<device_context>\n{e['device_context']}\n"
                             "</device_context>\n</document>")
             else:
-                docs.append(head + f"<device_context ref=\"{e['ref']}\" note=\"earlier "
+                docs.append(head + anom_block + f"<device_context ref=\"{e['ref']}\" note=\"earlier "
                             "round; fs_read the ref if the latest echo is not enough\"/>\n"
                             "</document>")
         if docs:
@@ -98,10 +106,22 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
                   "sync / segments) before rewriting anything; prefer making the case "
                   "self-contained (own artifact names, head/tail cleanup of its own channel)."
                   if n_contra else "")
+        # 自身执行失败引导(污点二落地,2026-07-13):上一版回显有执行失败行时,失败在
+        # 本案自己的命令序列(交互确认吃掉下条命令/加载全配置冲突/保存撞已存在文件),
+        # 不是床污染——引导 worker 查序列本身(C 层指方向,不写具体命令)
+        exec_fail = ("\nThe previous run has execution-failure lines (see <execution_failures>): "
+                     "the fault is in THIS case's own command sequence, not the testbed. Common "
+                     "sequence faults: a command that triggers an interactive confirmation (e.g. "
+                     "overwrite/Type-YES) with no confirmation step after it, so the next command "
+                     "is consumed as the answer and the stream desyncs; loading whole-config that "
+                     "conflicts with the running interface state; a save colliding with an existing "
+                     "file. Retrieve a precedent of the SAME intent that ran clean and match its "
+                     "command forms; do not treat this as bed cleanup."
+                     if any(e.get("anomaly") for e in evs) else "")
         tail.append(
             f"<round_task>\nRecompile round (previous on-device runs failed; thinking depth is max"
             + ("; FINAL attempt" if rounds_used >= max_rounds - 1 else "") + ")."
-            + contra + "\n"
+            + contra + exec_fail + "\n"
             "Before adopting any prior attribution, answer independently against each round's "
             "device echo: did the config realize the intent (is the observed form the kind the "
             "intent asks for)? A wrong form with a right-looking assertion usually means config "

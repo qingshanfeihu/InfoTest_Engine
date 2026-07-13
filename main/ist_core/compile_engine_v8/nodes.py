@@ -1491,6 +1491,12 @@ def diagnose(state: dict) -> dict:
         h_pos, polluters, basis = _s0_pair(aid, comp, _prof, sig)
         if h_pos == "h_s0" and _cross_bed_refuted(mine, last):
             h_pos, polluters, basis = "", [], ""   # 跨床反驳:s₀ 不成立
+        # 自身执行失败证据 → 不判 s₀(问询前提校验/echo-grounding 负门,与 G6 前筛
+        # 1052 的 anomaly 保护一致):失败机理在受害者自己的序列,不是床污染。此前
+        # diagnose 主体只有跨床反驳、缺此门,是 G6 未覆盖案的 s₀ 误判缺口
+        if h_pos == "h_s0" and (_recs.get(aid) or {}).get("anomaly_lines"):
+            sh.emit(f"…{aid[-6:]} s₀ 配对命中但回显含自身执行失败——不判 s₀,保留深归因")
+            h_pos, polluters, basis = "", [], ""
         if not h_pos:
             att = [f for f in mine if f.get("ev") == "attribution"]
             h_pos = str((att[-1] if att else {}).get("h_position") or "")

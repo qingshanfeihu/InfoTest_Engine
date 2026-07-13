@@ -68,22 +68,6 @@ def _apv_config_lines(steps: list, init: str = "") -> list[str]:
     return out
 
 
-def _restore_leak_rule() -> dict | None:
-    """恢复类命令的泄漏清理要求(文法数据,run13 668000 实证)。呈报侧 fail-open
-    (读失败不判、不拦编译),但必须留声——坏 JSON 让泄漏检查无声消失=门形同虚设。"""
-    try:
-        from main.case_compiler.domain_grammar import load_grammar
-        rule = dict(load_grammar().get("restore_leak_teardown") or {})
-        if rule.get("trigger_pattern") and rule.get("required_teardown_pattern"):
-            return rule
-    except Exception:  # noqa: BLE001
-        import logging
-        logging.getLogger(__name__).warning(
-            "restore_leak_teardown 文法条目读取失败——恢复类泄漏清理检查本次禁用",
-            exc_info=True)
-    return None
-
-
 def _derivation_data() -> tuple[dict, tuple]:
     """τ 推导数据(§18.4):inverse_forms(inventory 机械派生 860 对)+F2 框架清理辖区。
     读失败=(空,空)→调用方留声降级词表(式③)。"""
@@ -170,27 +154,15 @@ def check_tau_coverage(steps: list, init: str = "") -> TauReport:
     或后续行以 `no <首关键字>` 开头且含同一实体 token(宽松侧:少误报呈报,
     漏检由 diagnose/上机兜底——方向同 D5)。
 
-    另判**恢复类命令的泄漏清理**(#74-⑥,文法数据 restore_leak_teardown 驱动):
-    config 恢复在设备内部注册的占用对象不随对象级 no/clear 消失(run13 668000
-    实证:后继案被 occupied 拒),恢复步之后案内须有 required_teardown_pattern
-    形态的清理步;建议命令与判据全部来自文法数据,本模块零领域词。"""
+    **本模块只做机械推导,不注入命令知识**(2026-07-13 用户裁决,实弹教训):
+    逆元一律从 inventory 的命令签名配对现查(no X 是 X 的逆元=CLI 元语义,闭合于
+    手册版本、作用域等于原命令);经验性的清理知识(如"某恢复命令会留下不可见
+    占用对象")属**判例层**——以设备行为观察入 footprint,由 worker 检索后自主
+    决定怎么清,引擎不发明命令。此前文法层曾放一条 suggested_teardown(人写的
+    具体命令),worker 把它升级成整机清配置命令跑死两台设备床——引擎向 LLM 注入
+    具体命令=把作用域判断权交给一个不知道边界的建议,已整条删除。"""
     lines = _apv_config_lines(steps, init)
     rep = TauReport()
-    leak = _restore_leak_rule()
-    if leak:
-        trig = re.compile(str(leak["trigger_pattern"]), re.IGNORECASE)
-        req = re.compile(str(leak["required_teardown_pattern"]), re.IGNORECASE)
-        excl = tuple(str(x).lower() for x in (leak.get("trigger_excluded_prefixes") or []))
-        for i, line in enumerate(lines):
-            if excl and line.lower().split()[:1] and line.lower().split()[0] in excl:
-                continue
-            if not trig.match(line):
-                continue
-            if not any(req.match(l) for l in lines[i + 1:]):
-                rep.missing.append({
-                    "cmd": line, "entity": "",
-                    "suggested_inverse": str(leak.get("suggested_teardown") or ""),
-                    "kind": "restore_leak"})
     pairs, scopes = _derivation_data()
     if pairs:
         _derived_tau(lines, pairs, scopes, rep)

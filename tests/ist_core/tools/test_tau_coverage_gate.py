@@ -164,39 +164,6 @@ def test_bed_panel_self_polluter_options():
     assert q["_tokens"]["重编补自清"] == "reflow_tau"
 
 
-# ------------------------------------------------- #74-⑥ 恢复类泄漏清理(文法数据)
-def test_restore_leak_requires_clear_slb():
-    """run13 668000 实证:config 恢复在设备内部注册占用对象,对象级 no/clear 清不掉
-    ——恢复步后案内须有 clear-slb 级清理(判据/建议全来自 domain_grammar,py 零领域词)。"""
-    steps = [{"E": "APV_0", "F": "cmds_config",
-              "G": "sdns on\nsdns listener 172.16.34.70 53"},
-             {"E": "APV_0", "F": "cmd_config", "G": "write memory"},
-             {"E": "APV_0", "F": "cmd_config", "G": "clear sdns listener"},
-             {"E": "APV_0", "F": "cmd_config", "G": "config memory"},
-             {"E": "APV_0", "F": "cmds_config", "G": "no sdns listener\nno sdns on"}]
-    r = check_tau_coverage(steps)
-    leaks = [m for m in r.missing if m.get("kind") == "restore_leak"]
-    assert leaks and leaks[0]["cmd"] == "config memory"
-    assert leaks[0]["suggested_inverse"] == "clear slb all"
-
-
-def test_restore_leak_satisfied_by_teardown():
-    steps = [{"E": "APV_0", "F": "cmd_config", "G": "write file f1"},
-             {"E": "APV_0", "F": "cmd_config", "G": "config file f1"},
-             {"E": "APV_0", "F": "cmds_config",
-              "G": "no sdns listener\nclear slb all\nclear config file f1"}]
-    r = check_tau_coverage(steps)
-    assert not [m for m in r.missing if m.get("kind") == "restore_leak"], r.missing
-
-
-def test_restore_leak_excludes_cleanup_forms():
-    """clear/show/no 前缀的 config 词面不是恢复动作,不触发泄漏要求。"""
-    steps = [{"E": "APV_0", "F": "cmds_config",
-              "G": "clear config file f1\nshow config file"}]
-    r = check_tau_coverage(steps)
-    assert not [m for m in r.missing if m.get("kind") == "restore_leak"], r.missing
-
-
 # ------------------------------------------------- §18.4 推导版 vs 词表版等价对照
 def test_derived_covers_lexicon_on_run13_sheets():
     """回归对照(词表 3 族退役验收):run13 真机 26 卷上,推导版 flag 集 ⊇ 词表版

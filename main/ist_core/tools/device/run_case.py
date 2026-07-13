@@ -327,6 +327,11 @@ def _do_probe(cmd: str, mode: str = "show") -> str:
             text = _redact(str(text))
         except Exception:  # noqa: BLE001
             logger.debug("脱敏处理失败，使用原始文本", exc_info=True)
+        # 服务端把 SSH/通道级失败以 `error:` 契约行返回——此时不包横幅:本函数契约是
+        # "失败返回 'error:' 前缀",下游(床态 _probe_failed 等)按首行识别工具级失败;
+        # 包了横幅错误就穿门成"设备内容"(2026-07-13 实证:105 床 SSH 挂死被报成残留)
+        if str(text).lstrip().startswith("error"):
+            return str(text).strip()
         # apv_ssh_execute 文本已自带 command/status/回显+对齐 ^，原样回灌(仅打 dev_probe 来源标)
         return _annotate_if_empty_probe(f"=== dev_probe (fastmcp apv_ssh) ===\n{text}")
     # 2) 回退：老 stdio probe_show（剥回显，无效命令只剩裸 ^）
@@ -382,10 +387,11 @@ def dev_probe(command: str) -> str:
     stable output. This lowers "a dynamic comparison the xlsx cannot express" into "a text
     search the xlsx can express".
 
-    Typical uses:
-    - confirm config took effect: ``command="show sdns host status"``
-    - inspect counter distribution: ``command="show statistics sdns pool"``
-    - check a command's syntax response: ``command="show sdns listener"``
+    Typical uses (which concrete show command fits is a domain judgment — derive it from
+    the version manual / verified precedents / footprint, never from this docstring):
+    - confirm config took effect (a config-view show of the object you configured)
+    - inspect a behavior's stable signature (a statistics/state-table show for that object)
+    - check a command's syntax response (probe the show form first, read the echo shape)
 
     **Device syntax errors**: for unrecognized commands/parameters the APV echoes a ``^``
     marker under the offending token. The framework server wraps that echo into a clear
@@ -455,10 +461,11 @@ def dev_help(command: str) -> str:
     (ask only — no Enter, nothing executed, no config change; the line is cleared with
     Ctrl-U), and brings back the device's description.
 
-    Example: ``sdns host pool "www.a.com" "poolA" ga`` gets ``^`` — the device parsed up to the
-    pool name ``"poolA"`` and stopped. Asking at that position returns "expects a numeric
-    priority 0-65535, effective only when method is wrr or ga". Now it is clear: a number is
-    required there, and you wrote the algorithm name ``ga``.
+    Example (synthetic shape — the mechanism, not a command to copy): ``<verb> <object>
+    "name-a" "name-b" <word>`` gets ``^`` under ``<word>`` — the device parsed up to
+    ``"name-b"`` and stopped. Asking at that position returns the device's own statement of
+    what it expects there (say, a numeric field with its valid range and applicability). Now
+    it is clear a different token type is required where you wrote ``<word>``.
 
     When to use: you saw ``^`` or ``Failed to execute the command`` in a dev_probe or on-device
     echo and need to know why and how to fix it. When not to use: the command runs but the

@@ -67,12 +67,13 @@ def dev_rest(
 
     **IMPORTANT**: REST API executes commands directly — no enable/config mode
     needed. Do NOT prepend ``enable\\n`` or ``enable\\nconfig\\n``. Just send
-    the actual command, e.g. ``"show slb virtual all"`` or
-    ``"slb virtual http v1 172.16.34.100 80 arp 0"``.
+    the actual command text itself (a show form, or a config form taken from
+    the version manual / a verified precedent — not from this docstring).
 
-    ``command`` can contain ``\\n`` for interactive commands (e.g. confirmations)::
+    ``command`` can contain ``\\n`` for interactive commands (e.g. a command
+    whose echo asks for a literal confirmation word)::
 
-        "ssl activate certificate 54_vhost\\nYES\\n"
+        "<command that prompts for confirmation>\\nYES\\n"
 
     Credentials from env: ``APV_RESTAPI_USERNAME``, ``APV_RESTAPI_PASSWORD``.
     Port from env: ``APV_RESTAPI_PORT`` (default 9997).

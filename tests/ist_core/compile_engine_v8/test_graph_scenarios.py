@@ -72,10 +72,16 @@ def rig(tmp_path, monkeypatch):
                            "group_path": ["g"], "step_intents": []} for a in AIDS]}
     (mdir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
 
-    # 床态:干净通过
+    # 床态:干净通过。bed_snapshot/check_sync 也必须打桩——bed_gate 与 closing 会
+    # 独立调它们,漏桩=单测真连跳板机 FastMCP/SSH 并真探设备床(2026-07-13 实证:
+    # 服务端一次卡死,SSE keep-alive 续租 idle 超时,全量回归在此级联挂 20min+)
     monkeypatch.setattr(N.B, "bed_check", lambda *a, **k: {
         "anchor": {"status": "match", "device": "InfosecOS Beta.APV-HG-K.10.5.0.585"},
         "findings": [], "needs_ask": False, "ours_unrestored": []})
+    monkeypatch.setattr(N.B, "bed_snapshot", lambda probe_fn: {})
+    import main.ist_core.compile_engine_v8.mirror_anchor as _MA
+    monkeypatch.setattr(_MA, "check_sync",
+                        lambda _exec: {"status": "unknown", "reason": "rig-stubbed"})
 
     # worker/attributor 假实现
     def fake_fork(skill, brief, *, tag="", effort=""):

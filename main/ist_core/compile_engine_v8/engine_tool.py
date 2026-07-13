@@ -55,28 +55,71 @@ def _bridge(payload: dict) -> dict:
         anchor = rep.get("anchor") or {}
         cu = rep.get("cleanup") or {}
         _CHAN_CN = {"segments": "分区配置", "sdns_config_files": "SDNS 配置文件",
-                    "sync_peers": "同步对端配置", "interface_addresses": "接口地址"}
-        kinds, failed_probes, stuck = [], [], []
+                    "sync_peers": "同步对端配置", "interface_addresses": "接口地址",
+                    "mirror_sync": "框架镜像同步"}
+
+        def _fail_sig(detail) -> str:
+            """探针失败签名:剥来源横幅/契约行后的首个错误载荷行(逐字比对,零语义猜测)。"""
+            if isinstance(detail, dict):
+                detail = detail.get("detail") or ""
+            for ln in str(detail or "").splitlines():
+                s = ln.strip()
+                if (not s or s.startswith(("===", "---", "command:"))
+                        or _re.match(r"^\w+=\S+(\s+\w+=\S+)*$", s)
+                        or _re.match(r"^status:\s*\w+$", s)):
+                    continue
+                low = s.lower()
+                for p in ("probe failed:", "error:"):
+                    if low.startswith(p):
+                        s = s[len(p):].strip()
+                        break
+                if s:
+                    return s[:160]
+            return str(detail or "").strip()[:160]
+
+        kinds, stuck, internal = [], [], []
+        failed: list = []   # (中文通道名, 失败签名)
         for f in (rep.get("findings") or []):
             k = str(f.get("kind"))
             if k == "build_anchor":
+                continue   # 版本锚单独渲染;probe_failed 时并入下方同因组
+            if k in ("mirror_sync", "bed_closure_failed"):
+                internal.append(str(f.get("detail") or ""))   # 引擎内部发现,不是设备残留
                 continue
             cn = _CHAN_CN.get(k, k)
             if f.get("probe_failed"):
-                failed_probes.append(cn)
+                failed.append((cn, _fail_sig(f.get("detail"))))
             elif f.get("ledger_stuck"):
                 stuck.append(cn)
             else:
                 kinds.append(cn + "残留")
+        if str(anchor.get("status")) == "probe_failed":
+            failed.append(("版本锚", _fail_sig(anchor)))
+        # 共因合题(2026-07-13 实证:105 床 SSH 挂死被摊成「残留×3+探测未完成+版本
+        # 不匹配」五段误导题面):同一失败签名覆盖 ≥2 路探针 → 合成一句,直说疑似设备
+        # 不可达;签名=逐字相等,不做语义归并
+        by_sig: dict = {}
+        for cn, sig in failed:
+            by_sig.setdefault(sig, []).append(cn)
+        failed_parts = []
+        for sig, chans in by_sig.items():
+            if len(chans) >= 2:
+                failed_parts.append(f"{'、'.join(chans)}共 {len(chans)} 路探针同因失败"
+                                    f"({sig})——疑似设备不可达,床态未知")
+            else:
+                failed_parts.append(f"{chans[0]}通道探测未完成(探针命令未跑通:{sig},"
+                                    f"该通道床态未知)")
         parts = []
         if kinds:
             parts.append(f"测试床上仍有残留:{'、'.join(kinds)}")
         if stuck:
             parts.append(f"上批留下的{'、'.join(stuck)}改动,自动恢复尝试未成"
                          f"(命令被拒或生成失败)——需要人工恢复后继续")
-        if failed_probes:
-            parts.append(f"{'、'.join(failed_probes)}通道探测未完成(探针命令被设备拒绝,"
-                         f"该通道床态未知——「继续」为床态不明自担风险,或「停止」后重跑重探/人工核查)")
+        if failed_parts:
+            parts.append(";".join(failed_parts)
+                         + "(「继续」为床态不明自担风险,或「停止」后修床重探/人工核查)")
+        if internal:
+            parts.extend(internal)
         cl, fl, sk = cu.get("cleaned") or [], cu.get("failed") or [], cu.get("skipped") or []
         if cl or fl or sk:
             seg = []
@@ -87,8 +130,13 @@ def _bridge(payload: dict) -> dict:
             if sk:
                 seg.append(f"{len(sk)} 项引擎不认识、不敢动")
             parts.append("(" + ",".join(seg) + ")")
-        if str(anchor.get("status")) == "match":
+        _astat = str(anchor.get("status"))
+        if _astat == "match":
             parts.append(f"版本正常(实测 {str(anchor.get('device', ''))[-12:]},与配置同族)")
+        elif _astat == "probe_failed":
+            pass   # 已并入上方探针失败段,不再谎报"版本不匹配"
+        elif _astat == "unknown":
+            parts.append(f"⚠ 版本未知:设备回显未解析出版本号(配置 {anchor.get('config', '?')})")
         else:
             parts.append(f"⚠ 版本不匹配:设备 {anchor.get('device', '?')} vs 配置 {anchor.get('config', '?')}")
         q = ";".join(parts) + "。如何处理?"

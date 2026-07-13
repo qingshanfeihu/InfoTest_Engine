@@ -258,12 +258,16 @@ def _gate_destructive_commands(autoid: str, steps: list, init: str = "") -> str 
     if not bad:
         return None
     lines = "; ".join(f"step[{i}]={cmd!r}" for i, cmd in bad)
+    # 反馈只带禁令+方向,不带具体命令序列(2026-07-13 裁决:引擎向 LLM 注入命令=交出
+    # 作用域判断权;曾在此处写死 clear 族替代范式——与跑死两床的 suggested_teardown 同族)
     return (f"case {autoid} contains {len(bad)} **destructive device-lifecycle command(s)**: {lines}\n"
-            f"Forbidden: this would really reboot/shut down a shared device, and the framework cannot reconnect after a reboot (bound to fail).\n"
-            f"If the intent is to test \"config save/persistence\", use the no-reboot clear→restore paradigm:\n"
-            f"  configure → write memory (or write file/all/net to save) → clear sdns all (clear running config)\n"
-            f"  → config memory (or config file/all/net to restore from storage) → show → assert whether the config is present.\n"
-            f"Precedent: smoke_test/sdns/log_backup (verified save→clear→restore→assert pattern).")
+            f"Forbidden: this would really reboot/shut down a shared device, and the framework "
+            f"cannot reconnect after a reboot (bound to fail).\n"
+            f"If the intent is to test \"config save/persistence\", implement it WITHOUT a "
+            f"reboot: save → clear the saved object scope → restore → observe. Which concrete "
+            f"commands realize each step is a domain judgment — retrieve same-intent verified "
+            f"precedents (compile_precedent) and the version manual; do not invent a wider "
+            f"clear scope than the objects this case configured.")
 
 
 _SAVE_RE = _re_dev.compile(r"\bwrite\s+(memory|mem|file|all|net)\b", _re_dev.IGNORECASE)
@@ -272,6 +276,9 @@ _SAVE_RE = _re_dev.compile(r"\bwrite\s+(memory|mem|file|all|net)\b", _re_dev.IGN
 # 被误判 restore 触发 P0b/P1a 双报错,worker 被迫绕门直改 xlsx → 凭证过期 → merge 拒
 _RESTORE_RE = _re_dev.compile(r"(?<!clear\s)(?<!show\s)\bconfig\s+(memory|file|all|net)\b",
                               _re_dev.IGNORECASE)
+# ⚠ 迁移方向(2026-07-13 硬编码审计#3):listener 配置/清除形态是文法层内容,应入
+# domain_grammar(带 provenance)按引用消费——py 内联随手册版本漂移;判定正则不进
+# LLM 上下文故不违命令注入裁决,但违四层封闭的归属。反馈文案已去命令化(P1a)。
 _LISTENER_CFG_RE = _re_dev.compile(r"^sdns\s+listener\s+\S", _re_dev.IGNORECASE)  # 配置形态(show/no 不算)
 _CLEAR_RE = _re_dev.compile(r"\b(no\s+sdns\s+listener|clear\s+sdns)\b", _re_dev.IGNORECASE)
 _SAVE_REMOTE = ("file", "all", "net")  # 这些保存/恢复变体需带参数(文件名/目标);memory 无参合法
@@ -372,14 +379,18 @@ def _gate_save_restore_pairing(autoid: str, steps: list, init: str = "",
                             f"to config {last_save}, or change the save to write {rf} (the two must be "
                             f"the same family).")
 
-    # P1a 清除步(配 listener 与首个恢复之间)
+    # P1a 清除步(配 listener 与首个恢复之间)。反馈只描述机制缺口,不给具体清除命令
+    # (2026-07-13 裁决:清哪个对象/用什么形态是领域判断,逆元从手册/inverse_forms 现查)
     first_restore_idx = restores[0][0]
     lo = first_listener if first_listener is not None else 0
     if not any(_CLEAR_RE.search(c) for c in cmds[lo:first_restore_idx]):
-        errs.append("missing clear step: there is no no sdns listener / clear sdns between the "
-                    "listener config and the config restore — the restore becomes a no-op, "
-                    "not_found is always true, and the test idles. Add a clear step after the "
-                    "save and before the restore.")
+        errs.append("missing clear step: nothing between the object config and the config "
+                    "restore removes the configured object from running config — the restore "
+                    "then restores over an unchanged state (no-op), a not_found check is "
+                    "always true, and the test verifies nothing. Add a clear/negate step for "
+                    "the object THIS case configured, after the save and before the restore; "
+                    "derive the inverse form from the manual (the `no`/`clear` pairing of the "
+                    "construct you used), scoped to that object only.")
 
     # P1b 参数完整(file/all/net 变体)
     for c in cmds:
@@ -412,9 +423,11 @@ def _gate_save_restore_pairing(autoid: str, steps: list, init: str = "",
         return None
     body = "\n".join(f"  - {e}" for e in errs)
     return (f"case {autoid} persistence test (config-restore class) structural errors:\n{body}\n"
-            f"Correct paradigm: configure listener → show/found → write <intent variant> → "
-            f"no/clear listener → config <same variant> → show → assert. "
-            f"See precedent smoke_test/sdns/log_backup.")
+            f"Correct paradigm (mechanism, not commands): configure the object → observe it → "
+            f"save (write <intent variant>) → clear/negate that object → restore "
+            f"(config <same variant>) → observe → assert presence. Which commands realize "
+            f"each step: retrieve same-intent verified precedents (compile_precedent) and "
+            f"the version manual.")
 
 
 def _gate_unreachable_listener(autoid: str, steps: list, init: str = "") -> str | None:

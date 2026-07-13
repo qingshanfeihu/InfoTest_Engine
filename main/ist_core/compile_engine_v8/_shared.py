@@ -206,6 +206,8 @@ def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
     vw = view(state, fs)
     c = vw["counts"]
     t = ask_targets(state, fs, vw)
+    _waiting = (set(t["panel"]) | set(t["contra"]) | set(t["cap"])
+                | set(t["env"]) | set(t["bed"]) | set(t["suspended"]))
     return {
         "n_pending": c.get(V.S_PENDING, 0),
         "n_awaiting_user": c.get(V.S_AWAITING_USER, 0),
@@ -218,9 +220,13 @@ def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
         "n_settled_bad": (c.get(V.S_ESCALATED, 0) + c.get(V.S_TERMINAL, 0)
                           + c.get(V.S_SUSPENDED, 0)),
         # 去重计数(一个案可能同时命中 panel 与 cap,题面层合并成一题)
-        "n_ask_contradiction": len(set(t["panel"]) | set(t["contra"]) | set(t["cap"])
-                                   | set(t["env"]) | set(t["bed"])
-                                   | set(t["suspended"])),
+        "n_ask_contradiction": len(_waiting),
+        # 可推进的失败案 = 失败/矛盾 且 不在任何问询等待集(run17 实弹:封顶/env/bed/
+        # 挂起恢复等待案不算"有活",否则 ask 边被 merge 空转跳过;而 rerun 处方案必须
+        # 算活,否则被「有未答题」吞掉——两个方向的实弹都在 §16.6)
+        "n_failed_actionable": len(
+            {a for a, cc in vw["cases"].items()
+             if cc["status"] in (V.S_FAILED, V.S_CONTRADICTED)} - _waiting),
     }
 
 

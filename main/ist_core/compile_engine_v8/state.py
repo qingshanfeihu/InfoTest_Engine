@@ -33,12 +33,14 @@ class V8State(TypedDict, total=False):
     n_awaiting_user: int
     n_authored: int
     n_failed: int
+    n_failed_actionable: int  # 失败/矛盾且不在任何问询等待集(run17:路由「有活」判据,§16.6)
     n_subset_verified: int
     n_broken: int
     n_deliverable: int
     n_contradicted: int
     n_settled_bad: int       # escalated + failed_terminal
-    n_ask_contradiction: int  # 矛盾计数≥2 且待问的案数
+    n_ask_contradiction: int  # 问询等待集大小(panel/contra/cap/env/bed/suspended 去重并)
+    ask_answers_consumed: int  # ask_contradiction 本轮消化的实答数(部分作答≠真·未获答,§16.6)
 
 
 # 节点表(拓扑门三方一致锚:graph ↔ 本表 ↔ SKILL.md phases)

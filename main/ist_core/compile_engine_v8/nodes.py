@@ -245,8 +245,12 @@ def bed_gate(state: dict) -> dict:
     # 清不掉/无引用的仍走 ask。R1 12/26 崩盘(¥96)最大嫌疑=两天床残留,此门止损。
     # probe_failed 项不进清理(床态未知,没有清理对象;题面单独如实呈报)
     # maintenance_explained(C1):维护写是合法床基线——决不能被清理引用误清
+    # mirror_sync/bed_closure_failed 是引擎内部发现、ledger_stuck 接力已试穷——
+    # 都不是设备残留,进清理只会虚占"引擎不认识"计数(2026-07-13 题面取证)
     residue = [f for f in (rep.get("findings") or [])
-               if f.get("kind") != "build_anchor" and not f.get("probe_failed")
+               if f.get("kind") not in ("build_anchor", "mirror_sync",
+                                        "bed_closure_failed")
+               and not f.get("probe_failed") and not f.get("ledger_stuck")
                and not f.get("maintenance_explained")]
     clean: dict = {"cleaned": [], "failed": [], "skipped": []}
     if residue:
@@ -1637,10 +1641,30 @@ def ask_contradiction(state: dict) -> dict:
         sh.signal("user_decided", aid, kind=kind)
     sh.append(state, new_facts)
     fs2 = sh.load_facts(state)
-    return {"phase_status": "ok", **sh.counts_update(state, fs2)}
+    # 本轮消化的实答数(answer 非空的 decision;自动挂起的空答不算)——路由据此区分
+    # 「部分作答」与「真·未获答」:后者才允许 closing 禁空转(run17 实弹,§16.6)
+    consumed = sum(1 for f in new_facts
+                   if f.get("ev") == "decision" and str(f.get("answer") or "").strip())
+    return {"phase_status": "ok", "ask_answers_consumed": consumed,
+            **sh.counts_update(state, fs2)}
 
 
 # --------------------------------------------------------------- [mech] closing
+def _g4_decision_echoes(fs: list[dict]) -> list[dict]:
+    """G4 收口卡 echo((41)③):每条实答 decision → {autoid, answer, understood}。
+    understood=token 的人话映射(语义兜底误判在此与 answer 原文并排可核对——run12
+    实录:「停止:…」截断被兜底成 retry,echo 上 answer 与 understood 明显相悖);
+    token 不在表内=Other 自由输入,回落 answer 原文前 40 字(如实,不翻译)。"""
+    out = []
+    for f in fs:
+        if f.get("ev") == "decision" and f.get("answer"):
+            tok = str(f.get("token") or "")
+            out.append({"autoid": str(f.get("aid") or ""),
+                        "answer": str(f.get("answer"))[:80],
+                        "understood": _TOKEN_CN.get(tok, str(f.get("answer"))[:40])})
+    return out
+
+
 def _archive_unsuccessful(aids: list[str], out_name: str) -> str | None:
     """未通过卷 xlsx(V6 契约迁入):gate-free 合并全部非交付案 → <批名>/unsuccessful_cases.xlsx。"""
     from main.ist_core.tools.device.emit_xlsx_tool import compile_emit_merged
@@ -1928,14 +1952,7 @@ def closing(state: dict) -> dict:
         sh.emit(f"⚠ 交付物缺失({', '.join(missing)})——收口结论降级为交付不完整")
     # G4 echo 入收口卡(§18.6 坑#21:此前仅流水行,收口卡无痕):每条用户裁决带
     # 「引擎理解为」复述,截断/兜底误判在收口卡上可核对
-    _decision_echo = []
-    for f in fs:
-        if f.get("ev") == "decision" and f.get("answer"):
-            tok = str(f.get("token") or "")
-            _decision_echo.append({
-                "autoid": str(f.get("aid") or ""),
-                "answer": str(f.get("answer"))[:80],
-                "understood": _TOKEN_CN.get(tok, str(f.get("answer"))[:40])})
+    _decision_echo = _g4_decision_echoes(fs)
     sh.emit_summary(state, {
         "outcome": report["outcome"],
         "decisions": _decision_echo,

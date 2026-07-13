@@ -40,13 +40,25 @@ def test_inv7_counts_recomputed_from_facts():
     assert out["n_authored"] == 1 and out["n_failed"] == 0
 
 
-def test_g4_echo_in_closing_card_shape():
-    """坑#21:收口卡 decisions 复述形态——「你的答案→引擎理解为」可核对
-    (run12 截断误判 retry 的可见化;渲染自 decision 事实,零 LLM)。"""
-    from main.ist_core.compile_engine_v8.nodes import _TOKEN_CN
-    f = {"ev": "decision", "aid": "203600000000000001",
-         "answer": "床已处理,复跑验证", "token": "retry"}
-    echo = {"autoid": f["aid"], "answer": f["answer"],
-            "understood": _TOKEN_CN.get(f["token"], f["answer"][:40])}
-    assert echo["understood"] and echo["understood"] != f["answer"][:40] or True
-    assert "retry" in _TOKEN_CN
+def test_g4_echo_replays_run12_truncation_misjudge():
+    """坑#21 真回放(走 closing 的实际 echo 构建路径 _g4_decision_echoes;旧版手搓
+    dict+恒真断言 `… or True` 永不可能失败,2026-07-13 审计发现后重写):
+    run12 实录——「停止:…」长文本截断被语义兜底误判成 retry。echo 的价值=answer
+    原文与 understood 并排呈现,误判肉眼可见;断言这对相悖字段确实并排产出。"""
+    from main.ist_core.compile_engine_v8.nodes import _TOKEN_CN, _g4_decision_echoes
+    fs = [
+        {"ev": "decision", "aid": "203600000000000001",
+         "answer": "停止:床有残留需要人工清理之后再", "token": "retry"},   # 截断误判形态
+        {"ev": "decision", "aid": "203600000000000002",
+         "answer": "自定义说法", "token": "not-a-known-token"},            # Other 自由输入
+        {"ev": "decision", "aid": "203600000000000003", "answer": "",
+         "token": "suspend"},                                              # 空答(自动挂起)不产 echo
+    ]
+    echoes = _g4_decision_echoes(fs)
+    assert len(echoes) == 2                                   # 空答不入收口卡
+    mis = echoes[0]
+    assert mis["answer"].startswith("停止")                    # 用户原文在场
+    assert mis["understood"] == _TOKEN_CN["retry"]            # 引擎理解在场
+    assert not mis["understood"].startswith("停止")            # 两者相悖=误判可核对
+    free = echoes[1]
+    assert free["understood"] == "自定义说法"                  # 表外 token 回落原文,不翻译

@@ -435,13 +435,30 @@ def resolve_device_ip(build: str = "", env: Any = None) -> str | None:
                 pass
 
 
+def _extract_rpc_obj(raw: str) -> dict | None:
+    """SSE/JSON 文本 → 首个含 result/error 的 JSON-RPC 对象(解析不出=None)。"""
+    for line in raw.splitlines():
+        line = line.strip()
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line)
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(o, dict) and ("result" in o or "error" in o):
+            return o
+    return None
+
+
 def fastmcp_call(tool: str, arguments: dict, env: Any = None,
                  timeout: int = 30) -> str | None:
     """通用：经跳转机新版 FastMCP(:8000) 调一个工具，返回其结果文本(content[0].text)。
 
     streamable-http JSON-RPC over HTTP，解析 SSE ``data:`` 行取 result/error。FastMCP 不可达 /
-    响应异常 / 无 result → 返回 None。**迁移基座**：dev_probe 走它(apv_ssh_execute)，后续把
-    init_device/deliver/run 等编排工具迁到 FastMCP 也复用它(不再各写一遍 HTTP+SSE)。
+    响应异常 / 无 result / 墙钟死线 → 返回 None。**迁移基座**：dev_probe 走它(apv_ssh_execute)，
+    后续把 init_device/deliver/run 等编排工具迁到 FastMCP 也复用它(不再各写一遍 HTTP+SSE)。
     """
     host = (env.jumphost if env is not None else JUMPHOST)
     url = "http://%s:%d/mcp" % (host, FASTMCP_PORT)
@@ -453,26 +470,34 @@ def fastmcp_call(tool: str, arguments: dict, env: Any = None,
         headers={"Content-Type": "application/json",
                  "Accept": "application/json, text/event-stream"},
         method="POST")
+    buf = bytearray()
+    obj: dict | None = None
     try:
+        import time as _time
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", "replace")
+            # 墙钟死线逐块读:urlopen 的 timeout 只是 socket idle 超时,SSE keep-alive
+            # 会不断续租它——2026-07-13 实证:服务端工具调用卡死时,单发 resp.read()
+            # 挂 20min+(回归套件在 bed 探针上级联挂死)。拿到 result/error 事件即停,
+            # 不等流关闭;死线触发按不可达处理(调用方回退 stdio/如实报错)。
+            deadline = _time.monotonic() + max(1, int(timeout))
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                if b'"result"' in buf or b'"error"' in buf:
+                    obj = _extract_rpc_obj(buf.decode("utf-8", "replace"))
+                    if obj is not None:
+                        break
+                if _time.monotonic() >= deadline:
+                    logger.warning("FastMCP 墙钟死线触发(%ds): tool=%s host=%s"
+                                   "——服务端工具调用疑似卡死", timeout, tool, host)
+                    break
     except Exception:  # noqa: BLE001
         logger.debug("FastMCP HTTP 请求失败: url=%s tool=%s", url, tool, exc_info=True)
         return None
-    obj = None
-    for line in raw.splitlines():
-        line = line.strip()
-        if line.startswith("data:"):
-            line = line[5:].strip()
-        if not line:
-            continue
-        try:
-            o = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(o, dict) and ("result" in o or "error" in o):
-            obj = o
-            break
+    if obj is None:
+        obj = _extract_rpc_obj(buf.decode("utf-8", "replace"))
     if obj is None:
         return None
     try:

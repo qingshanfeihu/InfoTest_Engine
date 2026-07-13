@@ -215,8 +215,11 @@ def dev_ssh(
     arguments: ``APV_USERNAME``, ``APV_PASSWORD``, ``APV_ENABLE_PASSWORD``.
 
     Use this tool for:
-    - Read-only device check: ``host="172.16.34.70" command="show slb virtual all"``
-    - Safe config deploy: ``host="172.16.34.70" command="slb virtual http v1 172.16.34.100 80 arp 0" mode="config"``
+    - Read-only device check: ``host="<device-ip from network topology>"`` with a show command
+    - Safe config deploy: same host, ``mode="config"``, command within the whitelisted subset
+      (concrete command syntax comes from the version manual / verified precedents,
+      and real IPs come from knowledge/data/auto_env/network_topology.json — never
+      from docstring examples: sample IPs were copied verbatim by workers 8 times)
 
     Args:
         host: Target device IP address (must exist in network topology).

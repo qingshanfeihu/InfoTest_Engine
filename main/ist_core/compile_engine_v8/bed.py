@@ -350,6 +350,14 @@ def _probe_failed(out: str) -> bool:
         return True
     if "% Invalid" in t and re.search(r"^\s*\^\s*$", t, re.MULTILINE):
         return True
+    # 工具 error 契约行可能跟在来源横幅之后(`=== dev_probe (fastmcp apv_ssh) ===\n
+    # error: SSH to X failed`)——只看串首会穿门(2026-07-13 实证:105 床 SSH 挂死被
+    # 报成"分区配置残留",批后快照垃圾 diff 入床账 4 条)。首个内容行即工具契约位。
+    for ln in t.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("==="):
+            continue
+        return s.startswith("error")
     return False
 
 
@@ -366,16 +374,25 @@ def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
     probes.pop("cleanup_refs", None)
     report: dict = {"host": host, "probes": {}, "findings": [], "needs_ask": False}
 
-    # ① 版本锚
+    # ① 版本锚。探针自身失败=床态未知,不是"版本不匹配"(2026-07-13 实证:SSH 挂死
+    # 的空版本被呈报成「⚠ 版本不匹配:设备(空)」——用户拿到的是误导性判断题,真相
+    # 是设备不可达);probe_failed 单独归类,题面走"探测失败"形态。
     bspec = probes.get("build") or {}
     raw = probe_fn(str(bspec.get("cmd") or "show version"))
     report["probes"]["build"] = raw[:400]
-    m = re.search(str(bspec.get("extract") or ""), raw or "")
-    device_build = (m.group(1).strip() if m else "")
-    report["anchor"] = anchor_verdict(device_build, cfg_build, precedent_build)
-    if report["anchor"]["status"] != "match":
+    if _probe_failed(raw):
         report["needs_ask"] = True
-        report["findings"].append({"kind": "build_anchor", "detail": report["anchor"]})
+        report["anchor"] = {"status": "probe_failed", "device": "",
+                            "config": cfg_build, "detail": (raw or "").strip()[:400]}
+        report["findings"].append({"kind": "build_anchor", "probe_failed": True,
+                                   "detail": report["anchor"]})
+    else:
+        m = re.search(str(bspec.get("extract") or ""), raw or "")
+        device_build = (m.group(1).strip() if m else "")
+        report["anchor"] = anchor_verdict(device_build, cfg_build, precedent_build)
+        if report["anchor"]["status"] != "match":
+            report["needs_ask"] = True
+            report["findings"].append({"kind": "build_anchor", "detail": report["anchor"]})
 
     # ② 各通道残留(只读;结果原文交调用方/用户判读,引擎只做"非空即报")
     for name, spec in probes.items():

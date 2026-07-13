@@ -17,11 +17,17 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 logger = logging.getLogger(__name__)
 
 _HANDLER = None
 _INIT_DONE = False
+# 初始化失败不永久放弃(2026-07-13 实证:02:16 TUI 进程 auth_check 撞 jp.cloud 瞬态
+# 读超时→整个进程终身禁用,全天两轮 run 零 trace 盲跑)——冷却后重试,既保住
+# "不反复重试拖慢每次调用"的本意,又不让一次网络抖动变成八小时观测黑洞。
+_NEXT_RETRY_TS = 0.0
+_RETRY_COOLDOWN_S = float(os.environ.get("IST_OBS_RETRY_COOLDOWN_S", "300"))
 
 # 可观测性自身的可观测(2026-07-10 实证:jp.cloud 出口静默读超时,一轮 ¥96 全程无 trace,
 # 仅 tui.log 有 ERROR——盲跑必须对用户可见):状态机 + 失败回调(TUI footer 挂告警)。
@@ -84,13 +90,18 @@ def get_langfuse_handler():
     """返回进程级缓存的 Langfuse CallbackHandler;未启用/初始化失败 → None。
 
     调用方:``cbs = [...]; h = get_langfuse_handler(); cbs += [h] if h else []``。
-    首次调用懒初始化(auth_check 一次,失败即永久 None,不反复重试拖慢每次调用)。
+    首次调用懒初始化;auth_check 失败**冷却后重试**(默认 300s,IST_OBS_RETRY_COOLDOWN_S
+    可调)——旧版"失败即永久 None"让一次瞬态超时把长驻 TUI 进程变成整日盲跑
+    (2026-07-13 实证),而 jp.cloud 出口读超时是本网络的已知常态(tui.log 三天前科)。
     """
-    global _HANDLER, _INIT_DONE
+    global _HANDLER, _INIT_DONE, _NEXT_RETRY_TS
     if _INIT_DONE:
         return _HANDLER
-    _INIT_DONE = True
+    now = time.time()
+    if now < _NEXT_RETRY_TS:
+        return None                    # 冷却期内不重试(不拖慢每次 LLM 调用)
     if not _enabled():
+        _INIT_DONE = True              # 未配置/显式关=确定态,无需重试
         _set_status("off", "未配置或显式关闭")
         return None
     try:
@@ -98,20 +109,27 @@ def get_langfuse_handler():
         from langfuse.langchain import CallbackHandler
         client = get_client()          # 自 env 读 key/host,进程级单例
         try:
-            if not client.auth_check():  # 一次性校验,失败静默降级(不阻断)
-                logger.warning("Langfuse auth_check 未通过,链路追踪禁用")
+            if not client.auth_check():  # 校验失败降级(不阻断),冷却后重试
+                logger.warning("Langfuse auth_check 未通过,链路追踪禁用(%.0fs 后重试)",
+                               _RETRY_COOLDOWN_S)
                 _set_status("init_failed", "auth_check 未通过")
+                _NEXT_RETRY_TS = now + _RETRY_COOLDOWN_S
                 return None
         except Exception as exc:  # noqa: BLE001 — auth_check 网络异常也降级,不抛
-            logger.debug("Langfuse auth_check 异常,按未通过处理", exc_info=True)
+            logger.warning("Langfuse auth_check 异常(%.0fs 后重试): %s",
+                           _RETRY_COOLDOWN_S, exc)
             _set_status("init_failed", f"auth_check 异常: {exc}")
+            _NEXT_RETRY_TS = now + _RETRY_COOLDOWN_S
             return None
         _HANDLER = CallbackHandler()
+        _INIT_DONE = True
         _set_status("ok")
         _install_export_watch()   # 运行中导出失败(网络断流)也要浮到用户面
         logger.info("Langfuse 链路追踪已启用")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Langfuse handler 初始化失败(降级为不追踪): %s", exc)
+        logger.warning("Langfuse handler 初始化失败(降级为不追踪,%.0fs 后重试): %s",
+                       _RETRY_COOLDOWN_S, exc)
         _set_status("init_failed", str(exc))
         _HANDLER = None
+        _NEXT_RETRY_TS = now + _RETRY_COOLDOWN_S
     return _HANDLER

@@ -35,8 +35,19 @@ def test_inv5_cross_minor_mismatch_triggers_ask(tmp_path):
     assert any(f["kind"] == "build_anchor" for f in rep["findings"])
 
 
-def test_unparseable_build_is_honest_unknown(tmp_path):
+def test_build_probe_failure_is_probe_failed_not_mismatch(tmp_path):
+    """build 探针自身失败=床态未知(probe_failed),不是"版本不匹配/unknown"——
+    2026-07-13 实证:105 床 SSH 挂死,空版本被呈报成「⚠ 版本不匹配:设备(空)」。"""
     rep = bed_check(_probe("error: probe failed"), CFG, root=tmp_path, host="h")
+    assert rep["anchor"]["status"] == "probe_failed" and rep["needs_ask"]
+    ba = [f for f in rep["findings"] if f["kind"] == "build_anchor"]
+    assert ba and ba[0].get("probe_failed") is True
+
+
+def test_unparseable_build_is_honest_unknown(tmp_path):
+    """探针跑通、回显却解析不出版本号 → unknown(如实报告,不猜)。"""
+    rep = bed_check(_probe("Software Version line without colon 10.5.0.585"),
+                    CFG, root=tmp_path, host="h")
     assert rep["anchor"]["status"] == "unknown" and rep["needs_ask"]
 
 
@@ -208,10 +219,135 @@ def test_probe_failure_status_error_and_tool_error_forms(tmp_path):
     assert not [f for f in rep["findings"] if not f.get("probe_failed")]
 
 
+# ── 2026-07-13 实弹回归:SSH 挂死床(105)的四种谎报形态 ───────────────────────
+
+_SSH_DEAD = ("=== dev_probe (fastmcp apv_ssh) ===\n"
+             "error: SSH to 172.16.35.70 failed: [Errno None] "
+             "Unable to connect to port 22 on 172.16.35.70")
+
+
+def test_probe_failure_fastmcp_banner_error_form(tmp_path):
+    """fastmcp 路径把 SSH 失败包在来源横幅后——曾穿门被判成"分区配置残留"+
+    床账 4 条垃圾 created(93 床实录);横幅后的 error 契约行必须归探测失败。"""
+    outputs = {"show segment name": _SSH_DEAD, "show synconfig peer": _SSH_DEAD,
+               "show sdns config file": _SSH_DEAD}
+    rep = bed_check(_probe(_SSH_DEAD, outputs), CFG, root=tmp_path, host="h")
+    assert rep["anchor"]["status"] == "probe_failed"
+    assert rep["needs_ask"] is True
+    assert rep["findings"] and all(f.get("probe_failed") for f in rep["findings"])
+
+
+def test_bed_snapshot_fastmcp_banner_error_marks_failed(tmp_path):
+    """快照同病:SSH 挂死通道必须 failed=True(diff 才会跳过)——曾 failed=false
+    把报错行当内容,批后 diff 出垃圾"漂移"入床账(bed_ledger/10.4.127.93 实录)。"""
+    from main.ist_core.compile_engine_v8.bed import bed_snapshot
+    snap = bed_snapshot(lambda cmd: _SSH_DEAD)
+    assert snap and all(v.get("failed") is True for v in snap.values())
+
+
+def test_bridge_common_cause_merges_dead_device_question(tmp_path):
+    """题面共因合题:同一失败签名覆盖 ≥2 路探针(含版本锚)→ 一句"疑似设备不可达",
+    不再摊成「残留×3+探测未完成+版本不匹配」五段误导题(105 床实弹形态)。"""
+    outputs = {"show segment name": _SSH_DEAD, "show synconfig peer": _SSH_DEAD,
+               "show sdns config file": (
+                   "=== dev_probe ===\ncommand: show sdns config file\n"
+                   "status: error\nprobe failed: [Errno None] Unable to connect "
+                   "to port 22 on 172.16.35.70")}
+    rep = bed_check(_probe(_SSH_DEAD, outputs), CFG, root=tmp_path, host="h")
+    import main.ist_core.compile_engine_v8.engine_tool as ET
+    captured = {}
+
+    def _fake_panel(qs):
+        captured["q"] = qs[0]["question"]
+        return {"decision": "停止"}
+
+    orig = ET._panel
+    ET._panel = _fake_panel
+    try:
+        ET._bridge({"kind": "bed_gate", "report": {
+            "anchor": rep["anchor"], "findings": rep["findings"], "cleanup": {}}})
+    finally:
+        ET._panel = orig
+    q = captured["q"]
+    assert "同因失败" in q and "疑似设备不可达" in q
+    assert "版本锚" in q                                  # build 锚并入同因组
+    assert "仍有残留" not in q and "版本不匹配" not in q   # 两个谎报形态都不许再出现
+
+
+def test_bridge_unknown_anchor_says_unknown_not_mismatch():
+    """版本解析不出(探针跑通)→ 题面说"版本未知",不说"版本不匹配:设备(空)"。"""
+    import main.ist_core.compile_engine_v8.engine_tool as ET
+    captured = {}
+
+    def _fake_panel(qs):
+        captured["q"] = qs[0]["question"]
+        return {"decision": "停止"}
+
+    orig = ET._panel
+    ET._panel = _fake_panel
+    try:
+        ET._bridge({"kind": "bed_gate", "report": {
+            "anchor": {"status": "unknown", "device": "", "config": CFG},
+            "findings": [{"kind": "build_anchor",
+                          "detail": {"status": "unknown", "device": "", "config": CFG}}],
+            "cleanup": {}}})
+    finally:
+        ET._panel = orig
+    assert "版本未知" in captured["q"] and "版本不匹配" not in captured["q"]
+
+
+def test_bridge_mirror_sync_is_not_residue_wording():
+    """mirror_sync 是引擎内部发现——题面按其 detail 原文呈报,不叫"残留"。"""
+    import main.ist_core.compile_engine_v8.engine_tool as ET
+    captured = {}
+
+    def _fake_panel(qs):
+        captured["q"] = qs[0]["question"]
+        return {"decision": "停止"}
+
+    orig = ET._panel
+    ET._panel = _fake_panel
+    try:
+        ET._bridge({"kind": "bed_gate", "report": {
+            "anchor": {"status": "match", "device": "InfosecOS Beta.APV-HG-K.10.5.0.585"},
+            "findings": [{"kind": "mirror_sync", "probe_failed": False,
+                          "detail": "盘上框架镜像与真机框架不一致(文件:lib/test_xlsx.py)"
+                                    "——请确认框架是否升级并更新镜像"}],
+            "cleanup": {}}})
+    finally:
+        ET._panel = orig
+    assert "盘上框架镜像与真机框架不一致" in captured["q"]
+    assert "残留" not in captured["q"]
+
+
+def test_mirror_sync_finding_never_enters_cleanup(tmp_path, monkeypatch):
+    """mirror_sync 不是设备残留——不得进 bed_cleanup(否则虚占"引擎不认识"计数)。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    outputs = {
+        "show segment name": "host=1.2.3.4  mode=show\n--- output ---\nAPV#",
+        "show synconfig peer": "host=1.2.3.4  mode=show\n--- output ---\nAPV#",
+        "show sdns config file": "host=1.2.3.4  mode=show\n--- output ---\nAPV#",
+    }
+    monkeypatch.setattr(N, "_probe_fn", _probe(DEV_585, outputs))
+    import main.ist_core.compile_engine_v8.mirror_anchor as MA
+    monkeypatch.setattr(MA, "check_sync",
+                        lambda _exec: {"status": "mismatch", "diffs": ["lib/test_xlsx.py"]})
+    monkeypatch.setattr(N.B, "bed_cleanup",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("cleanup called")))
+    monkeypatch.setattr(sh, "outputs_root", lambda: tmp_path / "outputs")
+    monkeypatch.setattr(sh, "facts_path", lambda s: tmp_path / "facts.jsonl")
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": []})
+    monkeypatch.setattr(N, "interrupt", lambda p: {"decision": "停止"})
+    out = N.bed_gate({"out_name": "b1"})
+    assert out["phase_status"] == "bed_blocked"   # 到达问询;cleanup 从未被调
+
+
 def test_probe_failed_findings_never_enter_cleanup(tmp_path, monkeypatch):
     """probe_failed 项不进清理(没有清理对象;bed_gate residue 过滤)。"""
     from main.ist_core.compile_engine_v8 import nodes as N
     from main.ist_core.compile_engine_v8 import _shared as sh
+    import main.ist_core.compile_engine_v8.mirror_anchor as MA
     outputs = {
         "show segment name": ("host=1.2.3.4  mode=show\n--- output ---\n"
                               "% Invalid input: nope\nshow segment name\n    ^"),
@@ -219,6 +355,9 @@ def test_probe_failed_findings_never_enter_cleanup(tmp_path, monkeypatch):
         "show sdns config file": "host=1.2.3.4  mode=show\n--- output ---\nAPV#",
     }
     monkeypatch.setattr(N, "_probe_fn", _probe(DEV_585, outputs))
+    # 单测不真 SSH 跳板机(曾真连 103 并写 .sync_anchor.json——网络依赖+副作用)
+    monkeypatch.setattr(MA, "check_sync", lambda _exec: {"status": "unknown",
+                                                         "reason": "stubbed"})
     monkeypatch.setattr(N.B, "bed_cleanup",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("cleanup called")))
     monkeypatch.setattr(sh, "outputs_root", lambda: tmp_path / "outputs")

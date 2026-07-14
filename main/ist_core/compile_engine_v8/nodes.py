@@ -481,14 +481,18 @@ def ask_decision(state: dict) -> dict:
                        for h in (it.get("forbidden_mechanism") or []) if isinstance(h, dict)})
         return {"group": gp or (aid,), "sig": (leaf + "|" + "+".join(fams)).lower()}
 
-    def _land(aid: str, decision: str, answer_text: str, provenance: str = "") -> bool:
+    def _land(aid: str, decision: str, answer_text: str, provenance: str = "",
+              form: str = "") -> bool:
         """user_decision 落盘+decision 事实(改描述另落 suspended)。INV-11 式②:先落盘
         后落账,失败=本案本轮不落 decision(留在 needs_decision 下轮重问),如实告警。
         H1:答案原文随 note 落盘——机制类裁决(等价实现文本/用户自给方案)语义都在
-        原文里,user_decision.json 是 worker brief 的既有引用点。"""
+        原文里,user_decision.json 是 worker brief 的既有引用点。§18.14 D1:形态类 claim
+        (distribution/position)的改过程/改预期须带 assertion_form(从 q['_form'] 派生),
+        否则 compile_user_decision 的 form 门拒落→活锁;机制类免 form 由工具侧判。"""
         try:
             from main.ist_core.tools.device.verifiability_tool import compile_user_decision
-            out = compile_user_decision.func(autoid=aid, decision=decision, note=answer_text)
+            out = compile_user_decision.func(autoid=aid, decision=decision, note=answer_text,
+                                             assertion_form=form)
             if str(out).startswith("error"):
                 raise RuntimeError(str(out)[:200])
         except Exception:  # noqa: BLE001
@@ -555,6 +559,10 @@ def ask_decision(state: dict) -> dict:
     # P3:三元组题的 label→token 显式映射(长 label「采纳「…」」不含"改过程",
     # substring 兜底匹配不到——run22 会掉 Other 兜底致 re-ask)。
     _tok_by_rep = {str(q.get("_autoid")): (q.get("_token_by_label") or {}) for q in qs}
+    # §18.14 D1:形态类 claim(distribution/position)的改过程/改预期须带 assertion_form
+    # (=q['_form'],FORM_BY_KIND 派生∈dist/member/captured_relation);机制类免 form
+    # 由工具侧判,传空无害。缺此→compile_user_decision form 门拒落→活锁。
+    _form_by_rep = {str(q.get("_autoid")): str(q.get("_form") or "") for q in qs}
     for q in qs:
         mem = fold.get(str(q.get("_autoid")), [])
         if len(mem) > 1:
@@ -606,7 +614,8 @@ def ask_decision(state: dict) -> dict:
             decision = "改过程"
         if not decision:
             continue
-        landed_members = [aid for aid in fold[rep] if _land(aid, decision, a)]
+        landed_members = [aid for aid in fold[rep]
+                          if _land(aid, decision, a, form=_form_by_rep.get(rep, ""))]
         if m and landed_members and version:
             # 判例写回(同键采信的供给侧;anchor=应然锚 A2,lineage=用户代理)
             try:
@@ -1542,6 +1551,19 @@ def _clear_prefixes() -> tuple:
     return tuple(sorted(cleanable)), tuple(sorted(filelike))
 
 
+@functools.lru_cache(maxsize=1)
+def _fixed_infra_ips() -> frozenset:
+    """测试床固定基础设施 IP(§18.14 S1:s₀ 脏态合取过滤料源)——从 env_facts 机械派生
+    (topology JSON 登记的接口/服务 IPv4)。读失败 fail-open 回落 frozenset()(不误放
+    真污染,只是退回旧的过宽行为)。"""
+    try:
+        from main.ist_core.tools._shared.env_facts import get_env_facts
+        return get_env_facts().infra_ips()
+    except Exception:  # noqa: BLE001
+        logger.debug("infra_ips 读取失败——s₀ 脏态过滤回落空集(过宽但不误放)", exc_info=True)
+        return frozenset()
+
+
 _RESTORE_RE_S0 = re.compile(r"^\s*config\s+(memory|file|net|all|segment)\b", re.IGNORECASE)
 _REMOTE_SAVE_RE = re.compile(r"^\s*write\s+(net|all\s+tftp|all\s+ftp|all\s+scp|all\s+sftp)\b",
                              re.IGNORECASE)
@@ -1673,7 +1695,12 @@ def _s0_pair(aid: str, comp: list[str], prof, sig: str) -> tuple[str, list[dict]
             # 持久面分支与床账兜
             p_ents = {e for line in p["l23"]
                       for e in _DIAG_ENTITY_RE.findall(line)}
-            shared = sorted(p_ents & vict["entities"])[:4]
+            # §18.14 S1(脏态合取):共享实体减去固定基础设施 IP——两案共用后端服务 IP/
+            # 接口 IP(topology 登记的合法共用地址)不是「前写脏、后读脏」污染,是测同一
+            # 被测系统的正常共用(667986 实弹:凭常量 co-reference 172.16.32.70 误贴 s₀,
+            # 掩盖自身断言缺陷)。减法必须在 [:4] 截断**前**(否则先截到基础设施 IP 会漏
+            # 掉第 5 个真污染物)。只减 IP 不碰 vlan/port/bond 名(自建对象是真污染物)。
+            shared = sorted((p_ents & vict["entities"]) - _fixed_infra_ips())[:4]
             if shared:
                 polluters.append({"aid": a, "via": "shared L2/L3 entity",
                                   "shared": shared})

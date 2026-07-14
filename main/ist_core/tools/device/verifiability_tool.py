@@ -341,7 +341,11 @@ def compile_user_decision(autoid: str, decision: str, assertion_form: str = "",
     # dist/member 形态可选——旧的无条件 form 门使引擎侧 ask_decision(不传 form)
     # 对这两类落盘必败→决策丢失下轮重问(问询活锁;655248 走通纯因选了改描述)。
     # 台账全为机制类 → 免 form;含任一形态类 claim → 仍旧强制(形态是语义决策不代判)。
-    _MECH_KINDS = {"verification_path_absent", "forbidden_mechanism"}
+    # §18.14 D1:command_existence(换版本内命令)/missing_teardown(补恢复步)同属"换
+    # 实现路径"、无 dist/member 形态可选——也免 form,否则经 ask_decision 答改过程同样
+    # 活锁(668059 command_existence + G1 missing_teardown 姊妹分支,655248 形态)。
+    _MECH_KINDS = {"verification_path_absent", "forbidden_mechanism",
+                   "command_existence", "missing_teardown"}
     _mech_only = bool(claims) and all(
         str(c.get("claim_kind")) in _MECH_KINDS for c in claims)
     if dec != "改描述" and not _mech_only:

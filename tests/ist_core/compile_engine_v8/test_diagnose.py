@@ -335,3 +335,25 @@ def test_g6_prescreen_skips_attribution_fork(rig):
                    for ctx, comp in device.calls), device.calls
     rep = _report(rig)
     assert rep["cases"][AIDS[1]]["status"] == "suspended", rep["cases"][AIDS[1]]
+
+
+def test_s0_l23_excludes_fixed_infra_ips(rig):
+    """§18.14 S1(脏态合取):L2/L3 共享实体减去固定基础设施 IP。667986 实弹——前案写
+    接口 IP、后案引用同 IP,不判 s₀(基础设施合法共用);对照前案自建对象仍判 s₀。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    rows = {
+        "P_infra": [{"E": "APV_0", "F": "cmds_config",
+                     "G": "bond interface bond1 port3\nip address bond1 172.16.32.70 24"}],
+        "V_infra": [{"E": "APV_0", "F": "cmds_config",
+                     "G": "sdns listener 172.16.32.70\nsdns listener 172.16.34.70 10001"}],
+        "P_self": [{"E": "APV_0", "F": "cmds_config",
+                    "G": "vlan port1 vlan233 233\nip address vlan233 10.9.9.9 24"}],
+        "V_self": [{"E": "APV_0", "F": "cmds_config", "G": "sdns listener vlan233"}],
+    }
+    rig["monkeypatch"].setattr(N, "_load_case_rows", lambda a: rows.get(a, []))
+    N._fixed_infra_ips.cache_clear()
+    pc = {a: N._case_touch_profile(a) for a in rows}
+    h1, _, _ = N._s0_pair("V_infra", ["P_infra", "V_infra"], lambda a: pc[a], "x")
+    assert h1 == ""          # 基础设施 IP 共用 → 非 s₀
+    h2, pol2, _ = N._s0_pair("V_self", ["P_self", "V_self"], lambda a: pc[a], "x")
+    assert h2 == "h_s0" and any("vlan233" in p.get("shared", []) for p in pol2)   # 自建对象 → 真 s₀

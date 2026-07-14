@@ -122,11 +122,33 @@ def test_verification_path_absent_lands_without_form():
     assert "已落盘" in out
 
 
+def test_command_existence_lands_without_form():
+    """§18.14 D1:command_existence(换版本内命令)免 form → 改过程落盘成功(不活锁)。"""
+    _ledger([{"claim_kind": "command_existence", "command": "sdns fulldns on"}])
+    out = compile_user_decision.func(_A, "改过程", note="换 sdns dnssec 形态")
+    assert "已落盘" in out and "expected_assertion_form" not in _ud()
+
+
+def test_missing_teardown_lands_without_form():
+    """§18.14 D1:missing_teardown(补恢复步)免 form → 改过程落盘成功(不活锁)。"""
+    _ledger([{"claim_kind": "missing_teardown", "suggested_tau": ["no sdns listener"]}])
+    out = compile_user_decision.func(_A, "改过程", note="案尾补 no 回放")
+    assert "已落盘" in out
+
+
 def test_form_kind_ledger_still_requires_form():
     """含形态类 claim → form 门不变(形态是语义决策,工具不代判)。"""
     _ledger([{"claim_kind": "weight_ratio", "min_requests": 46}])
     out = compile_user_decision.func(_A, "改过程")
     assert str(out).startswith("error")
+
+
+def test_form_kind_lands_with_explicit_form():
+    """§18.14 D1②:形态类带 assertion_form(=q['_form'])→ 落盘成功(engine _land 传 form
+    后不再活锁;此前 ask_decision 从不传 form 致 distribution 类经改过程恒拒重问)。"""
+    _ledger([{"claim_kind": "distribution", "min_requests": 20}])
+    out = compile_user_decision.func(_A, "改过程", note="加请求数到可验", assertion_form="dist")
+    assert "已落盘" in out and _ud().get("expected_assertion_form") == "dist"
 
 
 def test_mixed_ledger_still_requires_form():

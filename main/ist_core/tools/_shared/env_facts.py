@@ -99,6 +99,21 @@ class EnvFacts:
     def reachable_subnets(self) -> list[str]:
         return [str(n) for n in self._subnets]
 
+    def infra_ips(self) -> frozenset[str]:
+        """测试床固定基础设施 IP 集(§18.14 S1:s₀ 脏态合取的机械料源)——所有拓扑登记
+        的设备接口/服务 IPv4(=`_exact_ips` 的 v4 投影)。这些是大家**合法共用**的固定
+        地址(接口 IP/后端服务 IP/触发机),不是"前案写脏、后案读脏"的污染实体:两案
+        都引用同一后端 IP 172.16.35.231 只说明它们测同一被测系统,不构成 T1 污染。
+        换床改 network_topology.json 即变,零硬编码。"""
+        out: set[str] = set()
+        for ip in self._exact_ips:
+            try:
+                ipaddress.IPv4Address(ip)
+                out.add(ip)
+            except ValueError:
+                continue
+        return frozenset(out)
+
     # ── 触发可达性派生(listener/VIP 选址用)──────────────────────────────
     # 关键事实:dig/curl 从「触发设备」(路由器/客户端)发起,必须够得着 listener。
     # 「够得着」= 触发设备与 APV 在同一网段(L2 直连)。所以 listener 只能配在

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -1486,6 +1487,65 @@ def _diag_grammar():
         return [], [], ([], [])
 
 
+@functools.lru_cache(maxsize=1)
+def _clear_prefixes() -> tuple:
+    """从 mirror clear.py::get_clear_list 机械解析框架逐命令清理覆盖(§18.12 三稿)。
+
+    s₀ 判据修正的核心事实源:框架每 autoid 前对上一案 cmd_list 做逐命令逆操作清理
+    (test_xlsx.py:239-256),覆盖集=CMD_RULES 的 startswith 前缀(源码闭集,clear.py
+    变了这里自动跟随,零硬编码)。返回 (清得掉前缀集, 备份文件类前缀集)——后者的清理
+    走 `clear conf file`,而其正则 `\\.cfg` 漏 `.tgz`(clear.py:178 盲区),故单列。
+    解析失败=空集(fail-open:退回旧的「全持久写皆 s₀」保守行为,不误放)。"""
+    try:
+        from main.knowledge_paths import KNOWLEDGE_FOOTPRINTS  # 定位 knowledge/ 根
+        root = KNOWLEDGE_FOOTPRINTS.parents[1]
+        src = (root / "framework" / "mirror" / "lib" / "apv" / "clear.py").read_text(
+            encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        try:
+            root = Path(__file__).resolve().parents[3]
+            src = (root / "knowledge" / "framework" / "mirror" / "lib" / "apv"
+                   / "clear.py").read_text(encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            logger.warning("clear.py 解析失败——s₀ 框架清理过滤禁用(保守回落全持久写)",
+                           exc_info=True)
+            return (), ()
+    cleanable, filelike = set(), set()
+    for m in re.finditer(
+            r"cmd\.startswith\('([^']+)'\)(?:\s+or\s+cmd\.startswith\('([^']+)'\))?"
+            r"\s*,\s*\[([^\]]*)\]", src):
+        prefixes = [p for p in (m.group(1), m.group(2)) if p]
+        cleans = re.findall(r'"([^"]*)"', m.group(3))
+        for p in prefixes:
+            (filelike if "clear conf file" in cleans else cleanable).add(p.lower())
+    return tuple(sorted(cleanable)), tuple(sorted(filelike))
+
+
+_RESTORE_RE_S0 = re.compile(r"^\s*config\s+(memory|file|net|all|segment)\b", re.IGNORECASE)
+_REMOTE_SAVE_RE = re.compile(r"^\s*write\s+(net|all\s+tftp|all\s+ftp|all\s+scp|all\s+sftp)\b",
+                             re.IGNORECASE)
+_SAVE_FILE_RE = re.compile(r"^\s*write\s+(?:all\s+)?file\s+(\S+)", re.IGNORECASE)
+_RESTORE_FILE_RE = re.compile(r"^\s*config\s+(?:all\s+)?file\s+(\S+)", re.IGNORECASE)
+
+
+def _s0_persist_class(cmd: str) -> str:
+    """一条命中 persistence_channels 的命令,对 s₀ 的归类(§18.12 三稿数据驱动):
+    restore=config 恢复(读磁盘,非污染源)/ cleanable=框架清得掉(不当 s₀)/
+    remote=远端备份(本机不留)/ leftover_file=框架清不掉的本机备份文件(.tgz 盲区,
+    真持久但需跨案撞名才有污染路径)/ uncovered=清理表外的真持久写(直接算 s₀)。"""
+    c = cmd.strip().lower()
+    if _RESTORE_RE_S0.match(c):
+        return "restore"
+    if _REMOTE_SAVE_RE.match(c):
+        return "remote"
+    cleanable, filelike = _clear_prefixes()
+    if any(c.startswith(p) for p in filelike):
+        return "leftover_file"
+    if any(c.startswith(p) for p in cleanable):
+        return "cleanable"
+    return "uncovered"
+
+
 def _g6_diag_key(last: dict, volume: str, aid: str) -> str:
     """G6 前筛 diagnosis 的幂等键(#74-⑤:带 verdict run 序,同 volume 二次 fail 的
     新诊断不再被去重;写入与去重检查共用本函数——两处手拼曾不对称,run_id 为空时
@@ -1494,10 +1554,17 @@ def _g6_diag_key(last: dict, volume: str, aid: str) -> str:
 
 
 def _case_touch_profile(aid: str) -> dict:
-    """从成品卷机械提取:持久面写/L2-L3 写/实体 token(S10 交换子配对的 I6 近似输入)。"""
+    """从成品卷机械提取:持久面写/L2-L3 写/实体 token(S10 交换子配对的 I6 近似输入)。
+
+    persist 经 §18.12 三稿收窄:命中 persistence_channels 的行再按 `_s0_persist_class`
+    过滤——只保留框架清不掉的真持久写(uncovered ∪ leftover_file);config 恢复(读)、
+    框架可清(write memory 等)、远端备份不进 persist(442 次历史指认对照:这三类
+    占 75%,是把读当写/把可清当污染的误判)。save_files/restore_files 供 _s0_pair 做
+    leftover_file(本机备份文件)的跨案撞名裁决——同名 write→config 才有真污染路径。"""
     rows = _load_case_rows(aid) or []
     pers_res, l23_res, _ = _diag_grammar()
     persist, l23, ents = [], [], set()
+    save_files, restore_files = set(), set()
     for r in rows:
         if not isinstance(r, dict):
             continue
@@ -1509,11 +1576,19 @@ def _case_touch_profile(aid: str) -> dict:
                 line = line.strip()
                 if not line:
                     continue
+                mf = _SAVE_FILE_RE.match(line)
+                if mf:
+                    save_files.add(mf.group(1).strip('"\''))
+                mr = _RESTORE_FILE_RE.match(line)
+                if mr:
+                    restore_files.add(mr.group(1).strip('"\''))
                 if any(p.search(line) for p in pers_res):
-                    persist.append(line)
+                    if _s0_persist_class(line) in ("uncovered", "leftover_file"):
+                        persist.append(line)      # 框架清不掉的才算持久面写
                 elif any(p.search(line) for p in l23_res):
                     l23.append(line)
-    return {"persist": persist, "l23": l23, "entities": ents}
+    return {"persist": persist, "l23": l23, "entities": ents,
+            "save_files": save_files, "restore_files": restore_files}
 
 
 def _occupancy_hit(sig: str) -> bool:
@@ -1558,13 +1633,21 @@ def _s0_pair(aid: str, comp: list[str], prof, sig: str) -> tuple[str, list[dict]
         if a == aid:
             continue
         p = prof(a)
+        # persist 已在 touch_profile 收窄为「框架清不掉的真持久写」(§18.12 三稿);
+        # 其中 leftover_file(本机备份文件,.tgz 清理盲区)只在**受害者从同名文件
+        # config 恢复**时才有实际污染路径——同名 write→config 撞名(autoid 异名不撞、
+        # 自存自恢复不算跨案)。uncovered(清理表外真持久写)直接算。
         if p["persist"]:
-            # 持久面写=全局配置存储分量(全机耦合),**不受卷序限制**——快照跨轮/
-            # 跨 run 存活复活(保存族跨面洗白路径,预言1 反扫 VC 规则);排尾只降低
-            # 卷内暴露,消不掉跨轮通路(run11 668030 排尾后仍三轮翻挂即此)
-            polluters.append({"aid": a, "via": "persistent-plane write",
-                              "cmds": p["persist"][:2]})
-        elif comp.index(a) < idx:
+            hit_names = p.get("save_files", set()) & vict.get("restore_files", set())
+            has_uncovered = any(_s0_persist_class(ln) == "uncovered"
+                                for ln in p["persist"])
+            if has_uncovered or hit_names:
+                cmds = list(p["persist"][:2])
+                if hit_names:
+                    cmds.append(f"[shared save/restore file: {sorted(hit_names)[0]}]")
+                polluters.append({"aid": a, "via": "persistent-plane write",
+                                  "cmds": cmds[:3]})
+        if not p["persist"] and comp.index(a) < idx:
             # 配置面 L2/L3 写按卷序(前驱写、后继读)——I6 近似,跨轮形态由
             # 持久面分支与床账兜
             p_ents = {e for line in p["l23"]
@@ -1573,7 +1656,12 @@ def _s0_pair(aid: str, comp: list[str], prof, sig: str) -> tuple[str, list[dict]
             if shared:
                 polluters.append({"aid": a, "via": "shared L2/L3 entity",
                                   "shared": shared})
-    self_persist = bool(vict["persist"]) and _occupancy_hit(sig)
+    # 自扰仅对 uncovered(框架清不掉的表外真持久写)成立——§18.12 三稿:leftover_file
+    # (本机备份文件)自存自恢复是**被测行为本身**(write file 保存→config file 恢复),
+    # 占用警告是配置时的例行 advisory(非占用陈述,occupancy_semantics 已负向排除);
+    # 把它判自扰 s₀ 是写保存族误判的最后一环(668015/030 self_persist 假阳)。
+    self_persist = (any(_s0_persist_class(ln) == "uncovered" for ln in vict["persist"])
+                    and _occupancy_hit(sig))
     if polluters or self_persist:
         basis = ("self persistent-plane write + occupied/exists signature"
                  if self_persist and not polluters else

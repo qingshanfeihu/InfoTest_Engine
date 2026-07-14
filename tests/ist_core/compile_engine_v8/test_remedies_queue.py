@@ -98,8 +98,12 @@ def test_e2e_report_remedy_and_r5_booleans(rig):
     from main.ist_core.compile_engine_v8 import nodes as N
 
     rows_by_aid = {
+        # §18.12 三稿:write memory 框架清得掉不再判 s₀;换真跨案撞名(A 存 shared_save,
+        # B 从同名 config 恢复)——s₀ 在新判据下仍真实成立,机制测试不变
         AIDS[0]: [{"E": "APV_0", "F": "cmds_config",
-                   "G": "slb virtual http v1 172.16.34.70 80\nwrite memory"}],
+                   "G": "sdns listener 172.16.34.70\nwrite file shared_save"}],
+        AIDS[1]: [{"E": "APV_0", "F": "cmds_config",
+                   "G": "sdns on\nsdns listener 172.16.34.70\nconfig file shared_save"}],
     }
     rig["monkeypatch"].setattr(
         N, "_load_case_rows",

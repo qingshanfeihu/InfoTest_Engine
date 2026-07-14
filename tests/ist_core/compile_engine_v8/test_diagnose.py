@@ -15,17 +15,55 @@ from tests.ist_core.compile_engine_v8.test_graph_scenarios import (  # noqa: F40
 
 # --------------------------------------------------------------- 单元:触碰画像
 def test_touch_profile_extraction(rig):
+    """persist 经 §18.12 三稿收窄:只保留框架清不掉的真持久写。write memory 框架
+    clear+write memory 清得掉(clear.py)→ 不进 persist(旧版误当持久污染源)。"""
     from main.ist_core.compile_engine_v8 import nodes as N
     rig["monkeypatch"].setattr(N, "_load_case_rows", lambda aid: [
         {"E": "APV_0", "F": "cmds_config",
-         "G": "slb virtual http v1 172.16.34.70 80\nwrite memory"},
+         "G": "write all file save_x pwd\nwrite memory"},   # 前者清不掉(.tgz盲区),后者清得掉
         {"E": "APV_0", "F": "cmd_config", "G": "ip address vlan100 172.16.34.70 24"},
         {"E": "check_point", "F": "found", "G": r"172\.16\.34\.70"},
     ])
     p = N._case_touch_profile("x")
-    assert p["persist"] == ["write memory"]
+    assert p["persist"] == ["write all file save_x pwd"]   # 只留框架清不掉的;write memory 被滤
+    assert p["save_files"] == {"save_x"}
     assert p["l23"] == ["ip address vlan100 172.16.34.70 24"]
     assert "172.16.34.70" in p["entities"] and "vlan100" in p["entities"]
+
+
+def test_s0_classes_data_driven():
+    """§18.12 三稿:s₀ 持久写归类(从 clear.py 机械解析框架清理覆盖)。"""
+    from main.ist_core.compile_engine_v8.nodes import _s0_persist_class
+    assert _s0_persist_class("write memory") == "cleanable"       # 框架 clear+write memory
+    assert _s0_persist_class("config memory") == "restore"        # 读磁盘,非污染源
+    assert _s0_persist_class("config all file x") == "restore"
+    assert _s0_persist_class("write net tftp 1 f") == "remote"    # 远端,本机不留
+    assert _s0_persist_class("write file save_x") == "leftover_file"   # .tgz 盲区,需撞名
+    assert _s0_persist_class("clear config all") == "uncovered"
+
+
+def test_write_memory_not_s0_no_cross_file(rig):
+    """写保存族自存自恢复(各案异名文件)→ 无跨案撞名 → 不判 s₀(误判消除正锚)。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    rows = {"P": [{"E": "APV_0", "F": "cmds_config",
+                   "G": "sdns listener 172.16.34.70 53\nwrite memory\nconfig memory"}],
+            "V": [{"E": "APV_0", "F": "cmds_config",
+                   "G": "sdns listener 172.16.34.70 53\nwrite file save_V\nconfig file save_V"}]}
+    rig["monkeypatch"].setattr(N, "_load_case_rows", lambda aid: rows.get(aid, []))
+    pc = {a: N._case_touch_profile(a) for a in rows}
+    h, pol, _ = N._s0_pair("V", ["P", "V"], lambda a: pc[a], "may already be occupied by SLB")
+    assert h == "" and pol == []       # write memory 清得掉+自存自恢复无跨案 → 非 s₀
+
+
+def test_cross_file_collision_is_s0(rig):
+    """真跨案撞名:B 从 A 存的同名文件 config 恢复 → 保留 s₀(真污染不漏判)。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    rows = {"A": [{"E": "APV_0", "F": "cmds_config", "G": "sdns listener 1.1.1.1 53\nwrite file shared"}],
+            "B": [{"E": "APV_0", "F": "cmds_config", "G": "sdns listener 1.1.1.1 53\nconfig file shared"}]}
+    rig["monkeypatch"].setattr(N, "_load_case_rows", lambda aid: rows.get(aid, []))
+    pc = {a: N._case_touch_profile(a) for a in rows}
+    h, pol, _ = N._s0_pair("B", ["A", "B"], lambda a: pc[a], "occupied")
+    assert h == "h_s0" and any(p["aid"] == "A" for p in pol)
 
 
 def test_submit_attribution_h_position_validation(tmp_path):
@@ -55,10 +93,12 @@ def test_diagnose_s0_blocks_pointless_rerun(rig):
     from main.ist_core.compile_engine_v8 import nodes as N
 
     rows_by_aid = {
+        # §18.12 三稿:污染者 write memory 框架清得掉→不再判 s₀;换真跨案撞名
+        # (A 存 shared_save,B 从同名 config 恢复)——新判据下 s₀ 仍真实成立
         AIDS[0]: [{"E": "APV_0", "F": "cmds_config",
-                   "G": "slb virtual http v1 172.16.34.70 80\nwrite memory"}],
+                   "G": "sdns listener 172.16.34.70\nwrite file shared_save"}],
         AIDS[1]: [{"E": "APV_0", "F": "cmds_config",
-                   "G": "sdns on\nsdns listener 172.16.34.70"}],
+                   "G": "sdns on\nsdns listener 172.16.34.70\nconfig file shared_save"}],
         AIDS[2]: [{"E": "APV_0", "F": "cmds_config", "G": "sdns on"}],
     }
     rig["monkeypatch"].setattr(
@@ -245,10 +285,12 @@ def test_g6_prescreen_skips_attribution_fork(rig):
     from main.ist_core.compile_engine_v8 import nodes as N
 
     rows_by_aid = {
+        # §18.12 三稿:污染者 write memory 框架清得掉→不再判 s₀;换真跨案撞名
+        # (A 存 shared_save,B 从同名 config 恢复)——新判据下 s₀ 仍真实成立
         AIDS[0]: [{"E": "APV_0", "F": "cmds_config",
-                   "G": "slb virtual http v1 172.16.34.70 80\nwrite memory"}],
+                   "G": "sdns listener 172.16.34.70\nwrite file shared_save"}],
         AIDS[1]: [{"E": "APV_0", "F": "cmds_config",
-                   "G": "sdns on\nsdns listener 172.16.34.70"}],
+                   "G": "sdns on\nsdns listener 172.16.34.70\nconfig file shared_save"}],
         AIDS[2]: [{"E": "APV_0", "F": "cmds_config", "G": "sdns on"}],
     }
     rig["monkeypatch"].setattr(

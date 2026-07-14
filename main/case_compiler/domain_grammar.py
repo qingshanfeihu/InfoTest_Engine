@@ -91,6 +91,15 @@ def occupancy_semantics() -> tuple[tuple[str, ...], tuple[str, ...]]:
     return (tuple(oc.get("patterns") or ()), tuple(oc.get("negations") or ()))
 
 
+def forbidden_mechanism_intents() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """禁令机制的意图侧词表 ((family, patterns), ...)——F6 路由用(§18.11)。
+    destructive_commands 是命令正则匹配不到中文意图文本;本表按族给意图词
+    (CJK 子串+英文显式边界),author 盖章扫描消费。误报语义=呈报非硬拒,见数据段出处。"""
+    fm = load_grammar().get("forbidden_mechanism_intents") or {}
+    return tuple((str(f.get("family") or ""), tuple(f.get("patterns") or ()))
+                 for f in (fm.get("families") or []))
+
+
 def reference_closures() -> list[dict]:
     return list(load_grammar().get("reference_closures", []))
 

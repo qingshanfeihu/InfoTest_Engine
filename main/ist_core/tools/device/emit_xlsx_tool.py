@@ -281,14 +281,17 @@ def _gate_destructive_commands(autoid: str, steps: list, init: str = "") -> str 
     lines = "; ".join(f"step[{i}]={cmd!r}" for i, cmd in bad)
     # 反馈只带禁令+方向,不带具体命令序列(2026-07-13 裁决:引擎向 LLM 注入命令=交出
     # 作用域判断权;曾在此处写死 clear 族替代范式——与跑死两床的 suggested_teardown 同族)
+    # 文案改机制陈述(2026-07-14 评审 D3):旧文教「save→clear→restore→observe」序列——
+    # 与 F6 等价判据打架(回放=导入方向,对不残留类意图恰是反题;写保存族 σ 链断裂的
+    # 帮凶之一)。门只说禁令与路由,替代序列的推导归 worker(要点先行+配置面模型)。
     return (f"case {autoid} contains {len(bad)} **destructive device-lifecycle command(s)**: {lines}\n"
             f"Forbidden: this would really reboot/shut down a shared device, and the framework "
             f"cannot reconnect after a reboot (bound to fail).\n"
-            f"If the intent is to test \"config save/persistence\", implement it WITHOUT a "
-            f"reboot: save → clear the saved object scope → restore → observe. Which concrete "
-            f"commands realize each step is a domain judgment — retrieve same-intent verified "
-            f"precedents (compile_precedent) and the version manual; do not invent a wider "
-            f"clear scope than the objects this case configured.")
+            f"Do NOT invent a substitute sequence here. Route: state the test point (claim + "
+            f"falsifying observation), derive the closest equivalent under the config-plane "
+            f"model (grammar section forbidden_mechanism_intents documents the routing), and "
+            f"report via compile_report_underdetermined (claim_kind=forbidden_mechanism) — "
+            f"the user rules before you land.")
 
 
 _SAVE_RE = _re_dev.compile(r"\bwrite\s+(memory|mem|file|all|net)\b", _re_dev.IGNORECASE)
@@ -315,6 +318,35 @@ def _norm_family(tok: str) -> str:
 _INTENT_SAVE_RE = _re_dev.compile(
     r"(?<![a-z])(?:write|config)\s*(all|mem(?:ory)?|file|net)(?![a-z0-9])",
     _re_dev.IGNORECASE)
+
+
+def _gate_forbidden_mechanism(autoid: str) -> str | None:
+    """F6 禁令机制门(A 层,§18.11;先问后落的机械强制)。
+
+    author 盖章的 intent.json 若含 forbidden_mechanism 标记(意图原文命中禁令机制
+    词表:重启/断电/恢复出厂族),user_decision.json 落盘前拒落卷——替代方案必须先经
+    用户裁决(等价判据四条见 S §0.3;写保存族 σ 链断裂即无此门的实证:替代被静默
+    采用×四案×两代引擎)。误报(如「重启计数」字面命中)经同一面板一答放行,门只认
+    盘上裁决凭据。无盖章(非引擎路径/存量)→ 门不触发,零回归。"""
+    try:
+        root = Path(__file__).resolve().parents[4]
+        it = json.loads((root / "workspace" / "outputs" / autoid / "intent.json")
+                        .read_text(encoding="utf-8"))
+        fm = it.get("forbidden_mechanism")
+        if fm and not (root / "workspace" / "outputs" / autoid / "user_decision.json").is_file():
+            toks = ", ".join(sorted({str(h.get("matched")) for h in fm if isinstance(h, dict)}))
+            return (f"error: case {autoid} intent names a bed-forbidden mechanism "
+                    f"({toks}). Landing is blocked until the user's ruling is on disk: "
+                    "report via compile_report_underdetermined (claim_kind="
+                    "forbidden_mechanism, reason = intent mechanism + your proposed "
+                    "equivalent + declared differences) and wait for user_decision.json. "
+                    "If the matched word is not an execution mechanism of this case, say "
+                    "so in the report — one answer clears it.")
+    except FileNotFoundError:
+        return None
+    except Exception:  # noqa: BLE001
+        logger.debug("F6 intent 标记读取失败(fail-open,门不触发)", exc_info=True)
+    return None
 
 
 def _intent_save_variant(autoid: str) -> str:
@@ -397,8 +429,21 @@ def _gate_save_restore_pairing(autoid: str, steps: list, init: str = "",
     """
     cmds = _ordered_apv_cmds(steps, init)
     restores = [(i, c, _restore_family(c)) for i, c in enumerate(cmds) if _restore_family(c)]
+    # P1c 提门(2026-07-14 §18.11 评审 D2):意图变体核对不再以 restore 存在为前提——
+    # F6 正解卷形态(write→clear→not_found,无回放)在旧触发条件下 P1c 永不运行,
+    # write all→memory 漂移无门可拦。凡 expected(intent.json 盖章推导)非空且卷面
+    # **存在**保存命令,族必须一致;卷面无保存命令不查(负向意图「不执行保存」合法
+    # 存在,缺席检查会误杀)。
+    if expected_save_variant:
+        _ev = _norm_family(expected_save_variant.strip())
+        _used_any = next((f for f in (_save_family(c) for c in cmds) if f), None)
+        if _used_any and _used_any != _ev:
+            return (f"case {autoid} intent variant mismatch: this case should test "
+                    f"write {_ev}, but the sheet's save command uses write {_used_any} — "
+                    f"the intent got swapped (and likely collides with the sibling case "
+                    f"that owns write {_used_any}). Change the save back to write {_ev}.")
     if not restores:
-        return None  # ★ 回归护栏:非恢复类用例不进闸
+        return None  # ★ 回归护栏:非恢复类用例不进闸(P1c 提门已在上方独立运行)
 
     errs: list[str] = []
     first_listener = next((i for i, c in enumerate(cmds) if _LISTENER_CFG_RE.search(c)), None)
@@ -474,11 +519,12 @@ def _gate_save_restore_pairing(autoid: str, steps: list, init: str = "",
         return None
     body = "\n".join(f"  - {e}" for e in errs)
     return (f"case {autoid} persistence test (config-restore class) structural errors:\n{body}\n"
-            f"Correct paradigm (mechanism, not commands): configure the object → observe it → "
-            f"save (write <intent variant>) → clear/negate that object → restore "
-            f"(config <same variant>) → observe → assert presence. Which commands realize "
-            f"each step: retrieve same-intent verified precedents (compile_precedent) and "
-            f"the version manual.")
+            f"Mechanism note (not a command recipe): a config-restore (config <variant>) is an "
+            f"IMPORT of the saved artifact back into running config — assert per your case's "
+            f"stated test point (a not-persisted intent asserts absence WITHOUT any restore "
+            f"step; a save/restore round-trip intent asserts presence AFTER the restore). "
+            f"Which commands realize each step: retrieve same-intent verified precedents "
+            f"(compile_precedent) and the version manual.")
 
 
 def _gate_unreachable_listener(autoid: str, steps: list, init: str = "") -> str | None:
@@ -1154,6 +1200,10 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
         return "error: steps must be a non-empty array (each element a dict with E/F/G)"
     _emit_fail_streak_clear(autoid)
     steps = _payload
+
+    _fm_err = _gate_forbidden_mechanism(autoid)
+    if _fm_err:
+        return _fm_err
 
     # 冻结闸门(A 层):digest 跨轮对照发现连续两轮同签名 fail 时在 outputs/<autoid>/ 落
     # .frozen.json——同法已证无效。重编必须显式声明换法(override_frozen_reason),

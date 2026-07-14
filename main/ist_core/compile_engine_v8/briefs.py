@@ -176,4 +176,21 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
     if intent:
         parts.append("<intent note=\"this case's intent; full text at manifest_path\">\n"
                      + intent + "\n</intent>")
+    # F6(§18.11):意图侧禁令机制标记随 brief 下发——worker 走要点先行(等价推导+
+    # compile_report_underdetermined 呈报),emit 硬门在 user_decision.json 落盘前拒落卷。
+    fm = (sh.read_json(sh.outputs_root() / aid / "intent.json", {}) or {}).get(
+        "forbidden_mechanism")
+    if fm and not (sh.outputs_root() / aid / "user_decision.json").is_file():
+        toks = ", ".join(sorted({str(h.get("matched")) for h in fm if isinstance(h, dict)}))
+        tail.append(
+            "<forbidden_mechanism matched=\"" + toks + "\">\n"
+            "The intent names a bed-forbidden mechanism. Do NOT author steps yet: follow "
+            "'State the test point first' — derive the closest equivalent under the "
+            "config-plane model and report it via compile_report_underdetermined "
+            "(claim_kind=forbidden_mechanism, reason = intent mechanism + proposed "
+            "equivalent + declared differences). The emit gate refuses to land this case "
+            "until the user's ruling is on disk. If the matched word is not actually an "
+            "execution mechanism of this case (e.g. a counter/statistic name), say so in "
+            "the report — the user clears it in one answer.\n"
+            "</forbidden_mechanism>")
     return "\n".join(parts + tail)

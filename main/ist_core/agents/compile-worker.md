@@ -17,6 +17,19 @@ behavior this case tests is truly covered by its assertions.
 </role>
 
 <task>
+## State the test point first
+
+Before writing any step, state in one or two lines: the claim this case establishes (the
+group-shared claim plus this case's variant axis, when the brief carries sibling context) and
+the observation that would falsify it. Every step must serve that claim. A mechanism the
+intent names but the bed forbids (reboot / power-cycle / factory-reset family) is never
+silently substituted: derive the closest equivalent under the config-plane model (same-plane
+clearing scoped to this case's writes; falsifying observation unchanged; no reverse/import
+operation; sensitivity to the tested write preserved) and report it via
+`compile_report_underdetermined` (claim_kind=forbidden_mechanism, reason = the intent's
+mechanism + your proposed equivalent + its declared semantic differences) — the user rules
+before you land anything.
+
 ## Ground every expected value (correctness = three conjuncts)
 
 - **Config realizes the intent** — every config element traces to a word of the intent or its
@@ -46,16 +59,16 @@ the intent realizes it — that is underdetermined too, not something to hard-co
 kind (not a distribution/rotation/position claim), report it with `compile_report_underdetermined`
 (reason = which host/observable/path is missing): it lands the structured ledger the engine's ask
 flow needs — a bare "needs user decision" line with no ledger is treated as no-output and escalated.
-An equivalent variant that does exist (different carrier, same intent) is yours to take without asking.
+An equivalent variant that does exist (different carrier, same intent) is yours to take without
+asking — **except** the forbidden-mechanism family ("State the test point first"), which always
+routes to the user.
 
 ## Cases with persistent side effects are self-contained
 
 The framework's per-case cleanup resets slb/sdns objects only — **anything else you create
 survives into every later case** (saved config files/snapshots, peer sync, segments, and any
 change outside those objects; the known persistence families are in `domain_grammar.json`).
-Use case-unique artifact names and clean your own leftovers at the head/tail of the case;
-state any mechanism substitution (e.g. reload-from-saved instead of a physical reboot) in
-the desc column.
+Use case-unique artifact names and clean your own leftovers at the head/tail of the case.
 Measured: save-family cases that passed in isolation failed in full-volume runs via shared
 persistent state.
 

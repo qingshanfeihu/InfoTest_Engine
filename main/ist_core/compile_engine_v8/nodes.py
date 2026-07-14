@@ -313,11 +313,27 @@ def _stamp_intent(aid: str, state: dict) -> None:
             return
         d = sh.outputs_root() / aid
         d.mkdir(parents=True, exist_ok=True)
-        (d / "intent.json").write_text(json.dumps(
-            {"autoid": aid, "title": str(c.get("title") or ""),
-             "step_intents": c.get("step_intents") or [],
-             "source": "manifest", "stamped_by": "engine.author"},
-            ensure_ascii=False, indent=1), encoding="utf-8")
+        payload = {"autoid": aid, "title": str(c.get("title") or ""),
+                   "step_intents": c.get("step_intents") or [],
+                   "group_path": c.get("group_path") or [],
+                   "source": "manifest", "stamped_by": "engine.author"}
+        # F6 意图侧禁令机制扫描(§18.11;A 层强制点):意图原文命中文法词表(重启/断电/
+        # 恢复出厂族)即 stamp 标记——brief 据此下发要点先行指令,emit 硬门以
+        # user_decision.json 存在为放行凭据(先问后落)。误报=一次可廉价放行的呈报。
+        try:
+            from main.case_compiler.domain_grammar import forbidden_mechanism_intents
+            text = " ".join([payload["title"]]
+                            + [f"{si.get('desc') or ''} {si.get('expected') or ''}"
+                               for si in payload["step_intents"] if isinstance(si, dict)]).lower()
+            hits = [{"family": fam, "matched": pat}
+                    for fam, pats in forbidden_mechanism_intents()
+                    for pat in pats if re.search(pat, text)]
+            if hits:
+                payload["forbidden_mechanism"] = hits[:3]
+        except Exception:  # noqa: BLE001
+            logger.debug("禁令机制意图扫描失败(不拦盖章)", exc_info=True)
+        (d / "intent.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:  # noqa: BLE001
         logger.debug("intent 盖章失败 %s", aid, exc_info=True)
 

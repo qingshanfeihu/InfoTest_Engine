@@ -195,3 +195,28 @@ def test_intent_variant_no_save_word_is_empty():
         assert _intent_save_variant(aid) == ""
     finally:
         _shutil.rmtree(d, ignore_errors=True)
+
+
+# ── P1c 提门(2026-07-14 §18.11 评审 D2):变体核对不再以 restore 存在为前提 ──────
+
+def test_p1c_fires_without_restore_on_variant_swap():
+    """F6 正解卷形态(write→clear→断言,无回放):expected=all 而卷面 write memory
+    → 漂移被拦(旧触发条件下 P1c 对此形态永不运行)。"""
+    steps = _mk("sdns on", "sdns listener 172.16.34.70 53", "show sdns listener",
+                "write memory", "clear sdns listener", "show sdns listener")
+    err = gate("t_p1c_lift", steps, expected_save_variant="all")
+    assert err and "intent variant mismatch" in err and "write all" in err
+
+
+def test_p1c_no_save_cmd_skips():
+    """卷面无保存命令 → 不查(负向意图「不执行保存」合法存在,缺席检查会误杀)。"""
+    steps = _mk("sdns on", "sdns listener 172.16.34.70 53", "show sdns listener",
+                "clear sdns listener", "show sdns listener")
+    assert gate("t_p1c_nosave", steps, expected_save_variant="all") is None
+
+
+def test_p1c_matching_variant_without_restore_passes():
+    """expected=file 且卷面 write file(F6 正解形态)→ 放行。"""
+    steps = _mk("sdns on", "sdns listener 172.16.34.70 53", "show sdns listener",
+                "write file sdns_save_x", "clear sdns listener", "show sdns listener")
+    assert gate("t_p1c_ok", steps, expected_save_variant="file") is None

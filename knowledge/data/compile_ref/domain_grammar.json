@@ -4651,5 +4651,38 @@
    "\\bhalt\\b",
    "\\bpoweroff\\b"
   ]
+ },
+ "forbidden_mechanism_intents": {
+  "_provenance": "2026-07-14 §18.11 F6(对抗评审 D4:destructive_commands 是英文命令正则,匹配不到中文意图文本,「零增长」宣称撤回——本段即必须新增的意图侧词表)。用途:author _stamp_intent 对意图原文(title/step_intents)扫描,命中即 stamp forbidden_mechanism 标记→worker 走要点先行+等价推导+compile_report_underdetermined(先问后落,emit 硬门以 user_decision.json 存在为放行凭据)。CJK 相邻无词界,中文条目用子串匹配;英文条目带 (?<![a-z]) / (?![a-z]) 显式边界(同 _INTENT_SAVE_RE 的坑规避)。误报面声明:「重启计数」类字面命中会触发一次呈报——面板携命中上下文,用户以『改过程+note:非机制要求照常编』一答放行(H1 机制类免 form 已通),代价=组一题(F8c 折叠);匹配即呈报非硬拒编译语义。",
+  "families": [
+   {
+    "family": "reboot",
+    "patterns": [
+     "重启",
+     "重新启动",
+     "(?<![a-z])reboot(?![a-z])",
+     "(?<![a-z])reload(?![a-z])"
+    ]
+   },
+   {
+    "family": "power",
+    "patterns": [
+     "断电",
+     "掉电",
+     "下电",
+     "power[ -]?cycle",
+     "(?<![a-z])poweroff(?![a-z])"
+    ]
+   },
+   {
+    "family": "factory",
+    "patterns": [
+     "恢复出厂",
+     "出厂设置",
+     "factory[ -]?reset",
+     "restore factory"
+    ]
+   }
+  ]
  }
 }

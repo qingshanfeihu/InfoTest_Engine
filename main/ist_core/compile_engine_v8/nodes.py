@@ -816,11 +816,51 @@ def merge(state: dict) -> dict:
         sh.emit(f"持久化家族 {len(moved)} 案排卷尾(交付报告将声明)")
     if coexist:
         sh.emit(f"⚠ 通道④共存违例 {len(coexist)} 组(详情入报告)")
+    try:  # F8d 兄弟碰撞呈报(§18.11;D5 型不硬拒,详情入事实流/报告)
+        _coll = _sibling_collisions(state, comp_ordered)
+        if _coll:
+            sh.append(state, _coll)
+            sh.emit(f"⚠ 同组变体撞题嫌疑 {len(_coll)} 起(尾号 "
+                    + "、".join(str(c.get('aid'))[-6:] for c in _coll[:4]) + ")")
+    except Exception:  # noqa: BLE001
+        logger.debug("兄弟碰撞扫描失败(呈报级,不拦合并)", exc_info=True)
     sh.emit(f"合并[{'整卷' if is_delivery else '子集'}] {len(comp_ordered)} 案 → {vol_name}/case.xlsx")
     return {"phase_status": "ok", "vol_seq": seq,
             "merged_ref": str(merged.relative_to(sh.project_root())),
             "run_ctx": F.CTX_DELIVERY if is_delivery else F.CTX_SUBSET,
             **sh.counts_update(state, fs)}
+
+
+def _sibling_collisions(state: dict, comp: list[str]) -> list[dict]:
+    """F8d 兄弟碰撞呈报(§18.11;评审 T14 附:D5 型呈报不硬拒)。
+
+    同组两案卷面**保存变体**相同=撞题嫌疑(668030 漂移≡668000 型)。P1c 已按案硬拦
+    「意图 vs 卷面」漂移,本扫描兜的是意图本身撞车/非引擎路径卷;保存族之外的变体轴
+    无机械数据不扫(组变体轴非机制轴的组会假阳——硬拒姿势仅保存族闭集已证成)。"""
+    from main.ist_core.tools.device.emit_xlsx_tool import _save_family
+    m = sh.manifest(state)
+    by_group: dict[tuple, list[str]] = {}
+    for c in (m.get("cases") or []):
+        a = str(c.get("autoid"))
+        if a in comp:
+            by_group.setdefault(tuple(c.get("group_path") or ()), []).append(a)
+    out: list[dict] = []
+    for gp, members in by_group.items():
+        if not gp or len(members) < 2:
+            continue
+        owner: dict[str, str] = {}
+        for a in sorted(members):
+            fam = next((f for f in (_save_family(str(r.get("G") or ""))
+                                    for r in _load_case_rows(a)) if f), "")
+            if not fam:
+                continue
+            if fam in owner and owner[fam] != a:
+                out.append({"ev": "sibling_collision", "aid": a,
+                            "with": owner[fam], "axis": f"write {fam}",
+                            "group": "/".join(gp)})
+            else:
+                owner[fam] = a
+    return out
 
 
 def _load_case_rows(aid: str) -> list[dict]:

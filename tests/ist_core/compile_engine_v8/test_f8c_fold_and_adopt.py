@@ -133,3 +133,27 @@ def test_forbidden_question_template():
     assert len(qs) == 1 and qs[0]["header"].startswith("禁令")
     assert "clear 运行面" in qs[0]["question"]
     assert [o["label"] for o in qs[0]["options"]] == ["改过程", "改预期", "改描述"]
+
+
+# ── F8d 兄弟碰撞呈报(D5 型不硬拒) ────────────────────────────────────────────
+
+def test_sibling_collision_reported(monkeypatch):
+    A, B = "203600000000000201", "203600000000000202"
+    monkeypatch.setattr(sh, "manifest", lambda st: {"cases": [
+        {"autoid": A, "title": "write mem 案", "group_path": ["功能", "配置保存"]},
+        {"autoid": B, "title": "write all 案", "group_path": ["功能", "配置保存"]}]})
+    rows = {A: [{"G": "write memory"}], B: [{"G": "write memory"}]}   # B 漂移撞 A
+    monkeypatch.setattr(N, "_load_case_rows", lambda aid: rows.get(aid, []))
+    out = N._sibling_collisions({}, [A, B])
+    assert len(out) == 1 and out[0]["aid"] == B and out[0]["with"] == A
+    assert out[0]["axis"] == "write memory"
+
+
+def test_sibling_distinct_variants_clean(monkeypatch):
+    A, B = "203600000000000203", "203600000000000204"
+    monkeypatch.setattr(sh, "manifest", lambda st: {"cases": [
+        {"autoid": A, "title": "t", "group_path": ["功能", "配置保存"]},
+        {"autoid": B, "title": "t", "group_path": ["功能", "配置保存"]}]})
+    rows = {A: [{"G": "write memory"}], B: [{"G": "write file f1"}]}
+    monkeypatch.setattr(N, "_load_case_rows", lambda aid: rows.get(aid, []))
+    assert N._sibling_collisions({}, [A, B]) == []

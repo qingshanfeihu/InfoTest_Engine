@@ -160,3 +160,34 @@ def test_no_exec_failure_block_when_no_anomaly(tmp_path, monkeypatch):
     b = build_brief(A, state, fs)
     assert "<execution_failures" not in b
     assert "THIS case's own command sequence" not in b
+
+
+# ── F8a 兄弟上下文(§18.11):同组 title 一行式内联,check 按引用不内联 ──────────
+
+def test_brief_siblings_block(monkeypatch):
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    from main.ist_core.compile_engine_v8 import briefs as BR
+    A, B, C = "203600000000000015", "203600000000000030", "203600000000000044"
+    monkeypatch.setattr(sh, "manifest", lambda st: {"cases": [
+        {"autoid": A, "title": "1.执行write file后重启设备", "group_path": ["功能", "配置保存"],
+         "step_intents": [{"desc": "[check1]配置未被保存", "expected": ""}]},
+        {"autoid": B, "title": "1.执行write all后重启设备", "group_path": ["功能", "配置保存"],
+         "step_intents": [{"desc": "[check1]配置未被保存", "expected": ""}]},
+        {"autoid": C, "title": "1.配置sdns listener,使用全域名功能", "group_path": ["功能", "全域名"],
+         "step_intents": []}]})
+    b = BR.build_brief(A, {"manifest_ref": "m.json", "max_rounds": 3}, [])
+    assert "<siblings" in b
+    assert "write all" in b                      # 兄弟 title 内联(变体轴可见)
+    assert "…" + B[-6:] in b
+    assert C[-6:] not in b.split("<siblings")[1]  # 异组不入
+    assert "配置未被保存" not in b.split("<siblings")[1]  # 兄弟 check/期望不内联(D14/D15)
+
+
+def test_brief_no_siblings_no_block(monkeypatch):
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    from main.ist_core.compile_engine_v8 import briefs as BR
+    A = "203600000000000059"
+    monkeypatch.setattr(sh, "manifest", lambda st: {"cases": [
+        {"autoid": A, "title": "全域名", "group_path": ["功能", "全域名"], "step_intents": []}]})
+    b = BR.build_brief(A, {"manifest_ref": "", "max_rounds": 3}, [])
+    assert "<siblings" not in b

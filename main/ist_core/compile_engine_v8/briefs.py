@@ -176,6 +176,28 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
     if intent:
         parts.append("<intent note=\"this case's intent; full text at manifest_path\">\n"
                      + intent + "\n</intent>")
+    # F8a 兄弟上下文(§18.11):脑图组是语义单元——同组 siblings 的 title 一行式内联
+    # (manifest 原文=事实性证据,机械注入;X8:check/期望值**不内联**只按引用,防
+    # precedent-then-assert 近亲锚定,评审 D14/D15)。worker 据此先陈述组共享 claim
+    # 与本案变体轴(F7 组感知措辞),变体撞车在编写期即可见(668030≡668000 型)。
+    m = sh.manifest(state)
+    me = next((c for c in (m.get("cases") or [])
+               if str(c.get("autoid")) == aid), None)
+    gp = tuple((me or {}).get("group_path") or ())
+    if gp:
+        sibs = [c for c in (m.get("cases") or []) if c is not me
+                and tuple(c.get("group_path") or ()) == gp]
+        if sibs:
+            lines = "\n".join(
+                f"- …{str(c.get('autoid'))[-6:]}: "
+                + str(c.get("title") or "").splitlines()[0][:80]
+                for c in sibs[:12])
+            more = f"\n(+{len(sibs) - 12} more in this group)" if len(sibs) > 12 else ""
+            parts.append(
+                "<siblings note=\"same mindmap group = one shared claim with per-case "
+                "variant axes. State the group claim and THIS case's variant axis before "
+                "writing steps; do NOT copy siblings' expectations (their full text lives "
+                "at manifest_path if needed)\">\n" + lines + more + "\n</siblings>")
     # F6(§18.11):意图侧禁令机制标记随 brief 下发——worker 走要点先行(等价推导+
     # compile_report_underdetermined 呈报),emit 硬门在 user_decision.json 落盘前拒落卷。
     fm = (sh.read_json(sh.outputs_root() / aid / "intent.json", {}) or {}).get(

@@ -165,6 +165,7 @@ class GraphBridge:
                     "session_user": _session_user,
                     "session_id": _session_id,
                     "conversation_id": _conversation_id,
+                    "thread_id": self._thread_id,
                 })
 
             if _session_user and _session_id and _conversation_id:
@@ -179,6 +180,13 @@ class GraphBridge:
                 except Exception as exc:
                     logger.error("DialogueCollector 注册失败: %s", exc)
                     pass
+
+            # 注册 TraceCollector（对话轮次 trace 聚合写入）
+            try:
+                from main.ist_core.sinks.trace_collector import TraceCollector
+                bus.subscribe(TraceCollector())
+            except Exception as exc:
+                logger.debug("TraceCollector 注册失败: %s", exc)
 
             coro = astream_to_bus(graph, payload, config=config, bus=bus)
             self._task = loop.create_task(coro)

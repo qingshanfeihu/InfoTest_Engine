@@ -841,6 +841,12 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str) -> dict
     from langchain_core.messages import HumanMessage
     inp = {"messages": [HumanMessage(content=rendered_body)]}
     cfg = {"callbacks": [_ForkUsageTally()]}   # fork usage 唯一采集点(每次 LLM 调用即时计)
+    # [已注释] Langfuse LLM 可观测性
+    # try:
+    #     from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks
+    #     inject_langfuse_callbacks(cfg["callbacks"])
+    # except Exception:
+    #     pass
     stream = getattr(runnable, "stream", None)
     if not callable(stream) or not _fork_step_emit_enabled():
         # runnable 不支持流式 或 关了步骤显示(IST_FORK_STEP_EMIT=0)→ 退回阻塞 invoke,

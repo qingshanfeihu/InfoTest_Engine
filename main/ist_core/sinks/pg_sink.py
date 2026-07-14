@@ -211,14 +211,14 @@ class PgAuditSink:
                 model_name, token_input, token_output, token_cache_hit, token_cache_miss,
                 tool_name, tool_input, tool_output, tool_duration_ms,
                 file_path, file_operation,
-                source_ip, is_error, error_message, tags
+                source_ip, is_error, error_message, tags, trace_id, category
             ) VALUES (
                 %(user_id)s, %(session_id)s, %(conversation_id)s, %(run_id)s, %(thread_id)s, %(recorded_at)s,
                 %(event_kind)s, %(event_summary)s, %(event_payload)s,
                 %(model_name)s, %(token_input)s, %(token_output)s, %(token_cache_hit)s, %(token_cache_miss)s,
                 %(tool_name)s, %(tool_input)s, %(tool_output)s, %(tool_duration_ms)s,
                 %(file_path)s, %(file_operation)s,
-                %(source_ip)s, %(is_error)s, %(error_message)s, %(tags)s
+                %(source_ip)s, %(is_error)s, %(error_message)s, %(tags)s, %(trace_id)s, %(category)s
             )
         """
         try:
@@ -306,7 +306,7 @@ class PgAuditSink:
 
         summary = self._extract_summary(kind, payload)
 
-        model_name = payload.get("model") or payload.get("name") or tags.get("model") or None
+        model_name = payload.get("model_name") or payload.get("model") or payload.get("name") or tags.get("model") or None
         token_input = token_output = token_cache_hit = token_cache_miss = None
         if usage:
             token_input = usage.get("input_tokens") or usage.get("prompt_tokens")
@@ -339,6 +339,20 @@ class PgAuditSink:
 
         source_ip = payload.get("source_ip") or tags.get("source_ip") or None
 
+        # trace_id: 关联 ist_audit.trace 的同次 run 主键
+        # run_id 是 12-char hex（uuid4().hex[:12]），不是合法 UUID，需补到 32 字符
+        raw_run_id = event.get("run_id", "") or ""
+        trace_id: str | None = None
+        if raw_run_id:
+            try:
+                import uuid as _uuid
+                padded = raw_run_id.ljust(32, "0") if len(raw_run_id) < 32 else raw_run_id
+                trace_id = str(_uuid.UUID(padded))
+            except (ValueError, AttributeError):
+                trace_id = None
+        # category: 事件粗分类——llm/tool/skill/kb/error/lifecycle/file/execute
+        category = self._classify_event(kind, tool_name)
+
         return {
             "user_id": user_id,
             "session_id": session_id,
@@ -365,6 +379,8 @@ class PgAuditSink:
             "error_message": error_message,
             "tags": json.dumps(tags, default=str) if tags else None,
             "_username": _username,
+            "trace_id": trace_id,
+            "category": category,
         }
 
     @staticmethod
@@ -396,6 +412,33 @@ class PgAuditSink:
         if len(text) <= cap:
             return text
         return text[: cap - 3] + "..."
+
+    @staticmethod
+    def _classify_event(kind: str, tool_name: str | None) -> str | None:
+        """将事件按粗粒度分类，方便按类别过滤 audit_log。"""
+        if kind in ("llm_start", "llm_end", "llm_token", "llm_thinking"):
+            return "llm"
+        if kind in ("tool_call", "tool_start", "tool_result", "tool_end"):
+            if tool_name in ("invoke_skill", "agent_define"):
+                return "skill"
+            if tool_name and tool_name.startswith("compile_"):
+                return "compile"
+            if tool_name and tool_name.startswith(("fs_", "kb_")):
+                return "kb"
+            if tool_name and tool_name.startswith(("dev_",)):
+                return "device"
+            if tool_name in ("run_shell", "run_python"):
+                return "execute"
+            if tool_name in ("fs_read", "fs_write", "fs_edit"):
+                return "file"
+            return "tool"
+        if kind in ("error", "run_error", "auth_login_failed", "access_denied"):
+            return "error"
+        if kind in ("run_start", "run_end", "node_start", "node_end"):
+            return "lifecycle"
+        if kind.startswith("auth_"):
+            return "auth"
+        return None
 
     # ------------------------------------------------------------------
     # Redis 连接

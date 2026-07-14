@@ -493,6 +493,12 @@ def qa_node(state: IstCoreState, config: RunnableConfig | None = None) -> dict[s
 
             "recursion_limit": max(config.get("recursion_limit") or 0, 300),
         }
+    # [已注释] Langfuse LLM 可观测性
+    # try:
+    #     from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks
+    #     inject_langfuse_callbacks(merged_config["callbacks"])
+    # except Exception:
+    #     pass
 
     try:
         result = agent.invoke(agent_input, config=merged_config)

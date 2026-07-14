@@ -299,164 +299,166 @@ class SessionManager:
             "is_active": True,
         }
 
-    # 【屏蔽切换对话功能】列表查询注释
-    # def list_conversations(
-    #     self,
-    #     username: str,
-    #     limit: int = 20,
-    #     offset: int = 0,
-    # ) -> list[dict]:
-    #     """列出用户的对话。优先读 Redis 缓存，miss 则查 PG 并回填。"""
-    #     cached = self._redis_get_conv_list(username)
-    #     if cached is not None:
-    #         return cached[offset : offset + limit]
-    #
-    #     user = self._pg_get_user_by_username(username)
-    #     if not user:
-    #         return []
-    #     user_id = str(user["id"])
-    #
-    #     with pg_cursor() as cur:
-    #         cur.execute(
-    #             """SELECT conversation_id, title, model_name, message_count,
-    #                       last_message_at, is_active, created_at
-    #                FROM ist_audit.conversations
-    #                WHERE user_id = %s
-    #                ORDER BY last_message_at DESC NULLS LAST, created_at DESC
-    #                LIMIT %s""",
-    #             (user_id, max(limit + offset, 100)),
-    #         )
-    #         rows = cur.fetchall()
-    #
-    #     result = []
-    #     for r in rows:
-    #         result.append({
-    #             "conversation_id": r["conversation_id"],
-    #             "title": r["title"],
-    #             "model_name": r["model_name"],
-    #             "message_count": r["message_count"],
-    #             "last_message_at": r["last_message_at"].isoformat() if r["last_message_at"] else None,
-    #             "is_active": r["is_active"],
-    #             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-    #         })
-    #
-    #     self._redis_set_conv_list(username, result)
-    #     return result[offset : offset + limit]
+    def list_conversations(
+        self,
+        username: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        """列出用户的对话。优先读 Redis 缓存，miss 则查 PG 并回填。
 
-    # 【屏蔽切换对话功能】单条查询注释
-    # def get_conversation(self, username: str, conversation_id: str) -> dict | None:
-    #     """获取单个对话详情（Redis → PG 二级回退，校验归属）。"""
-    #     # 1. Redis 缓存
-    #     cached = self._redis_get_conv(conversation_id)
-    #     if cached:
-    #         return cached
-    #
-    #     user = self._pg_get_user_by_username(username)
-    #     if not user:
-    #         return None
-    #     user_id = str(user["id"])
-    #
-    #     with pg_cursor() as cur:
-    #         cur.execute(
-    #             """SELECT conversation_id, user_id, title, model_name, message_count,
-    #                       last_message_at, is_active, created_at, updated_at
-    #                FROM ist_audit.conversations
-    #                WHERE conversation_id = %s AND user_id = %s""",
-    #             (conversation_id, user_id),
-    #         )
-    #         row = cur.fetchone()
-    #     if not row:
-    #         return None
-    #
-    #     result = {
-    #         "conversation_id": row["conversation_id"],
-    #         "title": row["title"],
-    #         "model_name": row["model_name"],
-    #         "message_count": row["message_count"],
-    #         "last_message_at": row["last_message_at"].isoformat() if row["last_message_at"] else None,
-    #         "is_active": row["is_active"],
-    #         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-    #         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
-    #     }
-    #     # 回填 Redis
-    #     self._redis_set_conv(conversation_id, result)
-    #     return result
+        返回字段含 first_user_input（标题候选），按 last_message_at 倒序。
+        """
+        cached = self._redis_get_conv_list(username)
+        if cached is not None:
+            return cached[offset : offset + limit]
 
-    # 【屏蔽切换对话功能】激活/切换对话注释
-    # def activate_conversation(self, username: str, conversation_id: str) -> dict | None:
-    #     """切换对话：同用户旧 is_active 设 FALSE，目标设 TRUE。"""
-    #     user = self._pg_get_user_by_username(username)
-    #     if not user:
-    #         return None
-    #     user_id = str(user["id"])
-    #
-    #     old_active_id = self.get_active_conversation_id(username)
-    #
-    #     with pg_cursor() as cur:
-    #         cur.execute(
-    #             "UPDATE ist_audit.conversations SET is_active = FALSE WHERE user_id = %s AND is_active = TRUE",
-    #             (user_id,),
-    #         )
-    #         cur.execute(
-    #             """UPDATE ist_audit.conversations SET is_active = TRUE, updated_at = now()
-    #                WHERE conversation_id = %s AND user_id = %s
-    #                RETURNING session_id""",
-    #             (conversation_id, user_id),
-    #         )
-    #         row = cur.fetchone()
-    #         if row is None:
-    #             return None
-    #         session_id = row.get("session_id") or ""
-    #
-    #     if old_active_id:
-    #         self._redis_delete_conv(old_active_id)
-    #     self._redis_delete_conv(conversation_id)
-    #     self._redis_invalidate_conv_list(username)
-    #     thread_id = f"{username}_{session_id}_{conversation_id}" if session_id else f"{username}_{conversation_id}"
-    #     return {"conversation_id": conversation_id, "thread_id": thread_id}
+        user = self._pg_get_user_by_username(username)
+        if not user:
+            return []
+        user_id = str(user["id"])
 
+        with pg_cursor() as cur:
+            cur.execute(
+                """SELECT c.conversation_id, c.title, c.model_name, c.message_count,
+                          c.last_message_at, c.is_active, c.created_at,
+                          (SELECT d.user_input FROM ist_audit.sys_dialog_chat d
+                           WHERE d.username = %s AND d.conversation_id = c.conversation_id
+                           ORDER BY d.recorded_at ASC LIMIT 1) AS first_user_input
+                   FROM ist_audit.conversations c
+                   WHERE c.user_id = %s
+                   ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
+                   LIMIT %s""",
+                (username, user_id, max(limit + offset, 100)),
+            )
+            rows = cur.fetchall()
 
-# 【屏蔽切换对话功能】删除对话注释
-    # def delete_conversation(self, username: str, conversation_id: str) -> bool:
-    #     """删除对话（CASCADE 删关联 sessions）。"""
-    #     user = self._pg_get_user_by_username(username)
-    #     if not user:
-    #         return False
-    #     user_id = str(user["id"])
-    #
-    #     with pg_cursor() as cur:
-    #         cur.execute(
-    #             "DELETE FROM ist_audit.conversations WHERE conversation_id = %s AND user_id = %s",
-    #             (conversation_id, user_id),
-    #         )
-    #         deleted = cur.rowcount > 0
-    #
-    #     if deleted:
-    #         self._redis_delete_conv(conversation_id)
-    #         self._redis_invalidate_conv_list(username)
-    #     return deleted
+        result = []
+        for r in rows:
+            result.append({
+                "conversation_id": r["conversation_id"],
+                "title": r["title"],
+                "model_name": r["model_name"],
+                "message_count": r["message_count"],
+                "last_message_at": r["last_message_at"].isoformat() if r["last_message_at"] else None,
+                "is_active": r["is_active"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "first_user_input": r.get("first_user_input") or "",
+            })
 
+        self._redis_set_conv_list(username, result)
+        return result[offset : offset + limit]
 
-# 【屏蔽切换对话功能】重命名对话注释
-    # def rename_conversation(self, username: str, conversation_id: str, title: str) -> bool:
-    #     """重命名对话。"""
-    #     user = self._pg_get_user_by_username(username)
-    #     if not user:
-    #         return False
-    #     user_id = str(user["id"])
-    #
-    #     with pg_cursor() as cur:
-    #         cur.execute(
-    #             """UPDATE ist_audit.conversations SET title = %s, updated_at = now()
-    #                WHERE conversation_id = %s AND user_id = %s""",
-    #             (title, conversation_id, user_id),
-    #         )
-    #         updated = cur.rowcount > 0
-    #
-    #     if updated:
-    #         self._redis_delete_conv(conversation_id)
-    #         self._redis_invalidate_conv_list(username)
-    #     return updated
+    def get_conversation(self, username: str, conversation_id: str) -> dict | None:
+        """获取单个对话详情（Redis → PG 二级回退，校验归属）。"""
+        # 1. Redis 缓存
+        cached = self._redis_get_conv(conversation_id)
+        if cached:
+            return cached
+
+        user = self._pg_get_user_by_username(username)
+        if not user:
+            return None
+        user_id = str(user["id"])
+
+        with pg_cursor() as cur:
+            cur.execute(
+                """SELECT conversation_id, user_id, title, model_name, message_count,
+                          last_message_at, is_active, created_at, updated_at
+                   FROM ist_audit.conversations
+                   WHERE conversation_id = %s AND user_id = %s""",
+                (conversation_id, user_id),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+
+        result = {
+            "conversation_id": row["conversation_id"],
+            "title": row["title"],
+            "model_name": row["model_name"],
+            "message_count": row["message_count"],
+            "last_message_at": row["last_message_at"].isoformat() if row["last_message_at"] else None,
+            "is_active": row["is_active"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        }
+        # 回填 Redis
+        self._redis_set_conv(conversation_id, result)
+        return result
+
+    def activate_conversation(self, username: str, conversation_id: str) -> dict | None:
+        """切换对话：同用户旧 is_active 设 FALSE，目标设 TRUE。
+
+        thread_id 使用新格式 {username}_{conversation_id}（不依赖易失的 session_id）。
+        """
+        user = self._pg_get_user_by_username(username)
+        if not user:
+            return None
+        user_id = str(user["id"])
+
+        old_active_id = self.get_active_conversation_id(username)
+
+        with pg_cursor() as cur:
+            cur.execute(
+                "UPDATE ist_audit.conversations SET is_active = FALSE WHERE user_id = %s AND is_active = TRUE",
+                (user_id,),
+            )
+            cur.execute(
+                """UPDATE ist_audit.conversations SET is_active = TRUE, updated_at = now()
+                   WHERE conversation_id = %s AND user_id = %s
+                   RETURNING session_id""",
+                (conversation_id, user_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+
+        if old_active_id:
+            self._redis_delete_conv(old_active_id)
+        self._redis_delete_conv(conversation_id)
+        self._redis_invalidate_conv_list(username)
+        thread_id = f"{username}_{conversation_id}"
+        return {"conversation_id": conversation_id, "thread_id": thread_id}
+
+    def delete_conversation(self, username: str, conversation_id: str) -> bool:
+        """删除对话（CASCADE 删关联 sessions）。"""
+        user = self._pg_get_user_by_username(username)
+        if not user:
+            return False
+        user_id = str(user["id"])
+
+        with pg_cursor() as cur:
+            cur.execute(
+                "DELETE FROM ist_audit.conversations WHERE conversation_id = %s AND user_id = %s",
+                (conversation_id, user_id),
+            )
+            deleted = cur.rowcount > 0
+
+        if deleted:
+            self._redis_delete_conv(conversation_id)
+            self._redis_invalidate_conv_list(username)
+        return deleted
+
+    def rename_conversation(self, username: str, conversation_id: str, title: str) -> bool:
+        """重命名对话。"""
+        user = self._pg_get_user_by_username(username)
+        if not user:
+            return False
+        user_id = str(user["id"])
+
+        with pg_cursor() as cur:
+            cur.execute(
+                """UPDATE ist_audit.conversations SET title = %s, updated_at = now()
+                   WHERE conversation_id = %s AND user_id = %s""",
+                (title, conversation_id, user_id),
+            )
+            updated = cur.rowcount > 0
+
+        if updated:
+            self._redis_delete_conv(conversation_id)
+            self._redis_invalidate_conv_list(username)
+        return updated
 
     def increment_message_count(self, conversation_id: str) -> None:
         """递增对话消息计数并更新 last_message_at。同时失效 Redis 单条缓存。"""
@@ -496,37 +498,36 @@ class SessionManager:
     # 内部：Redis 对话列表缓存
     # ------------------------------------------------------------------
 
-    # 【屏蔽切换对话功能】Redis 对话列表缓存注释
-    # def _redis_get_conv_list(self, username: str) -> list[dict] | None:
-    #     if not self._redis:
-    #         return None
-    #     try:
-    #         raw = self._redis.get(f"ist:conv:list:{username}")
-    #         if raw:
-    #             return json.loads(raw)
-    #     except Exception as exc:
-    #         logger.warning("Redis GET conv_list failed for %s: %s", username, exc)
-    #     return None
+    def _redis_get_conv_list(self, username: str) -> list[dict] | None:
+        if not self._redis:
+            return None
+        try:
+            raw = self._redis.get(f"ist:conv:list:{username}")
+            if raw:
+                return json.loads(raw)
+        except Exception as exc:
+            logger.warning("Redis GET conv_list failed for %s: %s", username, exc)
+        return None
 
-    # def _redis_set_conv_list(self, username: str, data: list[dict]) -> None:
-    #     if not self._redis:
-    #         return
-    #     try:
-    #         self._redis.setex(
-    #             f"ist:conv:list:{username}",
-    #             300,  # 5 分钟 TTL
-    #             json.dumps(data, default=str),
-    #         )
-    #     except Exception as exc:
-    #         logger.warning("Redis SET conv_list failed for %s: %s", username, exc)
+    def _redis_set_conv_list(self, username: str, data: list[dict]) -> None:
+        if not self._redis:
+            return
+        try:
+            self._redis.setex(
+                f"ist:conv:list:{username}",
+                300,  # 5 分钟 TTL
+                json.dumps(data, default=str),
+            )
+        except Exception as exc:
+            logger.warning("Redis SET conv_list failed for %s: %s", username, exc)
 
-    # def _redis_invalidate_conv_list(self, username: str) -> None:
-    #     if not self._redis:
-    #         return
-    #     try:
-    #         self._redis.delete(f"ist:conv:list:{username}")
-    #     except Exception as exc:
-    #         logger.warning("Redis DEL conv_list failed for %s: %s", username, exc)
+    def _redis_invalidate_conv_list(self, username: str) -> None:
+        if not self._redis:
+            return
+        try:
+            self._redis.delete(f"ist:conv:list:{username}")
+        except Exception as exc:
+            logger.warning("Redis DEL conv_list failed for %s: %s", username, exc)
 
     # ------------------------------------------------------------------
     # 内部：Redis 单条 Conversation 缓存
@@ -589,30 +590,26 @@ class SessionManager:
             row = cur.fetchone()
         return bool(row and row.get("is_active"))
 
-    # 【屏蔽切换对话功能】重建 thread_id 注释
-    # def build_thread_id(self, username: str, conversation_id: str) -> str | None:
-    #     """构建标准 thread_id = {username}_{session_id}_{conversation_id}。
-    #
-    #     从 conversations 表查出 session_id。若 conversation 不存在或不属于该用户返回 None。
-    #     """
-    #     user = self._pg_get_user_by_username(username)
-    #     if not user:
-    #         return None
-    #     user_id = str(user["id"])
-    #
-    #     with pg_cursor() as cur:
-    #         cur.execute(
-    #             """SELECT session_id FROM ist_audit.conversations
-    #                WHERE conversation_id = %s AND user_id = %s""",
-    #             (conversation_id, user_id),
-    #         )
-    #         row = cur.fetchone()
-    #     if not row:
-    #         return None
-    #     session_id = row.get("session_id") or ""
-    #     if session_id:
-    #         return f"{username}_{session_id}_{conversation_id}"
-    #     return f"{username}_{conversation_id}"
+    def build_thread_id(self, username: str, conversation_id: str) -> str | None:
+        """构建标准 thread_id = {username}_{conversation_id}。
+
+        从 conversations 表校验归属。不依赖 session_id。
+        """
+        user = self._pg_get_user_by_username(username)
+        if not user:
+            return None
+        user_id = str(user["id"])
+
+        with pg_cursor() as cur:
+            cur.execute(
+                """SELECT conversation_id FROM ist_audit.conversations
+                   WHERE conversation_id = %s AND user_id = %s""",
+                (conversation_id, user_id),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return f"{username}_{conversation_id}"
 
 
 # ------------------------------------------------------------------

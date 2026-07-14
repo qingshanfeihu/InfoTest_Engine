@@ -111,6 +111,9 @@ def aggregate_daily_tokens(target_date: Optional[date] = None) -> int:
 
 def main() -> None:
     """CLI 入口。"""
+    from main.langchain_env import langchain_load_dotenv_if_present
+    langchain_load_dotenv_if_present()
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     if len(sys.argv) > 1:

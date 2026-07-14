@@ -459,122 +459,108 @@ def _set_winsize(fd: int, cols: int, rows: int):
 
 # ------------------------------------------------------------------
 # 对话管理 API
-# 【屏蔽切换对话功能】以下接口全部注释：列表、创建、查询、删除、激活、上下文、重命名
 # ------------------------------------------------------------------
 
-# @app.get("/api/conversations")
-# async def list_conversations(session_id: str = "", token: str = "", limit: int = 20, offset: int = 0):
-#     sess = _validate_request(session_id, token)
-#     if not sess:
-#         raise HTTPException(401, "未登录")
-#     limit = max(1, min(limit, 100))
-#     items = _get_session_mgr().list_conversations(sess["username"], limit=limit, offset=offset)
-#     return {"items": items, "limit": limit, "offset": offset}
+@app.get("/api/conversations")
+async def list_conversations(session_id: str = "", token: str = "", limit: int = 20, offset: int = 0):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    limit = max(1, min(limit, 100))
+    items = _get_session_mgr().list_conversations(sess["username"], limit=limit, offset=offset)
+    return {"items": items, "limit": limit, "offset": offset}
 
 
-# @app.post("/api/conversations")
-# async def create_conversation(body: dict, session_id: str = "", token: str = ""):
-#     sess = _validate_request(session_id, token)
-#     if not sess:
-#         raise HTTPException(401, "未登录")
-#     title = (body.get("title") or "新对话").strip()[:200]
-#     model_name = body.get("model_name")
-#     try:
-#         conv = _get_session_mgr().create_conversation(sess["username"], title=title, model_name=model_name, session_id=session_id)
-#     except ValueError as exc:
-#         raise HTTPException(404, str(exc))
-#     return conv
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    conv = _get_session_mgr().get_conversation(sess["username"], conversation_id)
+    if not conv:
+        raise HTTPException(404, "对话不存在")
+    return conv
 
 
-# @app.get("/api/conversations/{conversation_id}")
-# async def get_conversation(conversation_id: str, session_id: str = "", token: str = ""):
-#     sess = _validate_request(session_id, token)
-#     if not sess:
-#         raise HTTPException(401, "未登录")
-#     conv = _get_session_mgr().get_conversation(sess["username"], conversation_id)
-#     if not conv:
-#         raise HTTPException(404, "对话不存在")
-#     return conv
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    ok = _get_session_mgr().delete_conversation(sess["username"], conversation_id)
+    if not ok:
+        raise HTTPException(404, "对话不存在")
+    return {"ok": True}
 
 
-# @app.delete("/api/conversations/{conversation_id}")
-# async def delete_conversation(conversation_id: str, session_id: str = "", token: str = ""):
-#     sess = _validate_request(session_id, token)
-#     if not sess:
-#         raise HTTPException(401, "未登录")
-#     ok = _get_session_mgr().delete_conversation(sess["username"], conversation_id)
-#     if not ok:
-#         raise HTTPException(404, "对话不存在")
-#     return {"ok": True}
+@app.put("/api/conversations/{conversation_id}/activate")
+async def activate_conversation(conversation_id: str, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    result = _get_session_mgr().activate_conversation(sess["username"], conversation_id)
+    if not result:
+        raise HTTPException(404, "对话不存在")
+    return result
 
 
-# @app.put("/api/conversations/{conversation_id}/activate")
-# async def activate_conversation(conversation_id: str, session_id: str = "", token: str = ""):
-#     sess = _validate_request(session_id, token)
-#     if not sess:
-#         raise HTTPException(401, "未登录")
-#     result = _get_session_mgr().activate_conversation(sess["username"], conversation_id)
-#     if not result:
-#         raise HTTPException(404, "对话不存在")
-#     return result
+@app.put("/api/conversations/{conversation_id}/title")
+async def rename_conversation(conversation_id: str, body: dict, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    title = (body.get("title") or "").strip()[:200]
+    if not title:
+        raise HTTPException(400, "标题不能为空")
+    ok = _get_session_mgr().rename_conversation(sess["username"], conversation_id, title)
+    if not ok:
+        raise HTTPException(404, "对话不存在")
+    return {"ok": True}
 
 
-# @app.get("/api/conversations/{conversation_id}/context")
-# async def get_conversation_context(conversation_id: str, session_id: str = "", token: str = ""):
-#     sess = _validate_request(session_id, token)
-#     if not sess:
-#         raise HTTPException(401, "未登录")
-#     username = sess["username"]
-#     conv = _get_session_mgr().get_conversation(username, conversation_id)
-#     if not conv:
-#         raise HTTPException(404, "对话不存在")
-#
-#     thread_id = _get_session_mgr().build_thread_id(username, conversation_id) or f"{username}_{conversation_id}"
-#     working_memory = ""
-#     try:
-#         from main.ist_core.memory.store import MemoryStore
-#         from main.ist_core.memory.backend import get_default_root
-#         ms = MemoryStore(backend=None, root_disk=get_default_root())
-#         working_memory = ms.read_working(thread_id, max_lines=200)
-#     except Exception:
-#         pass
-#
-#     checkpoint_summary = None
-#     try:
-#         from main.ist_core.graph import _make_checkpointer
-#         cp = _make_checkpointer()
-#         if cp:
-#             config = {"configurable": {"thread_id": thread_id}}
-#             state = cp.get(config)
-#             if state:
-#                 msgs = state.get("values", {}).get("messages", [])
-#                 if msgs:
-#                     checkpoint_summary = {
-#                         "message_count": len(msgs),
-#                         "last_message": str(msgs[-1].content)[:200] if hasattr(msgs[-1], "content") else str(msgs[-1])[:200],
-#                     }
-#     except Exception:
-#         pass
-#
-#     return {
-#         "conversation": conv,
-#         "checkpoint_summary": checkpoint_summary,
-#         "working_memory": working_memory,
-#     }
+@app.get("/api/conversations/{conversation_id}/context")
+async def get_conversation_context(conversation_id: str, session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
+    if not sess:
+        raise HTTPException(401, "未登录")
+    username = sess["username"]
+    conv = _get_session_mgr().get_conversation(username, conversation_id)
+    if not conv:
+        raise HTTPException(404, "对话不存在")
 
+    thread_id = _get_session_mgr().build_thread_id(username, conversation_id) or f"{username}_{conversation_id}"
+    working_memory = ""
+    try:
+        from main.ist_core.memory.store import MemoryStore
+        from main.ist_core.memory.backend import get_default_root
+        ms = MemoryStore(backend=None, root_disk=get_default_root())
+        working_memory = ms.read_working(thread_id, max_lines=200)
+    except Exception:
+        pass
 
-# @app.put("/api/conversations/{conversation_id}/title")
-# async def rename_conversation(conversation_id: str, body: dict, session_id: str = "", token: str = ""):
-#     sess = _validate_request(session_id, token)
-#     if not sess:
-#         raise HTTPException(401, "未登录")
-#     title = (body.get("title") or "").strip()[:200]
-#     if not title:
-#         raise HTTPException(400, "标题不能为空")
-#     ok = _get_session_mgr().rename_conversation(sess["username"], conversation_id, title)
-#     if not ok:
-#         raise HTTPException(404, "对话不存在")
-#     return {"ok": True}
+    checkpoint_summary = None
+    try:
+        from main.ist_core.graph import _make_checkpointer
+        cp = _make_checkpointer()
+        if cp:
+            config = {"configurable": {"thread_id": thread_id}}
+            state = cp.get(config)
+            if state:
+                values = state.get("values", {}) if isinstance(state, dict) else {}
+                msgs = values.get("messages", []) if isinstance(values, dict) else []
+                if msgs:
+                    checkpoint_summary = {
+                        "message_count": len(msgs),
+                        "last_message": str(msgs[-1].content)[:200] if hasattr(msgs[-1], "content") else str(msgs[-1])[:200],
+                    }
+    except Exception:
+        pass
+
+    return {
+        "conversation": conv,
+        "checkpoint_summary": checkpoint_summary,
+        "working_memory": working_memory,
+    }
 
 
 @app.websocket("/ws/terminal")
@@ -617,7 +603,7 @@ async def ws_terminal(websocket: WebSocket):
     env["PYTHONIOENCODING"] = "utf-8"
     env["IST_SSH_USER"] = username
     env["IST_AUTH_SESSION_ID"] = session_id         # auth session_id，审计日志用
-    env["IST_CONVERSATION_ID"] = conversation_id    # thread_id 用：{username}_{conversation_id}，审计日志用
+    env["IST_CONVERSATION_ID"] = conversation_id    # thread_id = {username}_{conversation_id}，审计日志用
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-u", "-m", "main.ist_core.tui.cli",
@@ -670,24 +656,25 @@ async def ws_terminal(websocket: WebSocket):
                                     osc = f"\x1b]7001;{b64}\x07"
                                     os.write(master_fd, osc.encode("ascii"))
                             elif d.get("type") == "switch_conversation":
-                                # 【屏蔽切换对话功能】不再处理切换对话
-                                # new_conv_id = d.get("conversation_id", "")
-                                # if new_conv_id:
-                                #     result = _get_session_mgr().activate_conversation(username, new_conv_id)
-                                #     if result:
-                                #         b64 = base64.b64encode(new_conv_id.encode("utf-8")).decode("ascii")
-                                #         osc = f"\x1b]7003;{b64}\x07"
-                                #         os.write(master_fd, osc.encode("ascii"))
-                                #         await websocket.send_json({
-                                #             "type": "switched",
-                                #             "conversation_id": new_conv_id,
-                                #             "title": d.get("title", ""),
-                                #         })
-                                #     else:
-                                #         await websocket.send_json({
-                                #             "type": "error",
-                                #             "msg": "对话不存在",
-                                #         })
+                                new_conv_id = d.get("conversation_id", "")
+                                if new_conv_id:
+                                    result = _get_session_mgr().activate_conversation(username, new_conv_id)
+                                    if result:
+                                        # 通过 OSC 7003 序列通知 TUI 切换上下文
+                                        b64 = base64.b64encode(new_conv_id.encode("utf-8")).decode("ascii")
+                                        osc = f"\x1b]7003;{b64}\x07"
+                                        os.write(master_fd, osc.encode("ascii"))
+                                        await websocket.send_json({
+                                            "type": "switched",
+                                            "conversation_id": new_conv_id,
+                                            "thread_id": result.get("thread_id", ""),
+                                            "title": d.get("title", ""),
+                                        })
+                                    else:
+                                        await websocket.send_json({
+                                            "type": "error",
+                                            "msg": "对话不存在",
+                                        })
                                 continue
                         except (json.JSONDecodeError, KeyError):
                             os.write(master_fd, msg["text"].encode("utf-8"))

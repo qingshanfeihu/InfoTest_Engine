@@ -102,6 +102,14 @@ IST_POSTGRES_USER=ultra_agent
 IST_POSTGRES_PASSWORD=ultra_agent
 IST_POSTGRES_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
 
+# =============================================================================
+# 五（续）、Langfuse LLM 可观测性（可选，自建实例）
+# =============================================================================
+# LANGFUSE_PUBLIC_KEY=pk-lf-...
+# LANGFUSE_SECRET_KEY=sk-lf-...
+# LANGFUSE_HOST=http://your-langfuse-server:3000
+# LANGFUSE_BASE_URL=http://your-langfuse-server:3000   # 兼容别名
+
 
 # =============================================================================
 # 六、缺陷库抓取（Bugzilla / 禅道 / WebVPN）

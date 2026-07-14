@@ -1044,7 +1044,102 @@ async def security_access_denied(
 
 
 # ===========================================================================
-# 7. 仪表盘
+# 7. 执行追踪（trace 表）
+# ===========================================================================
+
+
+@app.get("/api/traces")
+async def list_traces(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    status: Optional[str] = None,
+    username: Optional[str] = None,
+    keyword: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+):
+    """Trace 列表（分页）。"""
+    _auth(request)
+    st = _parse_dt(start_time)
+    et = _parse_dt(end_time)
+    kw = f"%{keyword}%" if keyword else None
+    offset = (page - 1) * page_size
+
+    where_sql, params = _build_where([
+        ("t.status = %(status)s", "status", status),
+        ("u.username = %(username)s", "username", username),
+        ("t.user_input ILIKE %(keyword)s", "keyword", kw),
+        ("t.started_at >= %(start_time)s", "start_time", st),
+        ("t.started_at <= %(end_time)s", "end_time", et),
+    ])
+    params["page_size"] = page_size
+    params["offset"] = offset
+
+    with pg_cursor() as cur:
+        cur.execute(
+            f"""SELECT count(*) AS total
+                FROM ist_audit.trace t
+                LEFT JOIN ist_audit.users u ON t.user_id = u.id
+                WHERE {where_sql}""",
+            params,
+        )
+        total = cur.fetchone()["total"]
+
+        cur.execute(
+            f"""SELECT t.id, t.trace_id, u.username,
+                       t.user_input, t.started_at, t.duration_ms, t.status,
+                       jsonb_array_length(COALESCE(t.llm_calls, '[]'::jsonb)) AS llm_count,
+                       jsonb_array_length(COALESCE(t.tool_calls, '[]'::jsonb)) AS tool_count,
+                       jsonb_array_length(COALESCE(t.kb_retrievals, '[]'::jsonb)) AS kb_count,
+                       t.error_info->>'total_error_count' AS error_count,
+                       (SELECT r.score FROM ist_audit.sys_chat_rating r
+                        WHERE r.run_id = left(replace(t.trace_id::text, '-', ''), 12)
+                        ORDER BY r.created_at DESC LIMIT 1) AS rating_score
+                FROM ist_audit.trace t
+                LEFT JOIN ist_audit.users u ON t.user_id = u.id
+                WHERE {where_sql}
+                ORDER BY t.started_at DESC
+                LIMIT %(page_size)s OFFSET %(offset)s""",
+            params,
+        )
+        items = [_serialize_row(r) for r in cur.fetchall()]
+
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+@app.get("/api/traces/{trace_id}")
+async def trace_detail(trace_id: str, request: Request):
+    """单条 Trace 详情（含全部 JSONB 载荷 + 用户评分）。"""
+    _auth(request)
+    with pg_cursor() as cur:
+        cur.execute(
+            """SELECT t.*, u.username, u.role
+               FROM ist_audit.trace t
+               LEFT JOIN ist_audit.users u ON t.user_id = u.id
+               WHERE t.trace_id = %s""",
+            (trace_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Trace 不存在")
+    result = _serialize_row(row)
+    # 查询关联评分（trace_id 去横杠前 12 位 = run_id）
+    run_id = trace_id.replace("-", "")[:12]
+    with pg_cursor() as cur:
+        cur.execute(
+            """SELECT score, comment, username, created_at
+               FROM ist_audit.sys_chat_rating
+               WHERE run_id = %s
+               ORDER BY created_at DESC""",
+            (run_id,),
+        )
+        result["ratings"] = [_serialize_row(r) for r in cur.fetchall()]
+    return result
+
+
+# ===========================================================================
+# 8. 仪表盘
 # ===========================================================================
 
 

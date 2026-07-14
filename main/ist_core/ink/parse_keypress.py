@@ -56,7 +56,17 @@ class UploadEvent:
     filename: str = ""
 
 
-InputEvent = KeyPress | MouseEvent | PasteEvent | UploadEvent
+@dataclass(slots=True)
+class SwitchConversationEvent:
+    """Web 前端切换对话信号。
+
+    web_server 收到前端 ``switch_conversation`` 消息后，激活对话并通过
+    OSC 7003 序列通知 TUI 切换上下文。
+    """
+    conversation_id: str = ""
+
+
+InputEvent = KeyPress | MouseEvent | PasteEvent | UploadEvent | SwitchConversationEvent
 
 
 
@@ -81,6 +91,8 @@ PASTE_END = "\x1b[201~"
 # 自定义 OSC 上传信号：ESC ] 7001 ; <base64(utf-8 filename)> (BEL | ESC \)
 # 7001 是私有 OSC 码（标准 OSC 用 0-9/52 等，7001 不与之冲突）。
 _OSC_UPLOAD_CODE = "7001"
+# OSC 7003: 前端切换对话信号，payload 为 base64(conversation_id)
+_OSC_SWITCH_CONV_CODE = "7003"
 
 
 class InputParser:
@@ -248,8 +260,8 @@ def _parse_char(ch: str) -> KeyPress:
 def _parse_osc(body: str) -> InputEvent | None:
     """Parse an OSC sequence body (after ``ESC ]``).
 
-    只识别自定义上传信号 ``7001;<base64>``（终止符 BEL / ST 已被 tokenizer 剥离，
-    但保险起见这里再 strip 一次）。其他 OSC（标题设置等）忽略，返回 None。
+    只识别自定义信号 ``7001;<base64>``（上传）和 ``7003;<base64>``（切换对话）。
+    其他 OSC（标题设置等）忽略，返回 None。
     """
     # 去掉可能残留的终止符 BEL(\x07) 或 ST(\x1b\\)
     body = body.rstrip("\x07")
@@ -257,17 +269,32 @@ def _parse_osc(body: str) -> InputEvent | None:
         body = body[:-2]
 
     code, sep, payload = body.partition(";")
-    if not sep or code != _OSC_UPLOAD_CODE:
+    if not sep:
         return None
-    try:
-        filename = base64.b64decode(payload.encode("ascii")).decode("utf-8")
-    except Exception:  # noqa: BLE001
-        logger.warning("OSC upload payload 解码失败，忽略")
-        return None
-    filename = filename.strip()
-    if not filename:
-        return None
-    return UploadEvent(filename=filename)
+
+    if code == _OSC_UPLOAD_CODE:
+        try:
+            filename = base64.b64decode(payload.encode("ascii")).decode("utf-8")
+        except Exception:
+            logger.warning("OSC upload payload 解码失败，忽略")
+            return None
+        filename = filename.strip()
+        if not filename:
+            return None
+        return UploadEvent(filename=filename)
+
+    if code == _OSC_SWITCH_CONV_CODE:
+        try:
+            conv_id = base64.b64decode(payload.encode("ascii")).decode("utf-8")
+        except Exception:
+            logger.warning("OSC switch_conversation payload 解码失败，忽略")
+            return None
+        conv_id = conv_id.strip()
+        if not conv_id:
+            return None
+        return SwitchConversationEvent(conversation_id=conv_id)
+
+    return None
 
 
 def _parse_sequence(seq: str) -> InputEvent | None:

@@ -315,8 +315,13 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             logging.basicConfig(level=log_level, format="%(levelname)s %(name)s: %(message)s")
     _ensure_env()
+    # 确保 ist_audit schema 和表存在（增量 ALTER 兼容旧部署）
+    try:
+        from main.ist_core.auth.db import ensure_schema
+        ensure_schema()
+    except Exception:
+        pass
 
-    
     if args.query == "threads" and not args.print:
         return _run_threads_mode()
 

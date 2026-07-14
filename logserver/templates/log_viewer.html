@@ -87,6 +87,31 @@
         .tab-content.active { display: block; }
 
         .loading { text-align: center; padding: 40px; color: #888; }
+
+        /* Trace detail sections */
+        .trace-section { margin-bottom: 20px; }
+        .trace-section-header { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px 14px; background: #f8f9fa; border-radius: 6px; margin-bottom: 8px; user-select: none; }
+        .trace-section-header:hover { background: #eef1f8; }
+        .trace-section-header .arrow { transition: transform 0.2s; font-size: 12px; color: #888; }
+        .trace-section-header.open .arrow { transform: rotate(90deg); }
+        .trace-section-header h4 { margin: 0; font-size: 14px; color: #333; }
+        .trace-section-body { display: none; padding: 0 4px; }
+        .trace-section-body.open { display: block; }
+        .trace-timeline { display: flex; gap: 4px; flex-wrap: wrap; margin: 8px 0; }
+        .trace-node { padding: 4px 10px; border-radius: 4px; font-size: 12px; background: #e0e7ff; color: #4338ca; }
+        .trace-node::after { content: '→'; margin-left: 6px; color: #aaa; }
+        .trace-node:last-child::after { content: ''; }
+        .trace-mini-table { width: 100%; font-size: 12px; }
+        .trace-mini-table th { font-size: 11px; padding: 6px 8px; }
+        .trace-mini-table td { padding: 6px 8px; }
+        .trace-badge { display: inline-block; padding: 2px 6px; border-radius: 8px; font-size: 11px; }
+        .trace-badge-done { background: #d1fae5; color: #059669; }
+        .trace-badge-error { background: #fee2e2; color: #dc2626; }
+        .trace-badge-running { background: #fef3c7; color: #d97706; }
+        .trace-summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .trace-summary-item { padding: 6px 0; }
+        .trace-summary-item .label { font-size: 11px; color: #888; }
+        .trace-summary-item .val { font-size: 13px; }
     </style>
 </head>
 <body>
@@ -119,6 +144,7 @@
     <button data-tab="sessions">会话</button>
     <button data-tab="llm">LLM 用量</button>
     <button data-tab="tools">工具</button>
+    <button data-tab="traces">执行追踪</button>
     <button data-tab="security">安全</button>
 </nav>
 
@@ -309,6 +335,72 @@
         </div>
     </div>
 
+    <!-- Traces Tab -->
+    <div class="tab-content" id="tab-traces">
+        <div class="filters">
+            <div class="filter-group">
+                <label>状态</label>
+                <select id="fTraceStatus">
+                    <option value="">全部</option>
+                    <option value="done">完成</option>
+                    <option value="error">错误</option>
+                    <option value="running">运行中</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>用户名</label>
+                <input type="text" id="fTraceUsername" placeholder="用户名">
+            </div>
+            <div class="filter-group">
+                <label>关键词</label>
+                <input type="text" id="fTraceKeyword" placeholder="搜索提问内容">
+            </div>
+            <div class="filter-group">
+                <label>开始时间</label>
+                <input type="datetime-local" id="fTraceStartTime">
+            </div>
+            <div class="filter-group">
+                <label>结束时间</label>
+                <input type="datetime-local" id="fTraceEndTime">
+            </div>
+            <div class="filter-actions">
+                <button class="btn btn-primary" onclick="loadTraces(1)">查询</button>
+                <button class="btn btn-secondary" onclick="clearTraceFilters()">清空</button>
+            </div>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>用户</th>
+                        <th>提问内容</th>
+                        <th>耗时</th>
+                        <th>状态</th>
+                        <th>LLM</th>
+                        <th>工具</th>
+                        <th>评分</th>
+                        <th>错误</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="traceTableBody">
+                    <tr><td colspan="10" class="loading">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="pagination" id="tracePagination"></div>
+    </div>
+
+    <!-- Trace Detail Modal -->
+    <div class="modal-overlay" id="traceDetailModal">
+        <div class="modal" style="max-width:1000px">
+            <button class="close-btn" onclick="closeTraceModal()">&times;</button>
+            <h3 id="traceDetailTitle">Trace 详情</h3>
+            <div id="traceDetailContent"></div>
+        </div>
+    </div>
+
     <!-- Security Tab -->
     <div class="tab-content" id="tab-security">
         <h3 style="margin-bottom:12px">登录失败记录</h3>
@@ -434,6 +526,14 @@ function enterApp() {
 }
 
 // ---- Nav ----
+function switchTab(tab) {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    const btn = document.querySelector(`nav button[data-tab="${tab}"]`);
+    if (btn) btn.classList.add('active');
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+}
+
 document.getElementById('mainNav').addEventListener('click', e => {
     if (e.target.tagName !== 'BUTTON') return;
     document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
@@ -442,12 +542,13 @@ document.getElementById('mainNav').addEventListener('click', e => {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.getElementById('tab-' + tab).classList.add('active');
     if (tab === 'dashboard') loadDashboard();
-    if (tab === 'audit') loadAuditLogs(1);
+    if (tab === 'audit') { _currentTraceId = null; loadAuditLogs(1); }
     if (tab === 'users') loadUsers(1);
     if (tab === 'sessions') loadSessions(1);
     if (tab === 'llm') loadLlmUsage(1);
     if (tab === 'tools') loadTools();
     if (tab === 'security') loadSecurity();
+    if (tab === 'traces') loadTraces(1);
 });
 
 // ---- Dashboard ----
@@ -545,6 +646,11 @@ async function showDetail(id) {
         grid.innerHTML = fields.map(([l, v]) => `
             <div class="detail-item"><div class="label">${l}</div><div class="val">${esc(String(v ?? ''))}</div></div>
         `).join('');
+
+        // 关联 Trace 链接
+        if (d.trace_id) {
+            grid.innerHTML += `<div class="detail-item detail-full"><div class="label">关联追踪</div><div class="val"><a href="javascript:void(0)" onclick="closeModal();showTraceDetail('${d.trace_id}')" style="color:#4361ee;text-decoration:underline;cursor:pointer">查看执行追踪 ${esc(d.trace_id.slice(0, 8))}...</a></div></div>`;
+        }
 
         if (d.event_summary) {
             grid.innerHTML += `<div class="detail-item detail-full"><div class="label">摘要</div><div class="val">${esc(d.event_summary)}</div></div>`;
@@ -762,11 +868,296 @@ function esc(s) {
     return el.innerHTML;
 }
 
+// ---- Traces ----
+function getTraceFilters() {
+    return {
+        status: document.getElementById('fTraceStatus').value,
+        username: document.getElementById('fTraceUsername').value,
+        keyword: document.getElementById('fTraceKeyword').value,
+        start_time: document.getElementById('fTraceStartTime').value,
+        end_time: document.getElementById('fTraceEndTime').value,
+    };
+}
+
+function clearTraceFilters() {
+    ['fTraceStatus','fTraceUsername','fTraceKeyword','fTraceStartTime','fTraceEndTime'].forEach(id => {
+        const el = document.getElementById(id);
+        el.value = '';
+    });
+}
+
+async function loadTraces(page) {
+    const f = getTraceFilters();
+    const body = document.getElementById('traceTableBody');
+    body.innerHTML = '<tr><td colspan="10" class="loading">加载中...</td></tr>';
+    try {
+        const d = await api('/api/traces', { page, page_size: 50, ...f });
+        if (!d.items.length) {
+            body.innerHTML = '<tr><td colspan="10" class="loading">暂无数据</td></tr>';
+        } else {
+            body.innerHTML = d.items.map(r => {
+                const statusCls = r.status === 'done' ? 'trace-badge-done' : r.status === 'error' ? 'trace-badge-error' : 'trace-badge-running';
+                const statusLabel = {done:'完成',error:'错误',running:'运行中',cancelled:'已取消'}[r.status] || r.status;
+                const input = (r.user_input || '').length > 60 ? (r.user_input || '').slice(0, 60) + '...' : (r.user_input || '');
+                const err = r.error_count && r.error_count !== '0' ? `<span class="trace-badge trace-badge-error">${r.error_count}</span>` : '-';
+                const rating = r.rating_score != null && r.rating_score > 0 ? r.rating_score : '-';
+                return `<tr onclick="showTraceDetail('${r.trace_id}')">
+                    <td>${fmtDt(r.started_at)}</td>
+                    <td>${esc(r.username || '')}</td>
+                    <td title="${esc(r.user_input || '')}">${esc(input)}</td>
+                    <td>${r.duration_ms != null ? (r.duration_ms / 1000).toFixed(1) + 's' : '-'}</td>
+                    <td><span class="trace-badge ${statusCls}">${statusLabel}</span></td>
+                    <td>${r.llm_count || 0}</td>
+                    <td>${(parseInt(r.tool_count || 0) + parseInt(r.kb_count || 0))}</td>
+                    <td>${rating}</td>
+                    <td>${err}</td>
+                    <td><button class="btn btn-secondary" style="padding:2px 8px;font-size:11px" onclick="event.stopPropagation();gotoAuditByTrace('${r.trace_id}')">审计日志</button></td>
+                </tr>`;
+            }).join('');
+        }
+        renderPagination('tracePagination', d.total, page, 50, loadTraces);
+    } catch (e) {
+        body.innerHTML = `<tr><td colspan="10" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
+    }
+}
+
+function closeTraceModal() {
+    document.getElementById('traceDetailModal').classList.remove('show');
+}
+
+async function showTraceDetail(traceId) {
+    try {
+        const d = await api(`/api/traces/${traceId}`);
+        document.getElementById('traceDetailTitle').textContent = 'Trace ' + traceId.slice(0, 8) + '...';
+
+        const statusCls = d.status === 'done' ? 'trace-badge-done' : d.status === 'error' ? 'trace-badge-error' : 'trace-badge-running';
+        const statusLabel = {done:'完成',error:'错误',running:'运行中',cancelled:'已取消'}[d.status] || d.status;
+
+        const llmCalls = d.llm_calls || [];
+        const toolCalls = d.tool_calls || [];
+        const kbRetrievals = d.kb_retrievals || [];
+        const subagentRuns = d.subagent_runs || [];
+        const errorInfo = d.error_info || { errors: [] };
+        const nodePath = d.node_path || [];
+
+        let html = '';
+
+        // Section 1: Overview
+        html += `<div class="trace-section">
+            <div class="trace-section-header open" onclick="toggleTraceSection(this)">
+                <span class="arrow">&#9654;</span><h4>概览</h4>
+            </div>
+            <div class="trace-section-body open">
+                <div class="trace-summary-grid">
+                    <div class="trace-summary-item"><div class="label">状态</div><div class="val"><span class="trace-badge ${statusCls}">${statusLabel}</span></div></div>
+                    <div class="trace-summary-item"><div class="label">耗时</div><div class="val">${d.duration_ms != null ? (d.duration_ms / 1000).toFixed(1) + 's' : '-'}</div></div>
+                    <div class="trace-summary-item"><div class="label">用户</div><div class="val">${esc(d.username || '-')}</div></div>
+                    <div class="trace-summary-item"><div class="label">Thread ID</div><div class="val" style="font-size:12px;word-break:break-all">${esc(d.thread_id || '-')}</div></div>
+                    <div class="trace-summary-item"><div class="label">开始时间</div><div class="val">${fmtDt(d.started_at)}</div></div>
+                    <div class="trace-summary-item"><div class="label">结束时间</div><div class="val">${fmtDt(d.ended_at)}</div></div>
+                    <div class="trace-summary-item" style="grid-column:1/-1"><div class="label">提问内容</div><div class="val" style="white-space:pre-wrap;margin-top:4px">${esc(d.user_input || '-')}</div></div>
+                </div>
+            </div>
+        </div>`;
+
+        // Section: 用户评分
+        const ratings = d.ratings || [];
+        if (ratings.length) {
+            const avgScore = ratings.reduce((s, r) => s + (r.score || 0), 0) / ratings.length;
+            html += `<div class="trace-section">
+                <div class="trace-section-header open" onclick="toggleTraceSection(this)">
+                    <span class="arrow">&#9654;</span><h4>用户评分 (${ratings.length} 条, 均分 ${avgScore.toFixed(1)})</h4>
+                </div>
+                <div class="trace-section-body open">
+                    ${ratings.map(r => `<div style="padding:8px 0;border-bottom:1px solid #f0f0f0">
+                        <div><strong>${r.score != null ? r.score : '-'}</strong> <span style="font-size:12px;color:#888;margin-left:8px">${esc(r.username || '')} · ${fmtDt(r.created_at)}</span></div>
+                        ${r.comment ? `<div style="margin-top:4px;font-size:13px;color:#555">${esc(r.comment)}</div>` : ''}
+                    </div>`).join('')}
+                </div>
+            </div>`;
+        }
+
+        // Section 2: Node path
+        if (nodePath.length) {
+            html += `<div class="trace-section">
+                <div class="trace-section-header" onclick="toggleTraceSection(this)">
+                    <span class="arrow">&#9654;</span><h4>执行链路 (${nodePath.length} 步)</h4>
+                </div>
+                <div class="trace-section-body">
+                    <div class="trace-timeline">${nodePath.map(n => `<span class="trace-node">${esc(n)}</span>`).join('')}</div>
+                </div>
+            </div>`;
+        }
+
+        // Section 3: LLM calls
+        if (llmCalls.length) {
+            const totalIn = llmCalls.reduce((s, c) => s + (c.input_tokens || 0), 0);
+            const totalOut = llmCalls.reduce((s, c) => s + (c.output_tokens || 0), 0);
+            html += `<div class="trace-section">
+                <div class="trace-section-header" onclick="toggleTraceSection(this)">
+                    <span class="arrow">&#9654;</span><h4>LLM 调用 (${llmCalls.length} 次, 输入 ${totalIn.toLocaleString()} / 输出 ${totalOut.toLocaleString()} tokens)</h4>
+                </div>
+                <div class="trace-section-body">
+                    <div class="table-container"><table class="trace-mini-table">
+                        <thead><tr><th>#</th><th>模型</th><th>节点</th><th>Phase</th><th>输入</th><th>输出</th><th>缓存命中</th><th>缓存未命中</th></tr></thead>
+                        <tbody>${llmCalls.map(c => `<tr>
+                            <td>${c.seq}</td><td>${esc(c.model_name || '-')}</td><td>${esc(c.node || '-')}</td>
+                            <td>${esc(c.phase || '-')}</td><td>${c.input_tokens || 0}</td><td>${c.output_tokens || 0}</td>
+                            <td>${c.cache_hit || 0}</td><td>${c.cache_miss || 0}</td>
+                        </tr>`).join('')}</tbody>
+                    </table></div>
+                </div>
+            </div>`;
+        }
+
+        // Section 4: Tools (kb + other)
+        if (toolCalls.length || kbRetrievals.length) {
+            html += `<div class="trace-section">
+                <div class="trace-section-header" onclick="toggleTraceSection(this)">
+                    <span class="arrow">&#9654;</span><h4>工具调用 (知识库 ${kbRetrievals.length} + 其他 ${toolCalls.length})</h4>
+                </div>
+                <div class="trace-section-body">`;
+
+            if (kbRetrievals.length) {
+                html += `<h5 style="margin:8px 0 4px;font-size:12px;color:#666">知识库检索</h5>
+                    <div class="table-container"><table class="trace-mini-table">
+                        <thead><tr><th>#</th><th>工具</th><th>显示</th><th>输入</th><th>输出</th><th>匹配</th><th>耗时</th></tr></thead>
+                        <tbody>${kbRetrievals.map(t => `<tr>
+                            <td>${t.seq}</td><td>${esc(t.tool_name || '-')}</td><td>${esc(t.display || '-')}</td>
+                            <td style="max-width:200px;word-break:break-all;font-size:11px">${esc(JSON.stringify(t.input_preview || {}))}</td>
+                            <td>${esc(t.output_summary || '-')}</td>
+                            <td>${t.matches_count || 0}</td><td>${t.duration_ms || 0}ms</td>
+                        </tr>`).join('')}</tbody>
+                    </table></div>`;
+            }
+
+            if (toolCalls.length) {
+                html += `<h5 style="margin:12px 0 4px;font-size:12px;color:#666">其他工具</h5>
+                    <div class="table-container"><table class="trace-mini-table">
+                        <thead><tr><th>#</th><th>工具</th><th>显示</th><th>分类</th><th>输出摘要</th><th>耗时</th><th>错误</th></tr></thead>
+                        <tbody>${toolCalls.map(t => `<tr>
+                            <td>${t.seq}</td><td>${esc(t.tool_name || '-')}</td><td>${esc(t.display || '-')}</td>
+                            <td><span class="badge badge-kind">${esc(t.category || '-')}</span></td>
+                            <td style="max-width:200px;word-break:break-all;font-size:11px">${esc((t.output_summary || '-').slice(0, 100))}</td>
+                            <td>${t.duration_ms || 0}ms</td>
+                            <td>${t.is_error ? '<span class="badge badge-error">ERR</span>' : '-'}</td>
+                        </tr>`).join('')}</tbody>
+                    </table></div>`;
+            }
+
+            html += `</div></div>`;
+        }
+
+        // Section 5: Sub-agents
+        if (subagentRuns.length) {
+            html += `<div class="trace-section">
+                <div class="trace-section-header" onclick="toggleTraceSection(this)">
+                    <span class="arrow">&#9654;</span><h4>子 Agent (${subagentRuns.length})</h4>
+                </div>
+                <div class="trace-section-body">
+                    <div class="table-container"><table class="trace-mini-table">
+                        <thead><tr><th>Agent</th><th>Skill</th><th>LLM 调用</th><th>工具调用</th><th>使用工具</th><th>状态</th><th>错误</th></tr></thead>
+                        <tbody>${subagentRuns.map(s => `<tr>
+                            <td>${esc(s.agent_name || '-')}</td><td>${esc(s.skill_name || '-')}</td>
+                            <td>${s.llm_call_count || 0}</td><td>${s.tool_call_count || 0}</td>
+                            <td style="font-size:11px">${esc((s.tool_names_used || []).join(', '))}</td>
+                            <td><span class="trace-badge ${s.status === 'done' ? 'trace-badge-done' : s.status === 'error' ? 'trace-badge-error' : 'trace-badge-running'}">${s.status || '-'}</span></td>
+                            <td>${(s.errors || []).length ? esc(s.errors.map(e => e.message).join('; ').slice(0, 100)) : '-'}</td>
+                        </tr>`).join('')}</tbody>
+                    </table></div>
+                </div>
+            </div>`;
+        }
+
+        // Section 6: Errors
+        if (errorInfo.errors && errorInfo.errors.length) {
+            html += `<div class="trace-section">
+                <div class="trace-section-header" onclick="toggleTraceSection(this)">
+                    <span class="arrow">&#9654;</span><h4>错误 (${errorInfo.total_error_count || errorInfo.errors.length})</h4>
+                </div>
+                <div class="trace-section-body">
+                    <div class="table-container"><table class="trace-mini-table">
+                        <thead><tr><th>类型</th><th>节点</th><th>消息</th><th>处理</th></tr></thead>
+                        <tbody>${errorInfo.errors.map(e => `<tr>
+                            <td>${esc(e.type || '-')}</td><td>${esc(e.node || '-')}</td>
+                            <td style="max-width:300px;word-break:break-all">${esc(e.message || '-')}</td>
+                            <td>${e.handled_by ? esc(e.handled_by) + (e.retry_success ? ' (成功)' : ' (失败)') : '-'}</td>
+                        </tr>`).join('')}</tbody>
+                    </table></div>
+                </div>
+            </div>`;
+        }
+
+        // Section 7: Thinking
+        if (d.thinking_full) {
+            html += `<div class="trace-section">
+                <div class="trace-section-header" onclick="toggleTraceSection(this)">
+                    <span class="arrow">&#9654;</span><h4>思考文本 (${d.thinking_full.length} 字符)</h4>
+                </div>
+                <div class="trace-section-body">
+                    <pre class="json-block" style="max-height:400px">${esc(d.thinking_full)}</pre>
+                </div>
+            </div>`;
+        }
+
+        document.getElementById('traceDetailContent').innerHTML = html;
+        document.getElementById('traceDetailModal').classList.add('show');
+    } catch (e) {
+        alert('加载失败: ' + errStr(e));
+    }
+}
+
+function toggleTraceSection(header) {
+    header.classList.toggle('open');
+    const body = header.nextElementSibling;
+    body.classList.toggle('open');
+}
+
+// Trace → Audit 跳转：用 trace_id 筛选关联的审计日志
+let _currentTraceId = null;  // 当前 trace 筛选模式的 trace_id，null 表示正常模式
+
+function gotoAuditByTrace(traceId) {
+    switchTab('audit');
+    _currentTraceId = traceId;
+    loadAuditLogsByTrace(1);
+}
+
+function loadAuditLogsByTrace(page) {
+    const traceId = _currentTraceId;
+    if (!traceId) { loadAuditLogs(page); return; }
+    auditPage = page;
+    const body = document.getElementById('auditTableBody');
+    body.innerHTML = '<tr><td colspan="8" class="loading">加载中...</td></tr>';
+    const runId = traceId.replace(/-/g, '').slice(0, 12);
+    api('/api/audit/logs', { page, page_size: 50, run_id: runId }).then(d => {
+        if (!d.items.length) {
+            body.innerHTML = `<tr><td colspan="8" class="loading">无关联审计日志（trace_id: ${esc(traceId.slice(0, 8))}...）</td></tr>`;
+        } else {
+            body.innerHTML = d.items.map(r => `
+                <tr onclick="showDetail(${r.id})">
+                    <td>${r.id}</td>
+                    <td>${fmtDt(r.recorded_at)}</td>
+                    <td>${esc(r.username || '')}</td>
+                    <td title="${esc(r.session_id || '')}">${esc((r.session_id || '').slice(0, 20))}${(r.session_id || '').length > 20 ? '...' : ''}</td>
+                    <td><span class="badge badge-kind">${esc(r.event_kind)}</span></td>
+                    <td>${esc((r.event_summary || '').slice(0, 80))}</td>
+                    <td>${esc(r.tool_name || '')}</td>
+                    <td>${r.is_error ? '<span class="badge badge-error">ERROR</span>' : '<span class="badge badge-ok">OK</span>'}</td>
+                </tr>
+            `).join('');
+        }
+        renderPagination('auditPagination', d.total, page, 50, loadAuditLogsByTrace);
+    }).catch(e => {
+        body.innerHTML = `<tr><td colspan="8" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
+    });
+}
+
 // ---- Keyboard ----
 document.getElementById('loginPassword').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 document.getElementById('loginUsername').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('loginPassword').focus(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); closeTraceModal(); } });
 document.getElementById('detailModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+document.getElementById('traceDetailModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeTraceModal(); });
 
 // ---- Init ----
 (function init() {

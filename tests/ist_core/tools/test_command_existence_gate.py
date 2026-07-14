@@ -161,7 +161,10 @@ def test_questions_command_existence_wording(tmp_path):
     qs = build_questions(ledgers)
     assert len(qs) == 1
     q = qs[0]
-    assert "查无记载" in q["question"] and aid[-6:] in q["question"]
+    # §18.14 S3:题面人话——命令名+"查不到",机读检索证明(签名数/覆盖率/路径)留台账
+    assert "查不到" in q["question"] and "sdns fulldns on" in q["question"]
+    assert aid[-6:] in q["question"]
+    assert "签名" not in q["question"] and "已检索" not in q["question"]
     assert [o["label"] for o in q["options"]] == ["改过程", "改预期", "改描述"]
     assert "挂起" in q["options"][2]["description"]      # fulldns 类正确出口
     assert validate_questions(qs, ledgers)

@@ -101,7 +101,7 @@ def test_gather_e2e_undecided_does_not_block_siblings(rig):
                  encoding="utf-8").splitlines()]
     asked = [f for f in facts if f.get("ev") == "ask_shown" and f.get("aid") == AIDS[1]]
     assert len(asked) == 1, f"ask_shown 题面事实应恰一条,实际 {len(asked)}"
-    assert asked[0].get("gather") is True and "查无记载" in asked[0].get("question", "")
+    assert asked[0].get("gather") is True and "查不到" in asked[0].get("question", "")   # S3 人话
     dec = [f for f in facts if f.get("ev") == "decision" and f.get("aid") == AIDS[1]]
     assert len(dec) == 1 and dec[0]["answer"] == "改过程"
 

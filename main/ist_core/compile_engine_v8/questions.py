@@ -14,6 +14,16 @@ from pathlib import Path
 # 决策选项(与 compile_user_decision 的 decision 枚举一致)
 DECISIONS = ("改过程", "改预期", "改描述")
 
+def _first_clause(s: str, cap: int = 150) -> str:
+    """按中文标点截首句(§18.14 D2:替代裸 `[:N]` 词中断路——668059 曾被截在
+    '已检索:knowledge/data/markdo';机读检索证明尾部本就不该进用户题面)。"""
+    s = str(s or "").strip()
+    for i, ch in enumerate(s):
+        if ch in "。;；" and i >= 10:
+            return s[:i]      # 不含末标点——外层 join 用「；」连,避免双标点
+    return s if len(s) <= cap else s[:cap].rstrip() + "…"
+
+
 # claim_kind → 建议断言形态(机械映射;最终形态以用户答案落盘为准)
 FORM_BY_KIND = {
     "distribution": "dist", "weight_ratio": "dist",
@@ -44,7 +54,7 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
         if not claims:
             continue
         ordering = any(c.get("ordering_sensitive") for c in claims)
-        reasons = "；".join(str(c.get("reason", ""))[:120] for c in claims[:3])
+        reasons = "；".join(_first_clause(c.get("reason", "")) for c in claims[:3])
         mins = [int(c.get("min_requests") or 0) for c in claims]
         min_req = max(mins) if any(m > 0 for m in mins) else 0
         kinds = [str(c.get("claim_kind", "")) for c in claims]
@@ -126,10 +136,11 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             continue
 
         if all(k == "command_existence" for k in kinds):
-            # S6 存在性呈报(V8.5 片1):题面带检索证明,选项语义按「换形态/挂起」而非可验性
+            # S6 存在性呈报(§18.14 S3:题面人话对象——用干净 cmds,机读检索证明
+            # (签名数/覆盖率/检索路径)留台账 _evidence 不进用户面)。
             cmds = "、".join(f"『{c.get('command', '')}』" for c in claims[:3])
-            q_text = (f"用例 {aid}(尾号 {aid[-6:]})使用的命令在被测版本专属 CLI 手册"
-                      f"命令集中查无记载:{reasons}。")
+            q_text = (f"用例 {aid[-6:]} 用到的命令 {cmds} 在被测版本的 CLI 手册里"
+                      f"查不到(可能这版没有此功能,或命令改了名)。")
             opt_process = {"label": "改过程",
                            "description": f"换用版本内存在的等价命令/形态重写 {cmds}(引擎继续编写)。"}
             opt_expect = {"label": "改预期",

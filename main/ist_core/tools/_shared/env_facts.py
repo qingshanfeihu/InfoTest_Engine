@@ -222,8 +222,16 @@ class EnvFacts:
         lines.append(f"后端服务器真实 IP(service/pool 后端用): {', '.join(self.service_ips())}")
         if listener:
             lines.append(
-                "★ listener/VIP 必须用这些 APV 接口 IP(触发设备 dig/curl 够得着的网段): "
-                + ", ".join(listener)
+                "★ 复用现有接口作 listener/VIP 时,用这些 APV 接口 IP(触发设备 dig/curl "
+                "够得着的网段): " + ", ".join(listener)
+            )
+            # §18.14 S2:不把预置接口当 listener 全集——创建型测试(VLAN 子接口/新网段)
+            # 的连通性(trunk/触发机对接)当前事实源未记录,该走数据缺口呈报而非被框死。
+            lines.append(
+                "  若用例要测**新建接口类型**(VLAN 子接口、新网段 listener 等):事实源只记录"
+                "了上述预置接口,未记录新建接口的连通性(VLAN trunk/触发机对接)——猜一个新 IP "
+                "大概率上机不解析。这属数据缺口,用 compile_report_underdetermined 如实呈报"
+                "(obstacle=事实源缺该接口类型的拓扑/连通数据),不要猜 IP 硬编。"
             )
         pairs = self.listener_trigger_pairs()
         if pairs:

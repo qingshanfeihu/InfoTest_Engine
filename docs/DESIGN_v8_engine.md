@@ -1609,8 +1609,19 @@ gather 折叠 P4 组稿+memoize → P6 lint → 移 brief 盖章块(**保留 emi
 - **明确不修(设计正确)**:不做语义预校验、不加 reboot grammar、gate 不走三元组、
   generic 不套三元组、s₀ 只减 IP 不碰 vlan/port/bond 名、preserves 自评靠 oracle 兜底。
 
-**落地序**:P0 = S1(BLOCKER)+D1(活锁);P1 = D2/S3/S2/L1/L2;P2 = S4/D3/D4。
-每单元先落码后落测(TODO 未落地时测试单独提交会红),全量回归绿后 cmux 跑 yzg 验收。
+**落地进度(2026-07-15)**:
+- **P0 ✓**:S1(s₀ 脏态合取·排固定基础设施 IP,+双向锚)、D1(ask_decision 非 mech 臂
+  活锁,command_existence/missing_teardown 免 form + _land 传 assertion_form,+3 锚)。
+- **P1 ✓**:D2(generic 题面按标点截首句,668059 不再词中断)、S3(command_existence 支
+  题面人话·机读检索证明留台账)、L1(等价判据补对象敏感:删写步须翻判决+启动通道缺口
+  进差异声明,668015 教训直接入文)、L2(同族证伪观测对象共享·变体只改刺激)、
+  **S2 保守版**(summary 分层措辞:复用现有接口 vs 创建型走数据缺口呈报——解框死+引导
+  正确归因,不盲目放行避免 VLAN 假 fail;完整版 candidate_segments+emit allowlist 放行
+  **待 VLAN trunk 事实源**,数据缺口不在本批)。
+- **P2**:D3 ✓(emit 门文案删失效 claim_kind 参数、改三元组 schema 指引);S4(文档对账)/
+  D4(TUI 面板 dismiss)= 文档/显示层剩余,不阻断 cmux 验收。
+- 全量回归绿后 cmux 跑 yzg 验收 aha 端到端(核心看点:写保存族三元组题面清爽、s₀ 假阳
+  归零、无假 fail 掩盖真缺陷)。
 
 ### 18.7 完成度纪律
 

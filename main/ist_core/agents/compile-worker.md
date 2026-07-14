@@ -21,11 +21,17 @@ behavior this case tests is truly covered by its assertions.
 
 Before writing any step, state in one or two lines: the claim this case establishes (the
 group-shared claim plus this case's variant axis, when the brief carries sibling context) and
-the observation that would falsify it. Every step must serve that claim. A mechanism the
-intent names but the bed forbids (reboot / power-cycle / factory-reset family) is never
-silently substituted: derive the closest equivalent under the config-plane model (same-plane
-clearing scoped to this case's writes; falsifying observation unchanged; no reverse/import
-operation; sensitivity to the tested write preserved).
+the observation that would falsify it. The falsifying observation reads a specific **object/layer
+where the behavior manifests** — that object is shared across the group; a variant changes only the
+**stimulus** (which write), never the observation object. Every step must serve that claim.
+
+A mechanism the intent names but the bed forbids (reboot / power-cycle / factory-reset family) is
+never silently substituted **and never emitted as a substitute** — derive the closest config-plane
+equivalent and **report it (below); the emit gate will not let you land it, by design**. The
+equivalent's four criteria: same-plane clearing; falsifying observation unchanged; no reverse/import;
+and **sensitive to the DEFECT** — deleting the write-under-test must flip the verdict, and if the
+equivalent reads a different object than the real path loads from (a saved backup file is NOT the
+reboot/startup-reload channel), that gap is a **declared difference, not a silent equivalence**.
 
 When the intent cannot run as-written on this bed (a forbidden mechanism, or any path this
 testbed can't realize), report it with `compile_report_underdetermined` **using the structured
@@ -52,7 +58,10 @@ soundness is the user's call, and the sheet still faces every emit gate and the 
 - **Expectations are faithful projections** — an expected value's polarity (found/not_found)
   and target trace to the intent or the manual; a precedent supplies config **form**, never the
   assertion direction (a precedent for a different intent can assert the opposite — copying its
-  polarity is a fake PASS, the twin of observe-then-assert). A same-key user adjudication in the
+  polarity is a fake PASS, the twin of observe-then-assert). The assertion must also read the
+  **object where the defect manifests**, not a proxy for it — a persistence defect shows on the
+  reload path (`show startup`), never on the save artifact (the backup file already holds what you
+  just wrote, so asserting `not_found` there is near-tautological). A same-key user adjudication in the
   brief is authoritative. Never copy whatever the device happens to show right now. Values
   unknowable offline stay `<RUNTIME>`. Count-type expectations come from `compile_expected_hits`,
   never hand math.

@@ -288,10 +288,10 @@ def _gate_destructive_commands(autoid: str, steps: list, init: str = "") -> str 
             f"Forbidden: this would really reboot/shut down a shared device, and the framework "
             f"cannot reconnect after a reboot (bound to fail).\n"
             f"Do NOT invent a substitute sequence here. Route: state the test point (claim + "
-            f"falsifying observation), derive the closest equivalent under the config-plane "
-            f"model (grammar section forbidden_mechanism_intents documents the routing), and "
-            f"report via compile_report_underdetermined (claim_kind=forbidden_mechanism) — "
-            f"the user rules before you land.")
+            f"falsifying observation), derive the closest config-plane equivalent, and report via "
+            f"compile_report_underdetermined **using the structured triple** (test_point + sources "
+            f"quoting the mindmap + obstacle + equivalent{{procedure,preserves}} or "
+            f"no_equivalent_reason) — the user rules before you land.")
 
 
 _SAVE_RE = _re_dev.compile(r"\bwrite\s+(memory|mem|file|all|net)\b", _re_dev.IGNORECASE)

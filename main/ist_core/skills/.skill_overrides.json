@@ -1,3 +1,6 @@
 {
-  "skillOverrides": {}
+  "skillOverrides": {
+    "compile-worker": "name-only",
+    "compile-attributor": "name-only"
+  }
 }

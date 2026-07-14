@@ -107,6 +107,88 @@ def test_short_fork_result_skips_banner_and_metadata_grabs_device_output():
     assert loader._short_fork_result("=== x ===") != ""
 
 
+def test_streamed_fork_emits_structured_events(monkeypatch):
+    """卡片数据面:fork_id 非空时,步骤同步双写 .events.jsonl 结构化事件——
+    tool 事件带累计 n_calls(自含幂等),tool_result 带 status+已剥信封 summary。"""
+    events: list[dict] = []
+    monkeypatch.setattr(loader, "_fork_emit", lambda t: None)
+    monkeypatch.setattr(loader, "_fork_emit_event", lambda r: events.append(r))
+    monkeypatch.setenv("IST_FORK_STEP_EMIT", "1")
+    states = _states()
+
+    class _R:
+        def stream(self, inp, config=None, stream_mode=None):
+            yield from states
+
+    loader._invoke_fork_streamed(_R(), "body", "x", fork_id="fk1")
+    kinds = [e["event"] for e in events]
+    assert kinds == ["tool", "tool_result", "tool", "tool_result"]
+    tools = [e for e in events if e["event"] == "tool"]
+    assert [t["n_calls"] for t in tools] == [1, 2]
+    assert tools[0]["tool"] == "compile_precedent" and tools[0]["arg"] == "persistence"
+    results = [e for e in events if e["event"] == "tool_result"]
+    assert all(e["fork_id"] == "fk1" and e["status"] == "ok" for e in results)
+    assert "命中 3 条先例" in results[0]["summary"]
+
+
+def test_streamed_fork_no_structured_events_without_fork_id(monkeypatch):
+    events: list[dict] = []
+    monkeypatch.setattr(loader, "_fork_emit", lambda t: None)
+    monkeypatch.setattr(loader, "_fork_emit_event", lambda r: events.append(r))
+    monkeypatch.setenv("IST_FORK_STEP_EMIT", "1")
+    states = _states()
+
+    class _R:
+        def stream(self, inp, config=None, stream_mode=None):
+            yield from states
+
+    loader._invoke_fork_streamed(_R(), "body", "x")   # 默认 fork_id="" → 不发结构化事件
+    assert events == []
+
+
+def test_fork_usage_tally_instance_counters(monkeypatch):
+    """per-fork tokens:实例计数与全局累计双写(fork_end 报本 fork 用量)。"""
+    import main.ist_core.graph as g
+    monkeypatch.setattr(g, "extract_llm_usage", lambda r: {
+        "input_tokens": 100, "output_tokens": 7, "prompt_cache_hit_tokens": 40})
+    before = loader.get_fork_tokens()
+    t = loader._ForkUsageTally()
+    t.on_llm_end(object())
+    t.on_llm_end(object())
+    assert t.tokens == [200, 14, 80]
+    after = loader.get_fork_tokens()
+    assert (after[0] - before[0], after[1] - before[1], after[2] - before[2]) == (200, 14, 80)
+
+
+def test_fork_events_path_derivation(monkeypatch):
+    monkeypatch.delenv("IST_EVIDENCE_LOG", raising=False)
+    p = loader._fork_events_path()
+    assert p.endswith(".events.jsonl") and f".{__import__('os').getpid()}." in p
+    monkeypatch.setenv("IST_EVIDENCE_LOG", "/tmp/x/custom.live.log")
+    assert loader._fork_events_path() == "/tmp/x/custom.events.jsonl"
+    monkeypatch.setenv("IST_EVIDENCE_LOG", "/tmp/x/other.log")
+    assert loader._fork_events_path() == "/tmp/x/other.log.events.jsonl"
+
+
+def test_short_fork_result_strips_tool_envelope():
+    """fork 挂 ToolEnvelopeMiddleware,ToolMessage 带 <tool_result> 信封——预览必须
+    拆回 body,不把开标签原文泄漏进 TUI(实况:满屏 `<tool_result name=… status="ok">`)。"""
+    from main.ist_core.middleware.tool_envelope import envelope_text
+    ok = envelope_text("dev_probe", "Pool: p1  Members: 3")
+    r = loader._short_fork_result(ok)
+    assert "<tool_result" not in r
+    assert "Pool: p1" in r
+    # error 信封 → ✗ 前缀 + 原因可见
+    err = envelope_text("compile_emit", "error: case X 步骤载荷为空——四通道都没传")
+    re_ = loader._short_fork_result(err)
+    assert "<tool_result" not in re_
+    assert re_.startswith("✗ ") and "步骤载荷为空" in re_
+    # JSON 结果包在信封里同样拆开后走 JSON 单行预览
+    js = envelope_text("compile_score", '{\n  "overall": 0.0,\n  "decision": "CUT"\n}')
+    rj = loader._short_fork_result(js)
+    assert "<tool_result" not in rj and "overall=0.0" in rj and "decision=CUT" in rj
+
+
 def test_short_fork_args_picks_representative_scalar():
     assert loader._short_fork_args({"query": "persistence"}) == "(persistence)"
     assert loader._short_fork_args({"path": "a/b.md", "extra": 1}) == "(a/b.md)"

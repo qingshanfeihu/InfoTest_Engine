@@ -7,14 +7,12 @@
 - [user] 孔桥接:引擎图 `interrupt({kind: ask_decision, questions})` 挂起 →
   本工具把 questions 转给既有 ask_user 线程面板 → `Command(resume=answers)` 续跑
   (官方 HIL 模式;非交互模式 answers={_non_interactive: True},引擎标 awaiting_user)。
-`IST_COMPILE_ENGINE=0` → 返回 engine_disabled(SKILL 兜底段引导走 v5 编排)。
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from pathlib import Path
 
@@ -58,12 +56,8 @@ def compile_engine_run(mindmap_path: str, product_version: str,
         max_rounds: 上机-重编循环上限(默认 3;到顶如实报告剩余)。
 
     Returns:
-        交付报告人话摘要;机读全量在 workspace/outputs/<out_name>/engine_report.json。
+        结果摘要(完整报告落盘 delivery_report.md);机读全量在 workspace/outputs/<out_name>/engine_report.json。
     """
-    if (os.environ.get("IST_COMPILE_ENGINE") or "1").strip().lower() in ("0", "false", "no"):
-        return ("engine_disabled: V6 引擎已关闭(IST_COMPILE_ENGINE=0)——"
-                "按 ist-compile skill 的 v5 编排流程执行。")
-
     root = Path(__file__).resolve().parents[4]
     name = (out_name or "").strip() or Path(mindmap_path).stem
     db = root / "runtime" / "compile_engine_checkpoints.db"
@@ -72,6 +66,15 @@ def compile_engine_run(mindmap_path: str, product_version: str,
     from langgraph.checkpoint.sqlite import SqliteSaver
     from langgraph.types import Command
     from main.ist_core.compile_engine.graph import build_compile_engine_graph
+
+    # 引擎运行元信息 → .events.jsonl(TUI 引擎卡建卡信号;失败静默)
+    try:
+        from main.ist_core.skills.loader import _fork_emit_event
+        _fork_emit_event({"event": "run_meta", "run": name, "kind": "engine",
+                          "mindmap": str(mindmap_path),
+                          "ledger": f"workspace/outputs/{name}/engine_ledger.json"})
+    except Exception:  # noqa: BLE001
+        pass
 
     # fork token 计量:execute_fork_skill 在 fork invoke 上显式挂 _ForkUsageTally,
     # 不依赖 callback 传播——引擎/线程池路径天然覆盖,无需开关。
@@ -118,6 +121,10 @@ def _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)
     if not rp.is_file():
         return f"error: 引擎结束但无报告(state={json.dumps(result, ensure_ascii=False, default=str)[:300]})"
     rep = json.loads(rp.read_text(encoding="utf-8"))
+    return _summarize_report(rep, str(rp.relative_to(root)), name)
+
+
+def _summarize_report(rep: dict, report_ref: str, name: str) -> str:
     t = rep.get("totals", {})
     lines = [
         f"编译引擎完成: {rep.get('outcome')}(轮次 {rep.get('rounds')})",
@@ -125,8 +132,32 @@ def _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)
         f",待用户拍板 {t.get('awaiting_user', 0)}"
         f",阻塞/缺陷标注 {t.get('failed_terminal', 0)}"
         f",升级人工 {t.get('escalated', 0)}",
-        f"机读报告: {rp.relative_to(root)}",
+        f"完整报告(已落盘): {rep.get('refs', {}).get('delivery_md') or '—'}",
+        f"机读报告: {report_ref}",
     ]
+    # 非 pass 用例逐条附证据:main 复述曾凭上下文记忆重构设备回显(伪造配置会话、
+    # 把「设备不支持」说成「执行成功」)——返回里给真原文摘录,复述才有据可引。
+    evid = []
+    for aid, cc in sorted((rep.get("cases") or {}).items()):
+        st = str(cc.get("state") or "")
+        if st not in ("escalated", "failed_terminal"):
+            continue
+        reason = cc.get("escalation_reason") or cc.get("detail") or st
+        tag = "升级人工" if st == "escalated" else "标注终态"
+        line = f"- [{tag}] …{aid[-6:]}: {reason}"
+        ev = cc.get("fail_evidence") or []
+        last = ev[-1] if ev and isinstance(ev[-1], dict) else {}
+        ctx = str(last.get("device_context") or "").strip()
+        if ctx:
+            line += f" | 末轮设备回显: {ctx[:200]}"
+        evid.append(line)
+    if evid:
+        lines.append("非 pass 用例证据(复述设备行为只引用下面的原文摘录、"
+                     "engine_report 的 fail_evidence 或 last_run.json 的"
+                     " device_context,不要凭记忆重构回显):")
+        lines.extend(evid)
+        lines.append(f"完整逐轮回显: {report_ref} 各 case 的 fail_evidence;"
+                     f"整卷原文 workspace/outputs/{name}/last_run.json")
     if rep.get("error"):
         lines.append(f"中止原因: {rep['error']}")
     return "\n".join(lines)

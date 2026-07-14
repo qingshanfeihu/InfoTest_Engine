@@ -67,7 +67,7 @@ Claude Desktop 配置 (`claude_desktop_config.json`)：
   "mcpServers": {
     "apv-device-manager": {
       "command": "python",
-      "args": ["D:/MCP_Server/server.py"],
+      "args": ["/path/to/InfoTest_Engine/scripts/MCP/server.py"],
       "env": {
         "APV_RESTAPI_USERNAME": "rest",
         "APV_RESTAPI_PASSWORD": "admin",
@@ -155,8 +155,10 @@ device_session_close(session_id="abc123")
 
 ## 项目结构
 
+源码位于仓库 `scripts/MCP/`（2026-06-30 自根目录 `MCP_Server/` 迁入）。跳板机 HTTP 部署路径通常为 `/home/test/MCP_Server/`。
+
 ```
-MCP_Server/
+scripts/MCP/
 ├── server.py                      # 入口（加载 .env，Py 版本检查，启动 MCP 服务）
 ├── pyproject.toml                 # 项目配置与依赖（Python 3.8+）
 ├── .env.example                   # 环境变量模板
@@ -171,6 +173,8 @@ MCP_Server/
         ├── restapi_apv.py         # execute_restapi() — httpx REST API 客户端
         └── ssh_linux.py           # LinuxSSHClient — paramiko exec_command
 ```
+
+> 编译/上机验证用的 stdio 框架 server 是另一套：`main/device_mcp_server/`，部署到跳板机 `/home/test/mcp_server/`。
 
 ## 设计说明
 

@@ -53,8 +53,32 @@ _TOOL_SHORT_NAMES: dict[str, str] = {
     "invoke_skill": "Skill",
     "kb_footprint": "Footprint",
     "kb_bug_search": "BugSearch",
+    "kb_memory_search": "Memory",
     "write_todos": "TodoWrite",
     "task": "Agent",
+    # 编译链/设备工具短名(2026-07-06):旧版落 dict-repr 兜底,`⏺ compile_emit({'autoid': …)`
+    # 一行截断噪声;与 fork 卡片内工具短名共用同一张表。
+    "compile_emit": "Emit",
+    "compile_emit_merged": "EmitMerged",
+    "compile_engine_run": "EngineRun",
+    "compile_fanout": "Fanout",
+    "compile_prep": "解析脑图",
+    "compile_precedent": "Precedent",
+    "compile_check_verifiability": "Verifiability",
+    "compile_expected_hits": "ExpectedHits",
+    "compile_attribute": "Attribute",
+    "compile_runtime_slots": "RuntimeSlots",
+    "compile_runtime_fill": "RuntimeFill",
+    "compile_writeback": "Writeback",
+    "compile_footprint_writeback": "FpWriteback",
+    "submit_attribution": "Attribution",
+    "dev_probe": "Probe",
+    "dev_ssh": "Ssh",
+    "dev_rest": "Rest",
+    "dev_run_case": "RunCase",
+    "dev_run_batch": "RunBatch",
+    "dev_run_batch_digest": "RunDigest",
+    "agent_define": "AgentDefine",
 }
 
 
@@ -82,6 +106,38 @@ def _extract_from_raw(args: dict, key: str) -> str:
         return ""
     m = re.search(rf"""['"]?{key}['"]?\s*[:=]\s*['"]([^'"]+)['"]""", raw)
     return m.group(1) if m else ""
+
+
+def _middle_ellipsis(s: str, maxw: int) -> str:
+    """长串中段省略成单行(路径感知:保首段+末两段)——进度/卡片行防软折行占多行。"""
+    s = str(s or "")
+    if len(s) <= maxw:
+        return s
+    if "/" in s:
+        parts = [p for p in s.replace("\\", "/").split("/") if p]
+        if len(parts) > 3:
+            cand = parts[0] + "/…/" + "/".join(parts[-2:])
+            if len(cand) <= maxw:
+                return cand
+    head = max(1, (maxw - 1) // 3)
+    tail = max(1, maxw - 1 - head)
+    return s[:head] + "…" + s[-tail:]
+
+
+def _arg_stem(path: str) -> str:
+    """路径 → 文件名去扩展(compile_engine_run 的 mindmap `dongkl.txt` → `dongkl`)。"""
+    if not path:
+        return ""
+    base = str(path).replace("\\", "/").rsplit("/", 1)[-1]
+    return base.rsplit(".", 1)[0] if "." in base else base
+
+
+# 参数摘要=autoid 尾 6 位的编译链工具(单 case 域,`…994838` 即最有辨识度的标识)
+_AUTOID_ARG_TOOLS = frozenset({
+    "compile_emit", "compile_precedent",
+    "compile_check_verifiability", "compile_attribute", "compile_runtime_slots",
+    "compile_runtime_fill", "submit_attribution",
+})
 
 
 def _tool_display_arg(name: str, args: dict) -> str:
@@ -114,7 +170,7 @@ def _tool_display_arg(name: str, args: dict) -> str:
         # 全是裸「⏺ Skill」行,分不清派的哪个 case——2026-07-03 实证)。
         import re as _re2
         blob = str(args.get("brief") or "") + str(args.get("raw") or "")
-        m = _re2.search(r"20303175\d{8,10}", blob)
+        m = _re2.search(r"(?<!\d)20\d{16}(?!\d)", blob)
         aid = f"…{m.group(0)[-6:]}" if m else ""
         if skill and aid:
             return f"{skill} · {aid}"
@@ -123,6 +179,36 @@ def _tool_display_arg(name: str, args: dict) -> str:
         # skill 名都抽不到时给 raw 首段,别渲染成裸工具名
         raw = str(args.get("raw") or "")
         return (raw[:40] + "…") if raw else ""
+    # 编译链工具(2026-07-06):不落 dict-repr 兜底,取域内最有辨识度的标量
+    if name in _AUTOID_ARG_TOOLS:
+        aid = str(args.get("autoid") or _extract_from_raw(args, "autoid") or "")
+        if not aid:
+            import re as _re3
+            m = _re3.search(r"(?<!\d)20\d{16}(?!\d)", str(args.get("raw") or ""))
+            aid = m.group(0) if m else ""
+        if aid:
+            return f"…{aid[-6:]}"
+    if name in ("compile_engine_run", "compile_prep"):
+        ver = str(args.get("version") or _extract_from_raw(args, "version") or "")
+        mm = str(args.get("mindmap_path") or args.get("mindmap")
+                 or _extract_from_raw(args, "mindmap_path") or _extract_from_raw(args, "mindmap") or "")
+        label = ver or _arg_stem(mm)
+        if label:
+            return label[:40]
+    if name == "compile_fanout":
+        skill = str(args.get("skill") or _extract_from_raw(args, "skill") or "")
+        if skill:
+            return skill[:40]
+    if name in ("dev_run_batch", "dev_run_batch_digest", "compile_emit_merged"):
+        xp = str(args.get("xlsx_path") or args.get("out_xlsx")
+                 or _extract_from_raw(args, "xlsx_path") or _extract_from_raw(args, "out_xlsx") or "")
+        if xp:
+            parts = xp.replace("\\", "/").split("/")
+            return "/".join(parts[-2:]) if len(parts) > 2 else xp
+    if name in ("dev_probe", "dev_ssh"):
+        cmd = str(args.get("command") or _extract_from_raw(args, "command") or "")
+        if cmd:
+            return _middle_ellipsis(cmd.replace("\n", " "), 60)
     first_val = next(iter(args.values()), "")
     if isinstance(first_val, str) and len(first_val) > 60:
         return first_val[:60] + "…"
@@ -164,6 +250,162 @@ def _tool_result_summary(name: str, output: str) -> list[str] | None:
     return None
 
 
+# ---------------------------------------------------------------- fork 卡片渲染
+# 对标 opencode Task 卡形态:运行中 spinner+当前子工具单行实时态,完成定格
+# 「N calls · 耗时 · tokens」摘要行。一张卡=一条 transcript entry(值内嵌 \n),
+# 高度变化不影响其他 entry 的 idx → update_message_at 原地改。
+
+_FORK_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_ENGINE_PHASE_CN = {
+    "prep": "准备", "worker_fanout": "编写", "ask_decision": "待决策",
+    "merge": "合并", "run_digest": "上机", "attribute": "归因",
+    "writeback": "写回", "report": "收尾",
+}
+_B, _C2, _D2, _X2 = "\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m"
+_G2, _R2, _Y2 = "\x1b[32m", "\x1b[31m", "\x1b[33m"
+
+
+def _render_engine_bottom_line(p: dict, *, max_thinking: bool = False) -> str:
+    """引擎聚合 → footer 底部常驻行(2026-07-06 用户定稿):进度条+文字计数,不用符号标签。
+
+    形如 `` 编译 dongkl · 轮次1 编写 ██████████░░░░░░░░░░ 26/34 · 产出26 编写中1 欠定7 通过0 失败0``。
+    九个 ledger 状态全部有归属:产出=produced,通过=passed,编写中=pending+dispatched+
+    failed_active(待重跑),欠定=pending_decision+awaiting_user,失败=failed_terminal+escalated。
+    max_thinking:任一 fork 处于 max 思考深度(升级重编最后一次)时挂「最大深度思考中」尾标。
+    """
+    p = dict(p or {})
+    counts = dict(p.get("counts") or {})
+    total = int(p.get("total") or 0)
+    produced = counts.get("produced", 0)
+    passed = counts.get("passed", 0)
+    spin = (counts.get("pending", 0) + counts.get("dispatched", 0)
+            + counts.get("failed_active", 0))
+    pend = counts.get("pending_decision", 0) + counts.get("awaiting_user", 0)
+    bad = counts.get("failed_terminal", 0) + counts.get("escalated", 0)
+    done = produced + passed
+    barw = 20
+    filled = round(barw * done / total) if total else 0
+    bar = "█" * filled + "░" * (barw - filled)
+    phase = _ENGINE_PHASE_CN.get(str(p.get("phase") or ""), str(p.get("phase") or "…"))
+    if p.get("status") == "done":
+        phase = "已收尾"
+    D, X = _D2, _X2
+    tail = f" {_B}{_Y2}· 最大深度思考中{X}" if max_thinking else ""
+    return (f" 编译 {p.get('run', '')} · 轮次{p.get('round', 0)} {phase} "
+            f"{bar} {done}/{total}{D} · 产出{produced} 编写中{spin} "
+            f"欠定{pend} 通过{passed} 失败{bad}{X}{tail}")
+
+
+def _payloads_have_max_thinking(payloads) -> bool:
+    """任一 running fork 卡处于 max 思考深度 → 引擎底部条挂「最大深度思考中」。
+
+    纯函数(入参=fork 卡 payload 可迭代,快照派生),便于测试且 replay 一致。max 深度
+    只在升级重编最后一次触发(effort=max 由 worker_fanout 判 rounds_used 决定)。
+    """
+    for pl in payloads:
+        if ((pl.get("kind") or "fork") == "fork" and pl.get("status") == "running"
+                and str(pl.get("effort") or "") == "max"):
+            return True
+    return False
+
+
+def _skill_short(skill: str) -> str:
+    s = str(skill or "")
+    for p in ("ist-compile-", "compile-", "ist_compile_"):
+        if s.startswith(p):
+            s = s[len(p):]
+    return {"worker": "编写", "attributor": "归因"}.get(s, s or "fork")
+
+
+def _card_ident(p: dict) -> str:
+    aid = str(p.get("autoid") or "")
+    if aid:
+        return aid[-6:]
+    tag = str(p.get("tag") or "")
+    if tag:
+        return tag.split(":")[-1][:12]
+    return str(p.get("fork_id") or "")[:6]
+
+
+def _fmt_secs(v) -> str:
+    try:
+        return _format_elapsed(float(v or 0))
+    except Exception:  # noqa: BLE001
+        return "0s"
+
+
+def _render_fork_card(payload: dict, *, now: float,
+                      expanded: bool = False, compact: bool = False) -> str:
+    """卡片 payload → 显示串(含 \\n 的单 entry)。纯函数,便于测试。"""
+    p = dict(payload or {})
+    kind = p.get("kind") or "fork"
+    frame = _FORK_SPINNER[int(now * 3) % 10]
+    B, C, D, X, G, R, Y = _B, _C2, _D2, _X2, _G2, _R2, _Y2
+
+    if kind == "progress":
+        phase = str(p.get("phase") or "进行")
+        n_cases = p.get("n_cases")
+        env = str(p.get("env") or "")
+        case_idx = p.get("case_idx") or 0
+        cases = f" · {n_cases} case" if n_cases else ""
+        env_s = f" · 环境 {env}" if env else ""
+        # 有当前 case 序号 → 显「第X/N」(诚实推进);否则回落总数
+        prog_s = (f" · 第{case_idx}/{n_cases}" if (case_idx and n_cases) else cases)
+        if p.get("status") == "done":
+            return (f"   {G}✓{X} {D}▸ {phase}完成{env_s}{cases} · "
+                    f"{_fmt_secs(p.get('elapsed_s'))}{X}")
+        if p.get("status") == "error":
+            return (f"   {R}✗{X} {D}▸ {phase}失败{env_s}{cases} · "
+                    f"{_middle_ellipsis(str(p.get('detail') or ''), 70)}{X}")
+        detail = _middle_ellipsis(str(p.get("detail") or ""), 48)
+        return (f"   {Y}{frame}{X} {B}▸ {phase}{X} {D}"
+                f"{int(p.get('elapsed_s') or 0)}s/{int(p.get('total_s') or 0)}s"
+                f"{env_s}{prog_s}{(' · ' + detail) if detail else ''}{X}")
+
+    # kind == "fork"
+    ident = _card_ident(p)
+    name = f"{_skill_short(p.get('skill'))}·{ident}"
+    status = p.get("status") or "running"
+    if status == "ok":
+        toks = ""
+        if p.get("tokens_in") or p.get("tokens_out"):
+            toks = (f" · ↑{_format_token_count(int(p.get('tokens_in') or 0))}"
+                    f" ↓{_format_token_count(int(p.get('tokens_out') or 0))}")
+        card = (f"   {G}✓{X} {D}{name} — 完成 · {p.get('calls', 0)} calls · "
+                f"{_fmt_secs(p.get('elapsed_s'))}{toks}{X}")
+    elif status == "error":
+        err = str(p.get("error") or "").split("\n")[0][:80]
+        card = (f"   {R}✗{X} {name} — 失败{(' · ' + D + err + X) if err else ''}"
+                f"{D} · {p.get('calls', 0)} calls · {_fmt_secs(p.get('elapsed_s'))}{X}")
+    else:
+        # running / stalled
+        start = float(p.get("start_ts") or now)
+        last = float(p.get("last_event_ts") or start)
+        import os as _os2
+        stall_after = float(_os2.environ.get("IST_FORK_WALLCLOCK_S") or 900) + 120
+        if now - last > stall_after:
+            return (f"   {Y}◌{X} {name} — {D}{int((now - last) / 60)}min 无事件"
+                    f"(可能已被看门狗放弃){X}")
+        elapsed = _fmt_secs(now - start)
+        if compact:
+            return (f"   {Y}{frame}{X} {name} {D}· {p.get('n_calls', 0)} calls · {elapsed}{X}")
+        brief = str(p.get("brief_head") or "")[:32]
+        head = f"   {Y}{frame}{X} {B}{name}{X}{(' ' + _D2 + '— ' + brief + X) if brief else ''}"
+        tool = str(p.get("current_tool") or "")
+        if tool:
+            arg = _middle_ellipsis(str(p.get("current_arg") or ""), 60)
+            sub = (f"     {D}↳ {_tool_short_name(tool)}({C}{arg}{X}{D})"
+                   f" · {p.get('n_calls', 0)} calls · {elapsed}{X}")
+        else:
+            sub = f"     {D}↳ 思考中… · {elapsed}{X}"
+        card = head + "\n" + sub
+    # ctrl+o 展开:最近工具结果明细(完成/失败卡同样受益——收口后想看它干了什么)
+    if expanded:
+        for ln in list(p.get("recent") or [])[-5:]:
+            card += f"\n       {D}{str(ln)[:100]}{X}"
+    return card
+
+
 class IstInkApp:
     """IST-Core TUI application using Python Ink renderer."""
 
@@ -185,6 +427,12 @@ class IstInkApp:
 
         
         self._transcript = Transcript()
+        # fork/引擎/进度卡片渲染态:uuid → transcript 行号 / 最近 payload(spinner tick
+        # 就地重渲用);rev 守卫丢弃迟到旧快照。
+        self._fork_card_rows: dict[str, int] = {}
+        self._fork_card_payloads: dict[str, dict] = {}
+        self._last_board_rev = -1
+        self._last_snapshot_rev = 0
         self._prompt = PromptInput(
             cursor_manager=self._app.cursor,
             on_submit=self._on_submit,
@@ -379,23 +627,30 @@ class IstInkApp:
             time.sleep(0.1)
 
     def _start_evidence_tailer(self) -> None:
-        """fastlog 消费端:每 ~300ms 把新增 fork 步骤**追加到主 transcript**(像日志往下流,
-        和 agent 消息/里程碑同一条流,不是独立面板 → 不分屏),并把 fork token 并入 footer ↑↓。
+        """fastlog 消费端(两种模式,`IST_FORK_CARDS` 默认开):
 
-        - **只在 sticky-scroll(视图在底部、用户在跟看)时渲染**;用户往上滚(sticky 关)则
-          只追加不渲染 → 不与用户滚动时的重排互抢、页面不冲花。
-        - 批量(300ms 读一次,非每条事件 emit)→ 不刷卡。完整明细同时在 evidence 日志文件。
+        - **卡片模式**(默认):tail `.events.jsonl` 结构化事件,300ms 批量经 bus
+          `fork_cards` 进 reducer → 卡片消息进 snapshot(replay 天然一致),这里只负责
+          搬运 + spinner tick(running 卡就地重渲帧/耗时,纯显示态不进 reducer)。
+        - **平铺模式**(`IST_FORK_CARDS=0` 回退):tail `.live.log` 人读行,原样 `·`
+          追加进 transcript(2026-07-06 之前的行为)。
+
+        两种模式都把 fork token 并入 footer ↑↓;只在 sticky-scroll(用户在底部跟看)时
+        渲染——往上滚则不渲染,不与用户滚动互抢。
         """
         import threading
         import time as _time
         import os as _os
         from main.ist_core.skills.loader import (
-            _evidence_log_path, reset_evidence_log, reset_fork_tokens, get_fork_tokens,
+            _evidence_log_path, _fork_events_path, reset_evidence_log,
+            reset_fork_tokens, get_fork_tokens,
         )
 
         reset_evidence_log()    # 每会话日志从干净开始
         reset_fork_tokens()
-        path = _evidence_log_path()
+        cards_mode = (_os.environ.get("IST_FORK_CARDS") or "1").strip().lower() \
+            not in ("0", "false", "no")
+        path = _fork_events_path() if cards_mode else _evidence_log_path()
         D, X = self._DIM, self._RESET
 
         def _poll() -> None:
@@ -419,6 +674,39 @@ class IstInkApp:
                     logger.debug("编译日志读取失败", exc_info=True)
                 try:
                     ft = get_fork_tokens()
+                    if cards_mode:
+                        records = []
+                        if new_lines:
+                            import json as _json
+                            for ln in new_lines:
+                                try:
+                                    rec = _json.loads(ln)
+                                except Exception:  # noqa: BLE001
+                                    continue      # 坏行(半写/损坏)跳过
+                                if isinstance(rec, dict):
+                                    records.append(rec)
+                        if records:
+                            # 批量一事件进 reducer(卡片状态入 snapshot;UI 渲染由
+                            # _on_snapshot 的 fork_board_rev 刷新路径完成)
+                            try:
+                                from main.ist_core.events import get_default_bus
+                                get_default_bus().emit("fork_cards",
+                                                       payload={"records": records})
+                            except Exception:  # noqa: BLE001
+                                logger.debug("fork_cards emit 失败", exc_info=True)
+                        with self._app.lock:
+                            if ft != last_ft:
+                                last_ft = ft
+                                self._footer.update(fork_input=ft[0], fork_output=ft[1],
+                                                    fork_cache_hit=ft[2])
+                            if records:
+                                self._footer.fork_last_event_ts = _time.time()
+                            # spinner tick:running 卡就地重渲(无新事件也走帧/耗时)
+                            animating = self._refresh_running_fork_cards_locked()
+                            if (records or animating) and self._transcript.node.sticky_scroll:
+                                self._app.render()
+                        continue
+                    # ---- 平铺模式(IST_FORK_CARDS=0,旧行为原样) ----
                     if not new_lines and ft == last_ft:
                         continue
                     last_ft = ft
@@ -1184,6 +1472,10 @@ class IstInkApp:
         self._main_thinking_lines = []
         # B2：新 run 清空 tool_use 行号映射，避免旧行号污染本轮插入定位
         self._tool_use_row = {}
+        # 上一轮卡片行随之定格为静态文本(payload 表清空 → spinner tick 不再动它们);
+        # reducer.reset 会清 fork_card_indices,新 run 的卡重新建行。
+        self._fork_card_rows = {}
+        self._fork_card_payloads = {}
         self._transcript.append_message("")
         self._bridge.start(initial_state)
 
@@ -1207,6 +1499,14 @@ class IstInkApp:
             BLOCK_TEXT, BLOCK_TOOL_USE, BLOCK_TOOL_RESULT, BLOCK_THINKING,
             BLOCK_PHASE_MARKER, BLOCK_EVIDENCE, BLOCK_FINDING,
         )
+        # rev 守卫(2026-07-06):快照在 reducer 锁内构建但锁外投递,多线程 dispatch
+        # (bridge/工具线程/tailer)下旧快照可能后到——prev_count 增量 diff 会把消息
+        # 重复渲染。rev 单调,迟到的旧快照直接丢弃。
+        rev = getattr(snapshot, "rev", 0)
+        if rev and rev <= getattr(self, "_last_snapshot_rev", 0):
+            return
+        if rev:
+            self._last_snapshot_rev = rev
         prev = getattr(self, '_prev_snapshot', None)
         self._prev_snapshot = snapshot
 
@@ -1264,7 +1564,13 @@ class IstInkApp:
             for block in msg.content:
                 self._render_content_block(block, msg)
 
-        
+        # fork 卡片板:板版本变了 → 已登记卡行按 snapshot 原地重渲(新卡在上面
+        # new_msgs 循环里刚建行,重渲幂等)。board_rev==0 = 本会话从无卡片,跳过。
+        board_rev = getattr(snapshot, "fork_board_rev", 0)
+        if board_rev and board_rev != getattr(self, "_last_board_rev", 0):
+            self._last_board_rev = board_rev
+            self._refresh_fork_cards_from_snapshot(snapshot)
+
         if snapshot.usage:
             input_t = snapshot.usage.get("input_tokens", 0) or 0
             output_t = snapshot.usage.get("output_tokens", 0) or 0
@@ -1439,12 +1745,78 @@ class IstInkApp:
             for blk in self._tool_output_blocks:
                 if blk.get("start_idx", -1) >= at_idx:
                     blk["start_idx"] += n
+        for uuid_, v in getattr(self, "_fork_card_rows", {}).items():
+            if v >= at_idx:
+                self._fork_card_rows[uuid_] = v + n
+        # thinking 行登记同样要偏移(存量缺口:曾漏偏移,插入后 ctrl+t 折错行)
+        for rec in getattr(self, "_main_thinking_lines", []):
+            if rec.get("idx", -1) >= at_idx:
+                rec["idx"] += n
+        for rec in getattr(self, "_subagent_thinking_lines", []):
+            if rec.get("idx", -1) >= at_idx:
+                rec["idx"] += n
+
+    def _card_line(self, uuid: str, payload: dict) -> str:
+        """卡片渲染入口:紧凑规则=第 9 张起的 running fork 卡收单行。"""
+        compact = False
+        if (payload.get("kind") or "fork") == "fork" and payload.get("status") == "running":
+            running = [u for u, p in getattr(self, "_fork_card_payloads", {}).items()
+                       if (p.get("kind") or "fork") == "fork"
+                       and p.get("status") == "running" and u != uuid]
+            compact = len(running) >= 8
+        return _render_fork_card(payload, now=_time.time(),
+                                 expanded=getattr(self, "_tool_outputs_expanded", False),
+                                 compact=compact)
+
+    def _refresh_fork_cards_from_snapshot(self, snapshot: Any) -> None:
+        """fork_board_rev 变更:已登记卡行原地重渲;引擎卡刷 footer 底部行(无则清)。"""
+        indices = getattr(snapshot, "fork_card_indices", None) or {}
+        rows = getattr(self, "_fork_card_rows", {})
+        # 预扫快照(顺序无关):任一 running fork 处于 max 深度 → 引擎底部条挂标。
+        max_thinking = _payloads_have_max_thinking(
+            (snapshot.messages[mi].content[0].payload or {})
+            for mi in indices.values()
+            if 0 <= mi < len(snapshot.messages) and snapshot.messages[mi].content)
+        saw_engine = False
+        for uuid_, mi in indices.items():
+            if not (0 <= mi < len(snapshot.messages)):
+                continue
+            m = snapshot.messages[mi]
+            if not m.content:
+                continue
+            payload = dict(m.content[0].payload or {})
+            if (payload.get("kind") or "") == "engine":
+                saw_engine = True
+                self._fork_card_payloads[uuid_] = payload
+                self._footer.set_engine_line(
+                    _render_engine_bottom_line(payload, max_thinking=max_thinking))
+                continue
+            row = rows.get(uuid_)
+            if row is None:
+                continue
+            self._fork_card_payloads[uuid_] = payload
+            self._transcript.update_message_at(row, self._card_line(uuid_, payload))
+        if not saw_engine:
+            self._footer.set_engine_line("")   # 新 run reset 后清掉上一轮的底部进度行
+
+    def _refresh_running_fork_cards_locked(self) -> bool:
+        """spinner tick(tailer 300ms):running 卡就地重渲帧/耗时。返回是否有卡在动。"""
+        any_running = False
+        for uuid_, payload in getattr(self, "_fork_card_payloads", {}).items():
+            if payload.get("status") not in ("running", None, ""):
+                continue
+            row = getattr(self, "_fork_card_rows", {}).get(uuid_)
+            if row is None:
+                continue
+            any_running = True
+            self._transcript.update_message_at(row, self._card_line(uuid_, payload))
+        return any_running
 
     def _render_content_block(self, block: Any, msg: Any) -> None:
         """Render a single ContentBlock to the transcript."""
         from main.ist_core.tui.message_model import (
             BLOCK_TEXT, BLOCK_TOOL_USE, BLOCK_TOOL_RESULT, BLOCK_THINKING,
-            BLOCK_PHASE_MARKER, BLOCK_EVIDENCE, BLOCK_FINDING,
+            BLOCK_PHASE_MARKER, BLOCK_EVIDENCE, BLOCK_FINDING, BLOCK_FORK_CARD,
         )
         B = self._BOLD
         C = self._CYAN
@@ -1555,25 +1927,44 @@ class IstInkApp:
             if block.output:
                 raw_name = block.name or ""
                 tuid = getattr(block, "tool_use_id", "") or ""
+                # 信封剥离(2026-07-06):内容带 <tool_result name= status=> 信封时显示 body,
+                # 不再把开标签原文当首行泄漏;status=error 时结果首行红。主路径 on_tool_end
+                # 拿的是包装前原文通常无信封——这里是廉价防御(fork 产物转述/嵌套场景)。
+                from main.ist_core.middleware.tool_envelope import parse_tool_result_envelope
+                output_text = block.output
+                env_error = False
+                _env = parse_tool_result_envelope(output_text)
+                if _env is not None:
+                    _, _env_status, _env_body = _env
+                    if _env_body.strip():
+                        output_text = _env_body
+                    env_error = _env_status == "error"
                 # fork skill (verifier) 完成：折叠为单行 Done
                 if (
                     raw_name == "invoke_skill"
-                    and "VERDICT:" in block.output
-                    and "LEVEL:" in block.output
+                    and "VERDICT:" in output_text
+                    and "LEVEL:" in output_text
                 ):
                     self._suppress_thinking_until_done = True
                     self._place_result_lines(
                         tuid, [f"   {D}⎿{X} {D}Done (Agent completed){X}"]
                     )
                     return
-                full_lines = block.output.split("\n")
+                full_lines = output_text.split("\n")
                 expanded = getattr(self, '_tool_outputs_expanded', False)
 
-                summary = _tool_result_summary(raw_name, block.output)
+                summary = _tool_result_summary(raw_name, output_text)
                 # ⎿ 只标结果首行，后续行用 5 空格对齐到内容列（与 Claude Code 一致），
                 # 不再每行都堆 ⎿（那样一列角标连成断续竖线）。5 空格 = "   ⎿ " 的视觉宽度。
                 def _gut(lns: list[str]) -> list[str]:
-                    return [(f"   {D}⎿{X} {t}" if i == 0 else f"     {t}") for i, t in enumerate(lns)]
+                    out = []
+                    for i, t in enumerate(lns):
+                        if i == 0:
+                            body = f"\x1b[31m{t}{X}" if env_error else t
+                            out.append(f"   {D}⎿{X} {body}")
+                        else:
+                            out.append(f"     {t}")
+                    return out
                 if summary is not None and not expanded:
                     result_lines = _gut(list(summary))
                 elif expanded or len(full_lines) <= 3:
@@ -1604,12 +1995,35 @@ class IstInkApp:
             # text 可能是 loader 合并后的**多行** fork 步骤(降刷屏)→ 逐行格式化,
             # 用 append_messages 整批**只滚动一次**(避免每行 O(N) 高度重算)。
             # 单行 evidence(流水线进度行,无 \n)split 后即单元素,行为不变。
-            # 放宽到 180:fork 结果行(footprint 节点+命令、dev_probe 回显)信息量大,
-            # 120 会把命令语法截没;过长部分靠 transcript soft-wrap 折行对齐。
-            ev_lines = [f"   {D}· evidence: {ln[:180]}{X}"
-                        for ln in text.split("\n") if ln.strip()]
+            # 里程碑样式(2026-07-06):`evidence:` 是内部术语、`[engine] ` 是 emit 端
+            # 拼的标签——都不给用户看;◆ 一次性里程碑 + 中段省略防长路径折行。
+            ev_lines = []
+            for ln in text.split("\n"):
+                ln = ln.strip()
+                if not ln:
+                    continue
+                if ln.startswith("[engine] "):
+                    ln = ln[len("[engine] "):]
+                ev_lines.append(f"   {D}◆ {_middle_ellipsis(ln, 160)}{X}")
             if ev_lines:
                 self._transcript.append_messages(ev_lines)
+
+        elif block.type == BLOCK_FORK_CARD:
+            payload = dict(block.payload) if block.payload else {}
+            if not hasattr(self, "_fork_card_rows"):
+                self._fork_card_rows = {}
+                self._fork_card_payloads = {}
+            # 引擎聚合卡走 footer 底部常驻行(用户定稿),不占 transcript 行
+            if (payload.get("kind") or "") == "engine":
+                self._fork_card_payloads[msg.uuid] = payload
+                self._footer.set_engine_line(_render_engine_bottom_line(
+                    payload, max_thinking=_payloads_have_max_thinking(
+                        self._fork_card_payloads.values())))
+                return
+            idx = self._transcript.message_count()
+            self._transcript.append_message(self._card_line(msg.uuid, payload))
+            self._fork_card_rows[msg.uuid] = idx
+            self._fork_card_payloads[msg.uuid] = payload
 
         elif block.type == BLOCK_FINDING:
             text = block.payload.get("text", "") if block.payload else ""
@@ -2023,6 +2437,8 @@ class IstInkApp:
         self._main_thinking_lines = []
         self._tool_output_blocks = []
         self._tool_use_row = {}
+        self._fork_card_rows = {}
+        self._fork_card_payloads = {}
         self._ai_stream_idx = -1
         self._stream_commit_idx = -1
         self._last_thinking_idx = -1
@@ -2030,6 +2446,10 @@ class IstInkApp:
         for msg in snap.messages:
             for block in getattr(msg, "content", None) or []:
                 self._render_content_block(block, msg)
+        # 卡片在 snapshot.messages 里 → 上面循环已按最新 payload 重建行与登记;
+        # 板版本对齐,避免下一个快照重复整板重渲。
+        self._last_board_rev = getattr(snap, "fork_board_rev",
+                                       getattr(self, "_last_board_rev", -1))
         self._app.render()
 
     def _load_tui_config(self) -> None:

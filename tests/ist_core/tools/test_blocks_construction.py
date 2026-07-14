@@ -61,53 +61,69 @@ def parse_blocks_from_steps(steps):
 
 
 def test_roundtrip_on_verified_volumes():
-    """34 已验证卷:反解组合子 → expand_blocks → 与原步骤 E/F/G/H 等价(容许
-    found(H引用)与 abs_found 的既有自动转换差异——emit 侧门语义)。"""
+    """成品卷反解组合子 → expand_blocks → 与原步骤 E/F/G/H 等价(容许 found(H引用)与
+    abs_found 的既有自动转换差异——emit 侧门语义)。自备 3 个 emit 产出卷(canonical
+    config→dig→found 形态)保证确定性,盘上另有 20303175* 已验证卷时一并纳入。"""
     import pathlib
+    import shutil
     import openpyxl
+    from main.ist_core.tools.device import compile_emit
+
+    seed_aids = ["203031759900000001", "203031759900000002", "203031759900000003"]
+    for aid, host in zip(seed_aids, ["t1.com", "t2.com", "t3.com"]):
+        steps = [
+            {"E": "APV_0", "F": "cmds_config",
+             "G": ("sdns on\nsdns listener 172.16.34.70\nsdns host name " + host
+                   + "\nsdns service ip s1 172.16.35.213\nsdns pool name p1"
+                   + "\nsdns pool service p1 s1\nsdns host pool " + host + " p1")},
+            {"E": "test_env", "F": "routera", "G": "dig @172.16.34.70 " + host},
+            {"E": "check_point", "F": "found", "G": r"\b172\.16\.35\.213\b"},
+        ]
+        compile_emit.invoke({"autoid": aid, "steps": steps, "out_name": aid})
+
     HEADER = ("case描述", "可以有很多行", "如：a=1", "测试对象")
     total = ok = 0
-    for d in sorted(pathlib.Path("workspace/outputs").iterdir()):
-        if not (d.name.startswith("20303175") and len(d.name) == 18
-                and (d / "case.xlsx").exists()):
-            continue
-        ws = openpyxl.load_workbook(d / "case.xlsx").active
-        steps = []
-        for r in ws.iter_rows(min_row=2):
-            E, F, G, H = (str(r[i].value or "") for i in (4, 5, 6, 7))
-            if E and not any(E.startswith(h) for h in HEADER):
-                # 空配置占位步(G 全空白)是合法无害步(框架 splitlines 零循环),
-                # 组合子语言不表达它——round-trip 两侧同步剔除
-                if E == "APV_0" and F in ("cmds_config", "cmd_config") and not G.strip():
-                    continue
-                steps.append((E, F, G.strip(), H.strip()))
-        total += 1
-        try:
-            blocks = parse_blocks_from_steps(steps)
-        except AssertionError:
-            continue  # 已知坏形态卷(实证=上机 fail 卷)不参与
-        expanded, _, err = expand_blocks(blocks)
-        assert err is None, err
-        got = [(s.get("E"), s.get("F"), s.get("G"), s.get("H", "") or "") for s in expanded]
-        # 表示等价归一:①found(H引用) 被 emit 自动转 abs_found;②单条配置 cmds_config 与
-        # cmd_config 框架行为一致;③寄存器名是 alpha 可重命名的(v1 vs first_hit 语义同),
-        # 按首现顺序统一映射。
-        def canon(rows):
-            reg_map = {}
-            out = []
-            for e, f, g, h in rows:
-                if h:
-                    h = reg_map.setdefault(h, f"R{len(reg_map)+1}")
-                if e == "APV_0" and f in ("cmds_config", "cmd_config") and "\n" not in g:
-                    f = "cfg1"
-                if e == "check_point" and h and f in ("found", "abs_found"):
-                    f = "H_REF"
-                out.append((e, f, g, h))
-            return out
-        if canon(got) == canon(steps):
-            ok += 1
-    assert total >= 3, "盘上成品卷不足,round-trip 无法验证"
-    assert ok / total >= 0.9, f"round-trip {ok}/{total}"
+    try:
+        for d in sorted(pathlib.Path("workspace/outputs").iterdir()):
+            if not (d.name.startswith("20303175") and len(d.name) == 18
+                    and (d / "case.xlsx").exists()):
+                continue
+            ws = openpyxl.load_workbook(d / "case.xlsx").active
+            steps = []
+            for r in ws.iter_rows(min_row=2):
+                E, F, G, H = (str(r[i].value or "") for i in (4, 5, 6, 7))
+                if E and not any(E.startswith(h) for h in HEADER):
+                    if E == "APV_0" and F in ("cmds_config", "cmd_config") and not G.strip():
+                        continue
+                    steps.append((E, F, G.strip(), H.strip()))
+            total += 1
+            try:
+                blocks = parse_blocks_from_steps(steps)
+            except AssertionError:
+                continue
+            expanded, _, err = expand_blocks(blocks)
+            assert err is None, err
+            got = [(s.get("E"), s.get("F"), s.get("G"), s.get("H", "") or "") for s in expanded]
+
+            def canon(rows):
+                reg_map = {}
+                out = []
+                for e, f, g, h in rows:
+                    if h:
+                        h = reg_map.setdefault(h, f"R{len(reg_map)+1}")
+                    if e == "APV_0" and f in ("cmds_config", "cmd_config") and "\n" not in g:
+                        f = "cfg1"
+                    if e == "check_point" and h and f in ("found", "abs_found"):
+                        f = "H_REF"
+                    out.append((e, f, g, h))
+                return out
+            if canon(got) == canon(steps):
+                ok += 1
+        assert total >= 3, "盘上成品卷不足,round-trip 无法验证"
+        assert ok / total >= 0.9, f"round-trip {ok}/{total}"
+    finally:
+        for aid in seed_aids:
+            shutil.rmtree(pathlib.Path("workspace/outputs") / aid, ignore_errors=True)
 
 
 def test_fuzz_expansion_always_passes_crash_gates():

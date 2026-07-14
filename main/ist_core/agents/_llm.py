@@ -131,16 +131,17 @@ def _build_chat_model(model_name: str, effort: str = "", **kwargs: Any):
         if _param is not None:
             extra_body["thinking"] = _param
 
-    # 思考深度 reasoning_effort(2026-07-06):deepseek 族支持 high|max,平台默认 max
-    # (思考+流式是标准形态,深想是默认;IST_EFFORT=high 全局降,或 effort= 按调用点覆盖
-    # ——fork 经 agents md frontmatter 的 effort: 字段)。仅思考开启且 deepseek 族注入,
-    # 其他族支持面未证实、不赌 400;非法值按 max 处理。
+    # 思考深度 reasoning_effort(2026-07-06):deepseek 族支持 high|max,平台默认 high
+    # (34-case 实跑对照:max 无更好表现、只多烧 token——2026-07-06 用户拍板降回;
+    # IST_EFFORT=max 可全局升,或 effort= 按调用点覆盖——fork 经 agents md frontmatter
+    # 的 effort: 字段)。仅思考开启且 deepseek 族注入,其他族支持面未证实、不赌 400;
+    # 非法值按 high 处理。
     if ("reasoning_effort" not in extra_body
             and extra_body.get("thinking", {}).get("type") in ("enabled", "adaptive")):
         _fam = (model_name or "").lower().rpartition("/")[-1]
         if _fam.startswith("deepseek"):
-            _eff = (effort or os.environ.get("IST_EFFORT") or "max").strip().lower()
-            extra_body["reasoning_effort"] = _eff if _eff in ("high", "max") else "max"
+            _eff = (effort or os.environ.get("IST_EFFORT") or "high").strip().lower()
+            extra_body["reasoning_effort"] = _eff if _eff in ("high", "max") else "high"
 
     # 深度思考开启(enabled/adaptive)时端点多强制自家采样参数、不接受自定义(如 mimo 官方
     # deep-thinking 页)。再发 0.0/0.5 是冗余,且可能触发端点告警或被静默忽略。仅未开 thinking
@@ -480,6 +481,27 @@ def _get_chat_openai_with_reasoning():
             ak = getattr(m, "additional_kwargs", None) or {}
             return bool(ak.get("reasoning_content") or ak.get("tool_calls"))
 
+        @staticmethod
+        def _chunk_finish_reason(ch) -> str:
+            """chunk 携带的终止信号 finish_reason;无则空。流正常收尾必带 stop/tool_calls/
+            length 之一——整段流吐完却从没见过它 = 网关中途断流(未收到终止帧)。
+            注意:finish_reason=stop 的自截断这里判不出(那类 stop 照常来,取证已确认),此校验
+            只兜「压根没收到终止信号」那类突然断流。"""
+            gi = getattr(ch, "generation_info", None) or {}
+            if gi.get("finish_reason"):
+                return str(gi.get("finish_reason"))
+            try:
+                rm = ch.message.response_metadata or {}
+            except Exception:  # noqa: BLE001
+                return ""
+            return str(rm.get("finish_reason") or "")
+
+        @staticmethod
+        def _verify_finish_enabled() -> bool:
+            """流终止信号校验开关(默认开;IST_LLM_VERIFY_FINISH=0 关)。"""
+            return (os.environ.get("IST_LLM_VERIFY_FINISH") or "1").strip().lower() not in (
+                "0", "false", "off", "no")
+
         def _stall_deadline_s(self) -> float:
             """连续零实质内容的容忍秒数;0=关守卫。挂流实证(2026-07-04 V轮):思考/输出
             增量冻结 15-45 分钟,期间仅 keep-alive 空 chunk,httpx 读超时被逐个重置永不触发。
@@ -493,11 +515,15 @@ def _get_chat_openai_with_reasoning():
             import time as _time
             yielded = False
             substantive = False
+            saw_finish = False
+            verify_finish = self._verify_finish_enabled()
             stall_s = self._stall_deadline_s()
             last_progress = _time.monotonic()
             try:
                 for ch in super()._stream(*args, **kwargs):
                     yielded = True
+                    if verify_finish and not saw_finish and self._chunk_finish_reason(ch):
+                        saw_finish = True
                     if self._chunk_has_substance(ch):
                         substantive = True
                         last_progress = _time.monotonic()
@@ -508,6 +534,17 @@ def _get_chat_openai_with_reasoning():
                         raise TimeoutError(
                             f"stream stalled: 连续 {stall_s}s 无实质内容(空 chunk 保活)")
                     yield ch
+                # 终止信号校验(2026-07-07,对标流截断调研的安全网):流吐过内容却从没带
+                # finish_reason → 网关中途断流。零实质内容时安全重发一次(上游没消费到,不重复);
+                # 已吐 substantive 时只告警(重发会重复输出,防 opencode #12234 无限重试)。
+                if verify_finish and yielded and not saw_finish:
+                    if not substantive:
+                        logger.warning("LLM 流结束但无终止信号且零实质内容,安全重发一次")
+                        for ch in super()._stream(*args, **kwargs):
+                            yield ch
+                    else:
+                        logger.warning("LLM 流结束却缺终止信号(finish_reason),疑似中途截断"
+                                       "(已吐 substantive,防重复不自动重发)")
             except Exception as exc:  # noqa: BLE001
                 # 参数拒绝发生在建流前(首 chunk 前 4xx);已吐过 chunk 说明不是参数问题,不重试防重复内容
                 if (not yielded and _is_thinking_param_rejection(exc)
@@ -526,11 +563,15 @@ def _get_chat_openai_with_reasoning():
             import time as _time
             yielded = False
             substantive = False
+            saw_finish = False
+            verify_finish = self._verify_finish_enabled()
             stall_s = self._stall_deadline_s()
             last_progress = _time.monotonic()
             try:
                 async for ch in super()._astream(*args, **kwargs):
                     yielded = True
+                    if verify_finish and not saw_finish and self._chunk_finish_reason(ch):
+                        saw_finish = True
                     if self._chunk_has_substance(ch):
                         substantive = True
                         last_progress = _time.monotonic()
@@ -541,6 +582,16 @@ def _get_chat_openai_with_reasoning():
                         raise TimeoutError(
                             f"stream stalled: 连续 {stall_s}s 无实质内容(空 chunk 保活)")
                     yield ch
+                # 终止信号校验(同 _stream):流吐过内容却从没带 finish_reason → 网关中途断流。
+                # 零实质内容安全重发一次;已吐 substantive 只告警(防重复输出)。
+                if verify_finish and yielded and not saw_finish:
+                    if not substantive:
+                        logger.warning("LLM 流结束但无终止信号且零实质内容,安全重发一次")
+                        async for ch in super()._astream(*args, **kwargs):
+                            yield ch
+                    else:
+                        logger.warning("LLM 流结束却缺终止信号(finish_reason),疑似中途截断"
+                                       "(已吐 substantive,防重复不自动重发)")
             except Exception as exc:  # noqa: BLE001
                 if (not yielded and _is_thinking_param_rejection(exc)
                         and self._drop_thinking_param(exc)):

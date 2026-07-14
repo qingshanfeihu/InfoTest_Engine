@@ -387,3 +387,127 @@ def test_serial_multi_sheet_forks_each_pop_correctly(monkeypatch):
     
     assert _find(snap, 2).parent_tool_use_id == "r1:1"
     assert _find(snap, 5).parent_tool_use_id == "r1:4"
+
+
+# ---------------------------------------------------------------- fork 卡片板
+
+def _cards_evt(seq: int, *records):
+    return _evt("fork_cards", seq, payload={"records": list(records)})
+
+
+def test_fork_card_create_update_finalize_inplace():
+    """fork_start 建卡→tool/tool_result 原地更新(消息数不变)→fork_end 定格;
+    rev 每次 dispatch 单调递增;fork_board_rev 卡片变更递增。"""
+    r = MessageReducer()
+    snaps = []
+    r.subscribe(snaps.append)
+
+    r.dispatch(_cards_evt(1, {"event": "fork_start", "fork_id": "f1", "ts": 1.0,
+                              "skill": "compile-worker", "agent": "compile-worker",
+                              "tag": "engine:994838", "autoid": "203031754291994838",
+                              "brief_head": "编写 case"}))
+    s1 = snaps[-1]
+    assert len(s1.messages) == 1
+    card = s1.messages[0].content[0]
+    assert card.type == "fork_card"
+    assert card.payload["status"] == "running" and card.payload["autoid"].endswith("994838")
+    assert s1.fork_card_indices["fork:f1"] == 0
+
+    r.dispatch(_cards_evt(2, {"event": "tool", "fork_id": "f1", "ts": 2.0,
+                              "tool": "dev_probe", "arg": "show sdns", "n_calls": 3}))
+    s2 = snaps[-1]
+    assert len(s2.messages) == 1, "tool 事件应原地更新,不新增消息"
+    p = s2.messages[0].content[0].payload
+    assert p["current_tool"] == "dev_probe" and p["n_calls"] == 3
+    assert s2.rev > s1.rev and s2.fork_board_rev > s1.fork_board_rev
+
+    r.dispatch(_cards_evt(3, {"event": "tool_result", "fork_id": "f1", "ts": 3.0,
+                              "tool": "dev_probe", "status": "ok", "summary": "Pool: p1"}))
+    assert list(snaps[-1].messages[0].content[0].payload["recent"]) == ["dev_probe → Pool: p1"]
+
+    r.dispatch(_cards_evt(4, {"event": "fork_end", "fork_id": "f1", "ts": 9.0, "ok": True,
+                              "error": "", "elapsed_s": 8.0, "calls": 7, "ai_rounds": 4,
+                              "tokens_in": 1000, "tokens_out": 50, "cache_hit": 900}))
+    p = snaps[-1].messages[0].content[0].payload
+    assert p["status"] == "ok" and p["calls"] == 7 and p["tokens_in"] == 1000
+    # 终态后迟到的 tool 事件不再改卡
+    r.dispatch(_cards_evt(5, {"event": "tool", "fork_id": "f1", "ts": 10.0,
+                              "tool": "fs_read", "arg": "x", "n_calls": 8}))
+    p2 = snaps[-1].messages[0].content[0].payload
+    assert p2["status"] == "ok" and p2["current_tool"] == ""
+
+
+def test_fork_card_skeleton_on_out_of_order_tool():
+    """tool 先到(fork_start 丢/乱序)→ 自动建骨架卡,不崩不丢。"""
+    r = MessageReducer()
+    r.dispatch(_cards_evt(1, {"event": "tool", "fork_id": "f9", "ts": 1.0,
+                              "tool": "fs_grep", "arg": "p", "n_calls": 1}))
+    snap = r.snapshot()
+    assert len(snap.messages) == 1
+    assert snap.messages[0].content[0].payload["status"] == "running"
+
+
+def test_engine_card_upsert_and_progress_single_row():
+    """engine_tick 同 run 恒一张卡;progress 同 key 恒一行(48 心跳收敛 1 行)。"""
+    r = MessageReducer()
+    r.dispatch(_cards_evt(1, {"event": "run_meta", "run": "dongkl", "kind": "engine",
+                              "ts": 1.0, "mindmap": "x.txt", "ledger": "l.json"}))
+    for i in range(5):
+        r.dispatch(_cards_evt(2 + i, {"event": "engine_tick", "run": "dongkl",
+                                      "phase": "worker_fanout", "round": 0, "wave": 1,
+                                      "counts": {"produced": i}, "total": 34, "ts": 2.0 + i}))
+    for i in range(48):
+        r.dispatch(_cards_evt(100 + i, {"event": "progress", "key": "runbatch:dongkl",
+                                        "phase": "上机", "elapsed_s": 10 + 30 * i,
+                                        "total_s": 1440, "n_cases": 32,
+                                        "detail": "smoke_test/.../test_xlsx.py",
+                                        "status": "running", "ts": 100.0 + i}))
+    snap = r.snapshot()
+    assert len(snap.messages) == 2, "engine 卡 + progress 行,各恒一条"
+    eng = snap.messages[0].content[0].payload
+    assert eng["counts"]["produced"] == 4 and eng["status"] == "running"
+    prog = snap.messages[1].content[0].payload
+    assert prog["elapsed_s"] == 10 + 30 * 47
+    # 终态定格
+    r.dispatch(_cards_evt(200, {"event": "progress", "key": "runbatch:dongkl",
+                                "phase": "上机", "elapsed_s": 1500, "total_s": 1440,
+                                "n_cases": 32, "detail": "完成", "status": "done", "ts": 999.0}))
+    r.dispatch(_cards_evt(201, {"event": "engine_tick", "run": "dongkl", "phase": "report",
+                                "round": 2, "wave": 3, "counts": {"passed": 34},
+                                "total": 34, "ts": 1000.0}))
+    snap = r.snapshot()
+    assert snap.messages[1].content[0].payload["status"] == "done"
+    assert snap.messages[0].content[0].payload["status"] == "done"
+
+
+def test_rev_monotonic_across_reset():
+    """rev 跨 reset 不清零(清零=reset 后全部快照被 UI 判旧丢弃)。"""
+    r = MessageReducer()
+    snaps = []
+    r.subscribe(snaps.append)
+    r.dispatch(_cards_evt(1, {"event": "fork_start", "fork_id": "a", "ts": 1.0}))
+    rev_before = snaps[-1].rev
+    r.reset()
+    assert snaps[-1].rev > rev_before, "reset 后 rev 必须继续递增"
+    assert snaps[-1].messages == ()
+    r.dispatch(_cards_evt(2, {"event": "fork_start", "fork_id": "b", "ts": 2.0}))
+    assert snaps[-1].rev > rev_before + 1
+    assert snaps[-1].fork_card_indices == {"fork:b": 0}
+
+
+def test_fork_cards_interleaved_with_normal_messages_keep_index():
+    """卡片与普通消息交错:下标登记随 append 正确,原地更新命中正确消息。"""
+    r = MessageReducer()
+    r.dispatch(_evt("llm_end", 1, payload={"name": "thought", "text": "分析中"}))
+    r.dispatch(_cards_evt(2, {"event": "fork_start", "fork_id": "f1", "ts": 1.0,
+                              "skill": "s", "brief_head": "b"}))
+    r.dispatch(_evt("llm_end", 3, payload={"name": "thought", "text": "继续"}))
+    r.dispatch(_cards_evt(4, {"event": "tool", "fork_id": "f1", "ts": 2.0,
+                              "tool": "fs_read", "arg": "a.md", "n_calls": 1}))
+    snap = r.snapshot()
+    idx = snap.fork_card_indices["fork:f1"]
+    assert snap.messages[idx].content[0].payload["current_tool"] == "fs_read"
+    n = len(snap.messages)
+    r.dispatch(_cards_evt(5, {"event": "tool", "fork_id": "f1", "ts": 3.0,
+                              "tool": "fs_grep", "arg": "p", "n_calls": 2}))
+    assert len(r.snapshot().messages) == n, "原地更新不增消息"

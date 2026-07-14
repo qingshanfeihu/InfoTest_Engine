@@ -54,7 +54,7 @@ def test_fanout_retries_on_rate_limit_then_succeeds(monkeypatch):
     # 前两次抛 429，第三次成功 → 应重试到成功，不判失败。
     calls = {"n": 0}
 
-    def fake_execute(skill, brief):
+    def fake_execute(skill, brief, **kw):
         calls["n"] += 1
         if calls["n"] < 3:
             raise Exception("Error code: 429 Too Many Requests")
@@ -76,7 +76,7 @@ def test_fanout_retries_on_rate_limit_then_succeeds(monkeypatch):
 
 
 def test_fanout_gives_up_after_max_retries(monkeypatch):
-    def always_429(skill, brief):
+    def always_429(skill, brief, **kw):
         raise Exception("429 rate limit")
 
     import main.ist_core.skills.loader as loader
@@ -111,7 +111,9 @@ def _sandbox(tmp_path, monkeypatch):
 
 def _fake_fork(monkeypatch, fn):
     import main.ist_core.skills.loader as loader
-    monkeypatch.setattr(loader, "execute_fork_skill", fn)
+    # fanout 真实调用带 tag= 归属参数;桩签名多为 (skill, brief),包一层吞掉额外 kwargs
+    monkeypatch.setattr(loader, "execute_fork_skill",
+                        lambda skill, brief, **kw: fn(skill, brief))
 
 
 def test_fanout_briefs_path_18_case_batch(tmp_path, monkeypatch):

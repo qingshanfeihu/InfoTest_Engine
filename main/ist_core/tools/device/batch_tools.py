@@ -210,15 +210,14 @@ def _xlsx_real_autoids(xlsx_file: str) -> list[str]:
 
 @tool(parse_docstring=True)
 def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = "",
-                   concurrency: int = 0, evidence_from_xlsx: str = "",
-                   force_regrade: bool = False) -> str:
+                   concurrency: int = 0, evidence_from_xlsx: str = "") -> str:
     """并发派发**同一个 fork skill** 给多个 brief，收齐所有子 agent 的输出。
 
-    用于批量编译里 worker / draft / grade 这类**可并行**阶段：每个 case 一个 brief，
+    用于批量编译里 worker / attributor 这类**可并行**阶段：每个 case 一个 brief，
     一次性并发跑完（受并发度上限约束，超出的排队），返回每个 brief 的产物。
     比逐个 invoke_skill 串行快 N 倍（N≈并发度），且各 fork 互相隔离、不串话。
 
-    **只用于 worker / draft / grade**（纯 LLM + 检索/本地写，不碰设备可变态）。
+    **只用于 worker / attributor**（纯 LLM + 检索/本地写，不碰设备可变态）。
     **上机（run）绝不用本工具**——上机受框架全局锁 + 设备共享态约束，必须串行，
     用 dev_run_batch。
 
@@ -230,7 +229,7 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
     截断(2026-07-04 全量轮实证:18-case 内联截断 → 被迫逐个派发,并发全失)。
 
     Args:
-        skill: 要并发派发的 fork skill 名（如 "compile-worker" / "ist-compile-draft" / "ist-compile-grade"）。
+        skill: 要并发派发的 fork skill 名（如 "compile-worker" / "compile-attributor"）。
         briefs_json: 小批次通道:原生数组(JSON 数组字符串兼容)。每项是含 key 与 brief 两键的
             dict——key 为标识(如 autoid,仅用于把输出对回到 case),brief 为完整 brief 文本。
         briefs_path: **大批次首选**。workspace 内 JSON 文件路径(如
@@ -242,8 +241,6 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
         evidence_from_xlsx: 可选。上机后的重编派发传那份 xlsx 路径——工具自动从同目录
             last_run.json 把每个 key(=autoid) 的 device_context/causality **原文**附进对应
             brief 尾部,消除手抄转述损耗（曾实证独行 ^ 被转述丢失致误归）。
-        force_regrade: grade 类派发默认跳过「凭证新鲜且已 PASS」的 case——卷面没变
-            重判只烧 token,结论还会随抽样漂移(实测零信息增量)。确有行级新证据要推翻时传 True。
 
     Returns:
         JSON 数组字符串。每项 {"key": ..., "ok": bool, "output": "<子agent输出或错误>"}，
@@ -328,40 +325,7 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
         except Exception:  # noqa: BLE001
             logger.debug("fanout 证据注入失败(跳过)", exc_info=True)
 
-    # grade 派发的新鲜 PASS 短路:凭证签名匹配当前 xlsx 且 verdict=PASS → 卷面没变、
-    # 结论已在,重派 fork 是纯 token 消耗(fork 全程=skill prompt+手册+先例检索,单次
-    # 300k-1M 输入)。结果以 skipped 项返回,orchestrator 无需区别处理。
     skipped: list[dict] = []
-    if "grade" in (skill or "").lower() and not force_regrade:
-        _root = _project_root()
-        rest: list[dict] = []
-        for it in norm:
-            aid = it["key"].strip()
-            fresh_pass = False
-            if len(aid) == 18 and aid.isdigit():
-                d = _root / "workspace" / "outputs" / aid
-                credf, xf = d / ".grade_credential.json", d / "case.xlsx"
-                if credf.is_file() and xf.is_file():
-                    try:
-                        cred = json.loads(credf.read_text(encoding="utf-8"))
-                        # 只认 grade 自己落的 PASS:lint 凭证(source=lint)是 emit 的结构
-                        # 凭证——新主路下 grade 派发都是显式意图(归因辅助/欠定过滤),
-                        # 不该被结构凭证豁免。
-                        fresh_pass = (str(cred.get("verdict")).upper() == "PASS"
-                                      and str(cred.get("source") or "grade") == "grade"
-                                      and abs(float(cred.get("xlsx_mtime", -1))
-                                              - xf.stat().st_mtime) < 1e-6)
-                    except Exception:  # noqa: BLE001
-                        fresh_pass = False
-            if fresh_pass:
-                skipped.append({"key": it["key"], "ok": True, "output": (
-                    "SKIPPED_FRESH_PASS: 该卷凭证新鲜且已 PASS(卷面自审批后未变),"
-                    "跳过重复 grade。要推翻须先改卷面,或带行级新证据传 force_regrade=True。")})
-            else:
-                rest.append(it)
-        norm = rest
-        if skipped and not norm:
-            return json.dumps(skipped, ensure_ascii=False, indent=2)
 
     from main.ist_core.skills.loader import execute_fork_skill
 
@@ -370,10 +334,16 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
                 skill, len(norm), workers, len(skipped))
 
     def _run(item: dict) -> dict:
+        # tag=per-item 归属标识(2026-07-06):旧版不传,N worker 的 fastlog 行全是同一个
+        # skill 名 label、无法分辨哪行属于哪个 case;格式对齐引擎 `engine:{aid[-6:]}`——
+        # `{skill短名}:{autoid尾6}`(非 autoid key 取前 12)。
+        _k = str(item.get("key") or "").strip()
+        _short = (skill or "fork").replace("ist-compile-", "").replace("compile-", "")
+        _tag = f"{_short}:{_k[-6:]}" if len(_k) == 18 and _k.isdigit() else f"{_short}:{_k[:12]}"
         last_exc = None
         for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
             try:
-                out = execute_fork_skill(skill, item["brief"])
+                out = execute_fork_skill(skill, item["brief"], tag=_tag)
                 ok = not (isinstance(out, str) and out.startswith("ERROR:"))
                 return {"key": item["key"], "ok": ok, "output": out}
             except Exception as exc:  # noqa: BLE001
@@ -400,7 +370,7 @@ def compile_fanout(skill: str, briefs_json: list | str = "", briefs_path: str = 
                 r = {"key": key, "ok": False, "output": f"ERROR: fork 超时/异常: {exc}"}
             results[key] = r
 
-    # 保持输入顺序;grade 短路跳过的项一并带回(orchestrator 拿到全量对账)
+    # 保持输入顺序
     ordered = [results.get(it["key"], {"key": it["key"], "ok": False,
                                        "output": "ERROR: 无结果"}) for it in norm]
     ordered += skipped
@@ -582,29 +552,59 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
 
             # 跑批进度 → evidence fastlog（TUI 300ms tail 同一文件即实时显示，零 TUI 改动）。
             # 降噪：完成数变化或 ≥30s 心跳才写一行；任何异常静默——可观测性不拖垮跑批。
+            # 双写(2026-07-06):人读 ▸ 行照旧(tail -f 契约);结构化 progress 事件带稳定
+            # key=runbatch:{submit}——TUI 卡片模式同 key 恒一行原地更新,不再 48 条心跳平铺。
             _t0 = time.time()
+            _prog_key = f"runbatch:{submit}"
             _prog_state = {"sig": "", "ts": 0.0}
             def _on_poll(st: dict) -> None:
                 try:
-                    from main.ist_core.skills.loader import _fork_emit
+                    import re
+                    from main.ist_core.skills.loader import _fork_emit, _fork_emit_event
                     now = time.time()
                     # 整卷单跑模式下 len(results) 开跑即满(框架一次性建全 per-case 条目),
                     # 旧版拿它当分子显示「34/34」恒满假进度(2026-07-03 实证)。改为诚实
                     # 口径:已跑时长/总预算 + 框架日志尾(真实推进信号在日志里)。
-                    tail_lines = (st.get("log_tail") or "").strip().splitlines()
+                    _log = st.get("log_tail") or ""
+                    tail_lines = _log.strip().splitlines()
                     tail_txt = tail_lines[-1].strip()[-70:] if tail_lines else ""
-                    sig = tail_txt
+                    # 当前在跑第几个 case:框架按 autoids 顺序单跑,日志尾最近提到的 18 位
+                    # autoid 即当前 case → 在 autoids 里的序号是诚实进度(比时长更直观)。
+                    _cur_idx = 0
+                    for _id in reversed(re.findall(r"(?<!\d)(\d{18})(?!\d)", _log)):
+                        if _id in autoids:
+                            _cur_idx = autoids.index(_id) + 1
+                            break
+                    _env_host = getattr(client, "host", "") or ""
+                    sig = f"{tail_txt}|{_cur_idx}"
                     if sig == _prog_state["sig"] and now - _prog_state["ts"] < 30:
                         return
                     _prog_state["sig"], _prog_state["ts"] = sig, now
+                    _prog_seg = (f"第{_cur_idx}/{len(autoids)}" if _cur_idx
+                                 else f"整卷 {len(autoids)} case 单跑")
                     tail = f" · {tail_txt}" if tail_txt else ""
                     _fork_emit(f"▸ 上机运行 {int(now - _t0)}s/{total_max}s"
-                               f"(整卷 {len(autoids)} case 单跑){tail}")
+                               f"(环境 {_env_host} · {_prog_seg}){tail}")
+                    _fork_emit_event({"event": "progress", "key": _prog_key,
+                                      "phase": "上机", "elapsed_s": int(now - _t0),
+                                      "total_s": int(total_max), "n_cases": len(autoids),
+                                      "env": _env_host, "case_idx": _cur_idx,
+                                      "detail": tail_txt, "status": "running"})
                 except Exception:  # noqa: BLE001
                     pass
 
             run = client.run_and_wait(module, submit, build, autoids, max_s=total_max,
                                       progress_cb=_on_poll)
+            try:
+                from main.ist_core.skills.loader import _fork_emit_event as _fee
+                _run_err = run.get("error") or ("device_busy" if run.get("busy") else "")
+                _fee({"event": "progress", "key": _prog_key, "phase": "上机",
+                      "elapsed_s": int(time.time() - _t0), "total_s": int(total_max),
+                      "n_cases": len(autoids),
+                      "detail": str(_run_err)[:70] if _run_err else "完成",
+                      "status": "error" if _run_err else "done"})
+            except Exception:  # noqa: BLE001
+                pass
             if run.get("busy") or run.get("error") == "device_busy":
                 return json.dumps({"error": "device_busy", "busy": True,
                                    "message": run.get("message") or "环境忙：正在验证上一个用例，请稍后重试。"},

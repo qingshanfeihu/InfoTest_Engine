@@ -2,8 +2,8 @@
 
 事故:orchestrator 用 run_python 直改 case.xlsx 绕过 compile_emit 的崩溃门,
 直改版带"dig(H)后直接断言"形态,上机 result=None 抛 TypeError 崩整份 pytest
-(39 秒截断、34 case 只跑 1 个,连续两轮)。修复:lint 挂到凭证(submit_verdict/
-compile_score)与合并(emit_merged)的必经之路——任何来源的卷面都逃不过。
+(39 秒截断、34 case 只跑 1 个,连续两轮)。修复:lint 挂到凭证(compile_emit lint)
+与合并(emit_merged)的必经之路——任何来源的卷面都逃不过。
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-from main.ist_core.tools.device import compile_emit, compile_emit_merged, submit_verdict
+from main.ist_core.tools.device import compile_emit, compile_emit_merged
 from main.ist_core.tools.device.structural_gate import lint_xlsx_case
 
 AID = "203031750000000201"
@@ -101,51 +101,9 @@ def test_lint_catches_dns_label_over_63(emitted_case):
     assert any(v.code == "dns_label_over_63" for v in res.violations)
 
 
-def test_submit_verdict_rejects_pass_on_lint_violation(emitted_case):
-    def mutate(ws):
-        r = _find_row(ws, 7, "dig @")
-        ws.cell(r, 8).value = "v1"
-    _corrupt(emitted_case, mutate)
-    out = submit_verdict.invoke({"autoid": AID, "verdict": "PASS",
-                                 "xlsx_path": str(emitted_case)})
-    assert out.startswith("error") and "lint" in out
-    # CUT 放行且违例并进 caveats(重做者可见)
-    out2 = submit_verdict.invoke({"autoid": AID, "verdict": "CUT", "root_cause": "可修复",
-                                  "caveats": ["r2 dig 带 H 后直接断言"],
-                                  "xlsx_path": str(emitted_case)})
-    assert "已提交" in out2
-    cred = json.loads((emitted_case.parent / ".grade_credential.json").read_text())
-    assert any("lint" in c for c in cred["caveats"])
-
-
-def test_submit_verdict_rejects_malformed_autoid(emitted_case):
-    out = submit_verdict.invoke({"autoid": AID[:17], "verdict": "PASS",
-                                 "xlsx_path": str(emitted_case)})
-    assert out.startswith("error") and "18 位" in out
-
-
-def test_submit_verdict_flip_needs_line_evidence(emitted_case):
-    ok = submit_verdict.invoke({"autoid": AID, "verdict": "PASS",
-                                "xlsx_path": str(emitted_case)})
-    assert "已提交" in ok
-    # 同卷面(内容未变)翻 CUT:无行级证据 → 拒
-    flip = submit_verdict.invoke({"autoid": AID, "verdict": "CUT", "root_cause": "可修复",
-                                  "caveats": ["感觉断言不够好"],
-                                  "xlsx_path": str(emitted_case)})
-    assert flip.startswith("error") and "行级" in flip
-    # 带行号 → 放
-    flip2 = submit_verdict.invoke({"autoid": AID, "verdict": "CUT", "root_cause": "可修复",
-                                   "caveats": ["r3 断言集合漏了成员"],
-                                   "xlsx_path": str(emitted_case)})
-    assert "已提交" in flip2
-
-
 def test_emit_merged_rejects_lint_violation(emitted_case):
-    # 直改场景全真模拟:凭证新鲜 PASS,但卷面在凭证后被改坏 → 合并 lint 最后防线拦下
-    ok = submit_verdict.invoke({"autoid": AID, "verdict": "PASS",
-                                "xlsx_path": str(emitted_case)})
-    assert "已提交" in ok
-
+    # 直改场景全真模拟:emit 落的 lint 凭证新鲜,但卷面在凭证后被改坏、直改者又把凭证签名
+    # 重签回当前 mtime → 合并的 lint 最后防线仍拦下(凭证门放行后 lint 是终卷必经)。
     def mutate(ws):
         r = _find_row(ws, 7, "dig @")
         ws.cell(r, 8).value = "v1"
@@ -240,22 +198,6 @@ def test_lint_i_without_placeholder(emitted_case):
     _corrupt(emitted_case, no_ph)
     res = lint_xlsx_case(emitted_case)
     assert any(v.code == "injection_without_placeholder" for v in res.violations)
-
-
-def test_submit_verdict_cut_streak_hint(emitted_case):
-    # CUT 连击止损(遗留#3):连续≥2次 CUT 附加"语义终判在上机"机械提示;PASS 清零
-    from main.ist_core.tools.device import submit_verdict as sv
-    kw = dict(root_cause="可修复", caveats=["r3 观测步缺失"])
-    out1 = sv.func(AID, "CUT", **kw)
-    assert "已提交判定" in out1 and "连续" not in out1
-    out2 = sv.func(AID, "CUT", **kw)
-    assert "连续 2 次 CUT" in out2 and "上机" in out2
-    out3 = sv.func(AID, "CUT", **kw)
-    assert "连续 3 次 CUT" in out3
-    out4 = sv.func(AID, "PASS")
-    assert "连续" not in out4
-    cred = json.loads((emitted_case.parent / ".grade_credential.json").read_text(encoding="utf-8"))
-    assert cred["cut_streak"] == 0
 
 
 def test_lint_comma_splits_parameters(emitted_case):

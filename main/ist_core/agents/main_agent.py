@@ -27,13 +27,10 @@ from main.ist_core.tools.device import (
     compile_emit,  # main-orchestrated 兜底单 case；worker 主路也用
     compile_user_decision,  # 欠定拍板落机读约束文件（锚取台账,不手抄）
     compile_engine_run,  # V6:一句话跑整条编译闭环(状态机图,断点续跑)
-    compile_prep,  # main-orchestrated：解析脑图→manifest（含意图族聚类,族摊销路由）
-    compile_skeleton,  # 族摊销:取族首成品的配置骨架,族内 brief 复用
+    compile_prep,  # 引擎构件 / ist-verify 链：解析脑图→manifest（含意图族聚类）
     compile_writeback,  # 闭环:上机真PASS写回先例库(ρ_k增长)
-    compile_emit_merged,  # main-orchestrated：合并各 case 单 xlsx 打包
-    compile_fanout,  # main-orchestrated 真并发：N 个 case 一次 fan-out 独立 worker（reflow/批量重编，替代逐个 invoke_skill 串行）
-    compile_grade_extract,  # main-orchestrated：合并前确定性自查 suspect（grade 之外的第二道闸）
-    compile_pipeline,
+    compile_emit_merged,  # 引擎构件 / ist-verify 链：合并各 case 单 xlsx 打包
+    compile_fanout,  # 真并发派发器：N 个 case 一次 fan-out 独立 worker（ist-verify reflow 用）
     compile_runtime_slots,
     compile_runtime_fill,
 )
@@ -47,6 +44,7 @@ from main.ist_core.tools.skills.file_server import qa_file_server
 from main.ist_core.tools.skills.download_case import download_agile_case
 from main.ist_core.tools.ask_user import ask_user
 from main.ist_core.tools.memory_tool import remember
+from main.ist_core.tools.wx_send_file import wx_send_file
 
 logger = logging.getLogger(__name__)
 
@@ -69,23 +67,20 @@ def _default_generic_tools() -> list[Any]:
         dev_probe,
         dev_init_device,
 
-        # 编译/上机：主 agent 只编排不手搓——编译机器（compile_prep/fanout/emit/
-        # emit_merged/precedent/score）下放到 compile_pipeline 内部 + draft/grade fork，
-        # 主 agent 仅调 compile_pipeline 一次；ist-verify 上机验证链用下面这组。
+        # 编译走 V6 引擎：主 agent 调 compile_engine_run 一次跑完整条闭环（编写/合并/
+        # 上机/归因/定向重编由状态机驱动，断点续跑）。下面这组 compile_*/dev_run_batch*
+        # 是 ist-verify 上机验证链 + 引擎内部构件（引擎以 .func 复用同一套工具）。
         dev_run_batch,
         dev_run_batch_digest,   # 整份上机 + 逐 case 归因 + 明细落 workspace，回精简分类摘要（推荐：大结果不 offload、可直接看分类）
         compile_attribute,   # 上机 fail 四层归因（单 case；digest 已内置批量归因）
         submit_attribution,  # 归因结论落盘 last_run.json（瞬态/冻结跨轮护栏与缺陷候选汇总靠它）
-        compile_pipeline,  # 确定性编译流水线（保留当 fallback）
-        compile_emit,  # main-orchestrated 兜底单 case
-        compile_prep,  # main-orchestrated：解析脑图→manifest（含意图族聚类,族摊销路由）
+        compile_emit,  # ist-verify reflow 单 case / worker 主路也用
+        compile_prep,  # 引擎构件 / ist-verify 链：解析脑图→manifest（含意图族聚类）
         compile_user_decision,  # 欠定拍板落机读约束文件（锚取台账,不手抄）
         compile_engine_run,  # V6:一句话跑整条编译闭环(状态机图,断点续跑)
-    compile_skeleton,  # 族摊销:取族首成品的配置骨架,族内 brief 复用
-    compile_writeback,  # 闭环:上机真PASS写回先例库(ρ_k增长)
-        compile_emit_merged,  # main-orchestrated：合并各 case 单 xlsx 打包
-        compile_fanout,  # main-orchestrated 真并发：一次派发 N 个独立 worker（批量重编/reflow，替代逐个 invoke_skill 串行）
-        compile_grade_extract,  # main-orchestrated：合并前确定性自查（grade 之外第二道闸，防放水）
+        compile_writeback,  # 闭环:上机真PASS写回先例库(ρ_k增长)
+        compile_emit_merged,  # 引擎构件 / ist-verify 链：合并各 case 单 xlsx 打包
+        compile_fanout,  # 真并发派发器：一次派发 N 个独立 worker（ist-verify reflow 用）
         compile_runtime_slots,  # 列 <RUNTIME> 待回填槽位
         compile_runtime_fill,  # 上机真实值锁死回填（不反复改）
         compile_footprint_writeback,  # 真 PASS 的 G 段文法写回 footprint（verify 步7 自演化 ρ_k）
@@ -106,6 +101,7 @@ def _default_generic_tools() -> list[Any]:
 
         ask_user,
         remember,
+        wx_send_file,
 
     ]
 

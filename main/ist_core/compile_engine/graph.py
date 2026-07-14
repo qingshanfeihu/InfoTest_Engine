@@ -66,10 +66,14 @@ def _after_run(s: dict) -> str:
 
 def _after_attribute(s: dict) -> str:
     max_rounds = int(s.get("max_rounds") or 3)
-    if s.get("n_pending_compile", 0) > 0 and int(s.get("round") or 0) < max_rounds:
+    # 再派发不设全局 round 上限:pending_compile 的 case 由 attribute 保证 rounds_used<max
+    # (耗尽的已 escalate),循环由 per-case 轮次自然收敛。旧版 `round<max_rounds` 在脏
+    # checkpoint 续跑(全局轮次带高)时会拒派新鲜 case、令其滞留(2026-07-07 根治,配套
+    # verify_phase 升级判据改 rounds_used)。
+    if s.get("n_pending_compile", 0) > 0:
         return "worker_fanout"   # 定向重编(派发集⊆fail 由 ledger 审计强制)
     if s.get("n_failed_active", 0) > 0 and int(s.get("round") or 0) < max_rounds:
-        return "merge"           # 仅 transient:不重编直接复跑
+        return "merge"           # 仅 transient:不重编直接复跑(全局 round 上限护栏)
     if (s.get("run_scope") == "subset" and s.get("n_passed", 0) > 0
             and s.get("n_failed_active", 0) == 0):
         # 收敛于子集轮(剩余全终态)→ 先终验整卷再收口:主交付卷是早前 full merge 的

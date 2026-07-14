@@ -2,7 +2,7 @@
 
 > 状态:已落地并经三域对照轮验收(dongkl 21/34 重灾域 / yzg 25/26 / zhaiyq 51/53,编排事故 0)。
 > 代码:`main/ist_core/compile_engine/`;资产包:`main/ist_core/skills/ist-compile-engine/SKILL.md`;
-> 回退:`IST_COMPILE_ENGINE=0` → v5 main-orchestrated(`ist-compile` skill)。
+> 编译只有 V6 这一条路(2026-07-07 起,v5 main-orchestrated / `compile_pipeline` / grade 闸全删,无 `IST_COMPILE_ENGINE` 开关)。
 
 ## 1. 目标与判据
 
@@ -99,7 +99,7 @@ langgraph × deepagents × opencode 谱系是**层**,不是竞争:
 
 ## 10. 与 v5 的关系
 
-v5(main agent 当 orchestrator,`ist-compile` skill 文内编排)保留为 `IST_COMPILE_ENGINE=0` 的 fallback;`compile_pipeline` 是二级 fallback。E4 实验(pipeline 55.9% vs orchestrated 64.7%)证明提升来自 **worker 自由理解孔**,不来自「编排交给 LLM」——V6 据此保留孔、把编排收回代码。
+v5(main agent 当 orchestrator,`ist-compile` skill 文内编排)与 `compile_pipeline` 二级 fallback 已于 2026-07-07 全删——beta 发布后编译只留 V6。E4 实验(pipeline 55.9% vs orchestrated 64.7%)证明提升来自 **worker 自由理解孔**,不来自「编排交给 LLM」——V6 据此保留孔(`compile-worker`)、把编排收回代码(StateGraph),v5/pipeline 的编排层无保留价值故删。
 
 ## 11. 已知边界与后续
 

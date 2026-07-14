@@ -53,7 +53,7 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setattr(N, "prep", fake_prep)   # 图从 nodes 包 getattr 绑定节点
 
     # worker stub:落 xlsx + produced
-    def fake_dispatch(executor, aid, brief, t0):
+    def fake_dispatch(executor, aid, brief, t0, effort=""):
         d = out_root / aid
         d.mkdir(exist_ok=True)
         (d / "case.xlsx").write_bytes(b"x" + aid.encode())
@@ -107,6 +107,32 @@ class _NullLimiter:
         return False
 
 
+def test_engine_ticks_selfcontained_counts(monkeypatch):
+    """engine_tick 事件门:节点边界+每 case 落账后发,自含全量 counts(消费端纯覆盖)。"""
+    import main.ist_core.skills.loader as loader
+    events: list[dict] = []
+    monkeypatch.setattr(loader, "_fork_emit_event", lambda r: events.append(r))
+
+    graph = build_compile_engine_graph()
+    graph.invoke({"mindmap_path": "x.txt", "product_version": "10.5",
+                  "out_name": _OUT, "max_rounds": 3},
+                 {"configurable": {"thread_id": "t-tick"}, "recursion_limit": 60})
+
+    ticks = [e for e in events if e.get("event") == "engine_tick"]
+    assert ticks, "引擎全程未发 engine_tick"
+    phases = {t["phase"] for t in ticks}
+    assert {"worker_fanout", "merge", "run_digest", "attribute", "report"} <= phases
+    for t in ticks:
+        assert t["run"] == _OUT
+        assert t["total"] == len(_AIDS), "counts 必须自含全量(乱序/丢事件容忍的前提)"
+        assert set(t["counts"]) == {"pending", "dispatched", "produced", "pending_decision",
+                                    "awaiting_user", "passed", "failed_active",
+                                    "failed_terminal", "escalated"}
+    # worker_fanout 每 case 落账即 tick:首轮 3 case + 重编轮 ≥2
+    assert sum(1 for t in ticks if t["phase"] == "worker_fanout") >= len(_AIDS)
+    assert ticks[-1]["phase"] == "report" and ticks[-1]["counts"]["passed"] == len(_AIDS)
+
+
 def test_full_loop_to_delivered():
     graph = build_compile_engine_graph()
     res = graph.invoke({"mindmap_path": "x.txt", "product_version": "10.5",
@@ -127,3 +153,56 @@ def test_full_loop_to_delivered():
     assert redisp == sorted([_AIDS[1], _AIDS[2]]), redisp
     # pass 卷 mtime 锁在账
     assert led.case(_AIDS[0]).get("passed_mtime_lock")
+
+
+def test_prep_error_emits_engine_tick(monkeypatch, tmp_path):
+    """prep 失败早退仍发 engine_tick(TUI 引擎卡不卡在旧态)。"""
+    import main.ist_core.skills.loader as loader
+    events: list[dict] = []
+    monkeypatch.setattr(loader, "_fork_emit_event", lambda r: events.append(r))
+
+    # 脑图不存在 → compile_prep 报错且不落 manifest → prep 早退 error
+    res = CP.prep({"mindmap_path": "no_such_mindmap.txt", "out_name": "dongkl"})
+    assert res["phase_status"] == "error"
+    ticks = [e for e in events if e.get("event") == "engine_tick"]
+    assert len(ticks) == 1
+    assert ticks[0]["phase"] == "prep"
+    assert ticks[0]["run"] == "dongkl"
+
+
+def test_ask_decision_validate_error_emits_engine_tick(monkeypatch, tmp_path):
+    """ask_decision 模板自检失败早退仍发 engine_tick。"""
+    out_root = SH.outputs_root()
+    import main.ist_core.skills.loader as loader
+    from main.ist_core.compile_engine import ledger as L
+
+    events: list[dict] = []
+    monkeypatch.setattr(loader, "_fork_emit_event", lambda r: events.append(r))
+
+    out_name = "askq_err_ut"
+    (out_root / out_name).mkdir(exist_ok=True)
+    led_path = out_root / out_name / "engine_ledger.json"
+    led = L.EngineLedger(led_path)
+    aid = _AIDS[0]
+    led.transition(aid, L.S_PENDING)
+    led.transition(aid, L.S_DISPATCHED)
+    led.transition(aid, L.S_PENDING_DECISION)
+    led.save()
+
+    aid_dir = out_root / aid
+    aid_dir.mkdir(exist_ok=True)
+    (aid_dir / "needs_decision.json").write_text(
+        json.dumps({"claims": [{"reason": "stub", "claim_kind": "distribution"}]}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(CP, "validate_questions", lambda _q, _l: False)
+
+    state = {"out_name": out_name,
+             "ledger_ref": f"outputs/{out_name}/engine_ledger.json", "round": 0}
+    res = CP.ask_decision(state)
+    assert res["phase_status"] == "error"
+    ticks = [e for e in events if e.get("event") == "engine_tick"]
+    assert len(ticks) == 1
+    assert ticks[0]["phase"] == "ask_decision"
+    assert ticks[0]["run"] == out_name

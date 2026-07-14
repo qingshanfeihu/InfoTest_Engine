@@ -318,28 +318,51 @@ class ForkExecutor:
             max_workers=int(_os.environ.get("IST_FORK_WATCHDOG_WORKERS") or 64),
             thread_name_prefix="fork-wd")
 
+    def _limits_for(self, effort: str) -> tuple[float, float]:
+        """按思考深度返回 (单次墙钟, 重试总墙钟)。
+
+        max 深度两者放宽:一次深思考的 LLM 调用服务端可跑数分钟,且 fork 非流式——调用
+        期间零中途输出可供续期,固定 600s 墙钟会误杀正跑的升级 worker。env 可调:
+        IST_FORK_WALLCLOCK_MAX_S(默认 1200)/ IST_FORK_TRANSIENT_WALLCLOCK_MAX_S(默认 2400)。
+        非 max 用基础值(零回归)。
+        """
+        if str(effort or "").strip().lower() != "max":
+            return self.wallclock_s, self.transient_wallclock_s
+
+        def _f(key: str, default: float) -> float:
+            try:
+                return float(_os.environ.get(key) or default)
+            except (TypeError, ValueError):
+                return default
+        wall = _f("IST_FORK_WALLCLOCK_MAX_S", 1200)
+        trans = _f("IST_FORK_TRANSIENT_WALLCLOCK_MAX_S", 2400)
+        return wall, max(trans, wall)   # 重试窗口至少容得下一次完整 max 单跑
+
     def call_bounded(self, skill: str, brief: str, tag: str,
-                     summary_sink: dict | None) -> str:
-        """单次 fork,看门狗墙钟封顶。"""
+                     summary_sink: dict | None, effort: str = "") -> str:
+        """单次 fork,看门狗墙钟封顶(max 深度按 _limits_for 放宽)。"""
         from main.ist_core.skills.loader import execute_fork_skill
         ctx = _ctxvars.copy_context()
         fut = self._watchdog.submit(
-            ctx.run, execute_fork_skill, skill, brief, tag=tag, summary_sink=summary_sink)
+            ctx.run, execute_fork_skill, skill, brief, tag=tag,
+            summary_sink=summary_sink, effort=effort)
+        wall, _ = self._limits_for(effort)
         try:
-            return fut.result(timeout=self.wallclock_s)
+            return fut.result(timeout=wall)
         except _cf.TimeoutError:
             if summary_sink is not None:
                 summary_sink.clear()   # 超墙钟 fork 无可信 summary,清空防污染调用方
             return (f"ERROR: [fork-wallclock] fork skill {skill!r} 超 "
-                    f"{int(self.wallclock_s)}s 墙钟未完成 → 放弃(escalate)")
+                    f"{int(wall)}s 墙钟未完成 → 放弃(escalate)")
 
     def call(self, skill: str, brief: str, tag: str = "",
-             summary_sink: dict | None = None) -> str:
-        """调 fork,transient 自动退避重试(次数与总墙钟双封顶)。"""
+             summary_sink: dict | None = None, effort: str = "") -> str:
+        """调 fork,transient 自动退避重试(次数与总墙钟双封顶)。effort 按调用点覆盖思考深度。"""
         last = ""
-        deadline = _time.monotonic() + self.transient_wallclock_s
+        _, transient_wall = self._limits_for(effort)
+        deadline = _time.monotonic() + transient_wall
         for attempt in range(self.transient_retries + 1):
-            out = self.call_bounded(skill, brief, tag, summary_sink)
+            out = self.call_bounded(skill, brief, tag, summary_sink, effort=effort)
             if isinstance(out, str) and out.startswith("ERROR:") and is_transient_error(out):
                 self.limiter.record_overload()
                 last = out

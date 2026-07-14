@@ -118,7 +118,7 @@ Process the request above.
     )
     monkeypatch.setattr(
         "main.ist_core.skills.loader.get_subagent_runnable",
-        lambda name: _StubRunnable(),
+        lambda name, **kw: _StubRunnable(),
     )
 
     from main.ist_core.skills.loader import execute_fork_skill

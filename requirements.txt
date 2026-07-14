@@ -59,3 +59,10 @@ fastapi>=0.110,<1
 uvicorn>=0.27,<1
 python-multipart>=0.0.9,<1
 pikepdf>=10
+
+# 企业微信自建应用机器人 (wecom_bot/)
+wechatpy>=2.0,<3              # 消息加解密 (WXBizMsgCrypt)
+
+# 企业微信智能机器人 (wecom_bot_smart/)
+websocket-client>=1.7,<2      # WebSocket 长连接客户端
+pycryptodome>=3.20,<4         # AES-256-CBC 文件解密

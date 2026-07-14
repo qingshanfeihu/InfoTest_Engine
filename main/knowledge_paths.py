@@ -105,6 +105,17 @@ CACHE_JSON = KNOWLEDGE_INTERMEDIATE / ".cache.json"
 KNOWLEDGE_FOOTPRINTS = KNOWLEDGE_ROOT / "footprints"
 KNOWLEDGE_FOOTPRINTS_NODES = KNOWLEDGE_FOOTPRINTS / "nodes"
 
+
+def footprint_nodes_dir(version: str | None = None) -> Path:
+    """返回 footprint nodes 目录。
+
+    version=None → 默认 nodes/（向后兼容）；
+    传入如 "10.4.6r2" → nodes_10.4.6r2/（版本隔离）。
+    """
+    if not version:
+        return KNOWLEDGE_FOOTPRINTS_NODES
+    return KNOWLEDGE_FOOTPRINTS / f"nodes_{version}"
+
 # 自动化框架源码镜像（test_xlsx.py / check_point.py / apv/…）——只读参考。
 # agent 读它理解框架真实断言机制（found 当正则 vs abs_found 用 re.escape、found_times 分派只传2参等），
 # 与人工诊断对等。加入 file_tools._agent_roots() 只读白名单（写路径不含它，仍只 workspace/outputs）。

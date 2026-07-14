@@ -1,70 +1,31 @@
-"""确定性编译流水线（V3 approach A）：把 prep→draft→grade→merge 锁成一个工具调用。
+"""compile_pipeline 遗留模块 —— 仅保留 V6 引擎复用的两个自包含 helper。
 
-为什么存在（颗粒度修正）：
-编译流水线本质是**低自由度**任务——固定序列 prep→fanout(draft)→fanout(grade)→筛 PASS→merge，
-脆弱、一致性关键、跑偏就废。此前用 inline skill 的散文让主 agent 自己编排这 5 个细粒度工具，
-实测主 agent 失控（prep×3、fanout×2、误调 review-verification）。
+原 V3/v5「确定性编译流水线」`compile_pipeline` @tool 及其内部实现（prep→draft→grade→merge
+的整条 main-orchestrated 流水线）已随 v5 编译路径删除（2026-07-07，只保留 V6 引擎）。
+保留本文件仅因 V6 引擎节点仍从这里 import 两个自包含 helper：
 
-对照标杆（Cursor create-skill §"Degrees of Freedom"：脆弱操作=低自由度=脚本；
-ngs-analysis：重活在 scripts/*.py、skill 只调脚本不叙述步骤），把固定流水线降级成
-**一个确定性工具**，主 agent 只调一次。论文口径：确定性机制执行流程，语义模型只在
-draft/grade fork 内部（查命令/断言）自由——自由度配在 fork 内，不配在编排层。
+- ``_emit_progress`` —— `compile_engine/nodes/_shared.py` 用它把进度推到 EventBus。
+- ``_grade_extract_facts`` —— `compile_engine/nodes/compile_phase.py` 用它跑机械信号预探针
+  （加载 `tools/device/grade_extract_script.py` 的 extract）。
 
-brief 五要素从 manifest 字段**机械模板化**生成（autoid/title/step_intents/group_path
-都在 manifest 里），不是语义判断——故可确定性产出，无需主 agent 逐条写。
+新代码可直接引用这两个函数；不要再往本文件加编排逻辑（编排收在 V6 StateGraph 里）。
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import re
 from pathlib import Path
-from typing import Any
-
-from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
-import concurrent.futures as _cf_mod
-import contextvars as _ctxvars
-
-_MAX_REWORK_ROUNDS = 3
-# Guard（防 merge 卡死）：per-case 墙钟截止——churner（footprint/dev_probe 过度探索撞满轮次的
-# 难 case）超时即 escalate，保证个别难 case 不会永久 gate 整脑图的 compile_emit_merged。
-# 注意：此 deadline 只在轮与轮之间检查（见 _compile_one_case），**不能抢占在飞 fork**——
-# 单 fork 的硬墙钟由 _FORK_WALLCLOCK_S 看门狗封顶（Fix A）。
-_CASE_DEADLINE_S = float(os.environ.get("IST_CASE_DEADLINE_S") or 540)
-# transient 端点错误(丢连接/限流/流中断)退避重试：与"质量重做≤3轮"分开，不消耗质量预算。
-_TRANSIENT_RETRIES = 4
-_TRANSIENT_BASE_SLEEP = 3.0
-
-# Fix A：单 fork 硬墙钟。实测端点 stall 时单个 draft fork 跑出 810/1004/1056s（流式下
-# request_timeout 不触发、ai_rounds=0 死挂），而 _CASE_DEADLINE_S 拦不住在飞 fork。看门狗
-# 把 fork 跑在独立线程、用 future.result(timeout) 放弃等待（挂死线程泄漏但数量受并发上限约束）。
-_FORK_WALLCLOCK_S = float(os.environ.get("IST_FORK_WALLCLOCK_S") or 600)
-_FORK_WATCHDOG = _cf_mod.ThreadPoolExecutor(
-    max_workers=int(os.environ.get("IST_FORK_WATCHDOG_WORKERS") or 64),
-    thread_name_prefix="fork-wd")
-# Fix B：一个 fork（含其所有 transient 重试）的总墙钟上限。防 "Request timed out" 被判 transient
-# 后整 fork 重试 4 次 = 4×810s 放大。封顶重试之**和**，与 _FORK_WALLCLOCK_S（封顶单次）互补。
-_FORK_TRANSIENT_WALLCLOCK_S = float(os.environ.get("IST_FORK_TRANSIENT_WALLCLOCK_S") or 1200)
-
 
 def _emit_progress(text: str) -> None:
-    """把流水线进度推到默认 EventBus → TUI 实时渲染（evidence_added → '· …' 行）。
-
-    compile_pipeline 是单个同步工具，内部跑 prep/draft/grade/CUT 的 fork 不会向主
-    EventBus 发事件 → TUI 整段编译期间零输出、spinner 像冻住。这里在关键节点显式 emit，
-    让用户看到 prep/draft/grade/CUT/merge 实时进展。fork 在线程池里跑，emit 从 worker
-    线程经 TuiSink 跨线程投递到 UI（bus seq 有锁、post 线程安全）。失败一律静默，不挡流水线。
-    """
+    """把进度推到默认 EventBus → TUI 实时渲染（evidence_added → '· …' 行）。失败一律静默。"""
     try:
         from main.ist_core.events import get_default_bus
         get_default_bus().emit("evidence_added", payload={"text": text})
     except Exception:  # noqa: BLE001
-        logger.debug("流水线进度 emit 失败", exc_info=True)
+        logger.debug("进度 emit 失败", exc_info=True)
 
 
 def _project_root() -> Path:
@@ -86,19 +47,19 @@ def _get_user_output_dir() -> Path:
     return user_dir
 
 def _grade_extract_facts(xp: Path, prov: Path) -> dict:
-    """缺陷①：grade 前确定性预跑 ist-compile-grade/scripts/grade_extract.py 的 extract(xp, prov)。
+    """确定性预跑 tools/device/grade_extract_script.py 的 extract(xp, prov)，产出机械信号。
 
-    脚本在 skills/ 下（非 main 包内可直接 import 的模块），用 importlib 按文件路径加载。
-    脚本由并行 agent 新建——若尚未就绪（文件缺失 / import 失败 / extract 抛错），一律吞掉
-    返回 {}，不阻断 grade。返回结构作为 brief 的 extract_facts= 段并入。
+    脚本是独立的按文件路径加载脚本（非包内可直接 import 的模块），用 importlib 加载。
+    缺失 / import 失败 / extract 抛错时一律吞掉返回 {}，不阻断调用方（可观测性不拖垮主流程）。
+    返回结构作为 brief 的 extract_facts= 段并入。
     """
     try:
         import importlib.util as _ilu
-        script = (_project_root() / "main" / "ist_core" / "skills"
-                  / "ist-compile-grade" / "scripts" / "grade_extract.py")
+        script = (_project_root() / "main" / "ist_core" / "tools"
+                  / "device" / "grade_extract_script.py")
         if not script.is_file():
             return {}
-        spec = _ilu.spec_from_file_location("ist-compile-grade_extract", script)
+        spec = _ilu.spec_from_file_location("grade_extract_script", script)
         if spec is None or spec.loader is None:
             return {}
         mod = _ilu.module_from_spec(spec)

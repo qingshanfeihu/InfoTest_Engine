@@ -49,6 +49,11 @@ BLOCK_HIL_DECISION = "hil_decision"
 
 BLOCK_ASK_USER = "ask_user"
 
+# fork/引擎/进度卡片(2026-07-06):payload=卡片全量可见状态,reducer 对同 uuid 消息
+# 原地替换(frozen-replace)——卡片活在 snapshot.messages 里,ctrl+o/_replay_snapshot
+# 全量重放天然还原(tailer 直接 append 的行不在 snapshot、replay 即丢的教训)。
+BLOCK_FORK_CARD = "fork_card"
+
 
 @dataclass(frozen=True)
 class ContentBlock:
@@ -111,6 +116,13 @@ class MessageSnapshot:
     usage: Mapping[str, int] = field(default_factory=lambda: _EMPTY_MAP)
     llm_phase: str = ""
     output_token_count: int = 0
+    # 单调版本号(2026-07-06):dispatch/reset 每次递增、跨 reset 不清零——UI 侧丢弃
+    # 迟到的旧快照(多线程 dispatch 下 snapshot 曾可能乱序投递→增量 diff 重复渲染)。
+    rev: int = 0
+    # fork 卡片板版本:任一卡片变更递增;UI 据此决定是否原地刷新已登记卡行。
+    fork_board_rev: int = 0
+    # uuid → messages 下标(卡片消息);UI 原地更新时按它定位,不重扫全量。
+    fork_card_indices: Mapping[str, int] = field(default_factory=lambda: _EMPTY_MAP)
     run_end_info: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAP)
 
 
@@ -294,6 +306,7 @@ __all__ = [
     "BLOCK_HIL_REQUEST",
     "BLOCK_HIL_DECISION",
     "BLOCK_ASK_USER",
+    "BLOCK_FORK_CARD",
     "make_uuid",
     "make_text_block",
     "make_thinking_block",

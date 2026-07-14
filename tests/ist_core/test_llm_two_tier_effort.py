@@ -1,8 +1,9 @@
 """两档模型收敛 + reasoning_effort 通道(2026-07-06 配置简化)。
 
 IST_MODEL 主档单源(旧 REVIEW/OPUS/SONNET 合并)、IST_FLASH 省钱档(旧 HAIKU 合并,
-兼容回落);思考默认开、effort 默认 max,IST_EFFORT 全局降档,fork frontmatter
-effort: 按点覆盖;仅 deepseek 族注入(其他族支持面未证实)。
+兼容回落);思考默认开、effort 默认 high(2026-07-06 实跑对照 max 无增益降回),
+IST_EFFORT=max 全局升档,fork frontmatter effort: 按点覆盖;仅 deepseek 族注入
+(其他族支持面未证实)。
 """
 import pytest
 
@@ -49,21 +50,23 @@ def _extra_body(model):
     return eb or {}
 
 
-def test_effort_defaults_to_max_for_deepseek_thinking():
+def test_effort_defaults_to_high_for_deepseek_thinking():
+    # 2026-07-06 用户拍板:34-case 实跑对照 max 无更好表现——默认降回 high
     m = _llm._build_chat_model("deepseek-v4-pro")
     eb = _extra_body(m)
     assert eb.get("thinking", {}).get("type") == "enabled"    # 思考默认开
-    assert eb.get("reasoning_effort") == "max"                # 深度默认 max
+    assert eb.get("reasoning_effort") == "high"               # 深度默认 high
 
 
 def test_effort_global_env_and_per_call_override(monkeypatch):
-    monkeypatch.setenv("IST_EFFORT", "high")
-    assert _extra_body(_llm._build_chat_model("deepseek-v4-flash")).get("reasoning_effort") == "high"
+    monkeypatch.setenv("IST_EFFORT", "max")
+    assert _extra_body(_llm._build_chat_model("deepseek-v4-flash")).get("reasoning_effort") == "max"
     # 调用点显式覆盖优先于全局
+    monkeypatch.setenv("IST_EFFORT", "high")
     assert _extra_body(_llm._build_chat_model("deepseek-v4-pro", effort="max")).get("reasoning_effort") == "max"
-    # 非法值按 max 处理
+    # 非法值按 high 处理
     monkeypatch.setenv("IST_EFFORT", "ultra")
-    assert _extra_body(_llm._build_chat_model("deepseek-v4-pro")).get("reasoning_effort") == "max"
+    assert _extra_body(_llm._build_chat_model("deepseek-v4-pro")).get("reasoning_effort") == "high"
 
 
 def test_effort_not_injected_for_non_deepseek_or_thinking_off(monkeypatch):

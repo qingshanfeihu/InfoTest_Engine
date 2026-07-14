@@ -58,6 +58,11 @@ class FooterPane:
         self._hint_line = create_text("")
         self._node.append_child(self._status_line)
         self._node.append_child(self._hint_line)
+        # 引擎聚合进度行(2026-07-06 用户定稿):常驻**最底部**(快捷键提示行之下),
+        # 进度条+文字计数,非空时 footer 高度 2→3。空串即隐藏。
+        self._engine_line = create_text("")
+        self._node.append_child(self._engine_line)
+        self._engine_text = ""
 
         self._render_cb = render_callback
         self._thinking_cb = thinking_text_cb
@@ -146,6 +151,14 @@ class FooterPane:
         if cache_hit_tokens is not None:
             self._cache_hit_tokens = cache_hit_tokens
         self._refresh()
+
+    def set_engine_line(self, text: str) -> None:
+        """引擎聚合进度(底部常驻行)。text 空=隐藏(footer 高度回 2)。幂等,同值不重渲。"""
+        if text == self._engine_text:
+            return
+        self._engine_text = text
+        self._engine_line.set_value(text)
+        self._node.style.height = 3 if text else 2
 
     def set_sticky_error(self, text: str) -> None:
         """把 run_error 摘要驻留到状态行(单行截断);下一轮 run 开始自动清除。"""

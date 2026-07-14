@@ -35,6 +35,7 @@ from main.ist_core.tui.message_model import (
     BLOCK_EVIDENCE,
     BLOCK_FINDING,
     BLOCK_HIL_DECISION,
+    BLOCK_FORK_CARD,
     BLOCK_HIL_REQUEST,
     BLOCK_PHASE_MARKER,
     BLOCK_THINKING,
@@ -148,15 +149,28 @@ class MessageReducer:
         
         self._subagent_parent_stack: list[str] = []
 
+        # rev 单调守卫(2026-07-06):snapshot 曾在 _lock 外构建+投递,多线程 dispatch
+        # (bridge 线程 + 工具线程 evidence_added + tailer 线程 fork_cards)下旧快照
+        # 可能后到,UI 侧 prev_count 增量 diff 会重复渲染。改锁内建快照带单调 rev,
+        # UI 丢弃 rev 更小的迟到快照。rev **跨 reset 不清零**(清零=reset 后全被判旧)。
+        self._rev = 0
+        # fork/引擎/进度卡片:uuid → _messages 下标(list 只 append 不删,下标稳定)
+        self._fork_card_idx: dict[str, int] = {}
+        self._fork_board_rev = 0
+
         self._listeners: list[Callable[[MessageSnapshot], None]] = []
         self._lock = threading.Lock()
 
-    
+
 
     def subscribe(self, cb: Callable[[MessageSnapshot], None]) -> None:
         self._listeners.append(cb)
 
     def snapshot(self) -> MessageSnapshot:
+        with self._lock:
+            return self._snapshot_locked()
+
+    def _snapshot_locked(self) -> MessageSnapshot:
         return MessageSnapshot(
             messages=tuple(self._messages),
             streaming_text=self._streaming_text,
@@ -164,6 +178,9 @@ class MessageReducer:
             usage=MappingProxyType(dict(self._usage)),
             llm_phase=self._llm_phase,
             output_token_count=self._output_token_count,
+            rev=self._rev,
+            fork_board_rev=self._fork_board_rev,
+            fork_card_indices=MappingProxyType(dict(self._fork_card_idx)),
             run_end_info=MappingProxyType(dict(self._run_end_info)),
         )
 
@@ -178,22 +195,33 @@ class MessageReducer:
             self._inflight_tool_use_ids.clear()
             self._tool_run_id_map.clear()
             self._subagent_parent_stack.clear()
-        self._notify()
+            self._fork_card_idx.clear()
+            self._fork_board_rev += 1   # 卡片板整体清空也是一次变更
+            self._rev += 1
+            snap = self._snapshot_locked()
+        self._notify(snap)
 
     def set_run_status(self, status: str) -> None:
         """外部（bridge）通知 run 完成 / 失败。dispatch 流末尾的 status 切换。"""
         with self._lock:
             self._status = status
-        self._notify()
+            self._rev += 1
+            snap = self._snapshot_locked()
+        self._notify(snap)
 
     def dispatch(self, event: IstCoreEvent) -> None:
         kind = event.get("kind") or ""
+        snap = None
         try:
             with self._lock:
                 self._handle(kind, event)
+                self._rev += 1
+                snap = self._snapshot_locked()
         except Exception:  # noqa: BLE001
             logger.exception("MessageReducer dispatch error: kind=%s", kind)
-        self._notify()
+        if snap is None:
+            snap = self.snapshot()
+        self._notify(snap)
 
     
 
@@ -234,6 +262,8 @@ class MessageReducer:
             self._on_payload_block(event, BLOCK_PHASE_MARKER)
         elif kind == "evidence_added":
             self._on_payload_block(event, BLOCK_EVIDENCE)
+        elif kind == "fork_cards":
+            self._on_fork_cards(event)
         elif kind in ("finding_emitted", "finding_written"):
             self._on_payload_block(event, BLOCK_FINDING)
         elif kind == "todo_list":
@@ -520,7 +550,128 @@ class MessageReducer:
         )
         self._messages.append(msg)
 
-    
+    # ------------------------------------------------------------- fork 卡片板
+    # 事件(.events.jsonl 经 tailer 批量转发)→ 三类卡:fork(fork:{fork_id})/
+    # engine(engine:{run})/progress(progress:{key})。每条 record 自含完整可见状态,
+    # 这里纯覆盖合并——乱序/丢事件容忍;同 uuid 消息原地替换(卡片活在 snapshot 里,
+    # _replay_snapshot 全量重放天然还原)。
+
+    def _on_fork_cards(self, event: IstCoreEvent) -> None:
+        payload = event.get("payload") or {}
+        records = payload.get("records") or []
+        changed = False
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            ev = str(rec.get("event") or "")
+            if ev == "fork_start":
+                changed |= self._upsert_card(f"fork:{rec.get('fork_id')}", {
+                    "kind": "fork", "fork_id": rec.get("fork_id"),
+                    "skill": rec.get("skill") or "", "agent": rec.get("agent") or "",
+                    "tag": rec.get("tag") or "", "autoid": rec.get("autoid") or "",
+                    "brief_head": rec.get("brief_head") or "",
+                    "effort": rec.get("effort") or "",
+                    "status": "running", "n_calls": 0,
+                    "start_ts": rec.get("ts"), "last_event_ts": rec.get("ts"),
+                })
+            elif ev == "tool":
+                changed |= self._upsert_card(f"fork:{rec.get('fork_id')}", {
+                    "kind": "fork", "fork_id": rec.get("fork_id"),
+                    "current_tool": rec.get("tool") or "",
+                    "current_arg": rec.get("arg") or "",
+                    "n_calls": rec.get("n_calls") or 0,
+                    "last_event_ts": rec.get("ts"),
+                }, skip_if_finished=True)
+            elif ev == "tool_result":
+                summary = str(rec.get("summary") or "")
+                extra = {"kind": "fork", "fork_id": rec.get("fork_id"),
+                         "last_event_ts": rec.get("ts")}
+                if summary:
+                    extra["_recent_append"] = f"{rec.get('tool') or ''} → {summary}"
+                changed |= self._upsert_card(f"fork:{rec.get('fork_id')}", extra,
+                                             skip_if_finished=True)
+            elif ev == "fork_end":
+                changed |= self._upsert_card(f"fork:{rec.get('fork_id')}", {
+                    "kind": "fork", "fork_id": rec.get("fork_id"),
+                    "status": "ok" if rec.get("ok") else "error",
+                    "error": str(rec.get("error") or ""),
+                    "elapsed_s": rec.get("elapsed_s"),
+                    "calls": rec.get("calls"), "ai_rounds": rec.get("ai_rounds"),
+                    "tokens_in": rec.get("tokens_in"), "tokens_out": rec.get("tokens_out"),
+                    "cache_hit": rec.get("cache_hit"), "last_event_ts": rec.get("ts"),
+                    "current_tool": "", "current_arg": "",
+                })
+            elif ev == "run_meta":
+                changed |= self._upsert_card(f"engine:{rec.get('run')}", {
+                    "kind": "engine", "run": rec.get("run") or "",
+                    "mindmap": rec.get("mindmap") or "", "ledger": rec.get("ledger") or "",
+                    "status": "running", "start_ts": rec.get("ts"),
+                    "last_event_ts": rec.get("ts"),
+                })
+            elif ev == "engine_tick":
+                changed |= self._upsert_card(f"engine:{rec.get('run')}", {
+                    "kind": "engine", "run": rec.get("run") or "",
+                    "phase": rec.get("phase") or "", "round": rec.get("round") or 0,
+                    "wave": rec.get("wave") or 0,
+                    "counts": dict(rec.get("counts") or {}),
+                    "total": rec.get("total") or 0,
+                    "status": "done" if rec.get("phase") == "report" else "running",
+                    "last_event_ts": rec.get("ts"),
+                })
+            elif ev == "progress":
+                changed |= self._upsert_card(f"progress:{rec.get('key')}", {
+                    "kind": "progress", "key": rec.get("key") or "",
+                    "phase": rec.get("phase") or "",
+                    "elapsed_s": rec.get("elapsed_s"), "total_s": rec.get("total_s"),
+                    "n_cases": rec.get("n_cases"), "detail": rec.get("detail") or "",
+                    "env": rec.get("env") or "", "case_idx": rec.get("case_idx") or 0,
+                    "status": rec.get("status") or "running",
+                    "last_event_ts": rec.get("ts"),
+                })
+        if changed:
+            self._fork_board_rev += 1
+
+    def _upsert_card(self, uuid: str, updates: dict,
+                     *, skip_if_finished: bool = False) -> bool:
+        """同 uuid 卡片消息原地替换(payload 覆盖合并);不存在则 append 建卡。
+
+        ``_recent_append`` 特殊键:追加进 recent 环形(≤5 条)。skip_if_finished:
+        fork_end 之后迟到的 tool/tool_result 不再改卡(终态 last-write-wins)。
+        """
+        idx = self._fork_card_idx.get(uuid)
+        if idx is not None and not (0 <= idx < len(self._messages)
+                                    and self._messages[idx].uuid == uuid):
+            # 防御:下标漂移(理论上 list 只 append 不会发生)→ 倒序重扫
+            idx = next((i for i in range(len(self._messages) - 1, -1, -1)
+                        if self._messages[i].uuid == uuid), None)
+            if idx is not None:
+                self._fork_card_idx[uuid] = idx
+        recent_item = updates.pop("_recent_append", "")
+        if idx is None:
+            merged = dict(updates)
+            merged.setdefault("status", "running")
+            if recent_item:
+                merged["recent"] = [recent_item]
+            block = make_payload_block(BLOCK_FORK_CARD, merged)
+            self._messages.append(make_system_message(
+                uuid=uuid, content=block, timestamp=""))
+            self._fork_card_idx[uuid] = len(self._messages) - 1
+            return True
+        old = self._messages[idx]
+        old_payload = dict(old.content[0].payload) if old.content else {}
+        if skip_if_finished and old_payload.get("status") in ("ok", "error"):
+            return False
+        old_payload.update(updates)
+        if recent_item:
+            recent = list(old_payload.get("recent") or [])
+            recent.append(recent_item)
+            old_payload["recent"] = recent[-5:]
+        block = make_payload_block(BLOCK_FORK_CARD, old_payload)
+        self._messages[idx] = make_system_message(
+            uuid=uuid, content=block, timestamp=old.timestamp)
+        return True
+
+
 
     def _on_todo_list(self, event: IstCoreEvent) -> None:
         payload = event.get("payload") or {}
@@ -654,8 +805,8 @@ class MessageReducer:
             if isinstance(v, int):
                 self._usage[key] = self._usage.get(key, 0) + v
 
-    def _notify(self) -> None:
-        snap = self.snapshot()
+    def _notify(self, snap: MessageSnapshot) -> None:
+        """锁外投递(快照已在锁内构建,带单调 rev——投递乱序由 UI 侧 rev 守卫兜)。"""
         for cb in list(self._listeners):
             try:
                 cb(snap)

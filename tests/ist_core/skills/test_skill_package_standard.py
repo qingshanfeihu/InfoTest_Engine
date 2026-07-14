@@ -127,8 +127,8 @@ def test_agent_definitions_have_metadata():
 def test_underscore_alias_resolution():
     """B1 别名兼容:旧下划线名(历史对话/旧脚本)经 loader 互通到连字符目录。"""
     from main.ist_core.skills.loader import resolve_skill_dirname
-    assert resolve_skill_dirname("ist_compile") == "ist-compile"
-    assert resolve_skill_dirname("ist_compile_grade") == "ist-compile-grade"
+    assert resolve_skill_dirname("ist_compile_engine") == "ist-compile-engine"
+    assert resolve_skill_dirname("compile_attributor") == "compile-attributor"
     assert resolve_skill_dirname("compile_worker") == "compile-worker"
     assert resolve_skill_dirname("ist-verify") == "ist-verify"          # 新名直通
     assert resolve_skill_dirname("no_such_skill") == "no_such_skill"    # 未知原样返回

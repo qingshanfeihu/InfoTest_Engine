@@ -9,7 +9,7 @@ import pytest
 
 _GE_PATH = (
     Path(__file__).resolve().parents[3]
-    / "main/ist_core/skills/ist-compile-grade/scripts/grade_extract.py"
+    / "main/ist_core/tools/device/grade_extract_script.py"
 )
 
 

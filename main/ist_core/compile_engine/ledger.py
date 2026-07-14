@@ -38,7 +38,10 @@ _LEGAL: dict[str, set[str]] = {
     S_PENDING_DECISION: {S_AWAITING_USER, S_PENDING, S_ESCALATED},   # 决策→重派;无台账→escalate
     S_AWAITING_USER: {S_PENDING},                              # 用户后来答了
     S_PRODUCED: {S_PASSED, S_FAILED_ACTIVE, S_PRODUCED},
-    S_FAILED_ACTIVE: {S_PENDING, S_FAILED_TERMINAL, S_PRODUCED, S_FAILED_ACTIVE, S_PASSED},
+    # failed_active → escalated:验证回路"没路可走"(轮次耗尽/归因缺失)的升级出口——
+    # 曾静默判 failed_terminal,用户永远看不到"引擎需要人拍板"(CNAME 570 三轮实证)。
+    S_FAILED_ACTIVE: {S_PENDING, S_FAILED_TERMINAL, S_PRODUCED, S_FAILED_ACTIVE, S_PASSED,
+                      S_ESCALATED},
     # S_PASSED 无出边:pass 即锁。唯一例外经 flip_evidence(双跑翻转)显式豁免。
     S_PASSED: set(),
     S_FAILED_TERMINAL: set(),

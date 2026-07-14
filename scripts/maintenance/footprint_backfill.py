@@ -251,7 +251,9 @@ class RunStats:
 
 def run_backfill(*, dry_run: bool = False, limit: int = 0,
                  manuals: list[Path] | None = None,
-                 existing_facts: dict | None = None) -> RunStats:
+                 existing_facts: dict | None = None,
+                 footprint_dir: Path | None = None,
+                 nodes_subdir: str = "nodes") -> RunStats:
     from main import knowledge_paths as kp
     from main.ist_core.memory.footprint import (
         extract_facts, route_facts, merge_fact, reconcile,
@@ -260,17 +262,23 @@ def run_backfill(*, dry_run: bool = False, limit: int = 0,
 
     root = Path(__file__).resolve().parents[2]
     if manuals is None:
-        # 新固定手册：adoc→md 产出的章节制 CLI 手册（粗体命令约定，表1-1）。
-        # 旧 MinerU 切分 `10.5_cli__part*.md` 已归档至 .md_backup/，不再用。
+        # 默认10.5 CLI 手册（章节制，粗体命令约定，表1-1）。
         manuals = sorted(
-            (root / "knowledge/data/markdown/product/manual_10.5").glob("cli_10.5_*.md")
+            (root / "knowledge/data/markdown/product/product").glob("cli_10.5_*.md")
         )
+
+    if footprint_dir is None:
+        footprint_dir = kp.KNOWLEDGE_FOOTPRINTS
+    nodes_dir = footprint_dir / nodes_subdir
+    nodes_dir.mkdir(parents=True, exist_ok=True)
 
     # 切片 + 打包
     all_batches: list[list[Chunk]] = []
+    print(f"[DEBUG-RB] manuals count={len(manuals)}, root={root}", flush=True)
     for md in manuals:
         rel = md.relative_to(root).as_posix()
         chunks = slice_manual(md, rel)
+        print(f"[DEBUG] {md.name}: {len(chunks)} chunks", flush=True)
         batches = pack_batches(chunks)
         logger.info("%s: %d 片 → %d 批", md.name, len(chunks), len(batches))
         all_batches.extend(batches)
@@ -289,12 +297,10 @@ def run_backfill(*, dry_run: bool = False, limit: int = 0,
     if llm_chat is None:
         return stats
 
-    footprint_dir = kp.KNOWLEDGE_FOOTPRINTS
-    kp.KNOWLEDGE_FOOTPRINTS_NODES.mkdir(parents=True, exist_ok=True)
-
     # existing_facts 快照（启动时取一次；供 LLM 复用 fact_key，避免每批重载 O(n²)）。
     # 传入 existing_facts 可覆盖（如范围化重生成时只传相关子树，避免把全树塞进 prompt）。
-    existing = existing_facts if existing_facts is not None else _load_existing_facts(footprint_dir)
+    # 注意：传 nodes_dir 而非 footprint_dir，避免扫描到其他版本的节点。
+    existing = existing_facts if existing_facts is not None else _load_existing_facts(nodes_dir)
 
     # 并发提取
     def _extract(batch: list[Chunk]):
@@ -319,7 +325,7 @@ def run_backfill(*, dry_run: bool = False, limit: int = 0,
     stats.facts_extracted = len(all_facts)
 
     # 串行 route + merge（写盘，避免并发竞态）
-    for rf in route_facts(all_facts, footprint_dir):
+    for rf in route_facts(all_facts, footprint_dir, nodes_subdir=nodes_subdir):
         r = merge_fact(rf, footprint_dir)
         if r.action == "create":
             stats.merged_create += 1
@@ -332,12 +338,13 @@ def run_backfill(*, dry_run: bool = False, limit: int = 0,
             stats.by_skip_detail[r.detail] = stats.by_skip_detail.get(r.detail, 0) + 1
 
     # 全树 reconcile
-    rec = reconcile(footprint_dir)
+    rec = reconcile(footprint_dir, nodes_subdir=nodes_subdir)
     logger.info("reconcile: %s", rec)
     return stats
 
 
-def _backup_and_clear_nodes() -> Path | None:
+def _backup_and_clear_nodes(footprint_dir: Path | None = None,
+                            nodes_subdir: str = "nodes") -> Path | None:
     """rebuild 前：把现有 nodes/*.json 备份到 .intermediate 带时间戳目录后清空。
 
     返回备份目录（无节点可备份时返回 None）。清空保证全量重建从干净状态起，
@@ -347,17 +354,20 @@ def _backup_and_clear_nodes() -> Path | None:
     from datetime import datetime
     from main import knowledge_paths as kp
 
-    nodes = kp.KNOWLEDGE_FOOTPRINTS_NODES
+    if footprint_dir is None:
+        footprint_dir = kp.KNOWLEDGE_FOOTPRINTS
+    nodes = footprint_dir / nodes_subdir
     files = sorted(nodes.glob("*.json")) if nodes.exists() else []
     if not files:
         return None
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    bak = kp.KNOWLEDGE_INTERMEDIATE / "footprint_nodes_backup" / ts
+    bak_name = f"footprint_nodes_backup_{nodes_subdir}_{ts}" if nodes_subdir != "nodes" else f"footprint_nodes_backup/{ts}"
+    bak = kp.KNOWLEDGE_INTERMEDIATE / bak_name
     bak.mkdir(parents=True, exist_ok=True)
     for f in files:
         shutil.copy2(f, bak / f.name)
         f.unlink()
-    logger.info("rebuild: 已备份 %d 节点 → %s 并清空 nodes/", len(files), bak)
+    logger.info("rebuild: 已备份 %d 节点 → %s 并清空 %s/", len(files), bak, nodes_subdir)
     return bak
 
 
@@ -367,8 +377,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=0, help="只跑前 N 批（调试）")
     parser.add_argument(
         "--rebuild", action="store_true",
-        help="全量重建：先备份现有 nodes 到 .intermediate/footprint_nodes_backup/<ts> 再清空，"
+        help="全量重建：先备份现有 nodes 到 .intermediate/ 再清空，"
              "然后从空树重抽（默认是增量补全，复用 existing 仅追加新事实）",
+    )
+    parser.add_argument(
+        "--nodes-subdir", type=str, default="nodes",
+        help="footprint nodes 子目录名（相对于 knowledge/footprints/）。默认 nodes；"
+             "版本隔离示例：--nodes-subdir nodes_10.4.6r2",
+    )
+    parser.add_argument(
+        "--manuals", type=str, default="",
+        help="手册文件 glob 模式（相对项目根）。默认 cli_10.5_*.md；"
+             '示例："knowledge/data/markdown/product/10_4_6_R2/product/cli_10.4.6_*.md"',
     )
     args = parser.parse_args(argv)
 
@@ -377,12 +397,26 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    if args.rebuild and not args.dry_run:
-        bak = _backup_and_clear_nodes()
-        print(f"[rebuild] 已备份旧节点到 {bak} 并清空 nodes/" if bak
-              else "[rebuild] nodes/ 已空，直接全量生成")
+    from main import knowledge_paths as kp
 
-    stats = run_backfill(dry_run=args.dry_run, limit=args.limit)
+    nodes_subdir = args.nodes_subdir
+
+    manuals_list: list[Path] | None = None
+    if args.manuals:
+        root = Path(__file__).resolve().parents[2]
+        import glob as _glob
+        manuals_list = sorted(Path(p) for p in _glob.glob(str(root / args.manuals)))
+        print(f"[DBG2] root={root} file={Path(__file__).resolve()} manuals_in={args.manuals} glob_pat={str(root / args.manuals)} found={len(manuals_list)}", flush=True)
+
+    if args.rebuild and not args.dry_run:
+        bak = _backup_and_clear_nodes(nodes_subdir=nodes_subdir)
+        print(f"[rebuild] 已备份旧节点到 {bak} 并清空 {nodes_subdir}/" if bak
+              else f"[rebuild] {nodes_subdir}/ 已空，直接全量生成")
+
+    stats = run_backfill(
+        dry_run=args.dry_run, limit=args.limit,
+        manuals=manuals_list, nodes_subdir=nodes_subdir,
+    )
     print("\n=== footprint backfill 统计 ===")
     print(f"批次:        {stats.batches}")
     if not args.dry_run:

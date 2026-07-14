@@ -30,48 +30,62 @@ logger = logging.getLogger(__name__)
 
 
 _HELP_TEXT = """/footprint subcommands:
-  /footprint                 总览（默认）
-  /footprint show <command>  查看节点完整内容（如 /footprint show http rewrite body）
-  /footprint search <query>  模糊搜索（如 /footprint search cookie 加密）
-  /footprint stats           统计信息
-  /footprint list [level]    列出所有节点（level: leaf/trunk/branch）
+  /footprint                           总览（默认）
+  /footprint --version <ver>           指定版本（如 --version 10.4.6r2）
+  /footprint show <command>            查看节点完整内容
+  /footprint search <query>            模糊搜索
+  /footprint stats                     统计信息
+  /footprint list [level]              列出所有节点（level: leaf/trunk/branch）
 """
 
 
-def _get_index():
+def _parse_version(args: str) -> tuple[str, str]:
+    """从参数串中提取 --version <ver>，返回 (version, 剩余参数)。"""
+    import re
+    m = re.search(r"--version\s+(\S+)", args or "")
+    if m:
+        version = m.group(1)
+        remaining = (args[:m.start()] + args[m.end():]).strip()
+        return version, remaining
+    return "", args or ""
+
+
+def _get_index(nodes_subdir: str = "nodes"):
     from main.ist_core.memory.footprint import get_footprint_index
-    return get_footprint_index()
+    return get_footprint_index(nodes_subdir)
 
 
 def cmd_footprint(args: str, app: "IstApp") -> SlashCommandResult:
-    parts = (args or "").strip().split(None, 1)
+    version, args = _parse_version(args or "")
+    nodes_subdir = f"nodes_{version}" if version else "nodes"
+    parts = args.strip().split(None, 1)
     if not parts or parts[0] in ("", "help", "--help", "-h"):
         if parts and parts[0] in ("help", "--help", "-h"):
             return TextResult(text=_HELP_TEXT)
-        return _cmd_overview()
+        return _cmd_overview(nodes_subdir)
     sub = parts[0].lower()
     rest = parts[1] if len(parts) > 1 else ""
 
     if sub == "stats":
-        return _cmd_stats()
+        return _cmd_stats(nodes_subdir)
     if sub == "show":
         if not rest:
             return ErrorResult(text="usage: /footprint show <command>")
-        return _cmd_show(rest)
+        return _cmd_show(rest, nodes_subdir)
     if sub == "search":
         if not rest:
             return ErrorResult(text="usage: /footprint search <query>")
-        return _cmd_search(rest)
+        return _cmd_search(rest, nodes_subdir)
     if sub == "list":
         level = rest.strip() or None
-        return _cmd_list(level)
+        return _cmd_list(level, nodes_subdir)
     return ErrorResult(text=f"unknown /footprint subcommand: {sub!r}\n{_HELP_TEXT}")
 
 
-def _cmd_overview() -> SlashCommandResult:
+def _cmd_overview(nodes_subdir: str = "nodes") -> SlashCommandResult:
     """总览：节点统计 + 最丰富节点 top 5。"""
     try:
-        idx = _get_index()
+        idx = _get_index(nodes_subdir)
         stats = idx.stats()
     except Exception as exc:
         return ErrorResult(text=f"footprint 索引加载失败: {exc}")
@@ -95,10 +109,10 @@ def _cmd_overview() -> SlashCommandResult:
     return TextResult(text="\n".join(lines))
 
 
-def _cmd_stats() -> SlashCommandResult:
+def _cmd_stats(nodes_subdir: str = "nodes") -> SlashCommandResult:
     """详细统计。"""
     try:
-        idx = _get_index()
+        idx = _get_index(nodes_subdir)
         stats = idx.stats()
     except Exception as exc:
         return ErrorResult(text=f"footprint 索引加载失败: {exc}")
@@ -112,10 +126,10 @@ def _cmd_stats() -> SlashCommandResult:
     return TextResult(text="\n".join(lines))
 
 
-def _cmd_show(command: str) -> SlashCommandResult:
+def _cmd_show(command: str, nodes_subdir: str = "nodes") -> SlashCommandResult:
     """查看节点完整内容。"""
     try:
-        idx = _get_index()
+        idx = _get_index(nodes_subdir)
         result = idx.lookup(command)
     except Exception as exc:
         return ErrorResult(text=f"查询失败: {exc}")
@@ -132,10 +146,10 @@ def _cmd_show(command: str) -> SlashCommandResult:
     return TextResult(text=json.dumps(result, ensure_ascii=False, indent=2))
 
 
-def _cmd_search(query: str) -> SlashCommandResult:
+def _cmd_search(query: str, nodes_subdir: str = "nodes") -> SlashCommandResult:
     """模糊搜索。"""
     try:
-        idx = _get_index()
+        idx = _get_index(nodes_subdir)
         hits = idx.search(query, top_k=5)
     except Exception as exc:
         return ErrorResult(text=f"搜索失败: {exc}")
@@ -150,10 +164,10 @@ def _cmd_search(query: str) -> SlashCommandResult:
     return TextResult(text="\n".join(lines))
 
 
-def _cmd_list(level: str | None) -> SlashCommandResult:
+def _cmd_list(level: str | None, nodes_subdir: str = "nodes") -> SlashCommandResult:
     """列出所有节点（按 level 过滤）。"""
     try:
-        idx = _get_index()
+        idx = _get_index(nodes_subdir)
         nodes = idx.list_nodes(level=level)
     except Exception as exc:
         return ErrorResult(text=f"列出失败: {exc}")

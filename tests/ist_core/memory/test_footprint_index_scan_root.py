@@ -33,8 +33,8 @@ def test_index_scans_nodes_only_excludes_archive(tmp_path, monkeypatch):
     _write_node(fp / ".archive_x" / "ghost.json",
                 "sdns.host.persistence.[ipv4_netmask")
 
-    monkeypatch.setattr(kp, "KNOWLEDGE_FOOTPRINTS_NODES", fp / "nodes")
-    monkeypatch.setattr(idx_mod, "_FOOTPRINT_INDEX_SINGLETON", None)
+    monkeypatch.setattr(kp, "KNOWLEDGE_FOOTPRINTS", fp)
+    monkeypatch.setattr(idx_mod, "_FOOTPRINT_INDEX_SINGLETONS", {})
     try:
         idx = get_footprint_index()
         idx._ensure_loaded()
@@ -43,4 +43,4 @@ def test_index_scans_nodes_only_excludes_archive(tmp_path, monkeypatch):
         assert "sdns.host.persistence.[ipv4_netmask" not in idx._nodes  # archive 不加载
         assert len(idx._nodes) == 1                    # 只有 nodes/ 那一个
     finally:
-        idx_mod._FOOTPRINT_INDEX_SINGLETON = None       # 别把测试索引漏给后续用例
+        idx_mod._FOOTPRINT_INDEX_SINGLETONS.clear()     # 别把测试索引漏给后续用例

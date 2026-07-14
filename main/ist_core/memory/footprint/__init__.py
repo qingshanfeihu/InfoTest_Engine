@@ -2,10 +2,10 @@
 
 Public API:
     extract_facts(content, *, llm_chat) -> list[RawFact]
-    route_facts(facts, footprint_dir) -> list[RoutedFact]
+    route_facts(facts, footprint_dir, nodes_subdir) -> list[RoutedFact]
     merge_fact(routed, footprint_dir) -> MergeResult
-    get_footprint_index() -> FootprintIndex   # 单例索引
-    invalidate_footprint_index() -> None      # 失效（dream 写后/测试用）
+    get_footprint_index(nodes_subdir) -> FootprintIndex   # 按版本缓存索引
+    invalidate_footprint_index(nodes_subdir) -> None      # 失效（dream 写后/测试用）
 """
 
 from __future__ import annotations

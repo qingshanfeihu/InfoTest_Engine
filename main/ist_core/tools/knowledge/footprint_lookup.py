@@ -152,8 +152,16 @@ _FP_CACHE_LOCK = threading.Lock()
 _FP_CACHE_IDX_ID = None  # 缓存对应的 index 对象 id;index 重载/换(含测试换 index)→ id 变 → 清缓存防 stale
 
 
+def _version_to_nodes_subdir(version: str) -> str:
+    """version 参数 → nodes 子目录名。空 → 默认 nodes/。"""
+    v = (version or "").strip()
+    if not v:
+        return "nodes"
+    return f"nodes_{v}"
+
+
 @tool(parse_docstring=True)
-def kb_footprint(command: str) -> str:
+def kb_footprint(command: str, version: str = "") -> str:
     """查询 CLI 命令的产品知识（已验证的规则、行为、缺陷）。
 
     在评审或回答产品问题时使用。读到 CLI 命令文档后调用此工具，
@@ -165,33 +173,36 @@ def kb_footprint(command: str) -> str:
 
     Args:
         command: CLI 命令名（精确或前缀）。
+        version: 产品版本号（如 "10.4.6r2"），空则查默认版本。
 
     Returns:
         匹配的 footprint 内容（CLI 语法、决策规则、行为、已知缺陷），
         或 "未找到" 提示。
     """
+    nodes_subdir = _version_to_nodes_subdir(version)
     from main.ist_core.memory.footprint import get_footprint_index
-    idx_id = id(get_footprint_index())
+    idx_id = id(get_footprint_index(nodes_subdir))
     key = (command or "").strip().lower()
+    cache_key = (key, nodes_subdir)
     global _FP_CACHE_IDX_ID
     with _FP_CACHE_LOCK:
         if idx_id != _FP_CACHE_IDX_ID:   # 索引重载/换 index → 清缓存(防 stale + 保测试隔离)
             _FP_CACHE.clear()
             _FP_CACHE_IDX_ID = idx_id
-        if key in _FP_CACHE:
-            return _FP_CACHE[key]
-    result_text = _kb_footprint_compute(command)
+        if cache_key in _FP_CACHE:
+            return _FP_CACHE[cache_key]
+    result_text = _kb_footprint_compute(command, nodes_subdir)
     if key:
         with _FP_CACHE_LOCK:
-            _FP_CACHE[key] = result_text
+            _FP_CACHE[cache_key] = result_text
     return result_text
 
 
-def _kb_footprint_compute(command: str) -> str:
+def _kb_footprint_compute(command: str, nodes_subdir: str = "nodes") -> str:
     """kb_footprint 的实际计算(被共享缓存包裹;并发 draft 反复查同命令时只算一次)。"""
     try:
         from main.ist_core.memory.footprint import get_footprint_index
-        idx = get_footprint_index()
+        idx = get_footprint_index(nodes_subdir)
         result = idx.lookup(command)
         enable_hint = _module_enable_hint(idx, command)
 

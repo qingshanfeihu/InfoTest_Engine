@@ -696,16 +696,22 @@ def merge(state: dict) -> dict:
             return False
         return True
 
+    # F1(§18.11):expectation_suspect 案带 ask_panel 在等人源裁决——与 author 的
+    # panel_wait 排除对称,不得被 merge 当「就绪案」误纳进 delivery 卷(它 case_status
+    # 仍是 S_FAILED,但唯一出口是面板,非复跑/交付)。裁决折叠既有 token 后正常流恢复。
+    panel_wait = set(sh.panel_waiting(fs, vw))
     ready = [a for a, c in vw["cases"].items()
              if c["status"] in (V.S_AUTHORED, V.S_SUBSET_VERIFIED, V.S_DELIVERABLE,
                                 V.S_CONTRADICTED, V.S_FAILED, V.S_BROKEN)
+             and a not in panel_wait
              and not (c["status"] in (V.S_FAILED, V.S_CONTRADICTED) and _s0_parked(a))]
     # V8.5 片2:挂起/待决案不得扣押其余案的 delivery 语境(§14-R4)——它们无卷可入,
     # 留在 live 里会让「待验=全体」永不成立、终验被结构性扣押。复活后经新 merge 换
     # 卷组成指纹,composition 锚自动强制整卷重新终验(INV-8 不破,答题→子集重跑→终验)。
     live = [a for a, c in vw["cases"].items()
             if c["status"] not in (V.S_ESCALATED, V.S_TERMINAL,
-                                   V.S_AWAITING_USER, V.S_SUSPENDED)]
+                                   V.S_AWAITING_USER, V.S_SUSPENDED)
+            and a not in panel_wait]
     def _rerun_disposed(aid: str) -> bool:
         att = [f for f in fs if f.get("aid") == aid and f.get("ev") == "attribution"]
         if not (att and str(att[-1].get("disposition")) in ("rerun_isolated", "transient")):

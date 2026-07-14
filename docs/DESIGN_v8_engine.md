@@ -1320,7 +1320,16 @@ uncertain 效度在语料契约加字段。**极性禁运(定界版,评审 D18/T
   outcome=miss **不阻断**缺陷候选(第三源沉默恰是新缺陷指纹),miss 入题面证据。
 - 判据「经窗口审计的干净判定」对 dig 族(window_audit 范围外)不可用——降级路径:
   dig 族以「触发端会话原文完整」代位,题面注明审计不可用。
-- 与 **S₀ 前置裁决**(原 G5 前置自动裁决改名)+F2(b) 同批。
+- **真实增量**(评审 D21③):§11.11 面板机构(expected_vs_observed conflict_shape +
+  confirm/correct/defect token)已全存在——F1 增量=处置词表第七臂 + submit 併呈门 +
+  merge/author 的 panel_wait 对称排除;裁决折叠**复用既有 panel 通道**(ask_contradiction
+  的 `_answer_token(panel)`),零新面板形态、零新终态。
+- **已落地(2026-07-14 批次六)**:_DISPS 扩 expectation_suspect + 併呈机械门
+  (`fail_attribution`)+ (40) 第七类(K §2.12.1)+ attributor 五查 + remedies 队列
+  空(引擎无单方修法权)+ merge panel_wait 排除。测试锚:`test_expectation_suspect.py`。
+- **S₀ 前置裁决 + F2(b) 为独立后续轮**(graph 流大改,§18.10 立项):s₀ 进 bed 问询
+  前引擎先隔离复跑+只读探针自耗尽裁决手段(山穷水尽的设备面);F2(b) bed ask 携检索
+  回执并入此批。不塞入 F1-F8 收尾——StateGraph 边改动风险独立评审后单开。
 
 **F4 执行器契约入文法层(最后)**:`,prompt=` 是通用 read_until 覆写**非**确认
 问句专用(mirror ssh_server.py 实核,评审 T10)——「确认问句形态闭集」本身是设备

@@ -194,12 +194,15 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
         xlsx_path: the volume case.xlsx run this round, or the brief's last_run_path
             directly (both accepted; the ledger is the sibling last_run.json).
         autoid: the attributed case's full autoid (must exist in last_run.json).
-        layer: one of five — G (device syntax rejection), E (environment/IP), V (assertion vs
+        layer: G (device syntax rejection), E (environment/IP), V (assertion vs
             behavior mismatch), transient (non-reproducible), product_defect (suspected).
             If unsure, do not call this tool (undetermined is the default state, no submission needed).
-        disposition: one of five — reflow (recompile with feedback), frozen (freeze the
-            approach, change direction), env_blocked (environment blocked, finish the run
-            first), defect_candidate (defect-candidate form), fixed (fixed, pending rerun).
+        disposition: reflow (recompile with feedback) / frozen (freeze the approach, change
+            direction) / env_blocked (environment blocked, finish the run first) /
+            defect_candidate (defect-candidate form) / fixed (fixed, pending rerun) /
+            rerun_isolated (bed-state suspicion, merge reruns) / expectation_suspect
+            (the EXPECTATION itself contradicts device+third-source — requires a
+            same-round submit_ask_panel; the user ruling is its only exit).
         evidence: the **verbatim substring** of device_context/causality supporting the
             conclusion (copy, never retell) — validated against the case's landed raw text
             (a standalone ^ line was measurably lost in retelling, causing misattribution).
@@ -227,13 +230,27 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
     from pathlib import Path
 
     _LAYERS = ("G", "E", "V", "transient", "product_defect")
-    _DISPS = ("reflow", "frozen", "env_blocked", "defect_candidate", "fixed", "rerun_isolated")
+    _DISPS = ("reflow", "frozen", "env_blocked", "defect_candidate", "fixed",
+              "rerun_isolated", "expectation_suspect")
     layer = (layer or "").strip()
     disposition = (disposition or "").strip()
     if layer not in _LAYERS:
         return f"error: layer must be one of {'/'.join(_LAYERS)}, got {layer!r}"
     if disposition not in _DISPS:
         return f"error: disposition must be one of {'/'.join(_DISPS)}, got {disposition!r}"
+    if disposition == "expectation_suspect":
+        # F1 panel 併呈机械门(§18.11,评审 D21 活锁防护):期望可疑=待人源裁决——
+        # author 不重编、merge 不复跑,唯一出口是 §11.11 面板;无 panel 伴行的案会停在
+        # S_FAILED+空队列+无 ask 目标(活锁)。裁决折叠回既有终态(确认缺陷→
+        # defect_candidate/修订期望→correct+reflow/挂起→suspended),不新增 @99 终态
+        # ((40) 第七类,K §2.12.1;views/report_gate 双路冗余勿协同改)。
+        _pp = (Path(__file__).resolve().parents[4] / "workspace" / "outputs"
+               / (autoid or "").strip() / "ask_panel.json")
+        if not _pp.is_file():
+            return ("error: disposition=expectation_suspect requires a same-round "
+                    "submit_ask_panel filed first (the panel IS its only exit — without "
+                    "it the case livelocks). File the panel with both sides quoted "
+                    "(device stream + third-source record), then re-submit.")
     ev = (evidence or "").strip()
     if not ev:
         return "error: evidence is required — copy a supporting snippet verbatim from device_context/causality"

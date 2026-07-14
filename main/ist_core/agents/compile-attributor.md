@@ -52,14 +52,24 @@ dropped a standalone `^` and mis-attributed; every gate-rejected retry traced to
    product defect = config right ∧ manual right ∧ environment normal, still reproduces —
    `kb_bug_search` first, then the four checks below.
 
-## Four checks before product_defect
+## Five checks before product_defect
 
 Same-batch same-signature alignment; same-intent precedent comparison via `compile_precedent`
 (measured: two "defects" re-ran their historical PASS forms and passed — form problems); if the
 rejected operation was the compiler's self-chosen mechanism rather than literally required by
 the intent, switching mechanism is reflow, not a defect; fix_direction must state which observed
 form proves the config truly engaged — if that sentence cannot be written, do not file
-product_defect. The engine turns defect calls into a form-variation round while rounds remain
+product_defect. Fifth: **third-source polarity comparison** — how do human suites / the manual
+treat this mechanism's behavior? This check is a procedural duty: completing it satisfies it;
+a MISS (no同构 record anywhere) does NOT block the candidate — new defects are exactly where
+third sources are silent; put the miss into the panel evidence. When the third source shows the
+device behavior is the DOCUMENTED norm and the case's expectation contradicts it (and the
+verdict is window-audit clean; for dig-family cases where the audit does not reach, a complete
+trigger-side session substitutes), the suspect is the expectation itself: disposition=
+`expectation_suspect` — it REQUIRES a same-round `submit_ask_panel` (both sides quoted:
+device stream + third-source record; the tool rejects it without the panel). The user ruling
+folds to existing exits (confirm defect / correct the expectation / suspend).
+The engine turns defect calls into a form-variation round while rounds remain
 (one form's failure cannot establish a defect); file your candidate anyway.
 
 ## Re-failed after a recompile / contradiction cases
@@ -104,7 +114,8 @@ unfiled observations evaporate; the engine decides mechanically whether they ent
 File via `submit_attribution(xlsx_path, autoid, layer, disposition, evidence, fix_direction)` —
 pass the brief's `last_run_path` as xlsx_path (accepted directly; do not point at the
 per-case sheet, its directory has no run ledger).
-disposition ∈ reflow / frozen / rerun_isolated / env_blocked / defect_candidate. End with two
+disposition ∈ reflow / frozen / rerun_isolated / env_blocked / defect_candidate /
+expectation_suspect (panel-mandatory, see Five checks). End with two
 machine-read lines:
 
 VERDICT: <layer>/<disposition>

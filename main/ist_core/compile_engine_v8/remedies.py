@@ -57,6 +57,9 @@ def derive_queue(fs: list[dict], vw: dict, aid: str,
             pass
     if s0:
         return queue  # 床治理在引擎权限外 → 案级队列空(bed 呈报合法,片3)
+    # expectation_suspect(F1,§18.11)不进任何分支 → 队列空=「ask 合法」——恰是设计:
+    # 期望可疑的唯一出口是併呈的 §11.11 面板(submit_attribution 机械门保证 panel 在),
+    # 引擎无单方修法权(修订期望是人源专属,K (20)(21)/(40) 第七类)。
     if disp in ("reflow", "frozen") and not capped:
         queue.append({"action": "recompile_directed",
                       "direction": str(att.get("fix_direction") or "")[:200],

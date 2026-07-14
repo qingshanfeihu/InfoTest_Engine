@@ -167,6 +167,57 @@ def test_diagnose_s0_blocks_pointless_rerun(rig):
     assert "测试床状态残留" in txt and AIDS[0][-6:] in txt, txt
 
 
+def test_attributor_s0_not_upgraded_when_mechanical_finds_no_polluter(rig):
+    """§18.14 缺口修(run24 655173):attributor(fork)判 h_s0,但机械 _s0_pair 判无
+    污染者(两案只共享固定基础设施 IP 172.16.34.70,S1 排除)→ 不升格成 bed,走深归因。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    rows_by_aid = {
+        AIDS[0]: [{"E": "APV_0", "F": "cmds_config", "G": "sdns on\nsdns listener 172.16.34.70"}],
+        AIDS[1]: [{"E": "APV_0", "F": "cmds_config", "G": "sdns on\nsdns listener 172.16.34.70 10001"}],
+        AIDS[2]: [{"E": "APV_0", "F": "cmds_config", "G": "sdns on"}],
+    }
+    rig["monkeypatch"].setattr(
+        N, "_load_case_rows",
+        lambda aid: rows_by_aid.get(aid, [{"E": "APV_0", "F": "cmds_config", "G": "sdns on"}]))
+    N._fixed_infra_ips.cache_clear()
+    orig_fork = N._FORK_OVERRIDE
+
+    def fork(skill, brief, *, tag="", effort=""):
+        env = json.loads(brief.splitlines()[0])
+        aid = str(env.get("autoid"))
+        if skill == "compile-attributor":
+            lrp = rig["tmp"] / str(env.get("last_run_path"))
+            data = json.loads(lrp.read_text(encoding="utf-8"))
+            for r in data:
+                if str(r.get("autoid")) == aid:
+                    r["_attribution"] = {"layer": "V", "disposition": "rerun_isolated",
+                                         "h_position": "h_s0",   # fork 判 s₀
+                                         "evidence": f"echo {aid}"}
+            lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            return "VERDICT"
+        return orig_fork(skill, brief, tag=tag, effort=effort)
+
+    rig["monkeypatch"].setattr(N, "_FORK_OVERRIDE", fork)
+    device = FakeDevice(lambda aid, ctx, n: "fail" if aid == AIDS[1] and ctx == "delivery" else "pass")
+    panels: list[dict] = []
+
+    def answer(payload):
+        panels.append(payload)
+        return {"__dismiss__": ""}
+
+    _run_graph(rig, device, resume_answers=answer)
+    facts = [json.loads(l) for l in
+             (rig["outputs"] / rig["out_name"] / "facts.jsonl").read_text(
+                 encoding="utf-8").splitlines()]
+    # ① AIDS[1] 无 h_s0 诊断(fork 的 h_s0 未升格——机械判无污染者)
+    diags = [f for f in facts if f.get("ev") == "diagnosis" and f.get("aid") == AIDS[1]]
+    assert not any(str(d.get("h_position")).startswith("h_s0") for d in diags), diags
+    # ② 不进 bed 床面板(走深归因而非床治理)
+    bed_items = [it for p in panels if p.get("kind") == "ask_contradiction"
+                 for it in p.get("cases", []) if it.get("kind") == "bed"]
+    assert not any(it.get("autoid") == AIDS[1] for it in bed_items), panels
+
+
 def test_transient_recovery_final_verify_not_gated(rig):
     """redline 实证回归①:瞬态案 delivery fail → rerun 处方 → subset pass →
     组成与卷面未变的终验**必须放行**(has_upgrade)拿到 delivery-pass。"""

@@ -1838,7 +1838,16 @@ def diagnose(state: dict) -> dict:
             h_pos, polluters, basis = "", [], ""
         if not h_pos:
             att = [f for f in mine if f.get("ev") == "attribution"]
-            h_pos = str((att[-1] if att else {}).get("h_position") or "")
+            cand_h = str((att[-1] if att else {}).get("h_position") or "")
+            # §18.14 缺口修(run24 655173):机械 _s0_pair **明确判无 s₀**(跑了配对、
+            # 非失明,S1 已排除固定基础设施 IP)时,attributor 的 h_s0 候选**不升格**成批级
+            # s₀ diagnosis——否则固定接口 IP 被 fork 误判污染→bed 床面板,而机械已判无
+            # 污染者(D8 分工:批级裁决为准、fork 只降不判死)。仅机械**失明**(触碰画像
+            # 提取失败,配对不可得)时才采信 fork 的 s₀;非 s₀ 候选(h_pi 等)照常回退。
+            if cand_h.startswith("h_s0") and aid not in _profile_failures:
+                sh.emit(f"…{aid[-6:]} fork 判 s₀ 但机械配对判无污染者——不升格,保留深归因")
+                cand_h = ""
+            h_pos = cand_h
             basis = "fork candidate (no batch-level counter-evidence)" if h_pos else ""
         if not h_pos:
             continue   # unknown 不落账(空裁决无信息)

@@ -37,3 +37,15 @@ def test_destructive_object_scoped_clear_not_matched():
     assert any(r.search("clear config all") for r in res)
     assert not any(r.search("clear sdns all") for r in res)
     assert not any(r.search("clear slb all") for r in res)
+
+
+# ── F4 执行器契约文法段(§18.11;句法门经审查不建,收敛为数据+知识) ──────────
+
+def test_executor_contract_grammar_section():
+    """domain_grammar 有 executor_contract 段,含 prompt/timeout kwarg + 出处。"""
+    from main.case_compiler.domain_grammar import load_grammar
+    ec = load_grammar().get("executor_contract") or {}
+    keys = {k.get("key") for k in (ec.get("kwargs") or [])}
+    assert "prompt" in keys and "timeout" in keys
+    assert "get_parameter" in ec.get("_provenance", "")   # 出处=源码,非硬编码
+    assert "不建" in ec.get("_provenance", "")             # 句法门不建的诚实记录

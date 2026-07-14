@@ -4684,5 +4684,18 @@
     ]
    }
   ]
+ },
+ "executor_contract": {
+  "_provenance": "2026-07-14 §18.11 F4:框架 xlsx 执行器的关键字参数契约。出处=mirror lib/test_xlsx.py::get_parameter(引号外逗号切段,key=value 无空格 key→kwargs,func(*parameters,**kwargs) 传 cmd_config)+人工金标准卷 smoke_test/sdns/log_backup_*.xlsx。语义:G 列命令尾挂 ,prompt=<response> 是**自包含**交互应答——框架在命令回显出现交互提示时自动发送 <response>(如 YES),命令流不错位;,timeout=<秒> 覆写该步等待墙钟。用途:worker 编写会触发交互确认的命令(如覆写已存在文件、加载整配置)时,用此 kwarg 自包含处理,不让下一条命令被交互提示吃掉(写保存族 YES 错位 σ 链断裂的知识面对策)。**判定不建句法配对门**(充分审查):交互确认是**条件性**设备行为(文件已存在才提示),无纯句法配对可建——同 interactive_confirm 猜测门(AUDIT_gate_inventory §2.2 决定不建);worker 检索先例形态(log_backup 经 F3 血统配额可见)自主决定何时用。单套件证据,保守。",
+  "kwargs": [
+   {
+    "key": "prompt",
+    "value": "interactive response string sent when the command echo shows a confirmation prompt (self-contained; no separate response step needed)"
+   },
+   {
+    "key": "timeout",
+    "value": "per-step read wallclock override in seconds"
+   }
+  ]
  }
 }

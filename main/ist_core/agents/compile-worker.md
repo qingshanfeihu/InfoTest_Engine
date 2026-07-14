@@ -73,7 +73,9 @@ survives into every later case** (saved config files/snapshots, peer sync, segme
 change outside those objects; the known persistence families are in `domain_grammar.json`).
 Use case-unique artifact names and clean your own leftovers at the head/tail of the case.
 Measured: save-family cases that passed in isolation failed in full-volume runs via shared
-persistent state.
+persistent state. A command that can hit an interactive confirmation (overwrite/Type-YES) takes
+a self-contained `,prompt=<response>` kwarg (grammar `executor_contract`) so the confirmation is
+answered inline and the next command is not consumed — retrieve the form from a precedent.
 
 ## Delivery language
 

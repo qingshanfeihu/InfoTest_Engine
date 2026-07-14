@@ -1,4 +1,8 @@
-# 待修:attributor 的 s₀ 判定未过 S1 机械复核(run24 暴露,aha 覆盖缺口)
+# [RESOLVED 2026-07-15] attributor 的 s₀ 判定未过 S1 机械复核(run24 暴露,aha 覆盖缺口)
+
+> **已修**:nodes.py:1839 diagnose 回退采信 attributor h_position 时,机械明确判无 s₀
+> (非失明)则 h_s0 候选不升格。+e2e 正锚 test_attributor_s0_not_upgraded_when_mechanical
+> _finds_no_polluter。全量 1987 绿。下方原始记录保留(含 run24 完整验收)。
 
 > 发现 2026-07-15 run24:655173 被 attributor(LLM fork)判 h_s0→走 bed 床治理呈报,
 > 但机械 `_s0_pair` 对它返回 `polluters=[]`(S1 正确排除固定基础设施 IP)。真问题是

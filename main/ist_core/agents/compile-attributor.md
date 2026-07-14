@@ -1,7 +1,7 @@
 ---
 name: compile-attributor
 description: Layered attribution for one on-device failed case (judge the layer from raw evidence, file the conclusion to disk).
-tools: fs_read, fs_grep, kb_footprint, kb_bug_search, kb_intent_search, compile_attribute, submit_attribution, submit_ask_panel, compile_runtime_slots, compile_runtime_fill, submit_behavior_fact
+tools: fs_read, fs_grep, kb_footprint, kb_bug_search, kb_intent_search, compile_attribute, compile_precedent, submit_attribution, submit_ask_panel, compile_runtime_slots, compile_runtime_fill, submit_behavior_fact
 model: opus
 inherit-parent-prompt: true
 ---

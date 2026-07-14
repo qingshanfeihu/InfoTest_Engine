@@ -78,8 +78,12 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
            and f.get("disposition") in ("env_blocked", "defect_candidate")
            for f in mine):
         return S_TERMINAL
-    if any(f.get("ev") == "needs_decision" for f in mine) and not any(
-            f.get("ev") == "decision" for f in mine):
+    # H2(§18.11 横切,2026-07-14):按 question_id 配对——旧谓词「有任意 decision 即
+    # 非等待」与 ask_decision 的按题配对二义,同案第二次欠定(F6 新增来源)会被
+    # author 重派或漏停车
+    _answered_q = {f.get("question_id") for f in mine if f.get("ev") == "decision"}
+    if any(f.get("ev") == "needs_decision"
+           and f.get("question_id") not in _answered_q for f in mine):
         return S_AWAITING_USER
     # emit_invalid 打回(#74-②):最新 authored 之后被合并预检拒(凭证过期/lint 违例,
     # 常见成因=emit 后绕门直改卷面)→ 当前卷面不可信,回待编写(author 重派,

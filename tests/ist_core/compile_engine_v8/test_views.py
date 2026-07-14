@@ -64,3 +64,16 @@ def test_batch_view_and_settlement():
     view2 = batch_view(fs, manifest)
     assert view2["cases"][A]["status"] != S_DELIVERABLE
     assert not all_settled(view2)
+
+
+def test_awaiting_pairs_by_question_id_h2():
+    """H2(§18.11 横切):同案第二次欠定(新 question_id 未答)必须仍是 AWAITING——
+    旧谓词「有任意 decision 即非等待」会把它误放行(重派/漏停车)。"""
+    A = "203600000000000048"
+    fs = [{"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+          {"ev": "needs_decision", "aid": A, "question_id": f"nd:{A}:1"},
+          {"ev": "decision", "aid": A, "question_id": f"nd:{A}:1", "answer": "改过程"},
+          {"ev": "needs_decision", "aid": A, "question_id": f"nd:{A}:2"}]
+    assert case_status(fs, A, "", "") == S_AWAITING_USER
+    fs.append({"ev": "decision", "aid": A, "question_id": f"nd:{A}:2", "answer": "改描述"})
+    assert case_status(fs, A, "", "") != S_AWAITING_USER

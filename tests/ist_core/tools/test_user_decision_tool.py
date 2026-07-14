@@ -95,3 +95,43 @@ def test_ask_before_decide_gate():
         assert not (d2 / "user_decision.json").exists()
     finally:
         _sh.rmtree(d2, ignore_errors=True)
+
+
+# ── H1(§18.11 横切,2026-07-14 对抗评审 BLOCKER):form 按 claim_kind 条件化 ──────
+# 机制类 claim(验证路径缺失/禁令机制)的「改过程」=换实现路径,无 dist/member 形态
+# 可选;旧无条件 form 门使引擎侧 ask_decision(不传 form)落盘必败→问询活锁。
+
+def test_mech_only_ledger_lands_without_form():
+    """台账全机制类 + 改过程不传 form → 落盘成功,note(等价实现原文)保留,无形态键。"""
+    _ledger([{"claim_kind": "forbidden_mechanism",
+              "reason": "intent requires reboot; bed forbids it"}])
+    out = compile_user_decision.func(_A, "改过程",
+                                     note="重启→clear 验证(等价实现,模型条件)")
+    assert "已落盘" in out
+    ud = _ud()
+    assert ud["decision"] == "改过程"
+    assert "clear 验证" in ud["note"]
+    assert "expected_assertion_form" not in ud
+
+
+def test_verification_path_absent_lands_without_form():
+    """655248 型(verification_path_absent)+ 改预期不传 form → 落盘成功。"""
+    _ledger([{"claim_kind": "verification_path_absent",
+              "reason": "HA FIP not realizable on this bed"}])
+    out = compile_user_decision.func(_A, "改预期", note="换可实现观测")
+    assert "已落盘" in out
+
+
+def test_form_kind_ledger_still_requires_form():
+    """含形态类 claim → form 门不变(形态是语义决策,工具不代判)。"""
+    _ledger([{"claim_kind": "weight_ratio", "min_requests": 46}])
+    out = compile_user_decision.func(_A, "改过程")
+    assert str(out).startswith("error")
+
+
+def test_mixed_ledger_still_requires_form():
+    """机制类+形态类混合台账 → 仍强制 form(保守)。"""
+    _ledger([{"claim_kind": "forbidden_mechanism"},
+             {"claim_kind": "weight_ratio", "min_requests": 4}])
+    out = compile_user_decision.func(_A, "改过程")
+    assert str(out).startswith("error")

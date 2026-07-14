@@ -231,7 +231,15 @@ def compile_user_decision(autoid: str, decision: str, assertion_form: str = "",
     ud: dict = {"autoid": aid, "decision": dec}
     if note.strip():
         ud["note"] = note.strip()
-    if dec != "改描述":
+    # H1(§18.11 横切,2026-07-14 对抗评审 BLOCKER):form 要求按 claim_kind 条件化。
+    # 机制类 claim(验证路径缺失/禁令机制)的「改过程」语义是**换实现路径**,不存在
+    # dist/member 形态可选——旧的无条件 form 门使引擎侧 ask_decision(不传 form)
+    # 对这两类落盘必败→决策丢失下轮重问(问询活锁;655248 走通纯因选了改描述)。
+    # 台账全为机制类 → 免 form;含任一形态类 claim → 仍旧强制(形态是语义决策不代判)。
+    _MECH_KINDS = {"verification_path_absent", "forbidden_mechanism"}
+    _mech_only = bool(claims) and all(
+        str(c.get("claim_kind")) in _MECH_KINDS for c in claims)
+    if dec != "改描述" and not _mech_only:
         # 形态是语义决策——必须显式传入(用户答案里真实对应的那个),工具不代判
         form = (assertion_form or "").strip()
         if form not in ("dist", "member", "captured_relation"):

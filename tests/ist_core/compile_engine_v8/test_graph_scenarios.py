@@ -60,7 +60,7 @@ def rig(tmp_path, monkeypatch):
     # stub 成功路径;失败语义由专项单元覆盖
     from main.ist_core.tools.device import verifiability_tool as _vt
     monkeypatch.setattr(_vt.compile_user_decision, "func",
-                        lambda autoid, decision: f"ok: {autoid} {decision}")
+                        lambda autoid, decision, **kw: f"ok: {autoid} {decision}")
     signals: list[tuple] = []
     monkeypatch.setattr(sh, "signal", lambda name, subj, **p: signals.append((name, subj, p)))
 

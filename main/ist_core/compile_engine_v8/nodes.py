@@ -465,9 +465,11 @@ def ask_decision(state: dict) -> dict:
         # 文件为凭据;落盘失败时 decision 事实照落=用户拍板从「代码强制」静默退化
         # 成散文约束。失败=本案本轮不落 decision(留在 needs_decision,下轮 gather
         # 重问),如实告警
-        try:  # emit 门的 user_decision 契约(工具层不变;先问后落由本节点次序保证)
+        try:  # emit 门的 user_decision 契约(先问后落由本节点次序保证)
             from main.ist_core.tools.device.verifiability_tool import compile_user_decision
-            out = compile_user_decision.func(autoid=aid, decision=decision)
+            # H1:答案原文随 note 落盘——机制类裁决(如 F6 等价实现文本/用户自给方案)
+            # 的语义都在原文里,user_decision.json 是 worker brief 的既有引用点
+            out = compile_user_decision.func(autoid=aid, decision=decision, note=a)
             if str(out).startswith("error"):
                 raise RuntimeError(str(out)[:200])
         except Exception:  # noqa: BLE001

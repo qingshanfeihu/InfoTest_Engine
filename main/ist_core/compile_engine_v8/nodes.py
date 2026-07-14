@@ -458,17 +458,27 @@ def ask_decision(state: dict) -> dict:
     new_facts: list[dict] = []
 
     def _fm_meta(aid: str) -> dict | None:
-        """forbidden_mechanism 台账的折叠/采信键(intent.json 盖章数据;非该类→None)。"""
+        """欠定题的折叠/采信键(§18.13 P1 re-key)。三元组题(有 test_point)按
+        (group_path, has_equivalent) 折叠——不再 key on claim_kind==forbidden_mechanism
+        (真实路径 claim_kind=verification_path_absent,旧键致 reboot 案永不折叠=run22
+        病理);旧禁令台账保留兼容。group_path 读 intent.json 盖章(缺→不折叠,各自一题)。"""
         nd = ledgers.get(aid) or {}
         claims = [c for c in (nd.get("claims") or []) if isinstance(c, dict)]
-        if not claims or not all(str(c.get("claim_kind")) == "forbidden_mechanism"
-                                 for c in claims):
+        if not claims:
+            return None
+        is_triple = all(c.get("test_point") for c in claims)
+        is_fm = all(str(c.get("claim_kind")) == "forbidden_mechanism" for c in claims)
+        if not (is_triple or is_fm):
             return None
         it = sh.read_json(sh.outputs_root() / aid / "intent.json", {}) or {}
         gp = tuple(str(x) for x in (it.get("group_path") or []))
+        leaf = gp[-1] if gp else str(it.get("title") or aid)[:40]
+        if is_triple:
+            has_eq = all(c.get("equivalent") for c in claims)
+            return {"group": gp or (aid,),
+                    "sig": (leaf + "|" + ("eq" if has_eq else "noeq")).lower()}
         fams = sorted({str(h.get("family") or "")
                        for h in (it.get("forbidden_mechanism") or []) if isinstance(h, dict)})
-        leaf = gp[-1] if gp else str(it.get("title") or aid)[:40]
         return {"group": gp or (aid,), "sig": (leaf + "|" + "+".join(fams)).lower()}
 
     def _land(aid: str, decision: str, answer_text: str, provenance: str = "") -> bool:
@@ -542,6 +552,9 @@ def ask_decision(state: dict) -> dict:
         fold.setdefault(rep, []).append(aid)
 
     qs = build_questions({aid: ledgers[aid] for aid in sorted(fold) if aid in ledgers})
+    # P3:三元组题的 label→token 显式映射(长 label「采纳「…」」不含"改过程",
+    # substring 兜底匹配不到——run22 会掉 Other 兜底致 re-ask)。
+    _tok_by_rep = {str(q.get("_autoid")): (q.get("_token_by_label") or {}) for q in qs}
     for q in qs:
         mem = fold.get(str(q.get("_autoid")), [])
         if len(mem) > 1:
@@ -578,10 +591,15 @@ def ask_decision(state: dict) -> dict:
         if not a:
             continue
         m = fm_meta.get(rep)
-        decision = next((d for d in ("改过程", "改预期", "改描述") if d in a), "")
-        if not decision and m:
-            # kind-aware Other 兜底(评审 D9):禁令类的自由文本=用户自给等价方案,
-            # 语义即「按此改过程」;原文随 note 直达 worker。其他类维持保守(重问)。
+        tbl = _tok_by_rep.get(rep) or {}
+        # P3:三元组题先按显式 label→token 映射(label 与 answer 互为子串即命中,
+        # 容 TUI 序号/换行加工);失败再走既有 substring 兜底。
+        decision = next((t for lbl, t in tbl.items() if lbl and (lbl in a or a in lbl)), "")
+        if not decision:
+            decision = next((d for d in ("改过程", "改预期", "改描述") if d in a), "")
+        if not decision and (m or tbl):
+            # kind-aware Other 兜底(评审 D9;三元组同理):自由文本=用户自给等价方案,
+            # 语义即「按此改过程」,原文随 note 直达 worker。其他类维持保守(重问)。
             decision = "改过程"
         if not decision:
             continue

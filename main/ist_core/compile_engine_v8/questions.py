@@ -68,6 +68,40 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
                               "_ordering": False, "_form": form})
             continue
 
+        if all(c.get("test_point") for c in claims):
+            # §18.13 三元组投影(逐字渲染,零模板文案):面板=worker 报告本身。
+            # 真实路径 claim_kind=verification_path_absent 但带三元组字段→走这里
+            # (旧版掉进 generic「加请求/观测次数」模板=run22 病理)。
+            c0 = claims[0]
+            tp = str(c0.get("test_point") or "")
+            obs = str(c0.get("obstacle") or "")
+            equiv = c0.get("equivalent") or None
+            proc = str((equiv or {}).get("procedure") or "") if equiv else ""
+            preserves = str((equiv or {}).get("preserves") or "") if equiv else ""
+            no_eq = str(c0.get("no_equivalent_reason") or "")
+            q_text = (f"用例 {aid[-6:]} 要验证:{tp}。\n问题:{obs}。"
+                      + (f"\n等价方法:{proc}" + (f"({preserves})" if preserves else "") + "。"
+                         if proc else ""))
+            opts, tok = [], {}
+            if proc:
+                lbl = f"采纳「{proc[:60]}」"
+                opts.append({"label": lbl,
+                             "description": "采纳此等价验证重编(引擎按它编写;差异声明随交付报告)。"})
+                tok[lbl] = "改过程"
+            lbl_other = "我给别的等价方案"
+            opts.append({"label": lbl_other,
+                         "description": "在自定义输入里给出你的等价方案,原文随裁决下发 worker。"})
+            tok[lbl_other] = "改预期"
+            lbl_susp = "挂起,如实报告"
+            opts.append({"label": lbl_susp,
+                         "description": f"{no_eq or obs}。本轮不产出,待可执行环境。"})
+            tok[lbl_susp] = "改描述"
+            questions.append({"question": q_text, "header": f"欠定·{aid[-6:]}",
+                              "options": opts, "multiSelect": False, "_autoid": aid,
+                              "_ordering": ordering, "_form": form,
+                              "_token_by_label": tok})   # P3:label→token 显式映射
+            continue
+
         if all(k == "forbidden_mechanism" for k in kinds):
             # F6 禁令机制呈报(§18.11 五稿):山穷水尽=有能力完成设计验证就实现——
             # 题面主推 worker 按配置面模型推导的等价实现(模型条件,差异已声明),

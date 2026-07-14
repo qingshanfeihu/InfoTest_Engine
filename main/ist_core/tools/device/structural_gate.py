@@ -478,7 +478,9 @@ def _check_no_destructive_commands(steps: list, result: StructuralResult) -> Non
             line = line.strip()
             if not line:
                 continue
-            if any(p.match(line) for p in pats):
+            # §18.13 P6:search 非 match——否则 `\breboot\b` 对 "system reboot" 漏判
+            # (成品卷 lint 弱于 emit 门,后者已用 search);^-锚的 clear-config 形态自带锚。
+            if any(p.search(line) for p in pats):
                 result.add(
                     "destructive_command",
                     f"step {i + 1}: {line!r} wipes the device's whole configuration "

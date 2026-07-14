@@ -559,10 +559,13 @@ def ask_decision(state: dict) -> dict:
         mem = fold.get(str(q.get("_autoid")), [])
         if len(mem) > 1:
             tails = "、".join(a[-6:] for a in mem)
+            # 折叠后缀机械确定(§18.13 P4:不引入 LLM 组稿——广播的是决策 token,
+            # 每案 fanout 按各自台账 equivalent 重编,代表案的等价只作示例;机械后缀
+            # 确定性+永不空,天然满足 P4 的 resume 一致与非空要求,无需 memoize/fallback)。
             q["question"] = (str(q.get("question", ""))
-                             + f"(本题代表同组同签名 {len(mem)} 案:尾号 {tails}"
-                             "——答案广播全组,逐案落盘)")
-            q["header"] = f"禁令·组{len(mem)}案"
+                             + f"(本题代表同组 {len(mem)} 案:尾号 {tails}——采纳即认可各案"
+                             "各自的等价方案,答案广播全组、逐案落盘)")
+            q["header"] = f"欠定·组{len(mem)}案"
     # 题面入账(run11 体检#6:问了什么必须入账;oracle 残差 (16) 对称应用到问询侧)。
     # 折叠组:每成员一条 ask_shown,非代表标 folded_into(账目完整,答案可回放归属)
     shown: list[dict] = []

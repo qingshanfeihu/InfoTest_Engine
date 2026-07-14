@@ -1491,10 +1491,14 @@ clear.py 覆盖集)+ 加跨案撞名检查 + `s0_vs_clear_coverage.py` 入 scrip
 作为 user_decision 载荷,worker 按它重编);Other→freeform 既有链;挂起→`改描述`
 (本轮不产出,如实叙述进报告)。状态机是窄桥(机械,不变),题面是田野(LLM,全换)。
 
-**F8c 折叠承接**:折叠判定机械——同 group_path(脑图父节点=语义单元,F8 用户裁决)
-∧ 同题类(有/无 equivalent);折叠**文案** LLM 组稿(gather 时一次 fork:N 份结构化
-报告→一题:共同测试主题/共同阻碍/逐案等价一览表)——语义内容归 LLM、折叠控制流
-归机械,三层栈各归其位。答案落地仍逐案(F8c 既有 fanout)。
+**F8c 折叠承接(P4 实施决定:机械后缀,不引入 LLM 组稿)**:折叠判定机械——同
+group_path(脑图父节点=语义单元)∧ has_equivalent(P1 re-key);折叠**文案用确定性
+机械后缀**("本题代表同组 N 案……采纳即认可各案各自的等价方案,答案广播全组、逐案
+落盘")。**关键语义**:折叠广播的是**决策 token**(改过程),不是代表案的 procedure——
+每案 fanout 时按**自己台账里的 equivalent** 重编(668000 用 write mem 等价、668044 用
+write net 等价各不同),代表案的等价只作用户判断的示例。故机械后缀语义已足;评审 P4
+担心的 LLM 组稿非确定性/空输出,通过**不引入 LLM 组稿**直接消除(机械后缀确定+永不空,
+resume 一致,无需 memoize/fallback)。答案落地仍逐案(F8c 既有 fanout)。
 
 **撤退清单(评审 F2/F3 重定,分两步,BLOCKER 已修)**:`forbidden_mechanism_intents`
 意图词表违反"判断用结构化事实,别退化成关键字白名单"红线,**该退**;但评审 code-
@@ -1550,10 +1554,9 @@ activelock(P2/P3 修复后)。加 eval:固化 668000 形态为回归 fixture(pro
   show startup…」」含"采纳"不含"改过程"→不匹配→掉 Other 兜底(需 `_fm_meta` truthy,
   当前 None)→decision=""→不落→re-ask。改:加显式 label→token 表(采纳→改过程、
   挂起→改描述、Other→freeform),先于 substring 兜底。
-- **P4 组稿 fallback+memoize(F5.3/F5.4)**:折叠组稿 fork 空/garbage→回落确定性机械
-  后缀(现 `nodes.py:549-552`,永不空),绝不出空白/乱码面板;组稿文本 memoize 落盘
-  (`outputs/<rep>/folded_panel.json`)读穿,防 resume 重入时 LLM 重新组稿(题面漂移)
-  +`ask_shown` 双 append。
+- **P4 机械后缀(F5.3/F5.4 消解)**:实施决定**不引入 LLM 组稿**——折叠用确定性
+  机械后缀(广播决策 token,每案 fanout 按自己 equivalent 重编)。评审担心的组稿空/
+  garbage/resume 非确定风险由此直接消除(机械后缀确定+永不空,无 memoize/fallback 需求)。
 - **P5 questions 路由完整性(F6.4)**:`questions.py:71` 禁令分支改 key on
   `equivalent`-present,**不破** generic 分支(`:112` 仍服务 distribution/其他
   verification_path_absent 案);adjudication `conflict_shape` 字符串两侧保持一致。

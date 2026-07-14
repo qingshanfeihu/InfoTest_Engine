@@ -25,10 +25,23 @@ the observation that would falsify it. Every step must serve that claim. A mecha
 intent names but the bed forbids (reboot / power-cycle / factory-reset family) is never
 silently substituted: derive the closest equivalent under the config-plane model (same-plane
 clearing scoped to this case's writes; falsifying observation unchanged; no reverse/import
-operation; sensitivity to the tested write preserved) and report it via
-`compile_report_underdetermined` (claim_kind=forbidden_mechanism, reason = the intent's
-mechanism + your proposed equivalent + its declared semantic differences) — the user rules
-before you land anything.
+operation; sensitivity to the tested write preserved).
+
+When the intent cannot run as-written on this bed (a forbidden mechanism, or any path this
+testbed can't realize), report it with `compile_report_underdetermined` **using the structured
+triple** — its fields go to the user's decision panel **verbatim, so write them as clear Chinese
+sentences**, and filling them IS the analysis the user needs:
+- `test_point` — one Chinese line stating the behavior under test; put the exact mindmap phrases
+  you lean on into `sources` (`[{kind: step|expected|title, quote}]`) — each quote must be a
+  verbatim substring of this case's mindmap (a mechanical gate rejects retold/invented quotes).
+- `obstacle` — why this bed can't run it as-written, as a fact ("自动化环境无法重启:断连即无法继续").
+- `equivalent` — if you can derive a config-plane equivalent that keeps the SAME falsifying
+  observation, give `procedure` (the concrete替代 steps, one readable line) and `preserves` (why
+  it keeps that observation — your self-check against the four criteria). Otherwise leave it empty
+  and fill `no_equivalent_reason` honestly. The user rules before you land anything; you are not
+  proving the equivalent correct, you are stating it clearly for the user to judge.
+Do NOT pre-judge your own equivalent as invalid and withhold it — state it with its self-check;
+soundness is the user's call, and the sheet still faces every emit gate and the on-device oracle.
 
 ## Ground every expected value (correctness = three conjuncts)
 
@@ -60,11 +73,12 @@ The same applies when the intent's verification path does not exist in this test
 trigger host cannot emit the traffic form the intent requires) AND no equivalent variant within
 the intent realizes it — that is underdetermined too, not something to hard-code around. For this
 kind (not a distribution/rotation/position claim), report it with `compile_report_underdetermined`
-(reason = which host/observable/path is missing): it lands the structured ledger the engine's ask
-flow needs — a bare "needs user decision" line with no ledger is treated as no-output and escalated.
-An equivalent variant that does exist (different carrier, same intent) is yours to take without
-asking — **except** the forbidden-mechanism family ("State the test point first"), which always
-routes to the user.
+**using the structured triple** ("State the test point first"): the test_point + sources +
+obstacle + equivalent/no_equivalent fields land the structured ledger the engine's ask flow needs
+and become the user's panel verbatim — a bare "needs user decision" line with no ledger is treated
+as no-output and escalated. An equivalent variant that does exist (different carrier, same intent)
+is yours to take without asking — **except** the forbidden-mechanism family, which always routes
+to the user with your proposed equivalent stated for their call.
 
 ## Cases with persistent side effects are self-contained
 

@@ -495,3 +495,19 @@ def test_no_command_suggestion_injection_in_grammar():
                    "framework_cleanup_scopes"):
             continue
         assert "suggested_teardown" not in blob, f"{key} 含命令建议注入"
+
+
+def test_p6_finished_sheet_lint_catches_namespaced_reboot():
+    """§18.13 P6:成品卷 lint 的 destructive 检查用 search(非 match)——命名空间前缀式
+    'system reboot' 也被抓(旧 match 从行首锚定会漏,emit 门用 search 已安全)。"""
+    from main.ist_core.tools.device.structural_gate import (
+        _check_no_destructive_commands, StructuralResult)
+    r = StructuralResult()
+    _check_no_destructive_commands(
+        [{"E": "APV_0", "F": "cmds_config", "G": "sdns on\nsystem reboot\nsdns listener 1.1.1.1"}], r)
+    assert not r.ok and any(v.code == "destructive_command" for v in r.violations)
+    # clear→restore 持久化范式仍放行(不误伤)
+    r2 = StructuralResult()
+    _check_no_destructive_commands(
+        [{"E": "APV_0", "F": "cmd_config", "G": "clear sdns all"}], r2)
+    assert r2.ok

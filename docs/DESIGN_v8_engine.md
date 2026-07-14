@@ -1451,9 +1451,16 @@ clear.py 覆盖集)+ 加跨案撞名检查 + `s0_vs_clear_coverage.py` 入 scrip
    填这些字段**就是**走理论要求的推理路(陈述 R→溯源→点名阻碍→推等价→自评判据)
    ——LLM 想发问就必须走完这条路,这是"自然而然逼"的第一层。
 2. **出处子串门(机械,数据完整性)**。每个 `sources[].quote` 必须是该案脑图切片的
-   原文子串,不是则拒收退回(带 diff)。同型先例:submit_attribution 的 evidence⊆
-   device_context 门(已运行)。**这不是关键字判断**——不读语义,只验"你引的话
-   真在原文里",逼真实溯源,题面"(取预期)(取步骤)"的可信度由此来。
+   原文子串,不是则拒收退回(带 diff)。**这不是关键字判断**——不读语义,只验"你引的
+   话真在原文里",逼真实溯源,题面"(取预期)(取步骤)"的可信度由此来。
+   **corpus+归一化(评审 F4,精确到实现)**:corpus=manifest 该案 `title` +
+   逐 `step_intents[].desc` + `.expected`(compile_prep 写,`compile_prep.py:64-73`);
+   两侧都过 `fail_attribution._norm`(反转义 `\r\n\t`+折叠空白,`fail_attribution.py:288`
+   现成先例——不复刻)再判子串,否则 worker 从 brief 看到的是 reformatted 投影
+   (加 `title:`/`- ` 前缀+strip 空白,`briefs.py:15-25`),诚实引文也会假失败。
+   **`kind` 定义为切片出处(title/desc/expected 字段来源),不是语义 step-vs-expected**
+   ——run22 实证:668000 的"配置未被保存"expected 语义物理落在 `desc` 里("[check1]…"),
+   `expected` 字段空;门**不校验 kind 语义正确性**,只标出处。
 3. **渲染零加词(逐字投影)**。questions.py 对本题类的渲染=纯投影:题面=
    statement_cn+obstacle_cn+equivalent 原样;选项 1=「采纳 "{procedure_cn 一句话}"」
    (仅 equivalent 非空时存在);选项 2=Other 恒有;选项 3=「挂起——
@@ -1489,28 +1496,79 @@ clear.py 覆盖集)+ 加跨案撞名检查 + `s0_vs_clear_coverage.py` 入 scrip
 报告→一题:共同测试主题/共同阻碍/逐案等价一览表)——语义内容归 LLM、折叠控制流
 归机械,三层栈各归其位。答案落地仍逐案(F8c 既有 fanout)。
 
-**撤退清单(分阶段,诚实)**:`forbidden_mechanism_intents` 意图词表+`_stamp_intent`
-意图扫描+意图级 emit 门——违反"判断用结构化事实,别退化成关键字白名单"红线
-(意图是自然语言,该 LLM 语义理解,词表漏变体)。**但 run22 的 worker 呈报是在
-brief 含词表盖章块的条件下发生的,"没有词表 worker 仍会呈报"未经实证**——故分
-两步:第一步落本节通道+渲染(最大收益),词表降级为 telemetry-only(盖章仍落
-intent.json 供对照,不再进 brief/不再门 emit);第二步跑一轮对照 worker 自主呈报率,
-达标后删词表。保留:`destructive_commands` 命令级门(安全边界,字面命令,合规)、
-恒真/可证伪门、F8c 骨架、判例采信(键=group_path+题类)。TODO_f6_claim_kind_unify
-随本节**溶解**(不再有 claim_kind 路由,呈现形态由字段有无派生)。
+**撤退清单(评审 F2/F3 重定,分两步,BLOCKER 已修)**:`forbidden_mechanism_intents`
+意图词表违反"判断用结构化事实,别退化成关键字白名单"红线,**该退**;但评审 code-
+verified 出一条我漏判的强制链——**`_gate_forbidden_mechanism` 的 emit 门是唯一机械
+强制"先问后落"、也是唯一机械捕捉静默替换的闸**:`author` 节点路由 `if fresh:` 先赢
+(`nodes.py:401`,needs_decision 是 `elif`),当前正是 emit 门拒写让 `fresh=False`
+才使案落 needs_decision;移除门→worker report-then-emit 或**静默把 write-mem 持久性
+测试改写成普通配置卷(极性错、无 reboot 字面、看似 PASS)**→`fresh=True`→authored
+→交付,gather 永不见(这正是历史 14-run 失败形态,§19.6 PASS 还会写回先例=投毒)。
+故:
+- **第一步(本轮)**:只移 brief 的 `<forbidden_mechanism>` 盖章块(`briefs.py:201-217`)
+  ——撤掉对 worker 的"提示",测其自主呈报率;**保留 `_gate_forbidden_mechanism`
+  emit 门**(`emit_xlsx_tool.py:1204`),重分类为**安全 backstop**(与 destructive
+  命令门同类:误报代价=多问一题,不是投毒),不是 demoted 词表。
+- **第二步**:对照轮显示自主呈报率高到"门只在误报时触发"后,才评估删词表+门。
+保留:`destructive_commands` 命令级门、恒真/可证伪门、F8c 骨架、判例采信。
+TODO_f6_claim_kind_unify 随本节溶解(呈现形态由 `equivalent` 字段有无派生,非 claim_kind)。
 
-**残余风险链(如实)**:worker 不呈报直接写卷→destructive 命令门兜(reboot/reload
-字面命令);写合法卷但语义漂移→F5/F7 极性纪律+判例血统+上机 oracle;等价方案错→
-用户裁决+采纳后全门+上机,fail 回归因环。
+**残余风险链(评审 F2.1 校正——删 strawman)**:worker 不呈报直接**写字面
+reboot/reload/shutdown 命令**→destructive 命令门兜(`\breboot\b` 等确在
+`destructive_commands.patterns`,emit 硬门拒卷,已核);但**静默语义替换**(不写字面
+lifecycle 命令、改写成看似合法的普通配置卷)→destructive 门**兜不住**(它只认字面
+命令),第一步靠**保留的 `_gate_forbidden_mechanism` 盖章门**兜(盖章基于意图词表命中,
+未答不落卷);词表命中不了的变体→F5/F7 极性纪律+判例血统+上机 oracle(prompt/结构级,
+非机械保证,如实标注);等价方案错→用户裁决+采纳后全门+上机,fail 回归因环。
 
 **验收(金标准形态,机器可核)**:改后 run 写保存族题面达到用户手写形态——
 ①sources 子串门通过率 100%;②题面/选项零模板文案(grep 无"加请求/观测次数");
-③用户面全中文;④选项 1 内嵌具体 procedure;⑤挂起项内嵌如实理由。加 eval:
-固化 668000 形态为回归 fixture(prompt 改动跑对照,官方 eval-first)。
+③用户面全中文;④选项 1 内嵌具体 procedure;⑤挂起项内嵌如实理由;⑥折叠命中
+(reboot 同组一题,facts 有 folded_into——P1 修复后);⑦采纳后 decision 落地不
+activelock(P2/P3 修复后)。加 eval:固化 668000 形态为回归 fixture(prompt 改动
+跑对照,官方 eval-first)。
 
-**落地序**:工具 schema+子串门 → worker md 报告节(F7 扩展:字段逐字呈现给用户)
-→ questions.py 投影渲染+选项映射 → gather 折叠组稿 → 词表降级 telemetry →
-测试翻新+全量回归 → run 对照验收 → 词表删除(第二步)。
+**评审裁决(2026-07-14 Opus 对抗评审)**:NO-GO for 原 step-1「不再门 emit」
+(拆掉唯一先问后落强制+唯一静默替换机械捕捉,F2/F3 BLOCKER);**GO for schema+
+子串门+逐字渲染那半**(最大收益,零安全回退)——前提 emit 门保留(撤退清单第一步)
++P1-P6 机械 precondition 全带。四稿=吸收后定形。
+
+**机械 precondition(评审四稿吸收,每条 code-verified,落地必带)**:
+- **P1 fold re-key(F5.2,run22 病理更深根因)**:`_fm_meta`(`nodes.py:464`)现 key
+  on `claim_kind=="forbidden_mechanism"`,但真实路径 worker 落 `verification_path_absent`
+  (`verifiability_tool.py:152` 硬编)→`_fm_meta`→None→reboot 案**永不折叠、永不采信、
+  掉进 generic "加请求/观测次数"模板**(=run22 病理根因,taxonomy 在盖章与 claim_kind
+  间分裂)。改:`_fm_meta` re-key on `equivalent`-present。
+- **P2 ledger 保 mech claim_kind(F6.1 activelock)**:`ask_decision._land` 调
+  `compile_user_decision` 不带 assertion_form(`nodes.py:481`),`改过程` 落地要
+  `_mech_only`=True(`verifiability_tool.py:240`),需 ledger 全 claim ∈ `_MECH_KINDS`。
+  三元组 ledger **必须保留 `claim_kind=verification_path_absent`**(或 `_mech_only`
+  加 equivalent-present 豁免),否则 form required→_land False→decision 不落→re-ask
+  activelock(655248 实证)。
+- **P3 label→token 显式映射(F6.2)**:`ask_decision` 现 `next(d for d in
+  ("改过程","改预期","改描述") if d in a)`(`nodes.py:581`)——长 label「采纳「查
+  show startup…」」含"采纳"不含"改过程"→不匹配→掉 Other 兜底(需 `_fm_meta` truthy,
+  当前 None)→decision=""→不落→re-ask。改:加显式 label→token 表(采纳→改过程、
+  挂起→改描述、Other→freeform),先于 substring 兜底。
+- **P4 组稿 fallback+memoize(F5.3/F5.4)**:折叠组稿 fork 空/garbage→回落确定性机械
+  后缀(现 `nodes.py:549-552`,永不空),绝不出空白/乱码面板;组稿文本 memoize 落盘
+  (`outputs/<rep>/folded_panel.json`)读穿,防 resume 重入时 LLM 重新组稿(题面漂移)
+  +`ask_shown` 双 append。
+- **P5 questions 路由完整性(F6.4)**:`questions.py:71` 禁令分支改 key on
+  `equivalent`-present,**不破** generic 分支(`:112` 仍服务 distribution/其他
+  verification_path_absent 案);adjudication `conflict_shape` 字符串两侧保持一致。
+- **P6 lint match→search(F1.3,minor)**:`structural_gate.py:481` `p.match`→`p.search`,
+  使成品卷 lint 也抓 `system reboot` 这类命名空间前缀式(emit 门用 search 已安全,
+  仅 finished-sheet lint 弱)。
+
+**eval-first(CLAUDE.md 官方纪律)**:退休的 `加请求`/`观测次数`/`可验水平` 三串
+(`questions.py:117`)当前**零测试覆盖**——固化 668000 形态为回归 fixture:断言
+写保存族面板**不含**这三串、**含**逐字 `procedure_cn`、sources 子串门通过率 100%。
+
+**落地序**:工具 schema+子串门(_norm 复用)→ worker md 报告节(F7:字段逐字呈现)
+→ P1/P2 台账与 fold re-key → questions.py 投影渲染+P3 label 映射+P5 路由 →
+gather 折叠 P4 组稿+memoize → P6 lint → 移 brief 盖章块(**保留 emit 门**)→
+668000 eval fixture+测试翻新+全量回归 → run 对照验收 → (第二步)自主呈报率达标后删词表。
 
 ### 18.7 完成度纪律
 

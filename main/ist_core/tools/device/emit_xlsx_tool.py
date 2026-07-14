@@ -337,11 +337,11 @@ def _gate_forbidden_mechanism(autoid: str) -> str | None:
             toks = ", ".join(sorted({str(h.get("matched")) for h in fm if isinstance(h, dict)}))
             return (f"error: case {autoid} intent names a bed-forbidden mechanism "
                     f"({toks}). Landing is blocked until the user's ruling is on disk: "
-                    "report via compile_report_underdetermined (claim_kind="
-                    "forbidden_mechanism, reason = intent mechanism + your proposed "
-                    "equivalent + declared differences) and wait for user_decision.json. "
-                    "If the matched word is not an execution mechanism of this case, say "
-                    "so in the report — one answer clears it.")
+                    "report via compile_report_underdetermined **using the structured triple** "
+                    "(test_point + sources quoting the mindmap + obstacle + equivalent{procedure,"
+                    "preserves} or no_equivalent_reason) and wait for user_decision.json. If the "
+                    "matched word is not an execution mechanism of this case (e.g. a counter name), "
+                    "say so in the report — one answer clears it.")
     except FileNotFoundError:
         return None
     except Exception:  # noqa: BLE001

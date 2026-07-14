@@ -74,16 +74,18 @@ def test_emit_gate_noop_without_stamp():
     assert _gate_forbidden_mechanism(_A) is None
 
 
-# ── brief 下发块 ────────────────────────────────────────────────────────────
+# ── brief 词表块降级(§18.13 撤退第一步)────────────────────────────────────
 
-def test_brief_carries_forbidden_block(monkeypatch):
+def test_brief_no_longer_carries_forbidden_block(monkeypatch):
+    """§18.13:盖章不再进 brief(撤 worker 的正则命中提示,违反红线);worker 靠
+    test-point-first prompt 语义自主 + emit 门兜底。盖章仍落 intent.json(telemetry)。"""
     from main.ist_core.compile_engine_v8 import briefs as BR
     _stamp_with_title(monkeypatch, "执行write net后重启设备")
     b = BR.build_brief(_A, {"manifest_ref": "", "max_rounds": 3}, [])
-    assert "<forbidden_mechanism" in b and "compile_report_underdetermined" in b
-    # 裁决已落盘 → 指令块撤(worker 按 user_decision 编写,不再重复呈报)
-    (_OUT / "user_decision.json").write_text(json.dumps(
-        {"autoid": _A, "decision": "改过程", "note": "clear 验证"}, ensure_ascii=False),
-        encoding="utf-8")
-    b2 = BR.build_brief(_A, {"manifest_ref": "", "max_rounds": 3}, [])
-    assert "<forbidden_mechanism" not in b2
+    assert "<forbidden_mechanism" not in b   # brief 不再喂词表命中给 worker
+    # 但盖章仍在 intent.json(emit 门读它做安全 backstop)
+    it = json.loads((_OUT / "intent.json").read_text(encoding="utf-8"))
+    assert it.get("forbidden_mechanism")     # telemetry 盖章保留
+    # emit 门仍拦(先问后落 backstop 保留——评审 BLOCKER)
+    from main.ist_core.tools.device.emit_xlsx_tool import _gate_forbidden_mechanism
+    assert _gate_forbidden_mechanism(_A) is not None

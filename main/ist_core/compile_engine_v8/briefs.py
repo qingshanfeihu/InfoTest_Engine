@@ -198,21 +198,10 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
                 "variant axes. State the group claim and THIS case's variant axis before "
                 "writing steps; do NOT copy siblings' expectations (their full text lives "
                 "at manifest_path if needed)\">\n" + lines + more + "\n</siblings>")
-    # F6(§18.11):意图侧禁令机制标记随 brief 下发——worker 走要点先行(等价推导+
-    # compile_report_underdetermined 呈报),emit 硬门在 user_decision.json 落盘前拒落卷。
-    fm = (sh.read_json(sh.outputs_root() / aid / "intent.json", {}) or {}).get(
-        "forbidden_mechanism")
-    if fm and not (sh.outputs_root() / aid / "user_decision.json").is_file():
-        toks = ", ".join(sorted({str(h.get("matched")) for h in fm if isinstance(h, dict)}))
-        tail.append(
-            "<forbidden_mechanism matched=\"" + toks + "\">\n"
-            "The intent names a bed-forbidden mechanism. Do NOT author steps yet: follow "
-            "'State the test point first' — derive the closest equivalent under the "
-            "config-plane model and report it via compile_report_underdetermined "
-            "(claim_kind=forbidden_mechanism, reason = intent mechanism + proposed "
-            "equivalent + declared differences). The emit gate refuses to land this case "
-            "until the user's ruling is on disk. If the matched word is not actually an "
-            "execution mechanism of this case (e.g. a counter/statistic name), say so in "
-            "the report — the user clears it in one answer.\n"
-            "</forbidden_mechanism>")
+    # §18.13 撤退第一步:意图侧禁令机制**盖章不再进 brief**(旧 <forbidden_mechanism>
+    # 块把词表正则命中喂给 worker 当提示,违反「判断用结构化事实,别退化成关键字白名单」
+    # 红线——用户判据「不能靠正则匹配」)。worker 改靠 test-point-first prompt 语义自主
+    # 判断意图可行性+主动三元组呈报;盖章仍落 intent.json(telemetry)+ emit 门仍读它做
+    # 安全 backstop(未主动报→写卷被门拦+三元组引导,不投毒)。第二步:对照轮自主呈报率
+    # 达标后删词表+门。
     return "\n".join(parts + tail)

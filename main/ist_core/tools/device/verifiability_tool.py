@@ -19,6 +19,61 @@ from langchain_core.tools import tool
 logger = logging.getLogger(__name__)
 
 
+def _norm(s: str) -> str:
+    """字面转义还原 + 空白折叠(同 fail_attribution._norm 先例算法——子串门防转述/
+    参数序列化失真,非字节保真;两侧同款归一化后判子串,编造的内容照样对不上)。"""
+    s = str(s or "")
+    s = s.replace("\\r", " ").replace("\\n", " ").replace("\\t", " ")
+    s = s.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    s = s.replace("\xa0", " ")   # 脑图 xlsx 常带非断空格(NBSP),否则含它的诚实引用假失败
+    return " ".join(s.split())
+
+
+def _case_mindmap_slice(autoid: str) -> str | None:
+    """该案脑图切片(§18.13 子串门 corpus):manifest 的 title + 逐 step_intents 的
+    desc/expected 拼接。工具只有 autoid,遍历 outputs/*/manifest.json 定位。
+    找不到返回 None(门 fail-open 留声,manifest 缺席是环境问题非 worker 造假)。"""
+    try:
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[4]
+        outs = root / "workspace" / "outputs"
+        aid = str(autoid or "").strip()
+        for mf in outs.glob("*/manifest.json"):
+            try:
+                m = json.loads(mf.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            for c in (m.get("cases") or []):
+                if str(c.get("autoid")) == aid:
+                    parts = [str(c.get("title") or "")]
+                    for si in (c.get("step_intents") or []):
+                        parts.append(str(si.get("desc") or ""))
+                        parts.append(str(si.get("expected") or ""))
+                    return "\n".join(p for p in parts if p)
+    except Exception:  # noqa: BLE001
+        logger.debug("_case_mindmap_slice 定位失败", exc_info=True)
+    return None
+
+
+def _substring_gate(sources: list, corpus: str | None) -> str | None:
+    """出处子串门:每个 quote 必须是脑图切片的(归一化)子串。返回 error 文本或 None。
+    corpus=None(切片不可得)→放行(留声),不误伤。"""
+    if corpus is None:
+        return None
+    ncorpus = _norm(corpus)
+    for i, s in enumerate(sources):
+        q = str((s or {}).get("quote") or "").strip()
+        if not q:
+            return (f"error: sources[{i}] has an empty quote — every source must quote a "
+                    f"verbatim fragment of this case's mindmap (title/step desc/expected).")
+        if q not in corpus and _norm(q) not in ncorpus:
+            return (f"error: sources[{i}].quote {q[:60]!r} is NOT a substring of this case's "
+                    f"mindmap text — **copy it directly** from the case's title/step/expected in "
+                    f"the mindmap, never retell. Quote a key fragment within a single line "
+                    f"(whitespace is normalized, no byte-exact match needed).")
+    return None
+
+
 def _land_needs_decision(autoid: str, claim_kind: str, entry: dict) -> bool:
     """欠定台账落盘(结构化,机读):同 case 多 claim 按 claim_kind 合并。verifiability
     与通用欠定上报共用——A 层「先问后落」要求台账是结构化文件(散文接力会磨掉锚点,
@@ -122,41 +177,91 @@ def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools
 
 
 @tool(parse_docstring=True)
-def compile_report_underdetermined(autoid: str, reason: str, suggested_fix: str = "",
-                                   ordering_sensitive: bool = False) -> str:
-    """Report a NON-distribution underdetermined case (e.g. the intent's verification path does not exist on this testbed) so the engine asks the user — lands a structured ledger, does not hard-code around it.
+def compile_report_underdetermined(autoid: str, test_point: str = "", sources_json: str = "",
+                                   obstacle: str = "", equivalent_procedure: str = "",
+                                   equivalent_preserves: str = "", no_equivalent_reason: str = "",
+                                   ordering_sensitive: bool = False,
+                                   reason: str = "", suggested_fix: str = "") -> str:
+    """Report a NON-distribution underdetermined case (the intent's verification path cannot run as-written on this testbed) so the engine asks the USER — lands a structured triple the panel shows verbatim, does not hard-code around it.
 
-    **When to use**: the intent cannot be verified on THIS testbed and no equivalent variant
-    within the intent realizes it — e.g. the trigger host cannot emit the traffic form the
-    intent requires, a required peer/segment is absent, or the observable the intent needs has
-    no probe here. This is underdetermined too, not something to guess an assertion around.
-    **When NOT to use**: distribution/rotation/position claims of algorithm cases → those go
-    through ``compile_check_verifiability`` (it does the math). Statically-determined
-    expectations (config-exists / protocol-fixed) are not underdetermined — just assert them.
+    **When to use**: the intent cannot be verified AS WRITTEN on this testbed — e.g. it needs a
+    device reboot/power-cycle this bed forbids, a trigger host that cannot emit the required
+    traffic, or an absent peer/segment. Underdetermined, not something to guess an assertion for.
+    **When NOT to use**: distribution/rotation/position algorithm claims → ``compile_check_verifiability``
+    (it does the math). Statically-determined expectations (config-exists / protocol-fixed) → just assert.
 
-    Landing a structured ledger (needs_decision.json) is required by the engine's ask flow
-    ("ask first, land after"): a bare ``STATUS: needs_user_decision`` line with no ledger is
-    treated as no-output and escalated (655173 evidence). This tool writes the ledger and
-    returns the marker for you to pass back verbatim.
+    **The fields below are shown to the USER verbatim — write them as clear Chinese sentences.**
+    Fill them by walking the reasoning the user needs: state the test point (quoting the mindmap),
+    name why this bed can't run it, then — if you can — give a config-plane equivalent that keeps
+    the SAME falsifying observation, or say honestly why no equivalent exists. This IS the analysis;
+    the panel is your report, projected 1:1.
 
     Args:
         autoid: the case autoid.
-        reason: why it is unverifiable on this bed (be concrete: which host/observable/path is missing).
-        suggested_fix: optional direction for the user (change the description / process / expected, or note the missing bed capability).
+        test_point: 中文一句话说清这个用例要验证的行为(R)。引用脑图原文的部分放进 sources。
+        sources_json: JSON array ``[{"kind":"step|expected|title","quote":"…"}]`` — each quote MUST be a verbatim substring of THIS case's mindmap (title/step desc/expected). Copy directly, do not retell; a mechanical gate rejects non-substrings.
+        obstacle: 中文说清本测试床为何跑不了原写法(事实,如"自动化环境无法重启:断连即无法继续")。
+        equivalent_procedure: 中文,若能给出保持同一证伪观测的等价验证步骤就写在这(具体、可读的一句)。给不出留空。
+        equivalent_preserves: 中文,若给了 equivalent,说明它为何保持原证伪观测(供用户判断,你的自评)。
+        no_equivalent_reason: 中文,equivalent_procedure 为空时必填——如实说明为何推不出等价方案(挂起理由)。
         ordering_sensitive: true if the intent carries ordered/temporal semantics whose loss must be an explicit user decision.
+        reason: (legacy, optional) free-text fallback if you are not using the triple fields yet.
+        suggested_fix: (legacy, optional) free-text fallback.
 
     Returns:
-        "NEEDS_USER_DECISION autoid=… reason …" — stop, do not write an assertion, return this
-        verbatim to the engine (which aggregates it into an ask_user).
+        "NEEDS_USER_DECISION autoid=…" — stop, do not write an assertion, return this verbatim to
+        the engine (which projects the triple into the user panel).
     """
-    landed = _land_needs_decision(autoid, "verification_path_absent", {
-        "reason": str(reason or ""), "suggested_fix": str(suggested_fix or ""),
-        "ordering_sensitive": bool(ordering_sensitive)})
-    ledger = "landed to needs_decision.json" if landed else "ledger write FAILED (report to engine)"
-    return (f"NEEDS_USER_DECISION autoid={autoid} kind=verification_path_absent\n"
-            f"reason: {reason}\n"
-            + (f"suggested_fix: {suggested_fix}\n" if suggested_fix else "")
-            + f"({ledger}; return this verbatim to the engine — do NOT write an assertion around it)")
+    # 兼容路径:只给了 legacy reason(未用三元组)→ 原样落,不启子串门(旧调用/旧测试)。
+    if not test_point and not sources_json:
+        landed = _land_needs_decision(autoid, "verification_path_absent", {
+            "reason": str(reason or ""), "suggested_fix": str(suggested_fix or ""),
+            "ordering_sensitive": bool(ordering_sensitive)})
+        ledger = "landed" if landed else "ledger write FAILED (report to engine)"
+        return (f"NEEDS_USER_DECISION autoid={autoid} kind=verification_path_absent\n"
+                f"reason: {reason}\n"
+                + (f"suggested_fix: {suggested_fix}\n" if suggested_fix else "")
+                + f"({ledger}; return this verbatim — do NOT write an assertion around it)")
+    # 三元组路径(§18.13)。
+    try:
+        sources = json.loads(sources_json) if sources_json else []
+        if not isinstance(sources, list):
+            return f"error: sources_json must be a JSON array of {{kind,quote}}, got {type(sources).__name__}"
+    except Exception as e:  # noqa: BLE001
+        return f"error: sources_json parse failed: {e}"
+    if not test_point.strip():
+        return "error: test_point is required (state the behavior under test in Chinese)."
+    if not obstacle.strip():
+        return "error: obstacle is required (why this bed can't run it as-written, in Chinese)."
+    if not equivalent_procedure.strip() and not no_equivalent_reason.strip():
+        return ("error: give either equivalent_procedure (a config-plane equivalent) OR "
+                "no_equivalent_reason (why none exists) — one is required.")
+    # 出处子串门(P2:corpus=manifest 切片,两侧 _norm)。
+    gate = _substring_gate(sources, _case_mindmap_slice(autoid))
+    if gate:
+        return gate
+    has_equiv = bool(equivalent_procedure.strip())
+    entry = {
+        "test_point": test_point.strip(),
+        "sources": [{"kind": str((s or {}).get("kind") or ""),
+                     "quote": str((s or {}).get("quote") or "")} for s in sources],
+        "obstacle": obstacle.strip(),
+        "equivalent": ({"procedure": equivalent_procedure.strip(),
+                        "preserves": equivalent_preserves.strip()} if has_equiv else None),
+        "no_equivalent_reason": no_equivalent_reason.strip(),
+        "ordering_sensitive": bool(ordering_sensitive),
+        # 兼容字段:旧渲染/日志仍读 reason/suggested_fix(合成兜底,不影响三元组投影)。
+        "reason": f"{test_point.strip()} / 障碍:{obstacle.strip()}",
+        "suggested_fix": equivalent_procedure.strip() or no_equivalent_reason.strip(),
+    }
+    # P2:claim_kind 保持 verification_path_absent(ledger mech,_land 不 activelock);
+    # 呈现形态由 equivalent 字段有无派生,不新增 claim_kind。
+    landed = _land_needs_decision(autoid, "verification_path_absent", entry)
+    ledger = "landed" if landed else "ledger write FAILED (report to engine)"
+    return (f"NEEDS_USER_DECISION autoid={autoid} kind=verification_path_absent "
+            f"equivalent={'yes' if has_equiv else 'none'}\n"
+            f"test_point: {test_point.strip()}\n"
+            f"({ledger}; return this verbatim — the engine projects the triple into the user panel)")
 
 
 @tool(parse_docstring=True)

@@ -53,6 +53,68 @@ def test_report_lands_ledger_and_returns_marker(tmp_path, monkeypatch):
     assert "routera" in claim["reason"]
 
 
+# ---------------------------------------------------------------- 三元组 schema(§18.13)
+_SLICE = "1.配置port 为53.执行write mem后重启设备\n2.查看sdns listener\n[check1]配置未被保存"
+
+
+def _fix_slice(monkeypatch):
+    import main.ist_core.tools.device.verifiability_tool as vt
+    monkeypatch.setattr(vt, "_case_mindmap_slice", lambda aid: _SLICE)
+
+
+def test_triple_lands_structured_with_equivalent(tmp_path, monkeypatch):
+    _outdir(tmp_path, "203600000000668000", monkeypatch)
+    _fix_slice(monkeypatch)
+    out = compile_report_underdetermined.func(
+        autoid="203600000000668000",
+        test_point="验证 write mem 存盘后重启,配置是否丢失",
+        sources_json='[{"kind":"step","quote":"执行write mem后重启设备"},'
+                     '{"kind":"expected","quote":"配置未被保存"}]',
+        obstacle="自动化环境无法重启:断连即无法继续测试",
+        equivalent_procedure="write file 后 clear 运行面,看 listener 是否再现",
+        equivalent_preserves="清运行面等价重启清内存;未写 startup 则不再现=未保存")
+    assert "NEEDS_USER_DECISION" in out and "equivalent=yes" in out
+    claim = json.loads((tmp_path / "203600000000668000" / "needs_decision.json"
+                        ).read_text())["claims"][0]
+    # P2:claim_kind 仍 mech(不 activelock);三元组结构化落盘
+    assert claim["claim_kind"] == "verification_path_absent"
+    assert claim["equivalent"]["procedure"].startswith("write file 后 clear")
+    assert len(claim["sources"]) == 2 and claim["sources"][0]["kind"] == "step"
+    assert claim["test_point"].startswith("验证 write mem")
+
+
+def test_triple_substring_gate_rejects_fabricated_quote(tmp_path, monkeypatch):
+    _outdir(tmp_path, "203600000000668001", monkeypatch)
+    _fix_slice(monkeypatch)
+    out = compile_report_underdetermined.func(
+        autoid="203600000000668001", test_point="x",
+        sources_json='[{"kind":"step","quote":"配置一个脑图里没有的虚构命令"}]',
+        obstacle="y", no_equivalent_reason="z")
+    assert out.startswith("error:") and "NOT a substring" in out
+    # 被拒不落盘
+    assert not (tmp_path / "203600000000668001" / "needs_decision.json").is_file()
+
+
+def test_triple_substring_gate_normalizes_whitespace(tmp_path, monkeypatch):
+    """引用跨 \\n/含 NBSP 的片段:归一化后应通过(诚实引用不因序列化失真被拒)。"""
+    _outdir(tmp_path, "203600000000668002", monkeypatch)
+    _fix_slice(monkeypatch)
+    out = compile_report_underdetermined.func(
+        autoid="203600000000668002",
+        test_point="验证监听器配置", sources_json='[{"kind":"step","quote":"查看sdns\\nlistener"}]',
+        obstacle="床约束", no_equivalent_reason="无等价")
+    assert "NEEDS_USER_DECISION" in out and "equivalent=none" in out
+
+
+def test_triple_requires_equivalent_or_reason(tmp_path, monkeypatch):
+    _outdir(tmp_path, "203600000000668003", monkeypatch)
+    _fix_slice(monkeypatch)
+    out = compile_report_underdetermined.func(
+        autoid="203600000000668003", test_point="a",
+        sources_json='[{"kind":"title","quote":"配置port 为53"}]', obstacle="b")
+    assert out.startswith("error:") and "equivalent_procedure" in out
+
+
 def test_ordering_sensitive_flag_recorded(tmp_path, monkeypatch):
     _outdir(tmp_path, "203600000000000200", monkeypatch)
     compile_report_underdetermined.func(

@@ -1346,71 +1346,71 @@ run18-21 ask 风暴即此原则缺位实证。
 → F6+F8c(+P1c 提门+门文案) → F8a(含 b 机械形态)+F8d → F3(含定界极性禁运,
 三处同改) → F1+S₀ 前置裁决+F2(b) → F4。
 
-### 18.12 S₀ 前置裁决定界（二稿=对抗评审合并,2026-07-14;全节**设计中**——评审
-NO-GO 七前置全部吸收,满足后实施;初稿裁决表第 2 行经 F13 三度修正）
+### 18.12 s₀ 判据修正（三稿=数据驱动定形,2026-07-14;取代 S₀ 前置裁决整个方向）
 
-**理论定界(检测器分工,infra §2/§3+S §0.3/§5;F13 修正后)**:隔离复跑与只读探针
-各裁一支——iDFlakies 形态(隔离/重排)=顺序侧,PolDet 形态(探针)=状态侧。
-**F13 关键修正**:「写者不在卷内 ≠ 写者的脏东西不在床上」——停车学说的前提本就是
-「卷序污染经框架逐案清理够不着的**床驻留通道**」(bed_l23_write_forms 入选标准),
-床驻留残渣在 probe 时仍在床上(批内 probe 前无清理:bed_gate 清理仅 prep 期,收敛仅
-closing 期)。故**隔离 FAIL 在 s₀ 为真时是预期结果,不构成反驳**;初稿「隔离仍挂=
-反驳」与 h 冻结学说两头矛盾,撤回。投影核边界不变:探针阴性只削弱、永不反驳。
-探针半=S5 承载链下降首个实例(attributor+dev_probe 只读,(25) 合规,命令推导归 fork)。
+**结论转向(实证驱动)**:一二稿都在设计「s₀ 判定为真之后怎么裁决」(隔离复跑/探针/
+bed 治理),但对 94 条历史 s₀ 诊断、442 次指认的持久写命令做机械对照
+(`scripts/debug/s0_vs_clear_coverage.py`:解析框架 `clear.py` 逐命令逆操作表 vs 引擎
+`persistence_channels` 判据)发现:**s₀ 判据本身就有 61%+ 是判据错误**——问题在判定
+不在善后。S₀ 前置裁决(隔离复跑+探针+bed 治理)整个方向**撤销**。
 
-**裁决表(三稿,F13 定形)**:
+**对照数据(按指认次数归桶)**:
 
-| 隔离单跑结果 | 前置探针 | 语义 | 去向 |
-|---|---|---|---|
-| PASS | — | 污染坐实(**显式假设:危害为卷内执行介导**——run13 回放模型;持久面载荷也需毒源步在卷内触发) | bed 问询(携裁决回执;题面提示:probe 时床态=整卷跑完态,下游案可能已清掉残渣,治床前可先复探实体) |
-| FAIL | 点名实体经 dev_probe **证实已不在床上** | 残渣缺席仍挂=s₀ 反驳 | 深归因 fork(G6 免派解除),不问 |
-| FAIL | 实体仍在/不可观测(投影核) | **不可辨**(床驻留效应 vs 案内因) | 深归因 fork 携探针义务(S5);阳性=佐证可再呈 bed,阴性=削弱不反驳 |
+| 桶 | 占比 | 真相 |
+|---|---|---|
+| 恢复类 `config memory/file/net/all` | 50% | **读**磁盘写运行,非持久写、非污染源——引擎把恢复动作当污染者 |
+| `write memory` | 11% | 框架 `clear+write memory` 精确覆盖(clear.py:90,排序 :139-148),**清得掉** |
+| `write file`/`write all file`(.tgz) | 26% | 真清不掉(clear conf file 正则 `\.cfg` 漏 `.tgz`,clear.py:178),但污染需后案从**同名**文件恢复;autoid 命名不撞→无实际路径 |
+| `write net`/`write all tftp`(远端) | 14% | 备份到远端服务器,本机不留 |
 
-**按案裁决,受害者合卷(F9 取代代表广播)**:代表广播不诚实(持久面配对无共享实体
-条件、假阳约 1/4 自认——广播=替假阳成员背书)且实测簇形态(互写者→毒源集两两不同
-→单例簇)节省为零。正解:**一个 probe 卷装全部纯读受害者**,机械准入=
-`_case_touch_profile` 无持久写 ∧ 两两实体不相交(互不构成对方毒源),一轮设备产出
-**逐案** verdict;不满足准入的受害者单例卷排队。
+**两个判据根错(persistence_channels 的 `^(write\|config)\s+(memory\|file\|net\|all)`)**:
+①把 `config` 恢复(读)和 `write` 保存(写)一视同仁——恢复动作不产生本机持久残留;
+②没考虑框架的逐命令逆操作清理(`clear.py::get_clear_list`,写保存族的 write memory/
+write file/sdns 全有配对逆操作)。
 
-**CTX_PROBE 消费点决策表(F1-F5;「不进升级」必须逐点做,一刀切会杀掉归因键控)**:
+**修法(机械闭集,零硬编码,自愈合纪律)**:s₀ 的「持久面写」判据从「命令 ∈
+persistence_channels」收窄为「命令是**框架清理够不着 ∧ 有跨案实际污染路径**」:
+- **删 config 恢复类**:config 是读,不是污染源(它恢复进运行区的对象靠该案自身
+  clear 覆盖;恢复了 clear 表外对象的风险另计,见诚实边界)。去 50% 误判。
+- **排除框架可清命令**:从 mirror `clear.py::get_clear_list` **机械解析覆盖集**
+  (98 前缀,源码闭集),命令在覆盖集内 ∧ 逆操作无已知盲区 → 框架清得掉,不判 s₀。
+  去 write memory 类 11%。
+- **write file/all file 只在跨案撞名时算真污染源**:卷内存在**另一案** `config <file>`
+  从与本案 `write <file>` **同名**的文件恢复 → 真跨案路径;同案自存自恢复(测试逻辑
+  本身)与 autoid 异名 → 不判。机械可查(卷面文件名比对)。
+- **框架清理盲区并入判据**:`clear.py` 的已知漏洞(`.tgz` 正则盲区、set 无序、
+  clear 无验证、config 恢复表外对象、98 前缀外命令)从源码机械识别,落入「够不着」集。
 
-| 消费点 | 处置 |
-|---|---|
-| contradictions pass 集(facts) | **排除** probe(F1 BLOCKER:现行 ctx 盲,probe PASS+delivery fail=假矛盾→contra 边) |
-| case_status/latest_verdict、subset_verified | **排除**(F2 BLOCKER:PASS→S_SUBSET_VERIFIED 绕幂等闸进终验=环;BROKEN→need_verify 普通复跑=检疫塌陷) |
-| 写回触发(真 PASS→先例/footprint) | **跳过** probe(F4:probe pass 写回后案走挂起/降级→回滚永不触发=半毒先例跨批存留,§18.10 投毒同型) |
-| attribute 归因键控(last verdict run_id)、briefs 失败轮证据 | **保留** probe(F3:滤掉则 fail-probe 的深归因永不派发;probe fail 全文内联=隔离对照证据,有益) |
-| frozen 展示、渲染 CTX_CN 词表、remedies tried_actions | 补词条/计数(MINOR;leak_scan denylist 随 CTX_CN 自动扩) |
-| digest/last_run/窗口审计/互斥/stale-log | 零改动(probe 走同一 dev_run_batch_digest,verdict 可信度与正常轮同级——F8① 已核) |
-| report_gate/deliverable/终验幂等闸 | 零改动(delivery-only,已安全) |
+**S₀ 前置裁决撤销的双重理由**:①数据——没有需要隔离复跑/探针去裁决的真污染面
+(61% 判据错、26% 无路径、14% 远端);②架构——用例间有**合法上下文依赖**(用户
+裁决:「想做到和人一样,单独拎出来只配个 rr 算法绝对不成立」),隔离复跑对依赖前案
+合法前置的受害者必然假失败,前提不成立。独立成立,任一即撤。
 
-**merge 次序(F6 BLOCKER)**:==none/scheduled 案**如 parked 一样排除出 ready**
-(否则混进 delivery 卷或触发指纹早退→closing,probe 永不调度);probe 组卷分支
-**先于** need_verify-空的 delivery 分支与指纹早退。承载计数=n_failed_actionable
-(bed 在 ==none 不计入 ask;contra 边对 h_s0 案同加 adjudication 条件,F7)。
+**独立性粒度(用户裁决+源码坐实)**:框架 `test_xlsx.py:239-256` 每个 autoid 前调
+`.clear()` 逐命令逆操作清理,`:265` 重加 excel「初始化配置」块——**隔离在框架层面
+已是默认**(粒度=autoid,组内共享前置靠初始化配置块承载)。引擎无需再造隔离。
+self-contained/τ/s₀ 门的粒度对齐此:清理够不着的才需用例自清或呈报。
 
-**scheduled/broken 补态(F8④)**:裁决去重键=「每 (案,诊断轮) 至多一个 probe
-**verdict**」(非组卷即视为已裁);scheduled 无 verdict(崩溃/device_busy/not_run)
-→ 重驱同一 probe 组成;broken 复用既有 broken 连击护栏,封顶后升级人工。
+**清理套路的归属(用户裁决)**:`clear` 不需 worker 写(框架每 autoid 自动做);
+`write memory` 是 worker **理解**知识(F7 要点:它写磁盘、config 恢复会带回,框架
+清理已配对处理故通常无需自清)——不写进引擎,符合零写死红线。
 
-**bed 面板改动**:删「床已处理,复跑验证」选项(引擎已复跑;`_answer_token` 自由
-文本已处理/复跑映射保留=(36) 用户特权;§16.4 片3 三选项文本同批修正,F10);题面
-携**裁决回执**(隔离 verdict+probe 卷号+第 N 次裁决)+ **F2(b) 检索回执**——供给侧
-同批补:bed 裁决写入判例店(conflict_shape=bed),回执=同键命中数+本簇历史 bed
-决策数(facts 派生,F14)。
+**诚实边界(不再过度自信)**:①config 恢复可能带回 clear 表**覆盖不到**的对象
+(clear.py 基于本案 cmd_list,恢复的表外对象看不到)——这是真风险,但归「恢复内容
+含表外命令」,运行时才知,不是 config 命令本身该判 s₀;②write memory 的逆操作依赖
+中途 clear 全部成功(clear.py 无验证,漏洞5)——低概率真风险,属框架清理可靠性,
+不是 write memory 该判 s₀。两者都不支持「把 config/write memory 判 s₀」,但登记为
+s₀ 收窄后的残余观察面(footprint 判例层,新坑零代码)。
 
-**附带修复(F15,先存缺陷被 probe 放大)**:diagnose 配对全集改为**本轮组成内**的
-案(现读 merges[-1].composition 对全部现存 fail 配对——probe 卷[rep]会给兄弟案
-捏造 polluter=rep 的新诊断)。
+**附带(框架侧真 bug,可上报 owner)**:`clear conf file` 的 `re.findall(r'\b[\w]+\.cfg\b')`
+(clear.py:178)漏 `.tgz` 备份包 → 所有 `write all file` 的 tgz 永不被清(run19
+`sdns_file_save_030.tgz` 跨 run 存活实证)。对我们不构成污染(无跨案恢复路径),
+但是框架一行正则的真缺陷。
 
-**测试翻新清单(实施必改)**:test_diagnose(:113 单案卷断言)/test_g6_prescreen
-(:292)/test_device_reachability(:116 停车旧语义)/test_facts_invariants(:72 矛盾
-ctx 盲)/test_graph_scenarios(:32 假设备 ctx 启发);probe 卷命名与 `__sub*` 清理
-glob 二选一同改。
-
-**落地序**:facts/views 消费点(F1-F4)→ merge 次序+合卷调度+补态(F6/F8/F9)→
-闸三改+contra 条件(F7)→ 面板+回执+判例店供给(F10/F14)→ F15+渲染词表 →
-测试翻新+全量回归+34 案对照轮。
+**落地(风险回到 F 件量级)**:改 `persistence_channels` 判据(删 config、机械对齐
+clear.py 覆盖集)+ 加跨案撞名检查 + `s0_vs_clear_coverage.py` 入 scripts/debug 做
+判据回归。无 graph 流改动、无新语境、无新可变状态。测试:s₀ 判定对 442 次历史指认
+的新归类逐条锁死(误判必须消失、真 s₀ 必须保留)。
 
 ### 18.7 完成度纪律
 

@@ -1412,6 +1412,106 @@ clear.py 覆盖集)+ 加跨案撞名检查 + `s0_vs_clear_coverage.py` 入 scrip
 判据回归。无 graph 流改动、无新语境、无新可变状态。测试:s₀ 判定对 442 次历史指认
 的新归类逐条锁死(误判必须消失、真 s₀ 必须保留)。
 
+### 18.13 欠定问询的信息架构（语义驱动;2026-07-14 run22 题面实弹,K (46) 的设计投影;
+全节**设计中**,待对抗评审后实施）
+
+**用户判据(原话,本节验收金标准)**:"不能靠正则匹配或者写硬代码……自然而然的
+'逼' LLM 到这个程度,顺其自然的写出这段话来"。金标准题面(用户手写):
+
+> 用例 668000 要验证:"sdns listener(取预期)配置 port 为 53(取步骤)执行 write file
+> 存盘(取步骤)后重启,测试配置是否会丢失",预期为配置未被保存(取预期)。
+> 问题:测试意图要求重启设备,但自动化环境无法重启(会断连、无法继续测试)。
+> 等价方法为:…查 show startup 中有没有 sdns listener port 53 的配置。
+> 接下来怎么做? 1 采纳「查 show startup…」 2 我给别的等价方案[Other]
+> 3 挂起——自动化环境无法验证重启用例,如实报告
+
+**run22 病理(为什么现状产不出这段话)**:worker 的理解是够的(reason 里已有完整
+配置面模型推理),被通道压扁——①`compile_report_underdetermined` 只收单 reason
+字符串,`verifiability_tool.py:152` 硬编 claim_kind;②questions.py 把 reason 截
+~120 字塞进固定壳"用例X按原始写法验证不出目标行为:{reason}。你希望怎么改?";
+③三个选项文案是写死的通用模板("加请求/观测次数到可验水平"对重启案完全错配);
+④reason 英文机器话直达用户。**LLM 只填了一个槽,面板的其余全是机械模板**。
+
+**核心原则:面板恰好是 worker 的报告本身——中间零模板。** 机械层只保证形(哪些
+字段必须存在、出处保真、安全边界),LLM 写每一个用户可见的句子。
+
+**逼出机制三件套(全部结构性,零正则零意图词表)**:
+
+1. **Schema=思考路径(形即思路)**。`compile_report_underdetermined` 收结构化三元组
+   ((46) 的对象模型):
+   ```
+   test_point:  { statement_cn,                    # R,人话
+                  sources: [{kind: step|expected, quote}] }   # 逐引称脑图原文
+   obstacle_cn:  本环境为何验证不了原写法(事实,人话)
+   equivalent:  { procedure_cn,                    # 具体替代步骤,一句话可读
+                  preserves_falsification_cn }     # 为何保持证伪观测(worker 自评)
+                | null
+   no_equivalent_reason_cn:  equivalent 为 null 时必填(如实挂起理由)
+   ```
+   填这些字段**就是**走理论要求的推理路(陈述 R→溯源→点名阻碍→推等价→自评判据)
+   ——LLM 想发问就必须走完这条路,这是"自然而然逼"的第一层。
+2. **出处子串门(机械,数据完整性)**。每个 `sources[].quote` 必须是该案脑图切片的
+   原文子串,不是则拒收退回(带 diff)。同型先例:submit_attribution 的 evidence⊆
+   device_context 门(已运行)。**这不是关键字判断**——不读语义,只验"你引的话
+   真在原文里",逼真实溯源,题面"(取预期)(取步骤)"的可信度由此来。
+3. **渲染零加词(逐字投影)**。questions.py 对本题类的渲染=纯投影:题面=
+   statement_cn+obstacle_cn+equivalent 原样;选项 1=「采纳 "{procedure_cn 一句话}"」
+   (仅 equivalent 非空时存在);选项 2=Other 恒有;选项 3=「挂起——
+   {no_equivalent_reason_cn 或 obstacle_cn 摘句}」。三个写死的选项描述文案对本题类
+   **整体退场**。worker 的字直达用户——schema description 里明说"字段逐字呈现给
+   用户,写中文人话",可见性压力+schema+子串门=顺其自然写出那段话。
+
+**理论↔设计↔实现耦合表(每字段有理论出处,改任一侧须保持映射全)**:
+
+| schema 字段 | 理论对象 | 机械保障 |
+|---|---|---|
+| test_point.statement_cn | (46) R;(2) 行为主张 | 渲染逐字 |
+| test_point.sources[].quote | (37) 框定保真;出处纪律 | **子串门(拒收退回)** |
+| obstacle_cn | (30) 环境事实;床约束 | 渲染逐字 |
+| equivalent.procedure_cn | S 等价判据的产物;山穷水尽方向性 | 采纳后走既有 emit 门+上机 oracle |
+| equivalent.preserves_falsification_cn | S §0.3 等价判据四条(worker 自评) | 渲染逐字(供用户判) |
+| no_equivalent_reason_cn | (21) 呈报义务;(46) 推论 | equivalent 为 null 时必填 |
+
+**语义预校验:不做(本轮实弹教训)**。引擎不上规则级"方案对错"校验器——2026-07-14
+实证:我(引擎作者)用"对 write file 步骤不敏感"误判 show-startup 等价为零信息,
+正确标准是"对**缺陷行为**敏感"(write 家族错写启动面会被它抓住)——规则预判会
+机械误杀合法等价。方案质量链:worker 自评字段(呈给用户)→用户裁决→采纳后重编
+仍过全部 emit 门(恒真/可证伪/崩溃门)→上机 oracle 终判。错方案不会静默交付,
+会回归因环。
+
+**选项→状态机映射(词表不动,题面全换)**:内部 token 空间保持 改过程/改预期/
+改描述 三值(ledger/收敛律/resume/判例采信全兼容)——采纳等价→`改过程`(procedure_cn
+作为 user_decision 载荷,worker 按它重编);Other→freeform 既有链;挂起→`改描述`
+(本轮不产出,如实叙述进报告)。状态机是窄桥(机械,不变),题面是田野(LLM,全换)。
+
+**F8c 折叠承接**:折叠判定机械——同 group_path(脑图父节点=语义单元,F8 用户裁决)
+∧ 同题类(有/无 equivalent);折叠**文案** LLM 组稿(gather 时一次 fork:N 份结构化
+报告→一题:共同测试主题/共同阻碍/逐案等价一览表)——语义内容归 LLM、折叠控制流
+归机械,三层栈各归其位。答案落地仍逐案(F8c 既有 fanout)。
+
+**撤退清单(分阶段,诚实)**:`forbidden_mechanism_intents` 意图词表+`_stamp_intent`
+意图扫描+意图级 emit 门——违反"判断用结构化事实,别退化成关键字白名单"红线
+(意图是自然语言,该 LLM 语义理解,词表漏变体)。**但 run22 的 worker 呈报是在
+brief 含词表盖章块的条件下发生的,"没有词表 worker 仍会呈报"未经实证**——故分
+两步:第一步落本节通道+渲染(最大收益),词表降级为 telemetry-only(盖章仍落
+intent.json 供对照,不再进 brief/不再门 emit);第二步跑一轮对照 worker 自主呈报率,
+达标后删词表。保留:`destructive_commands` 命令级门(安全边界,字面命令,合规)、
+恒真/可证伪门、F8c 骨架、判例采信(键=group_path+题类)。TODO_f6_claim_kind_unify
+随本节**溶解**(不再有 claim_kind 路由,呈现形态由字段有无派生)。
+
+**残余风险链(如实)**:worker 不呈报直接写卷→destructive 命令门兜(reboot/reload
+字面命令);写合法卷但语义漂移→F5/F7 极性纪律+判例血统+上机 oracle;等价方案错→
+用户裁决+采纳后全门+上机,fail 回归因环。
+
+**验收(金标准形态,机器可核)**:改后 run 写保存族题面达到用户手写形态——
+①sources 子串门通过率 100%;②题面/选项零模板文案(grep 无"加请求/观测次数");
+③用户面全中文;④选项 1 内嵌具体 procedure;⑤挂起项内嵌如实理由。加 eval:
+固化 668000 形态为回归 fixture(prompt 改动跑对照,官方 eval-first)。
+
+**落地序**:工具 schema+子串门 → worker md 报告节(F7 扩展:字段逐字呈现给用户)
+→ questions.py 投影渲染+选项映射 → gather 折叠组稿 → 词表降级 telemetry →
+测试翻新+全量回归 → run 对照验收 → 词表删除(第二步)。
+
 ### 18.7 完成度纪律
 
 本章各构件落地时在本节表格挂测试锚;未挂锚前,任何位置引用本章构件必须带「设计中」

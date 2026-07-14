@@ -451,16 +451,120 @@ def ask_decision(state: dict) -> dict:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
     from main.ist_core.compile_engine_v8.questions import load_ledgers, build_questions
     aids = [str(f.get("aid")) for f in pending]
-    qs = build_questions(load_ledgers(sh.outputs_root(), aids))
-    # 题面入账(run11 体检发现#6:decision×7 而问询题面×0——问了什么没入账,只有
-    # 答案入账;oracle 残差公理 (16) 对称应用到问询侧)。gather 语义(V8.5 片2):
-    # 本节点只在「全批无可推进工作」时到达(graph._gather_or_close),一次聚合呈报。
+    ledgers = load_ledgers(sh.outputs_root(), aids)
     _qid_by_aid = {str(f.get("aid")): f.get("question_id") for f in pending}
-    sh.append(state, [{"ev": "ask_shown", "aid": q.get("_autoid", ""),
-                       "question_id": _qid_by_aid.get(q.get("_autoid", ""), ""),
-                       "question": str(q.get("question", ""))[:300],
-                       "options": [o.get("label") for o in q.get("options", [])],
-                       "gather": True} for q in qs])
+    version = str(state.get("product_version") or "")
+    new_facts: list[dict] = []
+
+    def _fm_meta(aid: str) -> dict | None:
+        """forbidden_mechanism 台账的折叠/采信键(intent.json 盖章数据;非该类→None)。"""
+        nd = ledgers.get(aid) or {}
+        claims = [c for c in (nd.get("claims") or []) if isinstance(c, dict)]
+        if not claims or not all(str(c.get("claim_kind")) == "forbidden_mechanism"
+                                 for c in claims):
+            return None
+        it = sh.read_json(sh.outputs_root() / aid / "intent.json", {}) or {}
+        gp = tuple(str(x) for x in (it.get("group_path") or []))
+        fams = sorted({str(h.get("family") or "")
+                       for h in (it.get("forbidden_mechanism") or []) if isinstance(h, dict)})
+        leaf = gp[-1] if gp else str(it.get("title") or aid)[:40]
+        return {"group": gp or (aid,), "sig": (leaf + "|" + "+".join(fams)).lower()}
+
+    def _land(aid: str, decision: str, answer_text: str, provenance: str = "") -> bool:
+        """user_decision 落盘+decision 事实(改描述另落 suspended)。INV-11 式②:先落盘
+        后落账,失败=本案本轮不落 decision(留在 needs_decision 下轮重问),如实告警。
+        H1:答案原文随 note 落盘——机制类裁决(等价实现文本/用户自给方案)语义都在
+        原文里,user_decision.json 是 worker brief 的既有引用点。"""
+        try:
+            from main.ist_core.tools.device.verifiability_tool import compile_user_decision
+            out = compile_user_decision.func(autoid=aid, decision=decision, note=answer_text)
+            if str(out).startswith("error"):
+                raise RuntimeError(str(out)[:200])
+        except Exception:  # noqa: BLE001
+            logger.warning("user_decision 落盘失败 %s——decision 不落账,下轮重问",
+                           aid, exc_info=True)
+            sh.emit(f"⚠ …{aid[-6:]} 裁决落盘失败,本轮不生效(下轮会重新询问)")
+            return False
+        rec = {"ev": "decision", "aid": aid, "question_id": _qid_by_aid.get(aid),
+               "answer": decision}
+        if provenance:
+            rec["provenance"] = provenance
+        new_facts.append(rec)
+        if decision == "改描述":
+            # 改描述=本轮不产出——落 suspended 进挂起态(非终态,跨批恢复通道既有);
+            # 不落则案回 S_PENDING 被无限重派(V8.5 片2 实测堵洞)
+            new_facts.append({"ev": "suspended", "aid": aid,
+                              "reason": "user_decision:改描述",
+                              "question_id": _qid_by_aid.get(aid)})
+        sh.signal("user_decided", aid)
+        return True
+
+    # ── F6 同键采信豁免(§18.11,评审 T12;(20) 收敛律在本 ask 类的兑现):既有裁决
+    # 键=(意图签名×forbidden_mechanism×版本族)精确命中 ∧ token 唯一(互斥→照常问,
+    # (45)/(21) 合成规则:人源记载互斥时不静态判赢)→ 机械采信免问。编译期无回显,
+    # 不用 B 片的回显子串条件——键精确匹配即采信变体。
+    fm_meta = {aid: _fm_meta(aid) for aid in aids}
+    adopted: set[str] = set()
+    for aid in aids:
+        m = fm_meta.get(aid)
+        if not m:
+            continue
+        try:
+            from main.ist_core.tools.knowledge.adjudication_store import find_adjudications
+            hits = find_adjudications(intent_signature=m["sig"],
+                                      conflict_shape="forbidden_mechanism",
+                                      version_family=version)
+        except Exception:  # noqa: BLE001
+            hits = []
+        toks = {str(h.get("token") or "") for h in hits}
+        if len(toks) == 1 and next(iter(toks)) in ("改过程", "改预期", "改描述"):
+            tok = next(iter(toks))
+            ruling = str(hits[0].get("ruling") or hits[0].get("body") or "")[:500]
+            if _land(aid, tok, ruling or tok,
+                     provenance=f"adopted:{hits[0].get('slug', '')}"):
+                new_facts.append({"ev": "adopted", "aid": aid, "round": 0,
+                                  "slug": str(hits[0].get("slug") or ""),
+                                  "token": tok, "ruling": ruling})
+                adopted.add(aid)
+                sh.emit(f"…{aid[-6:]} 同键禁令机制判例命中,免问采用")
+
+    # ── F8c 组一题折叠(§18.11;共因合题机构的编写期前移):同(组,签名)的
+    # forbidden_mechanism 案取代表提问,答案扇出、逐案落盘(emit 门按案读)。
+    fold: dict[str, list[str]] = {}
+    _rep_of: dict[tuple, str] = {}
+    for aid in aids:
+        if aid in adopted:
+            continue
+        m = fm_meta.get(aid)
+        key = (m["group"], m["sig"]) if m else ("solo", aid)
+        rep = _rep_of.setdefault(key, aid)
+        fold.setdefault(rep, []).append(aid)
+
+    qs = build_questions({aid: ledgers[aid] for aid in sorted(fold) if aid in ledgers})
+    for q in qs:
+        mem = fold.get(str(q.get("_autoid")), [])
+        if len(mem) > 1:
+            tails = "、".join(a[-6:] for a in mem)
+            q["question"] = (str(q.get("question", ""))
+                             + f"(本题代表同组同签名 {len(mem)} 案:尾号 {tails}"
+                             "——答案广播全组,逐案落盘)")
+            q["header"] = f"禁令·组{len(mem)}案"
+    # 题面入账(run11 体检#6:问了什么必须入账;oracle 残差 (16) 对称应用到问询侧)。
+    # 折叠组:每成员一条 ask_shown,非代表标 folded_into(账目完整,答案可回放归属)
+    shown: list[dict] = []
+    for q in qs:
+        rep = str(q.get("_autoid", ""))
+        for member in fold.get(rep, [rep]):
+            rec = {"ev": "ask_shown", "aid": member,
+                   "question_id": _qid_by_aid.get(member, ""),
+                   "question": str(q.get("question", ""))[:300],
+                   "options": [o.get("label") for o in q.get("options", [])],
+                   "gather": True}
+            if member != rep:
+                rec["folded_into"] = rep
+            shown.append(rec)
+    if shown:
+        sh.append(state, shown)
     answers: dict[str, str] = {}
     for i in range(0, len(qs), 4):
         if i // 4 >= _MAX_ASK_ROUNDS:
@@ -468,41 +572,32 @@ def ask_decision(state: dict) -> dict:
         ans = interrupt({"kind": "ask_decision", "questions": qs[i:i + 4]})
         if isinstance(ans, dict):
             answers.update({str(k): str(v) for k, v in ans.items()})
-    new_facts = []
-    for f in pending:
-        aid = str(f.get("aid"))
-        a = answers.get(aid, "")
+    for rep in sorted(fold):
+        a = answers.get(rep, "")
         if not a:
             continue
+        m = fm_meta.get(rep)
         decision = next((d for d in ("改过程", "改预期", "改描述") if d in a), "")
+        if not decision and m:
+            # kind-aware Other 兜底(评审 D9):禁令类的自由文本=用户自给等价方案,
+            # 语义即「按此改过程」;原文随 note 直达 worker。其他类维持保守(重问)。
+            decision = "改过程"
         if not decision:
             continue
-        # INV-11 式②(坑#14):先落盘后落账——emit 的 A 层 user_decision 硬门以盘上
-        # 文件为凭据;落盘失败时 decision 事实照落=用户拍板从「代码强制」静默退化
-        # 成散文约束。失败=本案本轮不落 decision(留在 needs_decision,下轮 gather
-        # 重问),如实告警
-        try:  # emit 门的 user_decision 契约(先问后落由本节点次序保证)
-            from main.ist_core.tools.device.verifiability_tool import compile_user_decision
-            # H1:答案原文随 note 落盘——机制类裁决(如 F6 等价实现文本/用户自给方案)
-            # 的语义都在原文里,user_decision.json 是 worker brief 的既有引用点
-            out = compile_user_decision.func(autoid=aid, decision=decision, note=a)
-            if str(out).startswith("error"):
-                raise RuntimeError(str(out)[:200])
-        except Exception:  # noqa: BLE001
-            logger.warning("user_decision 落盘失败 %s——decision 不落账,下轮重问",
-                           aid, exc_info=True)
-            sh.emit(f"⚠ …{aid[-6:]} 裁决落盘失败,本轮不生效(下轮会重新询问)")
-            continue
-        new_facts.append({"ev": "decision", "aid": aid,
-                          "question_id": f.get("question_id"), "answer": decision})
-        if decision == "改描述":
-            # 改描述=本轮不产出(题面即此语义:歧义/不属本版本,待人工/适用版本)——
-            # 落 suspended 事实进挂起态(非终态,跨批恢复通道既有)。不落则案回
-            # S_PENDING 被无限重派→每次收敛再问一遍(V8.5 片2 实测堵洞)。
-            new_facts.append({"ev": "suspended", "aid": aid,
-                              "reason": "user_decision:改描述",
-                              "question_id": f.get("question_id")})
-        sh.signal("user_decided", aid)
+        landed_members = [aid for aid in fold[rep] if _land(aid, decision, a)]
+        if m and landed_members and version:
+            # 判例写回(同键采信的供给侧;anchor=应然锚 A2,lineage=用户代理)
+            try:
+                from main.ist_core.tools.knowledge.adjudication_store import write_adjudication
+                write_adjudication(
+                    key={"intent_signature": m["sig"],
+                         "conflict_shape": "forbidden_mechanism",
+                         "version_family": version},
+                    ruling=a, anchor={"version": version, "lineage": "user_proxy"},
+                    meta={"autoid": rep, "token": decision,
+                          "batch": str(state.get("out_name") or "")})
+            except Exception:  # noqa: BLE001
+                logger.debug("禁令机制判例写回失败(不拦裁决生效)", exc_info=True)
     sh.append(state, new_facts)
     fs2 = sh.load_facts(state)
     return {"phase_status": "ok", **sh.counts_update(state, fs2)}

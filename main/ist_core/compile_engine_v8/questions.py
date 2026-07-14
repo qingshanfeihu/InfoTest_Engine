@@ -68,6 +68,29 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
                               "_ordering": False, "_form": form})
             continue
 
+        if all(k == "forbidden_mechanism" for k in kinds):
+            # F6 禁令机制呈报(§18.11 五稿):山穷水尽=有能力完成设计验证就实现——
+            # 题面主推 worker 按配置面模型推导的等价实现(模型条件,差异已声明),
+            # 投降选项必须携穷举论证语义;误报(字面命中非机制)一答放行。
+            c0 = claims[0]
+            prop = str(c0.get("proposed_equivalent") or c0.get("suggested_fix") or "")[:200]
+            q_text = (f"用例 {aid}(尾号 {aid[-6:]})的意图要求测试床禁止的机制:{reasons}。"
+                      + (f"worker 按配置面模型推导的等价实现:{prop}。" if prop else "")
+                      + "等价性为模型条件(启动通道等差异已在报告声明),如何处置?")
+            opt_process = {"label": "改过程",
+                           "description": ("采纳等价实现重编(推荐;差异声明随交付报告)。"
+                                           "若命中词并非本案执行机制(如计数/字段名),同选此项"
+                                           "并注明,照常编写。")}
+            opt_expect = {"label": "改预期",
+                          "description": "等价实现方向不对——在自定义输入里给出你的等价方案,原文将随裁决下发 worker。"}
+            opt_desc = {"label": "改描述",
+                        "description": "确认无有效替代/必须真机制——本轮不产出,挂起待可执行环境(如实报告)。"}
+            questions.append({"question": q_text, "header": f"禁令·{aid[-6:]}",
+                              "options": [opt_process, opt_expect, opt_desc],
+                              "multiSelect": False, "_autoid": aid,
+                              "_ordering": False, "_form": form})
+            continue
+
         if all(k == "command_existence" for k in kinds):
             # S6 存在性呈报(V8.5 片1):题面带检索证明,选项语义按「换形态/挂起」而非可验性
             cmds = "、".join(f"『{c.get('command', '')}』" for c in claims[:3])

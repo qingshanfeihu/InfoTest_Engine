@@ -90,14 +90,25 @@ def _load_mirror_corpus() -> list[dict]:
                 cases.append(cur)
             if not cases:   # 无 autoid 标记的老先例 → 整文件当一个 case，向后兼容
                 cases = [{"aid": "", "title": "", "rows": [x for x in raw if x["E"] or x["F"]]}]
+            # F3 血统((45)/(45b),§18.11):mirror 根下 verified_<autoid>.xlsx=引擎写回
+            # (机生,与生成器同环→自指风险);子目录(smoke_test/…)=人源套件。血统由
+            # 路径机械可导,不经 LLM 自产。engine_verified 未经窗口审计的按 uncertain
+            # 采信(检索可见但降先验)——审计状态字段留待 F1/§18.10 联动填,当前默认 unknown。
+            _rel = Path(fp).relative_to(_MIRROR)
+            _name = _rel.name
+            if _rel.parent == Path(".") and _name.startswith("verified_"):
+                _lineage, _audit = "engine_verified", "unaudited"
+            else:
+                _lineage, _audit = "human_suite", "n/a"
             for c in cases:
                 full = preamble + c["rows"]   # 每 case = 通用前置 + 该 case 步骤（配置基线完整、可照抄）
                 cfg = " ".join(x["G"] for x in full if x["E"].startswith("APV") and x["G"])
                 # 完整链：APV 配置基线(sdns on/启用/池法)+ show + 触发 + 断言，基线必须可见才能照抄。
                 seq = [(x["E"], x["F"], x["G"]) for x in full
                        if x["E"] in ("test_env", "check_point", "time") or x["E"].startswith("APV")]
-                corpus.append({"fn": Path(fp).name, "autoid": c["aid"], "intent_self": c["title"],
-                               "cfg_tokens": _cmd_tokens(cfg), "seq": seq[:40]})
+                corpus.append({"fn": _name, "autoid": c["aid"], "intent_self": c["title"],
+                               "cfg_tokens": _cmd_tokens(cfg), "seq": seq[:40],
+                               "lineage": _lineage, "audit": _audit})
         _MIRROR_CORPUS_CACHE = corpus
         logger.info("mirror 先例语料已缓存: %d 个先例", len(corpus))
         return _MIRROR_CORPUS_CACHE
@@ -319,9 +330,18 @@ def _retrieve_precedent_hits(my_config: str, intent: str, limit: int) -> tuple[l
             continue
         # 返回完整"触发→断言"步骤链(test_env 的 dig/触发 + check_point),不只摘断言——
         # 否则 agent 看不到先例怎么触发的(如 A/AAAA 分查、多次触发),学不全做法。
-        cands.append((score, cfg_sim, intent_sim, entry["fn"], entry["seq"], entry.get("autoid", "")))
+        cands.append((score, cfg_sim, intent_sim, entry["fn"], entry["seq"],
+                      entry.get("autoid", ""), entry.get("lineage", "human_suite")))
     cands.sort(key=lambda x: -x[0])
-    return [c for c in cands[:limit] if c[0] > 0], my_toks, intent
+    top = [c for c in cands[:limit] if c[0] > 0]
+    # F3 配额保底((45b) 防自指,§18.11):机生血统在词面相似度上结构性碾压人源
+    # (同 autoid 族/同标题措辞)——若 top 全机生但存在有效人源命中,置换末位为最高分
+    # 人源命中,保证结果集人源可见性(不改排序哲学,只破"自产血统垄断")。
+    if top and all(c[6] == "engine_verified" for c in top):
+        human = next((c for c in cands if c[6] == "human_suite" and c[0] > 0), None)
+        if human:
+            top[-1] = human
+    return top, my_toks, intent
 
 
 def _load_precedent_annotations() -> dict:
@@ -343,15 +363,18 @@ def _format_precedent_hits(hits: list, my_toks: set, intent: str) -> str:
     axis = "config+intent fused" if (my_toks and intent) else ("intent axis" if intent else "config structure axis")
     anns = _load_precedent_annotations()
     out = [f"=== compile_precedent (ranked by {axis} similarity; full trigger→assertion chains) ==="]
-    for score, cfg_sim, intent_sim, fn, seq, autoid in hits:
+    for score, cfg_sim, intent_sim, fn, seq, autoid, *_rest in hits:
+        lineage = _rest[0] if _rest else "human_suite"
         if my_toks and intent:
             tag = f"config {cfg_sim:.2f} + intent {intent_sim:.2f}"
         elif intent:
             tag = f"intent {intent_sim:.2f}"
         else:
             tag = f"similarity {cfg_sim:.2f}"
+        # F3 血统外显((45),§18.11):机生血统标注,提醒 draft 别把自产判例当人源金标准
+        lin_tag = " ⟨engine-written; structure only, not an authority⟩" if lineage == "engine_verified" else ""
         fn_show = f"{fn}[{autoid}]" if autoid else fn
-        out.append(f"\nPrecedent {fn_show} ({tag}) trigger→assertion chain:")
+        out.append(f"\nPrecedent {fn_show} ({tag}){lin_tag} trigger→assertion chain:")
         ann = anns.get(str(autoid)) if autoid else None
         if ann and ann.get("note"):
             out.append(f"  ⚠ curation note [{ann.get('flag', 'curated')}]: {str(ann['note'])[:260]}")
@@ -364,8 +387,11 @@ def _format_precedent_hits(hits: list, my_toks: set, intent: str) -> str:
                "steps and every baseline step in the precedent must all be present — miss one and the "
                "device service never comes up, dig resolves nothing, every assertion fails. A precedent's "
                "'how to configure (full baseline) + how to trigger (dig types/counts) + how to assert' is a "
-               "matched set; write the whole chain as it does. Source expected values from precedent+manual; "
-               "runtime values unknowable offline (concrete IPs a dig resolves, etc.) stay <RUNTIME>, never invented.")
+               "matched set; write the whole chain as it does. Copy the precedent for **config form** "
+               "(commands/quoting/baseline); an expected value's polarity (found vs not_found) and target "
+               "trace to THIS case's intent + the manual, NOT to the precedent — a precedent testing a "
+               "different intent can assert the opposite direction (precedent-then-assert is a fake-PASS "
+               "path, the twin of observe-then-assert). Runtime values unknowable offline stay <RUNTIME>.")
     out.append("⚠ **Copy the closest precedent's command format verbatim; change only values (IP/domain/name), "
                "never the format**: the precedent's **quoting, parameter count and order** are what actually ran "
                "on-device — if it double-quotes a parameter (e.g. `\"24\"`) you quote it too; if it does not, "

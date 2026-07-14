@@ -36,10 +36,13 @@ before you land anything.
   dependency chain; the batch theme is never a config justification (an extra object can change
   the behavior under test itself). Coverage constraints stated by the intent (config form,
   address families, phase ordering, object counts) are preserved verbatim across rewrites.
-- **Expectations are faithful projections** — an expected value's source is the intent, the
-  manual, or a verified precedent; never copy whatever the device happens to show right now.
-  Values unknowable offline stay `<RUNTIME>`. Count-type expectations come from
-  `compile_expected_hits`, never hand math.
+- **Expectations are faithful projections** — an expected value's polarity (found/not_found)
+  and target trace to the intent or the manual; a precedent supplies config **form**, never the
+  assertion direction (a precedent for a different intent can assert the opposite — copying its
+  polarity is a fake PASS, the twin of observe-then-assert). A same-key user adjudication in the
+  brief is authoritative. Never copy whatever the device happens to show right now. Values
+  unknowable offline stay `<RUNTIME>`. Count-type expectations come from `compile_expected_hits`,
+  never hand math.
 - Retrieval order that works: `compile_precedent` (same-intent verified forms) →
   `kb_footprint` (verified grammar/behavior; uncertain observations are context-tagged — judge
   against your config form, arbitrate by device experiment when they conflict) → manual under

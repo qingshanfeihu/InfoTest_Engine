@@ -1346,65 +1346,71 @@ run18-21 ask 风暴即此原则缺位实证。
 → F6+F8c(+P1c 提门+门文案) → F8a(含 b 机械形态)+F8d → F3(含定界极性禁运,
 三处同改) → F1+S₀ 前置裁决+F2(b) → F4。
 
-### 18.12 S₀ 前置裁决定界（2026-07-14;全节**设计中**,待对抗评审后实施——graph 流改动）
+### 18.12 S₀ 前置裁决定界（二稿=对抗评审合并,2026-07-14;全节**设计中**——评审
+NO-GO 七前置全部吸收,满足后实施;初稿裁决表第 2 行经 F13 三度修正）
 
-**理论定界(检测器分工,infra §2/§3+S §0.3/§5)**:隔离复跑与只读探针**各裁一支**,
-不是双保险——①iDFlakies 形态(隔离/重排复跑)=**顺序侧**检测器,只能裁决 T1 的
-卷序分量;②PolDet/快照形态(探针)=**状态侧**检测器,裁持久面(制品跨 run 存活,
-「复跑=h 重采样只救 π 噪声」对此支成立)。`_s0_pair` 的诊断本就分支带标
-(polluters[].via ∈ persistent-plane write / shared L2/L3 entity),裁决按支选型。
-**投影核边界(S §5)**:不可观测分量的污染无法用快照/探针捕获——探针**阴性只削弱、
-永不反驳**(run20 占用者 show 面不可见实证)。**探针半=S5(承载链下降)的首个实例**:
-探什么命令是领域判断归 fork(attributor 白名单+`dev_probe`,只读,(25) 合规),
-零硬编码红线不破。**实证脚注(诚实)**:「s₀ 复跑不可救」的经验锚(run11 668030
-排尾复验×3 翻挂)现已知是断言窗失真的假 fail——理论论证(持久面 h 冻结)独立成立,
-但窗口门上线后隔离复跑首次能产出可信 verdict,这强化了做前置裁决的理由。
+**理论定界(检测器分工,infra §2/§3+S §0.3/§5;F13 修正后)**:隔离复跑与只读探针
+各裁一支——iDFlakies 形态(隔离/重排)=顺序侧,PolDet 形态(探针)=状态侧。
+**F13 关键修正**:「写者不在卷内 ≠ 写者的脏东西不在床上」——停车学说的前提本就是
+「卷序污染经框架逐案清理够不着的**床驻留通道**」(bed_l23_write_forms 入选标准),
+床驻留残渣在 probe 时仍在床上(批内 probe 前无清理:bed_gate 清理仅 prep 期,收敛仅
+closing 期)。故**隔离 FAIL 在 s₀ 为真时是预期结果,不构成反驳**;初稿「隔离仍挂=
+反驳」与 h 冻结学说两头矛盾,撤回。投影核边界不变:探针阴性只削弱、永不反驳。
+探针半=S5 承载链下降首个实例(attributor+dev_probe 只读,(25) 合规,命令推导归 fork)。
 
-**与既有机制的分界(不重复三个既有反驳器)**:可达性第零层(批级前提)、跨床反驳
-(≥2 床史)、anomaly 否决(自身执行异常)照旧在前;前置裁决是它们之后、bed 问询
-之前的**因果判别实验**。「复跑不可救」规则**收窄**:挡的是重采样复跑(毒源在卷/
-同脏床),放行的是**引擎主动的判别性隔离单跑**(受害者单独成卷,毒源不在场)——
-(36) 写权律的 user retry 释放阀已是同型先例(用户声明放行一次复跑),本节把同一
-主动权在问询**之前**交给引擎一次(2026-07-14 用户裁决:「床已处理不应该你自己
-处理复跑验证吗」)。
+**裁决表(三稿,F13 定形)**:
 
-**裁决表(理论修正版,取代 §18.10 初稿的过宽句)**:
-
-| 隔离单跑结果 | 毒源分支 | 语义 | 去向 |
+| 隔离单跑结果 | 前置探针 | 语义 | 去向 |
 |---|---|---|---|
-| PASS | 任意 | 污染坐实(两支的危害均为卷内介导——持久面载荷也需毒源回放步在卷内触发,run13 模型) | bed 问询(携裁决回执) |
-| FAIL | 纯卷序(全部 via shared L2/L3) | 上游写者不在场仍挂=s₀ **反驳** | 深归因 fork(G6 免派解除),不问 |
-| FAIL | 含持久面毒源 | 不可辨(直接持久效应 vs 案内因) | 深归因 fork **携探针义务**(S5;阳性=佐证可再呈 bed,阴性=削弱不反驳) |
+| PASS | — | 污染坐实(**显式假设:危害为卷内执行介导**——run13 回放模型;持久面载荷也需毒源步在卷内触发) | bed 问询(携裁决回执;题面提示:probe 时床态=整卷跑完态,下游案可能已清掉残渣,治床前可先复探实体) |
+| FAIL | 点名实体经 dev_probe **证实已不在床上** | 残渣缺席仍挂=s₀ 反驳 | 深归因 fork(G6 免派解除),不问 |
+| FAIL | 实体仍在/不可观测(投影核) | **不可辨**(床驻留效应 vs 案内因) | 深归因 fork 携探针义务(S5);阳性=佐证可再呈 bed,阴性=削弱不反驳 |
 
-**机件设计(fold 哲学,零新可变状态)**:
-- **probe ctx(关键陷阱的解)**:隔离单跑的卷用**新语境 `CTX_PROBE`**——其 verdict
-  只喂 s₀ 裁决派生,**不进 case_status 升级**(否则 PASS→S_SUBSET_VERIFIED→进交付
-  终验→全卷序下必再挂=环;矛盾谓词 ∃pass@subset∧fail@delivery 亦不受污染)。
-- **裁决派生**:`_s0_adjudication(fs, aid)` → none/scheduled/pass/fail,由
-  merged(probe 卷,composition==[rep])+该卷 verdict 联表派生;`s0_probe` 事实在
-  merge 组 probe 卷时落(键=最新 diagnosis 轮,防重复)。
-- **调度与资源规则((24))**:按共因簇取**代表**单跑一次(簇键=共因合题既有
-  (诊断依据,毒源集)),结果广播全簇;每 (簇,诊断轮) 至多一次;probe 卷组卷时机=
-  merge 发现 s₀ 案 adjudication==none 且无其他待验工作时优先(不阻塞兄弟交付,
-  §14-R4)。
-- **闸改动**:`_s0_parked` 停车仅当 adjudication==pass(坐实待问)/用户已答;
-  ==none → 进 probe 卷调度;==fail → 不停车不问,G6 免派条件加「无该轮 fail 裁决」
-  → attribute 派 attributor(brief 携隔离结果+分支注记+探针义务)。
-  `bed_treatment_waiting` 加条件 adjudication==pass(或 (36) 用户 user_cleared 通道,
-  或 attributor 在 fail 裁决后**再次**确认 rerun_isolated——携双回执照问,防活锁)。
-- **bed 面板改动**:删「床已处理,复跑验证」选项(引擎已复跑;`_answer_token` 的
-  已处理/复跑自由文本映射**保留**为 (36) 用户特权通道);题面携**裁决回执**(隔离
-  单跑 verdict+probe 卷号)+ **F2(b) 检索回执**(判例店 conflict_shape=bed 同键命中
-  数+本簇历史 bed 决策数,机械字符串);选项=挂起(床治理后下批)/如实降级/Other。
-- **attributor 增量**:白名单+`dev_probe`;md 补 S5 一段(沿承载链下降的探针序;
-  探针阴性只削弱——投影核;隔离 fail+持久面分支的判别义务)。
-- **防环**:裁决键=(aid/簇, 最新 diagnosis 轮);深归因产新 attribution 后走正常流;
-  attributor 复判 rerun_isolated → bed 问询接受(双回执披露),无悬空态。
+**按案裁决,受害者合卷(F9 取代代表广播)**:代表广播不诚实(持久面配对无共享实体
+条件、假阳约 1/4 自认——广播=替假阳成员背书)且实测簇形态(互写者→毒源集两两不同
+→单例簇)节省为零。正解:**一个 probe 卷装全部纯读受害者**,机械准入=
+`_case_touch_profile` 无持久写 ∧ 两两实体不相交(互不构成对方毒源),一轮设备产出
+**逐案** verdict;不满足准入的受害者单例卷排队。
 
-**落地序**:本节过一轮对抗评审(重点攻:probe ctx 对 reconcile/views/矛盾谓词/
-run_marker 幂等的全消费面;n_ask_contradiction 计数在 adjudication==none 时必须
-不计 bed(否则 ask 边先于 probe 调度);probe 卷与 emit 凭证/merge 预检的交互)
-→ 通过后实施+全量回归+34 案对照轮。
+**CTX_PROBE 消费点决策表(F1-F5;「不进升级」必须逐点做,一刀切会杀掉归因键控)**:
+
+| 消费点 | 处置 |
+|---|---|
+| contradictions pass 集(facts) | **排除** probe(F1 BLOCKER:现行 ctx 盲,probe PASS+delivery fail=假矛盾→contra 边) |
+| case_status/latest_verdict、subset_verified | **排除**(F2 BLOCKER:PASS→S_SUBSET_VERIFIED 绕幂等闸进终验=环;BROKEN→need_verify 普通复跑=检疫塌陷) |
+| 写回触发(真 PASS→先例/footprint) | **跳过** probe(F4:probe pass 写回后案走挂起/降级→回滚永不触发=半毒先例跨批存留,§18.10 投毒同型) |
+| attribute 归因键控(last verdict run_id)、briefs 失败轮证据 | **保留** probe(F3:滤掉则 fail-probe 的深归因永不派发;probe fail 全文内联=隔离对照证据,有益) |
+| frozen 展示、渲染 CTX_CN 词表、remedies tried_actions | 补词条/计数(MINOR;leak_scan denylist 随 CTX_CN 自动扩) |
+| digest/last_run/窗口审计/互斥/stale-log | 零改动(probe 走同一 dev_run_batch_digest,verdict 可信度与正常轮同级——F8① 已核) |
+| report_gate/deliverable/终验幂等闸 | 零改动(delivery-only,已安全) |
+
+**merge 次序(F6 BLOCKER)**:==none/scheduled 案**如 parked 一样排除出 ready**
+(否则混进 delivery 卷或触发指纹早退→closing,probe 永不调度);probe 组卷分支
+**先于** need_verify-空的 delivery 分支与指纹早退。承载计数=n_failed_actionable
+(bed 在 ==none 不计入 ask;contra 边对 h_s0 案同加 adjudication 条件,F7)。
+
+**scheduled/broken 补态(F8④)**:裁决去重键=「每 (案,诊断轮) 至多一个 probe
+**verdict**」(非组卷即视为已裁);scheduled 无 verdict(崩溃/device_busy/not_run)
+→ 重驱同一 probe 组成;broken 复用既有 broken 连击护栏,封顶后升级人工。
+
+**bed 面板改动**:删「床已处理,复跑验证」选项(引擎已复跑;`_answer_token` 自由
+文本已处理/复跑映射保留=(36) 用户特权;§16.4 片3 三选项文本同批修正,F10);题面
+携**裁决回执**(隔离 verdict+probe 卷号+第 N 次裁决)+ **F2(b) 检索回执**——供给侧
+同批补:bed 裁决写入判例店(conflict_shape=bed),回执=同键命中数+本簇历史 bed
+决策数(facts 派生,F14)。
+
+**附带修复(F15,先存缺陷被 probe 放大)**:diagnose 配对全集改为**本轮组成内**的
+案(现读 merges[-1].composition 对全部现存 fail 配对——probe 卷[rep]会给兄弟案
+捏造 polluter=rep 的新诊断)。
+
+**测试翻新清单(实施必改)**:test_diagnose(:113 单案卷断言)/test_g6_prescreen
+(:292)/test_device_reachability(:116 停车旧语义)/test_facts_invariants(:72 矛盾
+ctx 盲)/test_graph_scenarios(:32 假设备 ctx 启发);probe 卷命名与 `__sub*` 清理
+glob 二选一同改。
+
+**落地序**:facts/views 消费点(F1-F4)→ merge 次序+合卷调度+补态(F6/F8/F9)→
+闸三改+contra 条件(F7)→ 面板+回执+判例店供给(F10/F14)→ F15+渲染词表 →
+测试翻新+全量回归+34 案对照轮。
 
 ### 18.7 完成度纪律
 

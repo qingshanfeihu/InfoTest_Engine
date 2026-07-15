@@ -56,9 +56,13 @@ class _StubApp:
 class _StubFooter:
     def __init__(self) -> None:
         self.engine_text = ""
+        self.max_thinking = False
 
     def set_engine_line(self, text: str) -> None:
         self.engine_text = text
+
+    def set_max_thinking(self, on: bool) -> None:
+        self.max_thinking = bool(on)
 
     def update(self, **kw) -> None:
         pass

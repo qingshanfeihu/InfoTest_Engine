@@ -43,12 +43,30 @@ def test_payloads_have_max_thinking():
     assert _payloads_have_max_thinking([done_max]) is False   # 已结束不算
 
 
-def test_engine_bottom_line_max_thinking_tail():
+def test_engine_bottom_line_no_max_thinking_tail():
+    """§18.14 后 TUI(用户裁决):max 状态移到 thinking 焦点行,引擎进度行**不再**挂
+    「最大深度思考中」tail——引擎行永不含它(检测仍走 _payloads_have_max_thinking)。"""
     from main.ist_core.ink.components.ist_app import _render_engine_bottom_line
     p = {"kind": "engine", "run": "dongkl", "phase": "worker_fanout",
          "round": 2, "total": 4, "counts": {"produced": 1}}
     assert "最大深度思考中" not in _render_engine_bottom_line(p)
-    assert "最大深度思考中" in _render_engine_bottom_line(p, max_thinking=True)
+
+
+def test_footer_max_thinking_upgrades_thinking_state():
+    """max 深度时 thinking 行 _state「深度思考中」升格「最大深度思考中」(视线焦点行)。"""
+    from main.ist_core.ink.components.footer import FooterPane
+    captured = {}
+    fp = FooterPane(render_callback=lambda: None, thinking_text_cb=lambda t: captured.update(t=t))
+    fp._llm_phase = "thinking"
+    fp._timer_running = True
+    fp._busy_since = 1.0   # 非零(truthy)→触发 thinking 渲染分支
+    fp._run_start_input = fp._run_start_output = 0
+    fp._max_thinking = False
+    fp.update()   # 触发 thinking 行渲染
+    assert "深度思考中" in (captured.get("t") or "") and "最大深度思考中" not in captured["t"]
+    fp._max_thinking = True
+    fp.update()
+    assert "最大深度思考中" in (captured.get("t") or "")
 
 
 # ------------------------------------------ H: finish_reason 终止信号

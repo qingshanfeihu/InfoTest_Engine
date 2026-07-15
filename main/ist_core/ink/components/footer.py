@@ -63,6 +63,10 @@ class FooterPane:
         self._engine_line = create_text("")
         self._node.append_child(self._engine_line)
         self._engine_text = ""
+        # 任一 fork 处于 max 思考深度(升级重编末轮)→ thinking 行 _state 显「最大深度
+        # 思考中」替代「深度思考中」(2026-07-15 用户裁决:max 状态该在视线焦点 thinking
+        # 行,不藏在引擎进度行尾)。
+        self._max_thinking = False
 
         self._render_cb = render_callback
         self._thinking_cb = thinking_text_cb
@@ -160,6 +164,16 @@ class FooterPane:
         self._engine_text = text
         self._engine_line.set_value(text)
         self._node.style.height = 3 if text else 2
+
+    def set_max_thinking(self, on: bool) -> None:
+        """任一 fork 处于 max 思考深度 → thinking 行 _state 显「最大深度思考中」。
+        幂等;变更时触发重渲(thinking 行由 _render_busy 现算,置位后 render 即生效)。"""
+        on = bool(on)
+        if on == self._max_thinking:
+            return
+        self._max_thinking = on
+        if self._render_cb:
+            self._render_cb()
 
     def set_obs_warning(self, text: str) -> None:
         """可观测性告警常驻状态行(黄):如 Langfuse 上报失败——盲跑必须看得见
@@ -285,6 +299,10 @@ class FooterPane:
             _run_out = max(0, self.output_tokens + self.fork_output - self._run_start_output)
             # 尾字段 = mimo 当前真实状态（由实际流式相位驱动，零假计时）；前面随机词不动。
             _state = _PHASE_STATE_TEXT.get(self._llm_phase)   # 无相位 → None
+            # 有 fork 在 max 思考深度时,thinking 相位的「深度思考中」升格为「最大深度
+            # 思考中」(焦点行反映全局 max 状态;§footer max_thinking)。
+            if _state and self._max_thinking and self._llm_phase == "thinking":
+                _state = "最大深度思考中"
             # 有真实相位（input/thinking/output）才带 "token · 状态" 尾字段：
             #   input=上传阶段（↑，本轮增量）；
             #   thinking/output=生成阶段（↓，用实时 _output_token_count——每 token 累加、

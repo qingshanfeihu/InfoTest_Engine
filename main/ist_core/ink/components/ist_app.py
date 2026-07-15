@@ -266,13 +266,14 @@ _B, _C2, _D2, _X2 = "\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m"
 _G2, _R2, _Y2 = "\x1b[32m", "\x1b[31m", "\x1b[33m"
 
 
-def _render_engine_bottom_line(p: dict, *, max_thinking: bool = False) -> str:
+def _render_engine_bottom_line(p: dict) -> str:
     """引擎聚合 → footer 底部常驻行(2026-07-06 用户定稿):进度条+文字计数,不用符号标签。
 
     形如 `` 编译 dongkl · 轮次1 编写 ██████████░░░░░░░░░░ 26/34 · 产出26 编写中1 欠定7 通过0 失败0``。
     九个 ledger 状态全部有归属:产出=produced,通过=passed,编写中=pending+dispatched+
     failed_active(待重跑),欠定=pending_decision+awaiting_user,失败=failed_terminal+escalated。
-    max_thinking:任一 fork 处于 max 思考深度(升级重编最后一次)时挂「最大深度思考中」尾标。
+    max 思考深度状态不在此行——移到 thinking 焦点行(footer._state「最大深度思考中」,
+    2026-07-15 用户裁决:该显在视线焦点的 thinking 行,不藏引擎进度行尾)。
     """
     p = dict(p or {})
     counts = dict(p.get("counts") or {})
@@ -291,10 +292,9 @@ def _render_engine_bottom_line(p: dict, *, max_thinking: bool = False) -> str:
     if p.get("status") == "done":
         phase = "已收尾"
     D, X = _D2, _X2
-    tail = f" {_B}{_Y2}· 最大深度思考中{X}" if max_thinking else ""
     return (f" 编译 {p.get('run', '')} · 轮次{p.get('round', 0)} {phase} "
             f"{bar} {done}/{total}{D} · 产出{produced} 编写中{spin} "
-            f"欠定{pend} 通过{passed} 失败{bad}{X}{tail}")
+            f"欠定{pend} 通过{passed} 失败{bad}{X}")
 
 
 def _payloads_have_max_thinking(payloads) -> bool:
@@ -1646,6 +1646,8 @@ class IstInkApp:
             (snapshot.messages[mi].content[0].payload or {})
             for mi in indices.values()
             if 0 <= mi < len(snapshot.messages) and snapshot.messages[mi].content)
+        # §18.14 后 TUI(用户裁决):max 状态显在 thinking 焦点行,不塞引擎行尾。
+        self._footer.set_max_thinking(max_thinking)
         saw_engine = False
         for uuid_, mi in indices.items():
             if not (0 <= mi < len(snapshot.messages)):
@@ -1657,8 +1659,7 @@ class IstInkApp:
             if (payload.get("kind") or "") == "engine":
                 saw_engine = True
                 self._fork_card_payloads[uuid_] = payload
-                self._footer.set_engine_line(
-                    _render_engine_bottom_line(payload, max_thinking=max_thinking))
+                self._footer.set_engine_line(_render_engine_bottom_line(payload))
                 continue
             row = rows.get(uuid_)
             if row is None:
@@ -1885,9 +1886,9 @@ class IstInkApp:
             # 引擎聚合卡走 footer 底部常驻行(用户定稿),不占 transcript 行
             if (payload.get("kind") or "") == "engine":
                 self._fork_card_payloads[msg.uuid] = payload
-                self._footer.set_engine_line(_render_engine_bottom_line(
-                    payload, max_thinking=_payloads_have_max_thinking(
-                        self._fork_card_payloads.values())))
+                self._footer.set_max_thinking(_payloads_have_max_thinking(
+                    self._fork_card_payloads.values()))
+                self._footer.set_engine_line(_render_engine_bottom_line(payload))
                 return
             idx = self._transcript.message_count()
             self._transcript.append_message(self._card_line(msg.uuid, payload))

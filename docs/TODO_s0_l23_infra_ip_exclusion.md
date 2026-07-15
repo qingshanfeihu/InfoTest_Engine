@@ -1,4 +1,5 @@
-# 待修:s₀ L2/L3 分支把测试床固定基础设施 IP 当共享污染(run23 暴露)
+# [RESOLVED 2026-07-15] 已由 §18.14 S1(env_facts.infra_ips + _fixed_infra_ips 减法)实现。原始记录保留。
+
 
 > 发现 2026-07-15 run23:667986(满配16条 listener)被判 h_s0、polluter=655203,
 > 但真 fail 是它**自己的断言正则缺陷**(V 层),与 655203 无关。s₀ L2/L3 共享实体

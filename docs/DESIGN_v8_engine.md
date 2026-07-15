@@ -1623,6 +1623,69 @@ gather 折叠 P4 组稿+memoize → P6 lint → 移 brief 盖章块(**保留 emi
 - 全量回归绿后 cmux 跑 yzg 验收 aha 端到端(核心看点:写保存族三元组题面清爽、s₀ 假阳
   归零、无假 fail 掩盖真缺陷)。
 
+### 18.15 成熟范式对标的工程收口(2026-07-15;输入=六项范式对标 RESEARCH + dongkl 活证据;全节**设计中**)
+
+> 输入两路:①`docs/RESEARCH_llm_test_automation_comparison.md`(NeTestLLM/iPanda/Keysight/
+> pyATS·Genie·NAPALM/NetConfEval/AutoSpec 六项对标,兑现审计 §6.4「抄作业」令);②dongkl
+> 2026-07-15 观察轮三活证据(`ANALYSIS_dongkl_ask_review.md`)。**共性诊断**:这几处**理论
+> 全对且已成文**(K §2.12.3b broken 公理 / K §5.5 oracle 残差 / S §0.5 h-不变式 / S §5 π 忠实
+> 实现),但**实现未强制**——又是 §18.14「实现丢理论合取」的病。本节是让门去强制已有理论的
+> 设计,不加新理论。纪律:每单元=活证据+设计+理论锚+外部模板+状态;全部「设计中」,挂测试
+> 锚前引用带该字样(§18.7)。
+
+**单元 A — h-不变式断言 emit 门 + flaky 写回护栏(593516;理论 S §0.5;BLOCKER-投毒)**
+- 活证据:593516 用 dig-命中计数断言 RR,子集复测采样够散即 pass 并 writeback verified——
+  h-样本读数当断言,采样噪声写成第二权威判例源。
+- 设计:emit 期机械门——断言若读某 **h-in-λ 通道**(RR/wrr/LB/调度类命令)的**样本读数**
+  (命中次数/单次采样值)而非其 h-不变式投影,拒绝;要求集合相等或区间形态。**写回护栏**:
+  断言为 h-变量的 pass 不够格写 footprint/precedent(第二权威源健全性,K §2.9.4 (45))。
+- 理论锚:S §0.5「R 边缘化为 h 不变式(集合)」;外部模板:NAPALM `_mode:strict` 集合相等、
+  AutoSpec canonical-flow。
+- 数据依赖:domain_grammar 需标注哪些命令是 h-in-λ 通道(RR/wrr/LB)——**文法层 JSON 数据**
+  增条目(自愈四层:新检查=加 JSON 零代码),h-通道标注源锚手册/footprint、禁现编。
+
+**单元 B — env_blocked 归因机械后校验(dongkl 777976/994986 2/2 误;理论 K (40);MAJOR)**
+- 活证据:attributor 看表面症状(dig 无输出/command not found)判 E 层,不做内部一致性检验;
+  两误判都有机械反证。
+- 设计:延伸 §18.14 attributor s₀ 机械复核到 env_blocked——LLM 判 env_blocked 后,机械扫同一
+  device_context 找反证:①env_blocked 依据「dig 无输出/Hit:0」但同卷有任一 Hit≥1 → 环境通 →
+  降 V 层(算法/分布);②回显含非 APV 主机提示符(`root@...:/...#`/`apt install`)→ dispatch 错
+  (show 打到错主机)→ V 层 reflow 非环境。反证信号从 device_context **结构化**解析(Hit 计数/
+  提示符正则),矛盾则不采信 env_blocked、转 V 深归因。
+- 理论锚:K (40) 处置分类学 env_blocked 出口缺内部一致性门,同型 §18.14 s₀ 复核;纪律:信号读
+  结构化事实非关键字白名单(`[[compile-judgment-structural-not-strongdict]]`)。
+
+**单元 C — broken 第三态路由核验(210998;理论 K (44);§18.1 已设计,需核验实现)**
+- 活证据:210998 = broken 在 verdict 流首次显式现身(此前只有 668030 空真一侧)。
+- 设计:§18.1 已设计 broken 全链(schema 三值/fold S_BROKEN/归因短路/报告分母)——本单元=**核验**
+  210998 是否路由正确(broken → 不重编、不写回、单列分母),挂 210998 形态回归锚(§18.7「已落地
+  字样挂测试锚」纪律)。若 §18.1 未全落则补齐。外部模板:pyATS 7 码滚动优先级
+  `Errored>Failed>Aborted>Blocked` 映射 broken 子类。
+
+**单元 D — 结构化断言通道(π 忠实实现;理论 S §5;对标 P0,最深借鉴,分期)**
+- 最深的借鉴:emit 契约加结构化断言通道 `(parser/getter, key_path, operator, expected)`,优先于
+  raw found/not_found、fail-loud 解析——π 的忠实实现。
+- **诚实作用域**:远端框架的上机执行是 raw-text found/not_found(mirror,我们不拥有),改它出作用域。
+  可实现形态=**在我方验证侧**加解析层:延伸 §18.10 oracle 残差门,从「窗口对齐」进到「结构化对象
+  抽取」——把第 k 个响应块解析成对象、断言 key-path,作为**独立于框架 raw verdict 的 oracle 层**。
+  这让 π 在我方验证侧忠实、不动远端框架。也是最强专利 claim(F2 oracle 残差)。
+- 状态:设计中,**分期**——phase1=把 §18.10 window-audit 扩到结构化对象抽取,先覆盖最高价值命令族
+  (RR/dig/show statistics),schema 锚手册/footprint、fail-loud;phase2 广覆盖。外部模板:Genie
+  `parse()`+Dq / NAPALM getter+key-path。
+
+**单元 E — 机械化 benchmark + naive 基线 + 消融(理论:eval-first 纪律;NetConfEval/iPanda/AutoSpec;P1)**
+- 建版本化 `(mindmap→期望 case.xlsx)` eval 集,分阶段配 oracle 打分,常开 naive 基线(无门无循环)+
+  门关/footprint 关消融;报 Pass@k + 到不动点轮数 + 每案成本×模型档 + MA/TA 分级接受度。
+- 收口审计 §6 欠实现的「eval-first」+「成本换轴」轴(`[[requirements-boundary-rulings]]`),对标显示的
+  我方最薄一环。状态:设计中,独立工作项(不阻断引擎主路)。
+
+**明确不做(诚实作用域)**:流量发生器集成(出域,我们测设备状态非包注入)、覆盖率生成前端
+(P2,需脑图审计设计,本批不做)、改远端框架断言执行(不拥有)。
+
+**收口优先序(种子,待实现讨论定夺)**:A(投毒,BLOCKER)> B(系统性误归,MAJOR)> C(核验,小)
+> D(最深最大价值,分期)> E(独立)。A/B/C 是「让门强制已有理论」的小步快跑;D 是架构级、专利级;
+E 是评估基建。**A 与 B 都是 §18.14 attributor 机械复核同型的延伸,可一并落。**
+
 ### 18.7 完成度纪律
 
 本章各构件落地时在本节表格挂测试锚;未挂锚前,任何位置引用本章构件必须带「设计中」

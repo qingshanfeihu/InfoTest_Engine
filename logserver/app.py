@@ -1095,7 +1095,10 @@ async def list_traces(
                        t.error_info->>'total_error_count' AS error_count,
                        (SELECT r.score FROM ist_audit.sys_chat_rating r
                         WHERE r.run_id = left(replace(t.trace_id::text, '-', ''), 12)
-                        ORDER BY r.created_at DESC LIMIT 1) AS rating_score
+                        ORDER BY r.created_at DESC LIMIT 1) AS rating_score,
+                       (SELECT d.llm_output FROM ist_audit.sys_dialog_chat d
+                        WHERE d.run_id = left(replace(t.trace_id::text, '-', ''), 12)
+                        ORDER BY d.recorded_at DESC LIMIT 1) AS llm_output
                 FROM ist_audit.trace t
                 LEFT JOIN ist_audit.users u ON t.user_id = u.id
                 WHERE {where_sql}

@@ -1102,13 +1102,13 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         return autoids_err
     if aid_list is not None:
         from main.ist_core.tools.device.precedent_tools import _load_case_rows
-        root = Path(__file__).resolve().parents[4]
+        user_dir = _get_user_output_dir()
         cases = []
         no_grade: list[str] = []
         stale_grade: list[str] = []
         for aid in aid_list:
             aid = str(aid).strip()
-            xp = root / "workspace" / "outputs" / aid / "case.xlsx"
+            xp = user_dir / aid / "case.xlsx"
             if not xp.is_file():
                 return f"error: autoid {aid} 的 case.xlsx 不存在({xp});该 case 可能没编译成功,先补编/重派 worker"
             # lint 凭证机械门(A 层):每个 case 必须在**当前这份** case.xlsx 上过 emit 的全部
@@ -1151,7 +1151,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         from main.ist_core.tools.device.structural_gate import lint_xlsx_case
         lint_bad: list[str] = []
         for aid in aid_list:
-            xp = root / "workspace" / "outputs" / str(aid).strip() / "case.xlsx"
+            xp = user_dir / str(aid).strip() / "case.xlsx"
             lr = lint_xlsx_case(xp)
             if not lr.ok:
                 lint_bad.append(f"{aid}: " + "; ".join(f"[{it.code}]" for it in lr.violations))

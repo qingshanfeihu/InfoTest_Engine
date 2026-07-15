@@ -186,6 +186,7 @@ class _TraceBuilder:
             "model_name": payload.get("model_name") or tags.get("model_name") or "",
             "node": tags.get("node", ""),
             "phase": "output",
+            "parent_subagent": tags.get("parent_subagent") or None,
         }
         if usage:
             call["input_tokens"] = usage.get("input_tokens") or usage.get("prompt_tokens") or 0

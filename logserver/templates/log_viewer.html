@@ -375,6 +375,7 @@
                         <th>时间</th>
                         <th>用户</th>
                         <th>提问内容</th>
+                        <th>最终回答</th>
                         <th>耗时</th>
                         <th>状态</th>
                         <th>LLM</th>
@@ -385,7 +386,7 @@
                     </tr>
                 </thead>
                 <tbody id="traceTableBody">
-                    <tr><td colspan="10" class="loading">加载中...</td></tr>
+                    <tr><td colspan="11" class="loading">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -889,22 +890,24 @@ function clearTraceFilters() {
 async function loadTraces(page) {
     const f = getTraceFilters();
     const body = document.getElementById('traceTableBody');
-    body.innerHTML = '<tr><td colspan="10" class="loading">加载中...</td></tr>';
+    body.innerHTML = '<tr><td colspan="11" class="loading">加载中...</td></tr>';
     try {
         const d = await api('/api/traces', { page, page_size: 50, ...f });
         if (!d.items.length) {
-            body.innerHTML = '<tr><td colspan="10" class="loading">暂无数据</td></tr>';
+            body.innerHTML = '<tr><td colspan="11" class="loading">暂无数据</td></tr>';
         } else {
             body.innerHTML = d.items.map(r => {
                 const statusCls = r.status === 'done' ? 'trace-badge-done' : r.status === 'error' ? 'trace-badge-error' : 'trace-badge-running';
                 const statusLabel = {done:'完成',error:'错误',running:'运行中',cancelled:'已取消'}[r.status] || r.status;
                 const input = (r.user_input || '').length > 60 ? (r.user_input || '').slice(0, 60) + '...' : (r.user_input || '');
+                const output = (r.llm_output || '').length > 80 ? (r.llm_output || '').slice(0, 80) + '...' : (r.llm_output || '');
                 const err = r.error_count && r.error_count !== '0' ? `<span class="trace-badge trace-badge-error">${r.error_count}</span>` : '-';
                 const rating = r.rating_score != null && r.rating_score > 0 ? r.rating_score : '-';
                 return `<tr onclick="showTraceDetail('${r.trace_id}')">
                     <td>${fmtDt(r.started_at)}</td>
                     <td>${esc(r.username || '')}</td>
                     <td title="${esc(r.user_input || '')}">${esc(input)}</td>
+                    <td title="${esc(r.llm_output || '')}">${esc(output)}</td>
                     <td>${r.duration_ms != null ? (r.duration_ms / 1000).toFixed(1) + 's' : '-'}</td>
                     <td><span class="trace-badge ${statusCls}">${statusLabel}</span></td>
                     <td>${r.llm_count || 0}</td>
@@ -917,7 +920,7 @@ async function loadTraces(page) {
         }
         renderPagination('tracePagination', d.total, page, 50, loadTraces);
     } catch (e) {
-        body.innerHTML = `<tr><td colspan="10" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
+        body.innerHTML = `<tr><td colspan="11" class="loading">加载失败: ${esc(errStr(e))}</td></tr>`;
     }
 }
 
@@ -985,6 +988,91 @@ async function showTraceDetail(traceId) {
                 </div>
                 <div class="trace-section-body">
                     <div class="trace-timeline">${nodePath.map(n => `<span class="trace-node">${esc(n)}</span>`).join('')}</div>
+                </div>
+            </div>`;
+        }
+
+        // Section: 执行轨迹（按调用时间顺序的树形列表）
+        {
+            // 合并所有调用到时间线，用原始数组序做全局排序
+            const timeline = [];
+            llmCalls.forEach((c, i) => timeline.push({type:'llm', _ord:i*10+0, ...c}));
+            kbRetrievals.forEach((c, i) => timeline.push({type:'kb', _ord:i*10+1, ...c}));
+            toolCalls.forEach((c, i) => timeline.push({type:'tool', _ord:i*10+2, ...c}));
+
+            // 按 _ord 排序（同类内 seq 保序，跨类按事件到达顺序）
+            timeline.sort((a, b) => a._ord - b._ord);
+
+            // 按 parent_subagent 分桶，桶内保持时间顺序
+            const mainItems = [];
+            const subItems = {};  // agent_name → []
+            timeline.forEach(item => {
+                const key = item.parent_subagent || '';
+                if (!key) mainItems.push(item);
+                else (subItems[key] = subItems[key] || []).push(item);
+            });
+
+            const fmtItem = (item, indent) => {
+                const pad = '  '.repeat(indent);
+                const prefix = indent ? '│  ' : '';
+                if (item.type === 'llm') {
+                    const tokens = item.input_tokens || item.output_tokens
+                        ? `  [in:${item.input_tokens||0} out:${item.output_tokens||0}]` : '';
+                    return `<div style="padding:3px 0;font-size:12px;font-family:monospace;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(item.model_name||'')} → ${esc(item.node||'')}">${pad}${prefix}🤖 <strong>${esc(item.model_name||'-')}</strong> ${esc(item.node||'')} <span style="color:#888">${item.phase||''}${tokens}</span></div>`;
+                }
+                if (item.type === 'kb') {
+                    const summary = item.output_summary ? `  → ${esc(item.output_summary)}` : '';
+                    return `<div style="padding:3px 0;font-size:12px;font-family:monospace;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(item.display||item.tool_name||'')}">${pad}${prefix}🔍 <strong>${esc(item.tool_name||'-')}</strong> ${esc((item.display||'').replace(item.tool_name+'(','').slice(0,50))}${summary} <span style="color:#888">${item.duration_ms||0}ms</span></div>`;
+                }
+                // tool
+                const summary = item.output_summary ? `  → ${esc((item.output_summary||'').slice(0,60))}` : '';
+                const err = item.is_error ? ' <span style="color:#dc2626">ERROR</span>' : '';
+                return `<div style="padding:3px 0;font-size:12px;font-family:monospace;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(item.display||item.tool_name||'')}">${pad}${prefix}🛠️ <strong>${esc(item.tool_name||'-')}</strong> ${esc((item.display||'').replace(item.tool_name+'(','').slice(0,50))}${summary} <span style="color:#888">${item.duration_ms||0}ms</span>${err}</div>`;
+            };
+
+            // 统计
+            const totalSub = subagentRuns.length;
+            const totalLlm = llmCalls.length;
+            const totalTool = toolCalls.length + kbRetrievals.length;
+            const totalSkill = toolCalls.filter(t => t.tool_name === 'invoke_skill').length;
+
+            // 渲染主 Agent
+            let treeHtml = '';
+            if (mainItems.length) {
+                treeHtml += `<div style="margin-bottom:4px"><strong style="font-size:13px">🔹 主 Agent</strong> <span style="color:#888;font-size:12px">(${mainItems.length} 调用)</span></div>`;
+                treeHtml += `<div style="border-left:2px solid #e0e7ff;margin-left:6px;padding-left:10px;margin-bottom:12px">`;
+                mainItems.forEach(item => { treeHtml += fmtItem(item, 0); });
+                treeHtml += `</div>`;
+            }
+
+            // 渲染每个子进程
+            subagentRuns.forEach((sa, idx) => {
+                const items = subItems[sa.agent_name] || [];
+                const statusCls = sa.status === 'done' ? 'trace-badge-done' : sa.status === 'error' ? 'trace-badge-error' : 'trace-badge-running';
+                const statusLabel = {done:'已完成',error:'失败',running:'进行中'}[sa.status] || sa.status;
+                const skillName = sa.skill_name || sa.agent_name;
+                treeHtml += `<div style="margin-bottom:4px"><strong style="font-size:13px">🔹 子进程 #${idx+1}：${esc(skillName)}</strong> <span class="trace-badge ${statusCls}" style="margin-left:6px">${statusLabel}</span> <span style="color:#888;font-size:12px">(${items.length} 调用)</span></div>`;
+                if (items.length) {
+                    treeHtml += `<div style="border-left:2px solid #e0e7ff;margin-left:6px;padding-left:10px;margin-bottom:12px">`;
+                    items.forEach(item => { treeHtml += fmtItem(item, 0); });
+                    treeHtml += `</div>`;
+                } else {
+                    treeHtml += `<div style="color:#888;font-size:12px;margin-left:16px;margin-bottom:12px">无调用记录</div>`;
+                }
+            });
+
+            html += `<div class="trace-section">
+                <div class="trace-section-header open" onclick="toggleTraceSection(this)">
+                    <span class="arrow">&#9654;</span><h4>执行轨迹</h4>
+                </div>
+                <div class="trace-section-body open">
+                    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px">
+                        <div class="stat-card" style="padding:10px 16px"><div class="label">子进程</div><div class="value" style="font-size:20px">${totalSub}</div></div>
+                        <div class="stat-card" style="padding:10px 16px"><div class="label">Skill 调用</div><div class="value" style="font-size:20px">${totalSkill}</div></div>
+                        <div class="stat-card" style="padding:10px 16px"><div class="label">工具调用</div><div class="value" style="font-size:20px">${totalTool}</div></div>
+                        <div class="stat-card" style="padding:10px 16px"><div class="label">LLM 调用</div><div class="value" style="font-size:20px">${totalLlm}</div></div>
+                    </div>
+                    ${treeHtml}
                 </div>
             </div>`;
         }

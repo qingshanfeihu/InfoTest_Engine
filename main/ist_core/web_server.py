@@ -432,25 +432,27 @@ def _get_user_outputs_dir(session_id: str, token: str) -> Path:
 async def list_files(session_id: str = "", token: str = ""):
     user_dir = _get_user_outputs_dir(session_id, token)
     files = []
-    for f in sorted(user_dir.iterdir()):
-        # 跳过隐藏文件（.gitkeep 等占位/元数据），不作为可下载产物列出
+    for f in sorted(user_dir.rglob("*")):
         if f.is_file() and not f.name.startswith("."):
-            files.append({"name": f.name, "size": f.stat().st_size})
+            rel = f.relative_to(user_dir)
+            files.append({"name": str(rel).replace("\\", "/"), "size": f.stat().st_size})
     return {"files": files}
 
 
 @app.get("/api/download")
 async def download_file(session_id: str = "", token: str = "", name: str = ""):
     user_dir = _get_user_outputs_dir(session_id, token)
-    if not name or "/" in name or "\\" in name or ".." in name:
+    if not name or ".." in name:
         raise HTTPException(400, "非法文件名")
+    # 统一用 / 分隔，拒绝 Windows 反斜杠绕过
+    name = name.replace("\\", "/")
     target = (user_dir / name).resolve()
     # 双保险：解析后必须仍在用户目录内
-    if not str(target).startswith(str(user_dir.resolve()) + os.sep):
+    if not str(target).startswith(str(user_dir.resolve()) + os.sep) and target != user_dir.resolve():
         raise HTTPException(403, "路径越权")
     if not target.is_file():
         raise HTTPException(404, "文件不存在")
-    return FileResponse(target, filename=name)
+    return FileResponse(target, filename=target.name)
 
 
 def _set_winsize(fd: int, cols: int, rows: int):

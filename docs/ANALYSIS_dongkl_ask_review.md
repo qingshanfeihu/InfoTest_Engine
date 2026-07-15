@@ -192,3 +192,29 @@ dongkl 续跑推来一批 attribution,记录三个信号:
 2/2 误)。可能因这几案症状"结构化"(RR 命中分布/语法拒绝)比"dig 无输出/command not found"
 更难被表层误读——反向印证发现 9/10 的根因:**症状越像"环境不通",attributor 越易误判 E 层,
 越需机械反证兜底**。仍只记录未改代码。
+
+### 子集复测判定(2026-07-15,续 — 揭出两个真问题)
+
+7 案子集复测 verdict:778012 **fail** / 593516 **pass** / 572741 fail / 994838 pass /
+994869 fail / 105941 pass / 210998 **broken**;writeback 593516+105941+994838。
+
+**问题 A:593516 与 778012 同判 RR-轮转缺陷候选,复测却 pass/fail 分岔——更正上节"两案同型
+真缺陷"的记载(过粗)。**
+- 778012:dig **全部**命中 p1(Hit:4),完全不轮转 → fail(签名复现,consistent with defect)。
+- 593516:上轮已是 **9:1** 分布(9×p1 + 1×p3),本轮 **pass 并 writeback**。
+- ∴ 两案非同 severity:778012 完全卡死、593516 部分轮转。**dig-命中分布断言对 RR 采样方差
+  敏感**——部分轮转的案在采样够散时会 pass。
+- **隐患(重):593516 部分轮转即 pass 并写回 verified**,可能把 778012 暴露的"RR 未完全
+  轮转"缺陷在先例/footprint 里**洗白成正常**。这正是 RESEARCH 文档「AutoSpec repair-
+  overfitting / canonical-flow 信息含量门」警示的形态:**采样敏感断言 + 写回 = 把 flaky
+  pass 编码成事实**。可修方向(记录,不改):RR 类断言不该用"某成员命中次数"的采样阈值,应
+  绑"轮转集合 = 期望成员集"(集合相等,run13/16 同款 `_mode: strict` 思路),消除采样方差。
+
+**问题 B:210998 = broken(第三态)——RESEARCH P0「Errored/Blocked 第三态」的活实例。**
+G 层 reflow(filter 为 DNS 类型时 host_name 须空)后产出的案既非 clean pass 也非 fail,而是
+broken。印证 `AUDIT_design_theory_gaps` §1 头号缺口(verdict 二值 vs 采集层多值)+ pyATS 7 码
+结果代数的现实需要。**broken 应走独立处置**(不重编、不写回、单独呈报);当前折叠进二值有被
+误当 fail 触发无谓重编的风险。这是本轮为 P0 借鉴攒下的**活案例**(专利 F2/F5 的 motivating
+example 之一)。
+
+仍只记录未改代码。

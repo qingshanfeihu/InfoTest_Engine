@@ -87,6 +87,29 @@ def test_eval1_strict_schema_locks_nested_fields():
     assert "$ref" not in json.dumps(params)
 
 
+def test_hypothesis_field_no_preset_default(lr_fixture):
+    """F1 面板不预设默认(定稿 §B / 判例血统 (45)):hypothesis 契约呈报三项平摆事实、
+    不推荐某侧、不索取"哪侧该赢";机生同族 verified 注明非独立佐证。且中性面板仍可落盘。"""
+    from main.ist_core.tools.device.ask_panel import AskPanelArgs
+    desc = AskPanelArgs.model_fields["hypothesis"].description.lower()
+    # 旧的"选边推荐"式索取措辞已去除
+    assert "which side should win" not in desc and "should win" not in desc
+    # 新契约:不预设默认 + 平摆 + 机生血统非独立佐证
+    assert "do not preset a default" in desc
+    assert "not independent corroboration" in desc
+    ask_desc = AskPanelArgs.model_fields["ask"].description.lower()
+    assert "neutral" in ask_desc and "favour one side" in ask_desc
+    # 中性 hypothesis 的面板照常落盘(不因去默认而拒绝)
+    lr, doc = lr_fixture
+    out = _call(lr, sides=[
+        _side_dev(),
+        {"source_ref": str(doc), "quote": "slb real dns <name> <ip> <port>",
+         "anchor": "v10.2"}],
+        retrieval_receipt=[{"slug": "manual_declared", "outcome": "miss"}],
+        hypothesis="手册记为注册；设备实测接受；前轮为机生卷、未独立验——三项并陈")
+    assert out.startswith("ask panel filed")
+
+
 def test_eval2_paraphrased_quote_rejected_with_closest_line(lr_fixture):
     """②转述被拒且反馈含最近似行(poka-yoke 自纠素材)。"""
     lr, doc = lr_fixture
@@ -131,6 +154,10 @@ def _fs_failed_with_panel(tmp_path, aid=A, answered=False):
     pdir.mkdir(parents=True, exist_ok=True)
     (pdir / "ask_panel.json").write_text(json.dumps({
         "autoid": aid, "conflict_shape": "expected_vs_observed",
+        # intent_signature/version_family 是 submit_ask_panel 落盘的必填字段(生产形态);
+        # 缺它们会让 _latest_panel→write_adjudication 的判例键不全、静默 warning 失败——
+        # fixture 补齐,让 confirm/correct 的判例写回(成对机制)可被真实验证
+        "intent_signature": "sdns-host-method-delete", "version_family": "10.5",
         "sides": [{"source_ref": "device_context", "quote": "q1", "anchor": None},
                   {"source_ref": "m.md", "quote": "q2", "anchor": None}],
         "retrieval_receipt": [{"slug": "manual_declared", "outcome": "miss"}],
@@ -147,7 +174,7 @@ def _fs_failed_with_panel(tmp_path, aid=A, answered=False):
     ]
     if answered:
         fs.append({"ev": "decision", "aid": aid, "question_id": f"panel:{aid}:1",
-                   "answer": "确认,按此继续", "token": "confirm"})
+                   "answer": "预期以实机为准", "token": "correct"})   # 中性面板:用户裁决=correct(ruling 权威)
     return fs
 
 
@@ -282,11 +309,15 @@ def test_ask_node_panel_confirm_lands_token(tmp_path, monkeypatch):
     monkeypatch.setattr(sh, "outputs_root", lambda: tmp_path / "outputs")
     monkeypatch.setattr(sh, "facts_path", lambda s: facts_file)
     monkeypatch.setattr(sh, "manifest", lambda s: {"cases": [{"autoid": A}]})
+    # 判例写回重定向到 tmp（默认写 repo knowledge/adjudications/，测试不得污染）
+    import main.ist_core.tools.knowledge.adjudication_store as adj_store
+    adj_dir = tmp_path / "adjudications"
+    monkeypatch.setattr(adj_store, "adjudications_root", lambda: adj_dir)
     captured = {}
 
     def _fake_interrupt(payload):
         captured.update(payload)
-        return {A: "确认,按此继续"}
+        return {A: "预期以实机为准"}
 
     monkeypatch.setattr(N, "interrupt", _fake_interrupt)
     N.ask_contradiction({"out_name": "b1"})
@@ -295,8 +326,12 @@ def test_ask_node_panel_confirm_lands_token(tmp_path, monkeypatch):
     item = next(c for c in captured["cases"] if c["autoid"] == A)
     assert item["panel"]["hypothesis"] == "按设备行为改预期"   # 面板全文进 payload
     fs2 = F.load_facts(facts_file)
-    dec = [f for f in fs2 if f.get("ev") == "decision" and f.get("token") == "confirm"]
+    # 中性面板:选"预期以实机为准"→ correct(裁决=意图最高权威;confirm 因 Z 中性化已退役)
+    dec = [f for f in fs2 if f.get("ev") == "decision" and f.get("token") == "correct"]
     assert dec and dec[0]["question_id"] == f"panel:{A}:1"
+    # 成对机制护栏:correct 裁决必落判例(下批同键免问)。panel 缺 intent_signature/
+    # version_family 时 write_adjudication 会静默 warning 失败——fixture 补齐后此断言守住它
+    assert list(adj_dir.glob("*.md")), "correct 裁决未写回判例(write_adjudication 静默失败=成对机制半断)"
 
 
 def test_answer_token_privilege_words_short_command_only():
@@ -327,3 +362,30 @@ def test_question_rendering_no_internal_terms_leak(tmp_path):
                      "cap_reached", "S_", "frozen", "rerun_isolated", "token"):
             assert term not in text, (kind, term)
         assert len(q["header"]) <= 12
+
+
+def test_panel_rendering_no_preset_default_option():
+    """S2-HIGH(#21;定稿 §B/(45)(46)):ask_panel 中性化后渲染层同步去预设首选项——
+    面板不渲"引擎的理解"、无"确认按此继续"默认项;两选项各指一侧(实机为准/缺陷)对称呈报;
+    confirm/defect token 仍有效(下游 briefs/adjudication 不变)。成对机制跨所有权补齐。"""
+    q = ET._contradiction_question({
+        "autoid": A, "kind": "panel", "title": "",
+        "panel": {"conflict_shape": "manual_vs_device",
+                  "sides": [{"source_ref": "device_context", "quote": "no-op-still-there"},
+                            {"source_ref": "manual.md", "quote": "该命令用于删除"}],
+                  "retrieval_receipt": [{"slug": "s", "outcome": "hit_conflicting"}],
+                  "hypothesis": "手册记为删除;实机为 no-op;前轮机生未独立验——三项并陈",
+                  "ask": "该以哪一方为准?"}})
+    labels = [o["label"] for o in q["options"]]
+    # 去"引擎的理解"标 + 去"确认按此继续"默认首选项(失所指的成对机制)
+    assert "引擎的理解" not in q["question"]
+    assert "确认,按此继续" not in labels and not any("按此继续" in l for l in labels)
+    assert not q["header"].startswith("确认")             # header 也不再隐含 confirm-default
+    # 两侧对称呈报:实机侧 + 手册侧(缺陷)各一选项;双源 verbatim 都进题面(平摆)
+    assert any("实机" in l for l in labels) and any("缺陷" in l for l in labels)
+    assert "no-op-still-there" in q["question"] and "该命令用于删除" in q["question"]
+    # token 下游有效:correct(裁决=意图最高权威,Z 中性后取代 confirm)/ defect
+    toks = set((q.get("_tokens") or {}).values())
+    assert "correct" in toks and "defect" in toks
+    # 中性化后 confirm(按呈报理解 Z 编)退役——面板不再产 confirm token
+    assert "confirm" not in toks

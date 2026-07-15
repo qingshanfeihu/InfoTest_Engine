@@ -17,7 +17,7 @@ from tests.ist_core.compile_engine_v8.test_broken_third_state import rec_env, A,
 def test_writeback_failure_lands_failed_fact(rec_env, monkeypatch):
     """式②(坑#4):写回失败不落成功事实——落 writeback_failed,台账不为失败背书。"""
     from main.ist_core.compile_engine_v8 import nodes as N
-    monkeypatch.setattr(N, "_writeback_one", lambda aid, ref: ["precedent", "footprint"])
+    monkeypatch.setattr(N, "_writeback_one", lambda aid, ref, provisional=False: ["precedent", "footprint"])
     rec_env["lr"].write_text(json.dumps([{"autoid": A, "verdict": "pass"}]),
                              encoding="utf-8")
     N.reconcile(rec_env["state"])
@@ -27,10 +27,44 @@ def test_writeback_failure_lands_failed_fact(rec_env, monkeypatch):
     assert wf and set(wf[-1]["targets"]) == {"precedent", "footprint"}
 
 
+def test_writeback_threads_provisional_keeps_footprint_device_verified(monkeypatch):
+    """S5(§18.15-A / K (45)):子集轮 provisional 贯通到先例写回(检索期「用前先核」);
+    footprint on_device_passed 恒 True——子集轮语法也真上机跑过,device_verified 不因未
+    终验而降级(误降会断 device_verified 第二权威源拉取)。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    from main.ist_core.tools.device import precedent_tools as PT
+    from main.ist_core.tools.knowledge import footprint_writeback as FW
+    cap: dict = {}
+
+    class _WB:
+        @staticmethod
+        def func(autoid, last_run_path, provisional=None):
+            cap["prov"] = provisional
+            return "written back: ok"
+
+    class _FP:
+        @staticmethod
+        def func(autoid, provenance_path, on_device_passed=True):
+            cap["odp"] = on_device_passed
+            return "ok"
+
+    monkeypatch.setattr(PT, "compile_writeback", _WB)
+    monkeypatch.setattr(FW, "compile_footprint_writeback", _FP)
+
+    N._writeback_one(A, "workspace/outputs/x/last_run.json", provisional=True)
+    assert cap["prov"] is True, "子集轮 provisional 应贯通到先例写回"
+    assert cap["odp"] is True, "footprint 语法真上机跑过,不因子集/未终验降 device_verified"
+
+    cap.clear()
+    N._writeback_one(A, "workspace/outputs/x/last_run.json", provisional=False)
+    assert cap["prov"] is False, "终验轮先例标非 provisional"
+    assert cap["odp"] is True
+
+
 def test_writeback_partial_failure_split(rec_env, monkeypatch):
     """部分失败:成功目标落 writeback,失败目标落 writeback_failed——按真发生记账。"""
     from main.ist_core.compile_engine_v8 import nodes as N
-    monkeypatch.setattr(N, "_writeback_one", lambda aid, ref: ["footprint"])
+    monkeypatch.setattr(N, "_writeback_one", lambda aid, ref, provisional=False: ["footprint"])
     rec_env["lr"].write_text(json.dumps([{"autoid": A, "verdict": "pass"}]),
                              encoding="utf-8")
     N.reconcile(rec_env["state"])
@@ -44,7 +78,7 @@ def test_writeback_partial_failure_split(rec_env, monkeypatch):
 def test_rollback_failure_lands_failed_fact(rec_env, monkeypatch):
     """式②:回滚失败=半毒残留在库,落 rollback_failed 非 rollback。"""
     from main.ist_core.compile_engine_v8 import nodes as N
-    monkeypatch.setattr(N, "_writeback_one", lambda aid, ref: [])
+    monkeypatch.setattr(N, "_writeback_one", lambda aid, ref, provisional=False: [])
     monkeypatch.setattr(N, "_rollback_one", lambda aid: ["precedent"])
     F.append_facts(rec_env["facts"], [
         _v("pass", ctx="subset", rid="r0"),

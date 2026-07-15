@@ -46,11 +46,28 @@ class _StubApp:
         pass
 
 
+class _StubAskPanel:
+    """最小 ask_user 固定面板 —— 记 update/clear 内容，供断言面板是否复活。"""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+        self.cleared = 0
+
+    def update(self, lines) -> None:
+        self.lines = list(lines)
+
+    def clear(self) -> None:
+        self.lines = []
+        self.cleared += 1
+
+
 def _bare_app() -> IstInkApp:
     """造裸实例，只挂 _replay_snapshot / _render_content_block 依赖的属性。"""
     app = object.__new__(IstInkApp)
     app._transcript = _StubTranscript()
     app._app = _StubApp()
+    app._ask_user = None
+    app._ask_user_panel = _StubAskPanel()
     app._GREEN = app._RED = app._CYAN = app._BOLD = app._DIM = app._RESET = ""
     app._ai_stream_idx = -1
     app._stream_commit_idx = -1
@@ -192,3 +209,48 @@ def test_ctrl_t_folds_all_main_thinking_not_just_last() -> None:
     for t in thoughts:  # 关键:3 段全文全部折成占位,一条不剩
         assert not any(t in l for l in lines), (t, lines)
     assert sum(1 for l in lines if "ctrl+t to expand" in l) == 3, lines
+
+
+# ── ask_user 面板答后残留(TODO_tui)回归 ─────────────────────────────────────
+
+def _ask_user_block(qid: str, *, answered: bool, answers: dict | None = None):
+    from main.ist_core.tui.message_model import make_payload_block, BLOCK_ASK_USER
+    payload = {
+        "question_id": qid,
+        "questions": [{"question": "产品版本?", "header": "版本",
+                       "options": [{"label": "10.5"}, {"label": "10.4"}]}],
+    }
+    if answered:
+        payload["answered"] = True
+        payload["answers"] = answers or {"产品版本?": "10.5"}
+    return make_payload_block(BLOCK_ASK_USER, payload)
+
+
+def test_replay_answered_ask_user_does_not_resurrect_panel() -> None:
+    """答后残留根因回归:snapshot 里的**已答** ask_user 块,全量重放不复活面板
+    (只留一行「已回答」摘要)。旧版 _replay_snapshot 重走该块→_begin_ask_user→
+    面板被拉回、遮挡后续问询。"""
+    app = _bare_app()
+    blk = _ask_user_block("q1", answered=True, answers={"产品版本?": "10.5"})
+    msg = Message(uuid="m:0", role="system", content=(blk,))
+    app._prev_snapshot = MessageSnapshot(messages=(msg,), status="done")
+
+    app._replay_snapshot()
+
+    assert app._ask_user is None                       # 面板不复活
+    assert not app._ask_user_panel.lines               # 固定面板为空
+    assert any("已回答" in l and "10.5" in l for l in app._transcript.lines), \
+        app._transcript.lines
+
+
+def test_replay_unanswered_ask_user_still_shows_panel() -> None:
+    """对照:**未答** ask_user 块重放仍进入问答模式(面板该在就在),不被兜底重置误清。"""
+    app = _bare_app()
+    blk = _ask_user_block("q2", answered=False)
+    msg = Message(uuid="m:0", role="system", content=(blk,))
+    app._prev_snapshot = MessageSnapshot(messages=(msg,), status="done")
+
+    app._replay_snapshot()
+
+    assert app._ask_user is not None                   # 未答 → 面板重建
+    assert app._ask_user_panel.lines                   # 面板有内容(渲染了问题)

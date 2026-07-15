@@ -37,8 +37,11 @@ _MAX_ASK_ROUNDS = 8      # ask 分批上限(每批 ≤4 题;面板硬限)
 # ── 注入点(生产默认真实实现;测试替换) ───────────────────────────────────────
 
 def _probe_fn(cmd: str) -> str:
+    # bed 残留探针专用:annotate=False 取**原始设备事实**——dev_probe 对空回显附的时机语义
+    # note 是给 worker 的便利提示、非床内容,注进来会被 bed_check 误当"分区配置残留"
+    # (回归#3 yzg 实证;修法A 分离关注点:worker 拿带 note 的,bed 拿原始的)。
     from main.ist_core.tools.device.run_case import _do_probe
-    return _do_probe(cmd)
+    return _do_probe(cmd, annotate=False)
 
 
 def _exec_fn(cmd: str) -> str:
@@ -343,7 +346,8 @@ def author(state: dict) -> dict:
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
     pending = [a for a, c in vw["cases"].items()
-               if c["status"] in (V.S_PENDING, V.S_FAILED, V.S_CONTRADICTED)]
+               if c["status"] in (V.S_PENDING, V.S_FAILED, V.S_CONTRADICTED,
+                                   V.S_BROKEN_ERRORED)]   # §④:Errored 子类走 reflow 重写
     # fail/矛盾案只重编 reflow/frozen 处置且未封顶的(归因定向;rerun_isolated/
     # transient 不重编——由 merge 收进待验集直接复跑);矛盾≥2 的不在此处理(ask 边)
     max_rounds = int(state.get("max_rounds") or 3)
@@ -353,7 +357,8 @@ def author(state: dict) -> dict:
         if aid in panel_wait:
             continue   # ought-欠定呈报未获答案:重编等用户确认(路由先经 ask 边,此为保险)
         mine = [f for f in fs if f.get("aid") == aid]
-        if vw["cases"][aid]["status"] in (V.S_FAILED, V.S_CONTRADICTED):
+        if vw["cases"][aid]["status"] in (V.S_FAILED, V.S_CONTRADICTED,
+                                          V.S_BROKEN_ERRORED):
             if F.contradictions(mine, aid) >= 2:
                 continue                      # 归 ask_contradiction 边
             att = [f for f in mine if f.get("ev") == "attribution"]
@@ -979,6 +984,9 @@ def reconcile(state: dict) -> dict:
             "result": _RESULT_MAP.get(str(rec.get("verdict")), "not_run"),
             "artifact": sh.artifact_fingerprint(aid), "volume": volume,
             "signatures": list(rec.get("_fail_signatures") or []),
+            # pyATS 七码子分类透传(§④):digest(batch_tools)按协议级硬事实打的
+            # broken_subtype(errored/blocked;未打=None→视图落 S_BROKEN 复跑,安全默认)
+            "broken_subtype": rec.get("broken_subtype"),
             "bed": str(state.get("bed_host") or ""),
             "build": str(state.get("device_build") or ""),
             "evidence_ref": lr_ref,
@@ -986,30 +994,84 @@ def reconcile(state: dict) -> dict:
     r = F.reconcile(fs, verdicts)
     sh.append(state, r["append"])
     fs2 = sh.load_facts(state)
-    # broken 连击护栏:同案同卷面连续≥2 轮没跑成(broken/not_run)——复跑救不了
-    # (每轮同因),升级人工;单次 not_run 照常入复跑集(级联崩溃的受害者复跑常能过)
+    # broken 连击护栏:同 **case** 连续≥2 轮没跑成(broken/not_run,pass/fail 重置)——
+    # 复跑救不了(每轮同因),升级人工;单次 not_run 照常入复跑集(级联崩溃的受害者
+    # 复跑常能过)。**per-case 非 per-artifact**(回归#2 修 C,DESIGN_dongkl_finalization
+    # §⑥ / A
+    # 理论 (44) 终止性):reflow 每轮换 artifact,per-artifact 计数被重置成 1、非收敛
+    # broken 恒占 live 饿死 gather(yzg 实证:2 案 not_run→reflow→not_run streak 恒 1);
+    # 改按 aid 累计跨 artifact 的连续未跑成——这**是一次降秩**(复跑预算耗尽→未决类数
+    # −1),让 (44) broken 纳入 (40) §2.12.1 的有限步到终态。
     esc_facts = []
     for v in verdicts:
         if v["result"] not in ("broken", "not_run"):
             continue
         streak = 0
         for f in reversed([f for f in fs2 if f.get("ev") == "verdict"
-                           and str(f.get("aid")) == v["aid"]
-                           and str(f.get("artifact")) == v["artifact"]]):
+                           and str(f.get("aid")) == v["aid"]]):
             if f.get("result") in ("broken", "not_run"):
                 streak += 1
             else:
-                break
+                break        # pass/fail=有推进,重置连击(跨 artifact 只被真进展打断)
         if streak >= 2 and not any(f.get("ev") == "escalated"
                                    and str(f.get("aid")) == v["aid"] for f in fs2):
             esc_facts.append({"ev": "escalated", "aid": v["aid"],
                               "reason": f"case did not execute for {streak} consecutive "
-                                        "runs (broken/not_run) — rerun cannot help, "
-                                        "needs human attention"})
+                                        "runs (broken/not_run) across reruns/reflows — "
+                                        "rerun cannot help, needs human attention"})
     if esc_facts:
         sh.append(state, esc_facts)
         fs2 = sh.load_facts(state)
         sh.emit(f"⚠ {len(esc_facts)} 案连续多轮未跑成——复跑无效,升级人工")
+
+    # pyATS 七码子分类机械归因(§18.1 broken 全链 / DESIGN_dongkl_finalization §④):
+    # 按裁决携带的协议级硬码 broken_subtype 给 errored/blocked 落**机械**归因——不调
+    # LLM(守 (44):broken 不深归因;细分基于协议物理码非语义猜测)。errored 据此经
+    # diagnose→author 重写(不空跑同一确定性缺陷),blocked 据此进 env_confirm_waiting
+    # 呈报(死设备复跑无益)。undetermined(not_run/stale/协议级分不清)不落此归因→
+    # 维持 S_BROKEN 复跑+streak 升级(安全默认)。run_id 绑 verdict run,与 attribute
+    # 幂等键同构(每裁决一次,不重复写)。
+    sub_att: list[dict] = []
+    for v in verdicts:
+        if v.get("result") not in ("broken", "not_run"):
+            continue
+        sub = str(v.get("broken_subtype") or "")
+        if sub not in ("errored", "blocked"):
+            continue
+        if any(f.get("ev") == "attribution" and f.get("run_id") == v["run_id"]
+               for f in fs2):
+            continue
+        rec2 = next((rr for rr in data
+                     if str(rr.get("autoid")) == v["aid"]), {}) or {}
+        reason = str(rec2.get("broken_reason") or "")[:400]
+        mine_v = [f for f in fs2 if f.get("aid") == v["aid"]]
+        if sub == "errored":
+            disp = "reflow"
+            fixd = (f"pyATS Errored (protocol-hard signal: "
+                    f"{reason or 'assertion contradicted by aligned device evidence / execution failure'}). "
+                    "Re-running the same volume re-hits the same deterministic defect — "
+                    "rewrite the assertion/step (reflow), do not burn device rounds.")
+        else:  # blocked
+            disp = "env_blocked"
+            fixd = (f"pyATS Blocked (protocol-hard signal: "
+                    f"{reason or 'device unreachable'}). Re-running cannot revive a "
+                    "downed device — surface for environment restore, then resume.")
+        sub_att.append({
+            "ev": "attribution", "aid": v["aid"],
+            "round": F.rounds_used(mine_v, v["aid"]),
+            "run_id": v["run_id"], "layer": "E", "disposition": disp,
+            "h_position": "none", "fix_direction": fixd,
+            "evidence": reason or sub, "mechanical": True,
+            "broken_subtype": sub})
+    if sub_att:
+        sh.append(state, sub_att)
+        fs2 = sh.load_facts(state)
+        _n_err = sum(1 for a in sub_att if a["disposition"] == "reflow")
+        _n_blk = len(sub_att) - _n_err
+        if _n_err:
+            sh.emit(f"⚙ {_n_err} 案协议级 Errored(断言被对齐证据反证/执行失败)——机械判 reflow 重写")
+        if _n_blk:
+            sh.emit(f"⚙ {_n_blk} 案协议级 Blocked(设备不可达)——机械判 env 呈报")
 
     # 结局审计:每条裁决有显式结局(结构保证);写回/回滚随视图变化执行
     wb_facts: list[dict] = []
@@ -1022,7 +1084,7 @@ def reconcile(state: dict) -> dict:
             done = any(f.get("ev") == "writeback" and f.get("voucher_run") == last.get("run_id")
                        for f in fs2)
             if not done:
-                wb_failed = _writeback_one(aid, lr_ref) or []
+                wb_failed = _writeback_one(aid, lr_ref, provisional=(ctx != F.CTX_DELIVERY)) or []
                 ok_targets = [t for t in ("precedent", "footprint") if t not in wb_failed]
                 if ok_targets:
                     wb_facts.append({"ev": "writeback", "aid": aid,
@@ -1071,13 +1133,18 @@ def reconcile(state: dict) -> dict:
     return {"phase_status": "ok", **sh.counts_update(state, fs3)}
 
 
-def _writeback_one(aid: str, lr_ref: str) -> list[str]:
+def _writeback_one(aid: str, lr_ref: str, provisional: bool = False) -> list[str]:
     """真 PASS 双写回。返回失败目标清单(INV-11 式②,坑#4):失败不再静默——
-    调用方据此落 writeback_failed 事实,台账只为真发生的动作背书。"""
+    调用方据此落 writeback_failed 事实,台账只为真发生的动作背书。
+
+    provisional(写回像记忆,§18.15-A / K (45)):True=子集轮过、未经整卷终验确认——旁挂进
+    先例存储供检索期「用前先核」。footprint G 段语法是真上机跑通的(子集轮也在设备上跑过),
+    device_verified 不因子集/终验而降级,故 on_device_passed 恒 True——provisional 只标先例
+    案级可信度,不改单命令语法的已验证事实。"""
     failed: list[str] = []
     try:
         from main.ist_core.tools.device.precedent_tools import compile_writeback
-        out = compile_writeback.func(autoid=aid, last_run_path=lr_ref)
+        out = compile_writeback.func(autoid=aid, last_run_path=lr_ref, provisional=provisional)
         if str(out).startswith("error"):
             failed.append("precedent")
     except Exception:  # noqa: BLE001
@@ -2175,6 +2242,25 @@ def closing(state: dict) -> dict:
     from main.ist_core.compile_engine_v8 import render as RD
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
+    # 收口前置门兜底(回归#2 修 B,§16 批末必有聚合点 / §18.2 式③不静默):到 closing
+    # 仍有未答欠定案(post-ask 路径 dismiss/非交互零答,或流失于极端错误)——落显式
+    # awaiting_user_unasked 事实,禁静默吞。区分「从没被问」(无 ask_shown)与「问过没答」。
+    _await = [a for a, c in vw["cases"].items() if c["status"] == V.S_AWAITING_USER]
+    _already = {str(f.get("aid")) for f in fs if f.get("ev") == "awaiting_user_unasked"}
+    _await = [a for a in _await if a not in _already]
+    if _await:
+        _shown = {str(f.get("aid")) for f in fs if f.get("ev") == "ask_shown"}
+        _never = [a for a in _await if a not in _shown]
+        sh.append(state, [{"ev": "awaiting_user_unasked", "aid": a,
+                           "shown": a in _shown,
+                           "reason": ("decision panel shown but left unanswered "
+                                      "(dismissed/non-interactive)" if a in _shown else
+                                      "reached closing without being shown a decision panel")}
+                          for a in _await])
+        fs = sh.load_facts(state)
+        if _never:
+            sh.emit(f"⚠ {len(_never)} 个欠定案收口前从未被问到——已如实入账(非静默),"
+                    "下批同参可续问")
     out_name = str(state.get("out_name"))
     mdir = sh.outputs_root() / out_name
     # 自愈环:fail 终态/升级案观察 uncertain 入库(复用 V6 已验收的入库器)

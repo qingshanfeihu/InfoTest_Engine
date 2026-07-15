@@ -36,6 +36,8 @@ class V8State(TypedDict, total=False):
     n_failed_actionable: int  # 失败/矛盾且不在任何问询等待集(run17:路由「有活」判据,§16.6)
     n_subset_verified: int
     n_broken: int
+    n_broken_errored: int    # pyATS Errored 子类:命令畸形/断言被反证→reflow(§④)
+    n_broken_blocked: int    # pyATS Blocked 子类:设备不可达→env 呈报(§④)
     n_deliverable: int
     n_contradicted: int
     n_settled_bad: int       # escalated + failed_terminal

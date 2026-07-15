@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from main.ist_core.tui.message_model import (
+    BLOCK_ASK_USER,
     BLOCK_EVIDENCE,
     BLOCK_HIL_REQUEST,
     BLOCK_PHASE_MARKER,
@@ -511,3 +512,38 @@ def test_fork_cards_interleaved_with_normal_messages_keep_index():
     r.dispatch(_cards_evt(5, {"event": "tool", "fork_id": "f1", "ts": 3.0,
                               "tool": "fs_grep", "arg": "p", "n_calls": 2}))
     assert len(r.snapshot().messages) == n, "原地更新不增消息"
+
+
+# ── ask_user 生命周期回边(TODO_tui:答后残留根因) ──────────────────────────
+
+def test_ask_user_answered_marks_block_answered():
+    """ask_user_answered 回边:按 question_id 把 snapshot 里那条 ask_user 块**原位**标
+    answered + answers(生命周期对称:问了/答了都进 snapshot,供全量重放渲折叠态而非
+    复活面板)。"""
+    r = MessageReducer()
+    snaps = []
+    r.subscribe(snaps.append)
+
+    r.dispatch(_evt("ask_user_request", 1,
+                    payload={"question_id": "qX", "questions": [{"question": "v?"}]}))
+    blocks = [b for m in snaps[-1].messages for b in m.content if b.type == BLOCK_ASK_USER]
+    assert len(blocks) == 1 and not blocks[0].payload.get("answered")
+
+    r.dispatch(_evt("ask_user_answered", 2,
+                    payload={"question_id": "qX", "answers": {"v?": "10.5"}}))
+    blocks = [b for m in snaps[-1].messages for b in m.content if b.type == BLOCK_ASK_USER]
+    assert len(blocks) == 1                                   # 原位标记,不新增块
+    assert blocks[0].payload.get("answered") is True
+    assert blocks[0].payload.get("answers") == {"v?": "10.5"}
+
+
+def test_ask_user_answered_unknown_qid_is_noop():
+    """未知 question_id 的 answered 事件 = no-op(不崩、不误改别的 ask_user 块)。"""
+    r = MessageReducer()
+    snaps = []
+    r.subscribe(snaps.append)
+    r.dispatch(_evt("ask_user_request", 1,
+                    payload={"question_id": "qX", "questions": [{"question": "v?"}]}))
+    r.dispatch(_evt("ask_user_answered", 2, payload={"question_id": "NOPE", "answers": {}}))
+    blocks = [b for m in snaps[-1].messages for b in m.content if b.type == BLOCK_ASK_USER]
+    assert len(blocks) == 1 and not blocks[0].payload.get("answered")

@@ -796,6 +796,15 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                         "block; neither the pass nor the fail is trustworthy here")
                 if _wa_note:
                     rec["window_audit"] = _wa_note
+                # pyATS 七码子分类(DESIGN_dongkl_finalization §④):给 broken 打协议级
+                # 硬码 broken_subtype——引擎侧(views/reconcile)据此细分处置。这里只认
+                # **已机械判定**的协议信号,不做语义猜测(守 (44)):
+                #   window-audit 失真(_dist:断言被对齐证据反证,确定性缺陷)
+                #   / 执行失败标记(_anom:exec-failure/裸 ^ 语法拒绝)= Errored → reflow 重写;
+                #   其余(not_run/stale/协议级分不清)留空 → 引擎落 S_BROKEN 复跑(安全默认);
+                #   device_unreachable(承载链探测,下方)覆盖为 blocked → env 呈报。
+                if verdict == "broken" and (_dist or _anom):
+                    rec["broken_subtype"] = "errored"
                 _sus = (_prog_state.get("timeout_suspects") or {}).get(autoid)
                 if _sus:
                     rec["timeout_suspect_s"] = _sus   # 心跳同案超阈(§18.5,hang 嫌疑)
@@ -814,6 +823,9 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
                         if r["verdict"] != "pass":
                             r["verdict"] = "broken"
                             r["device_unreachable"] = True
+                            # pyATS Blocked 子类(§④):设备不可达 → env 呈报(复跑救不了
+                            # 死设备)。覆盖此前可能打的 errored(承载链第零层优先)。
+                            r["broken_subtype"] = "blocked"
                             r["broken_reason"] = (
                                 "device unreachable (ping 100% loss from jumphost) — "
                                 "this failure is a downstream symptom of device loss, "

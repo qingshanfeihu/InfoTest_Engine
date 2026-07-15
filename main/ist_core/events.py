@@ -36,6 +36,7 @@ EventKind = Literal[
     "hil_request",
     "hil_response",
     "ask_user_request",
+    "ask_user_answered",
     "finding_written",
     "run_error",
     "error",

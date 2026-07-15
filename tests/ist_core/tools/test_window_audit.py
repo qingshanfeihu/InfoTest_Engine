@@ -109,3 +109,24 @@ def test_bad_regex_pattern_falls_back_literal():
     apv = "APV(config)#show x\n[broken( yes\n\nAPV(config)#exit\n"
     dist, _ = _window_audit(inner, {"apv.txt": apv})
     assert any(d["kind"] == "false_fail" for d in dist)
+
+
+# dongkl 2026-07-15 210998 真实形态(§18.15-C / DESIGN_dongkl_finalization §④ 测试锚):
+# worker 把 host 改成空串 → show statistics sdns query "" all A;断言 pattern 前导-\n
+# 过锚(`\nA Record Statistics:`),框架读窗判 fail,但旁路对齐块确含 "A Record
+# Statistics: 1" → false_fail 失真 → 降 broken。取自 dongkl__sub3/last_run.json 的
+# window_distortion 逐字重建(evidence "A Record Statistics: 1" 与盘上一致)。
+def test_false_fail_statistics_empty_host_210998():
+    inner = ('2026-07-15 18:15:23 172.16.35.70 - sends command in config: '
+             'show statistics sdns query "" all A\n'
+             '2026-07-15 18:15:23 #### Fail Num 1: fail to find \\nA Record Statistics: in: \n')
+    apv = ('APV(config)#show statistics sdns query "" all A\n'
+           '\n'
+           'A Record Statistics: 1\n'
+           '\n'
+           'APV(config)#\n')
+    dist, _ = _window_audit(inner, {"apv_172.16.35.70.txt": apv})
+    hit = [d for d in dist if d["kind"] == "false_fail"
+           and 'show statistics sdns query' in d["cmd"]]
+    assert hit, dist
+    assert hit[0]["evidence"].strip() == "A Record Statistics: 1"

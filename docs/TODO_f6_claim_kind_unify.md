@@ -24,6 +24,13 @@
 
 ## 修法(推荐:下游改认盖章,不改工具)
 
+> **[已被 re-key 取代 2026-07-15]** 本节的「下游改认盖章」是当时提案;实际落地走了更通用的
+> **equivalent-present re-key**(见顶注):`_fm_meta`/`questions.py` 改按**三元组投影**
+> (claim 带 `test_point` 即命中)+ `(group_path, has_equivalent)` 折叠,claim_kind 故意保持
+> `verification_path_absent` 不新增。覆盖面比只认 forbidden_mechanism 盖章更宽(所有三元组
+> 欠定案)。核销以顶注 + 代码为准(closeout 已代码核实真 RESOLVED,`test_f8c_fold_and_adopt.py`
+> +`test_report_underdetermined.py` 全绿)。下方原提案保留存档。
+
 `questions.py` F6 分支 + `nodes.py::_fm_meta` + `verifiability_tool.py:239` 的
 `_MECH_KINDS` 判定,从"claim_kind=='forbidden_mechanism'"改为**"读 intent.json 有
 forbidden_mechanism 盖章"**——盖章是 author 侧权威标记,比 worker 填的 claim_kind

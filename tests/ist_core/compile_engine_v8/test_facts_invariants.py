@@ -195,7 +195,7 @@ def test_reconcile_ignores_stale_records_outside_composition(tmp_path, monkeypat
     monkeypatch.setattr(sh, "emit", lambda t: None)
     monkeypatch.setattr(sh, "emit_tick", lambda *a, **k: None)
     monkeypatch.setattr(sh, "signal", lambda *a, **k: None)
-    monkeypatch.setattr(N, "_writeback_one", lambda aid, lr: None)
+    monkeypatch.setattr(N, "_writeback_one", lambda aid, lr, provisional=False: None)
     A, B = "209030000000000001", "209030000000000002"
     (outputs / "b" / "manifest.json").write_text(_json.dumps(
         {"cases": [{"autoid": A}, {"autoid": B}]}), encoding="utf-8")

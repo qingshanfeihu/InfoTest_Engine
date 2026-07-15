@@ -52,6 +52,30 @@ dropped a standalone `^` and mis-attributed; every gate-rejected retry traced to
    product defect = config right ∧ manual right ∧ environment normal, still reproduces —
    `kb_bug_search` first, then the four checks below.
 
+## Same-case consistency before E / env_blocked
+
+E means the environment blocked THIS case, so this case's own run has to be consistent with
+"environment down". The framework already records that inside the evidence you have: a per-case
+`The passed check point num: N` line, and per-assertion `Success Num` / `Fail Num` lines. Read
+them for this case before you conclude E — you are cross-checking the verdict against its own
+run, the same internal-consistency habit as step 3, but within one case instead of across cases.
+
+- Any passing check point in this case (`passed check point num` ≥ 1, or a `Success Num` line)
+  means the framework reached the device and matched an assertion on real device output — the
+  environment is reachable. An env_blocked verdict that rests on one failing member's counter
+  while another member passed in the same run does not hold; the failure is narrower than the
+  environment (commonly a rotation/distribution-sensitive expectation — layer V, whose fix is a
+  set/interval-shaped assertion, not env_blocked).
+- A non-device host prompt where a device response was expected — a shell prompt such as
+  `root@<host>:/<path>#` with a shell "command not found" — means the verification command was
+  dispatched to a host that is not the device under test: a channel/dispatch problem (layer V,
+  reflow the verification onto the device), not the environment being down.
+
+This is a self-check, not an auto-rule. If after reading this case's own counters you still
+judge E, file it — the engine does not auto-downgrade your verdict; env_blocked routes to the
+user panel, and the user's environment call stands (the self-check sharpens the verdict, it
+does not overturn it for you).
+
 ## Five checks before product_defect
 
 Same-batch same-signature alignment; same-intent precedent comparison via `compile_precedent`
@@ -90,12 +114,25 @@ how the feature is implemented — and picking either side would rewrite someone
 pick. First search what humans already recorded: `kb_intent_search` fans out over product spec,
 precedent volumes, cached defects, and prior user adjudications — an earlier ruling on the same
 intent may settle it without asking (the engine auto-adopts a same-key adjudication when the
-device behavior still matches). Then file the discrepancy via `submit_ask_panel`: both sides
-quoted verbatim (device side is gate-checked against last_run raw text, document side against
-the source file), what you searched with real outcomes in `retrieval_receipt` (a hit's slug with
-its outcome; a miss with your query as slug — a miss is also a fact), your best understanding
-(`hypothesis`, Chinese — the user sees it verbatim), and one Chinese question. The engine
-presents it; the user confirms, corrects, or declares a defect.
+device behavior still matches).
+
+Bloodline caveat: a same-family engine-generated verified volume (same autoid family, a round
+the engine itself wrote and passed on device) is NOT independent corroboration of an
+expectation's polarity — a passing `found` there only shows the device behaved that way then,
+not that `found` is the correct expectation, which is exactly what is under dispute. The manual
+/ mindmap is the human source on intent; a prior engine round does not outweigh it, and it does
+not license presetting the panel toward "keep the prior assertion". Present it flat as one fact
+among the sides — "this prior round is engine-generated, not independently verified" — never as
+the reason to lean.
+
+Then file the discrepancy via `submit_ask_panel`: both sides quoted verbatim (device side is
+gate-checked against last_run raw text, document side against the source file), what you
+searched with real outcomes in `retrieval_receipt` (a hit's slug with its outcome; a miss with
+your query as slug — a miss is also a fact), a neutral summary of the discrepancy and the facts
+you verified (`hypothesis`, Chinese, shown to the user verbatim — state the manual's record, the
+device's actual behavior, and any prior-round bloodline flat, do NOT preset a default or
+recommend which side wins), and one Chinese question phrased without favouring a side. The
+engine presents it; the user confirms, corrects, or declares a defect.
 
 Do NOT file a panel when the fix is derivable from evidence alone (that is a normal reflow), or
 when evidence is merely insufficient (reflow with the missing observation named). A panel rides

@@ -1094,31 +1094,51 @@ def _check_parameter_splitting(steps: list, result: StructuralResult) -> None:
             )
 
 
-_DOMAIN_TOKEN_RE = re.compile(r"\b([A-Za-z0-9][A-Za-z0-9.-]{10,}\.(?:com|net|org|cn|test))\b")
+# DNS 单标签最长 63 字符(RFC 1035 LDH)——超限域名 dig 侧 IDNA 直接拒、查询发不出去,案必 fail。
+# 检测面 = **域名 token 的单标签长度**,不是「关键字行上任意长 alnum 串」——后者是强字典,会误杀
+# dig 行合法长 token(`+cookie=<hex>` / TSIG `-y hmac:key:<base64>` / 64-hex),项目反复回归的
+# GA-CUT 型误杀。双闸:①行含 DNS 名承载命令(dig 名参数 / sdns host name|pool / hostname);
+# ②token 是纯域名形态(LDH+点+下划线,非 flag/非 @server/不含 =:/ 等键材料字符)。再逐点分标签量长度。
+# host pool(994838 漏扫)+ hostname 单词 + 续行 dig 均纳入(§18.15-A MEDIUM 批·regression 矩阵 S4)。
+_DNS_NAME_LINE_RE = re.compile(r"\bdig\b|\bhost\s+(?:name|pool)\b|\bhostname\b", re.IGNORECASE)
+_DNS_NAME_TOKEN_RE = re.compile(r"^[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?$")
+_LINE_CONTINUATION_RE = re.compile(r"\\\s*\n")
 
 
 def _check_dns_label_limit(steps: list, result: StructuralResult) -> None:
     """DNS 单标签最长 63 字符(RFC 1035)——超限域名 dig 直接报 'not a legal IDNA2008
     name'、查询永远发不出去,该 case 必 fail。实证:994838 的"128字符域名"需求被写成
     单标签 120 字符,三轮上机 fail 后才定位到协议物理约束。长域名需求的合法形态是
-    多标签拼总长(每段 ≤63)。"""
+    多标签拼总长(每段 ≤63)。
+
+    检测**域名 token 的单标签长度**(非关键字行上任意长串——那会误杀 dig 合法长 flag/key
+    材料 `+cookie=`/TSIG/64-hex,是项目反复回归的强字典误杀形态)。承载 DNS 名的命令位
+    (dig 名参数 / sdns host name|pool / hostname)+ 纯域名形态 token(排除 flag/@server/键
+    材料)双闸,再逐标签量长度。跳过含 `= : /` 等非 LDH 字符的 token(cookie/TSIG/base64)。"""
     seen: set[str] = set()
     for i, s in enumerate(steps):
         if not isinstance(s, dict):
             continue
-        g = str(s.get("G", "") or "")
-        for dom in _DOMAIN_TOKEN_RE.findall(g):
-            if dom in seen:
+        # 续行拼成逻辑行:`\`↵ 结尾续行会把 dig 关键字与域名参数拆到不同物理行,先合并
+        g = _LINE_CONTINUATION_RE.sub(" ", str(s.get("G", "") or ""))
+        for line in g.splitlines():
+            if not _DNS_NAME_LINE_RE.search(line):
                 continue
-            seen.add(dom)
-            too_long = [lab for lab in dom.split(".") if len(lab) > 63]
-            if too_long:
+            for tok in line.split():
+                if tok[:1] in ("+", "-", "@"):
+                    continue   # dig query-option/flag(+cookie/+short)、-y TSIG、@server —— 非域名位
+                if not _DNS_NAME_TOKEN_RE.match(tok):
+                    continue   # 含 = : / 等非 LDH 字符 = cookie/TSIG/base64 键材料,非域名 token
+                over = [lab for lab in tok.split(".") if len(lab) > 63]
+                if not over or tok in seen:
+                    continue
+                seen.add(tok)
                 result.add(
                     "dns_label_over_63",
-                    f"domain {dom[:60]}… contains a label longer than 63 characters (length "
-                    f"{len(too_long[0])}) — this violates the DNS single-label limit; dig-side "
-                    "IDNA rejects it outright and the query can never be sent. For long-domain "
-                    "requirements, build the total length from multiple labels (each ≤63, e.g. "
+                    f"the DNS name '{tok[:48]}…' has a single label of length {len(over[0])} "
+                    "(>63) — this violates the RFC 1035 label limit; dig-side IDNA rejects it "
+                    "outright and the query can never be sent. For long-domain requirements, "
+                    "build the total length from multiple labels (each ≤63, e.g. "
                     "www.<61-chars>.<58-chars>.com).",
                     i,
                 )

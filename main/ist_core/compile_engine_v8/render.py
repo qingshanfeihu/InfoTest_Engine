@@ -31,6 +31,10 @@ STATUS_CN = {
     "pending": "未开始",
     "delivery_blocked": "验证通过但卷面缺案尾清理——暂不交付(重编补自清后可交付)",
     "broken": "未跑成(执行中断/日志陈腐/级联受害)——结论无效,已安排复跑",
+    # pyATS 七码子分类(§④):broken 按协议级硬码细分处置(用户面人话)
+    "broken_errored": "未跑成·断言/命令写坏了(断言被设备实际回显反证,或命令执行失败)"
+                      "——原样复跑必再错,已安排重写",
+    "broken_blocked": "未跑成·设备不可达(ping 不通)——复跑救不了死设备,需恢复环境后继续",
 }
 CTX_CN = {"delivery": "整卷连跑复验", "subset": "单独验证"}
 LAYER_CN = {"G": "设备拒绝了命令(语法/能力)", "E": "环境/测试床问题",
@@ -226,10 +230,13 @@ def render_delivery_report(report: dict, fs: list[dict], manifest: dict,
              "",
              f"本批 {total} 个用例:**{ok} 个通过整卷复验,已入交付卷**"
              + (f";其余 {total - ok} 个的情况逐一说明如下。" if total > ok else "。"), ""]
-    n_broken = int(t.get("broken") or 0)
+    # 未跑成分母:broken 三子态(复跑/重写/env)同属「无结论」,统一不计通过率分母(§④)
+    n_broken = (int(t.get("broken") or 0) + int(t.get("broken_errored") or 0)
+                + int(t.get("broken_blocked") or 0))
     if n_broken:
         lines.append(f"- ⚠ 有 {n_broken} 个用例本轮**未跑成**(执行中断/日志陈腐/级联"
-                     f"受害)——它们的结果是「无结论」而非「未通过」,不计入通过率分母叙事")
+                     f"受害/断言被实机回显反证/设备不可达)——它们的结果是「无结论」而非"
+                     f"「未通过」,不计入通过率分母叙事")
     # K 健康度行(§18.2 第6行式③):门数据面缺席=判定降级,用户必须看得见——诊断/τ/
     # bed 恢复的可信度取决于三数据面(grammar 门/inventory 签名/case 画像)是否齐备
     _gd = {}

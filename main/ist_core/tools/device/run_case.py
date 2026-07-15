@@ -295,7 +295,7 @@ def _annotate_if_empty_probe(text: str) -> str:
             "consult the product manual/spec or precedents — do not keep re-probing emptiness.)")
 
 
-def _do_probe(cmd: str, mode: str = "show") -> str:
+def _do_probe(cmd: str, mode: str = "show", *, annotate: bool = True) -> str:
     """真探一次设备。**永不抛**——失败返回 'error:'/包装文本。
 
     优先走新版 FastMCP ``apv_ssh_execute``（自带 status + 完整回显 + 对齐 ^，治老 probe_show
@@ -304,7 +304,13 @@ def _do_probe(cmd: str, mode: str = "show") -> str:
 
     mode="config":配置模式执行(床态初始化清理专用——clear 族在 show 通道被拒,
     2026-07-10 实证);该模式不回退 stdio(老通道只有只读)。
+
+    annotate=True(默认,worker 便利):空回显尾部附时机语义提示(OBS-15,别对空统计反复重探)。
+    annotate=False:返回**原始设备事实**,不拼提示——**机器消费者(bed 残留检测)专用**:那段提示
+    是探针元输出、非床内容,`annotate=True` 时会被 bed_check 误当"分区配置残留"(回归#3 根因,
+    2026-07-15;分离关注点=worker 拿带提示的、bed 拿原始的)。
     """
+    _wrap = _annotate_if_empty_probe if annotate else (lambda s: s)
     # build 决定 conf 设备段(单一事实源:compiler config)
     try:
         from main.case_compiler.config import get_config
@@ -333,7 +339,7 @@ def _do_probe(cmd: str, mode: str = "show") -> str:
         if str(text).lstrip().startswith("error"):
             return str(text).strip()
         # apv_ssh_execute 文本已自带 command/status/回显+对齐 ^，原样回灌(仅打 dev_probe 来源标)
-        return _annotate_if_empty_probe(f"=== dev_probe (fastmcp apv_ssh) ===\n{text}")
+        return _wrap(f"=== dev_probe (fastmcp apv_ssh) ===\n{text}")
     # 2) 回退：老 stdio probe_show（剥回显，无效命令只剩裸 ^）
     try:
         from main.case_compiler.device_mcp_client import FrameworkMCPClient
@@ -355,7 +361,7 @@ def _do_probe(cmd: str, mode: str = "show") -> str:
         output = _redact(str(output)) if output else output
     except Exception:  # noqa: BLE001
         logger.debug("脱敏处理失败，使用原始输出", exc_info=True)
-    return _annotate_if_empty_probe(
+    return _wrap(
         f"=== dev_probe ===\n"
         f"command: {cmd}\n"
         f"--- device echo (via jumphost) ---\n"

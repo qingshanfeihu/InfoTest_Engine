@@ -22,7 +22,9 @@ def recount_deliverable(fs: list[dict], manifest: dict) -> dict:
     delivery 裁决 pass ∧ 卷面/卷组成双指纹匹配 ∧ 其后无 delivery_blocked。
     """
     aids = [str(c.get("autoid")) for c in (manifest.get("cases") or [])]
-    merges = [f for f in fs if f.get("ev") == "merged"]
+    # 卷指纹隔离(回归#2 修):deliverable 绑最近 **delivery** 卷,与 views.batch_view
+    # 同规则(独立重算两条路径必须同口径,否则 G5 报告门自我误告警);只排除 subset 复跑卷
+    merges = [f for f in fs if f.get("ev") == "merged" and f.get("ctx") != "subset"]
     vol = str(merges[-1].get("volume")) if merges else ""
     supported: set[str] = set()
     for aid in aids:

@@ -91,6 +91,44 @@ def test_clean_bed_clean_pass(tmp_path):
     assert rep["needs_ask"] is False and rep["findings"] == []
 
 
+def test_probe_annotation_note_is_false_residue_fixed_by_raw_bed_probe(tmp_path):
+    """回归#3:dev_probe 的空探针时机语义 note 被 bed_check 误当"分区配置残留"(yzg 实证)。
+    根因=bed 探针走注 note 的路(annotate=True);修法A=bed 走原始探针(annotate=False)。
+    本测试锚住因果链:note 进 bed_check=假残留;去掉 note(原始回显)=干净。"""
+    from main.ist_core.tools.device.run_case import _annotate_if_empty_probe
+    raw_empty = "=== dev_probe (fastmcp apv_ssh) ===\ncommand: show segment name\nstatus: success\n"
+    note_leaked = _annotate_if_empty_probe(raw_empty)             # annotate=True 的产物(带 note)
+    assert "re-probing emptiness" in note_leaked                 # 确认注入了 note
+
+    # 旧行为:note 泄漏进 bed_check → 误报 segments 残留(根因复现)
+    leak = bed_check(_probe(DEV_585, {"show segment name": note_leaked}),
+                     CFG, root=tmp_path, host="h")
+    assert any(f["kind"] == "segments" for f in leak["findings"])
+    assert leak["needs_ask"] is True
+
+    # 修法A:bed 走 annotate=False,空探针只回原始 banner(无 note)→ 干净床零假残留
+    fixed = bed_check(_probe(DEV_585, {"show segment name": raw_empty}),
+                      CFG, root=tmp_path, host="h")
+    assert not any(f["kind"] == "segments" for f in fixed["findings"])
+    assert fixed["needs_ask"] is False
+
+
+def test_bed_probe_fn_returns_raw_no_annotation_note(monkeypatch):
+    """回归#3 端到端(修法A 接线):bed 专用 nodes._probe_fn 走 annotate=False,空探针回显
+    不含时机语义 note(与 worker 侧 dev_probe 带-note 便利分离)——bed_check 不再误报假残留。"""
+    import main.case_compiler.device_mcp_client as mcp
+    from main.ist_core.compile_engine_v8 import nodes as N
+    monkeypatch.setattr(
+        mcp, "probe_via_fastmcp",
+        lambda *a, **k: {"text": "command: show segment name\nstatus: success\n"})
+    out = N._probe_fn("show segment name")               # bed 专用路(annotate=False)
+    assert "re-probing emptiness" not in out             # bed 路:原始事实,零 note
+    assert out.startswith("=== dev_probe")               # 仍是探针原文(banner 在)
+    # 对照:worker 侧 _do_probe 默认 annotate=True 仍带 note(OBS-15 便利不回归)
+    from main.ist_core.tools.device.run_case import _do_probe
+    assert "re-probing emptiness" in _do_probe("show segment name")
+
+
 # ── 初始化清理(2026-07-10 用户裁决:开工必净) ─────────────────────────────────
 
 def _fake_grammar_with_ref():

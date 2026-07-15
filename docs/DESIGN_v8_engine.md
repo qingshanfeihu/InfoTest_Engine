@@ -1623,7 +1623,14 @@ gather 折叠 P4 组稿+memoize → P6 lint → 移 brief 盖章块(**保留 emi
 - 全量回归绿后 cmux 跑 yzg 验收 aha 端到端(核心看点:写保存族三元组题面清爽、s₀ 假阳
   归零、无假 fail 掩盖真缺陷)。
 
-### 18.15 成熟范式对标的工程收口(2026-07-15;输入=六项范式对标 RESEARCH + dongkl 活证据;全节**设计中**)
+### 18.15 成熟范式对标的工程收口(2026-07-15;输入=六项范式对标 RESEARCH + dongkl 活证据)
+
+> **⚠️ 本节诸单元(A-E)已被 `docs/DESIGN_dongkl_finalization.md` 定稿取代(2026-07-15,经真实 Langfuse 数据
+> 四报告取证 + 用户逐条裁决)。定稿把本节两处判断纠回**:① oracle 的「集合相等/比例不可构造→需单元 D」
+> **是错的**——membership 用 abs_found 合取、分布用大样本+区间正则均可构造(domain_grammar 既载),**不需要 D**;
+> ② 机械后校验(A/B)改为**「摆事实+prompt 自查」,不加机械门替判**(用户红线)。写回护栏改为**像记忆一样如实标+
+> 用前先核**;broken 采纳 pyATS 七码(仅协议级硬码)为完整交付;command_existence 不修(worker 自纠)。
+> 下方原探索性文本保留作演进记录,实现以定稿文档为准。
 
 > 输入两路:①`docs/RESEARCH_llm_test_automation_comparison.md`(NeTestLLM/iPanda/Keysight/
 > pyATS·Genie·NAPALM/NetConfEval/AutoSpec 六项对标,兑现审计 §6.4「抄作业」令);②dongkl

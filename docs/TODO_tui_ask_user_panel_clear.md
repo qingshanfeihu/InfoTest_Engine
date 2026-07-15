@@ -1,4 +1,13 @@
-# 待修:ask_user 面板答后不清除(渲染残留)
+# [RESOLVED 2026-07-15] ask_user 面板答后不清除(渲染残留)
+
+> **已修(S4 clear-fixes)**:生命周期回边补齐——`submit_answers`(`tools/ask_user/__init__.py`)
+> 发 `ask_user_answered` 事件(EventKind 新增)→ reducer `_on_ask_user_answered` 复用
+> `_update_tool_use_status` 的 `replace_content_block` 样板,按 question_id 把 BLOCK_ASK_USER 块
+> 原位标 `answered`+`answers`(进 snapshot)→ ink `_render_content_block` ask_user 分支见 answered
+> 渲一行「已回答」摘要、不再 `_begin_ask_user` 复活面板 + `_replay_snapshot` 兜底重置 `_ask_user`
+> /清面板。根因是 `_replay_snapshot` 全量重渲重走永驻 snapshot 的未标记块。回归:
+> `test_ist_app_replay_snapshot.py`(已答块不复活 + 未答块仍显)+ `test_reducer.py`(answered 态
+> 原位转移 + 未知 qid no-op),单元全绿;真机验收见 Task #7。下方原始诊断保留。
 
 > 发现 2026-07-14,run22 实况:run 开头主 agent 弹的"产品版本"面板已答(10.5 落盘、
 > 引擎用它跑完 15 pass),但面板一直挂在 TUI 屏幕上,直到 gather 阶段仍未消失。

@@ -18,6 +18,13 @@ S_FAILED = "failed"                   # 最新裁决 fail(同卷面),未终态
 S_BROKEN = "broken"                   # 最新裁决 broken/not_run:案没跑成(级联崩溃/
                                       # stale/超时/执行相位失败),结论无效≠断言红
                                       # ——(44) 断言有效性/xUnit ERROR;处置=复跑
+# pyATS 七码子分类(§18.1/DESIGN_dongkl_finalization §④;仅按协议级硬事实细分,
+# 守 (44) 不语义猜测——细分基于物理码非 LLM 判断):
+S_BROKEN_ERRORED = "broken_errored"   # Errored:命令畸形/执行错/断言被对齐证据机械反证
+                                      # (window-audit false_fail/false_pass、exec-failure
+                                      # marker)——原样复跑必再错,处置=reflow 重写(不空跑)
+S_BROKEN_BLOCKED = "broken_blocked"   # Blocked:设备 ping 不通(承载链第零层)——处置=env
+                                      # 呈报(复跑救不了死设备,别烧设备轮)
 S_SUBSET_VERIFIED = "subset_verified" # 子集 pass,待终验
 S_DELIVERABLE = "deliverable"         # delivery-ctx pass 且三重匹配
 S_CONTRADICTED = "contradicted"       # 矛盾计数>0 且当前不可交付
@@ -101,8 +108,15 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
         if last.get("result") == "pass":
             return S_SUBSET_VERIFIED
         if last.get("result") in ("broken", "not_run"):
-            # (44) 断言有效性:案没跑成,结论无效——非 fail(不计签名/不深归因),
-            # 处置=复跑;连续未跑成的护栏在 reconcile(streak≥2 落 escalated)
+            # (44) 断言有效性:案没跑成,结论无效——非 fail(不计签名/不深归因)。
+            # pyATS 七码子分类(§④):按裁决携带的协议级硬码 broken_subtype 定处置——
+            # errored→reflow(重写)、blocked→env(呈报)、其余(not_run/stale/协议级分不清)
+            # →复跑(streak≥2 落 escalated,护栏在 reconcile)。子分类只读硬事实,不猜。
+            sub = str(last.get("broken_subtype") or "")
+            if sub == "errored":
+                return S_BROKEN_ERRORED
+            if sub == "blocked":
+                return S_BROKEN_BLOCKED
             return S_BROKEN
         if last.get("ctx") == F.CTX_DELIVERY and F.contradictions(mine, aid) > 0:
             return S_CONTRADICTED
@@ -116,11 +130,20 @@ def batch_view(fs: list[dict], manifest: dict) -> dict:
     """全批视图:{aid: {status, rounds, contradictions, frozen}} + 计数汇总。
 
     manifest 提供 aid 全集与各案当前卷面指纹(authored 事实回填);
-    volume 指纹取自最近 merge 事实(无则空——尚未合并)。
+    volume 指纹取自最近 **delivery** merge 事实(无则空——尚未交付合并)。
+    **卷指纹隔离(回归#2 修 C,DESIGN_dongkl_finalization §⑥)**:deliverable 判定绑
+    「最近 delivery 卷」而非「最近任意
+    merge 卷」——否则别案的 broken/失败案子集复跑(subset merge)会 churn current_volume,
+    把已 pass@delivery 的案指纹失配、降级回 subset_verified,恒占 live 饿死 gather
+    (yzg 实证:17 pass 案被 2 broken 案的子集复跑反复降级)。子集复跑不改交付语境;
+    真交付组成变化(新 delivery merge)才让旧交付案重新终验(INV-8 组成锚不破)。
     """
     aids = [str(c.get("autoid")) for c in (manifest.get("cases") or [])]
-    merges = [f for f in fs if f.get("ev") == "merged"]
-    current_volume = str(merges[-1].get("volume")) if merges else ""
+    # 只**排除** subset 复跑卷(ctx=="subset");delivery 卷与无 ctx 的旧/最小事实照旧
+    # 当交付卷(向后兼容,真实 subset merge 必带 ctx="subset",见 nodes.merge)
+    d_merges = [f for f in fs if f.get("ev") == "merged"
+                and f.get("ctx") != F.CTX_SUBSET]
+    current_volume = str(d_merges[-1].get("volume")) if d_merges else ""
     out: dict = {"cases": {}, "volume": current_volume}
     for aid in aids:
         mine = [f for f in fs if str(f.get("aid")) == aid]

@@ -69,9 +69,16 @@ class AskPanelArgs(BaseModel):
         ">=1 records of what you searched before asking — asking without having searched "
         "is rejected."))
     hypothesis: str = Field(description=(
-        "Your best understanding of which side should win and why — in Chinese, shown "
-        "to the user verbatim."))
-    ask: str = Field(description="One Chinese question sentence the user will be asked.")
+        "A neutral summary of the discrepancy and the facts you verified — in Chinese, shown "
+        "to the user verbatim. Present the manual's record, the device's actual behavior, and "
+        "(if a prior round is cited) that it is engine-generated and not independently verified, "
+        "each as a fact of equal standing. Do NOT preset a default or recommend which side wins: "
+        "picking a side rewrites someone's intent, which is the user's call, not the engine's. A "
+        "same-family engine-verified round is not independent corroboration of the expectation "
+        "— it only shows the device behaved that way then, not that the expectation is correct."))
+    ask: str = Field(description=(
+        "One Chinese question sentence the user will be asked — phrase it neutrally, without "
+        "ordering the choices to favour one side or implying a default."))
 
 # device 侧语料字段(与 submit_attribution 的 evidence 门同一语料面)
 _DEVICE_CORPUS_KEYS = ("device_context", "causality", "detail_tail", "framework_traceback")
@@ -121,7 +128,9 @@ def submit_ask_panel(last_run_path: str, autoid: str, intent_signature: str,
     owned by the case author / developers — e.g. the manual's command form disagrees with the
     live device, the mindmap's expected result disagrees with observed behavior, or the case's
     verification method disagrees with how the feature is implemented. You state both sides
-    verbatim plus your best understanding; the user confirms, corrects, or declares a defect.
+    verbatim plus a neutral summary of the facts — no preset default, no side recommendation
+    (a same-family engine-verified round is not independent corroboration; present it flat as a
+    fact); the user confirms, corrects, or declares a defect.
     **When not to use**: the fix is derivable from evidence alone (just recompile with it);
     or evidence is merely insufficient (that is reflow with a named missing observation, not
     a user question).
@@ -140,7 +149,8 @@ def submit_ask_panel(last_run_path: str, autoid: str, intent_signature: str,
     if not (intent_signature or "").strip():
         return "error: intent_signature is required — a short lowercase-hyphen slug naming the disputed intent"
     if not (hypothesis or "").strip():
-        return "error: hypothesis is required — state your best understanding (Chinese; shown to the user)"
+        return ("error: hypothesis is required — neutrally state the discrepancy and the facts "
+                "you verified (Chinese; shown to the user), no preset default or side recommendation")
     if not (ask or "").strip():
         return "error: ask is required — one Chinese question sentence for the user"
 

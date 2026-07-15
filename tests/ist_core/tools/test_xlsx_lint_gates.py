@@ -101,6 +101,86 @@ def test_lint_catches_dns_label_over_63(emitted_case):
     assert any(v.code == "dns_label_over_63" for v in res.violations)
 
 
+def test_lint_catches_dns_label_over_63_no_tld(emitted_case):
+    """无 TLD 结尾的超长裸标签也必须拦(旧 TLD 白名单锚只认 .com/.net… 结尾,
+    `dig @IP <80字符>` 无 TLD 绿着出厂=994838/994869 真 bug 根因)。"""
+    def mutate(ws):
+        rd = _find_row(ws, 7, "dig @")
+        ws.cell(rd, 7).value = "dig @172.16.34.70 " + "y" * 80   # 裸 80 字符标签,无 TLD
+    _corrupt(emitted_case, mutate)
+    res = lint_xlsx_case(emitted_case)
+    assert any(v.code == "dns_label_over_63" for v in res.violations)
+
+
+def test_lint_catches_dns_label_over_63_host_name(emitted_case):
+    """`sdns host name` 配置行的超长裸标签也拦(994838 形态:147 字符 host name,无 TLD
+    ——config 面而非 dig 面;旧 TLD 白名单锚同样漏这条)。"""
+    def mutate(ws):
+        r = _find_row(ws, 7, "sdns host name")
+        ws.cell(r, 7).value = "sdns host name " + "z" * 147
+    _corrupt(emitted_case, mutate)
+    res = lint_xlsx_case(emitted_case)
+    assert any(v.code == "dns_label_over_63" for v in res.violations)
+
+
+def test_lint_dns_normal_multilabel_domain_clean(emitted_case):
+    """正常多标签域名(每段 ≤63)不误伤——防裸标签扫描把合法长域名当违例。"""
+    def mutate(ws):
+        rd = _find_row(ws, 7, "dig @")
+        ws.cell(rd, 7).value = "dig @172.16.34.70 www." + "a" * 61 + "." + "b" * 58 + ".com"
+    _corrupt(emitted_case, mutate)
+    res = lint_xlsx_case(emitted_case)
+    assert not any(v.code == "dns_label_over_63" for v in res.violations), \
+        [v.code for v in res.violations]
+
+
+def test_lint_dns_ignores_dig_flag_and_key_long_tokens(emitted_case):
+    """收窄误杀(MEDIUM 批 S4·§1#5):dig 行的合法长 flag/key 材料——`+cookie=<hex>`、
+    TSIG `-y hmac:name:<base64>`——不是域名标签,不得误报 dns_label_over_63(强字典误杀
+    金标准形态,GA-CUT 型回归)。域名本身短、合法。"""
+    def mutate(ws):
+        rd = _find_row(ws, 7, "dig @")
+        ws.cell(rd, 7).value = (
+            "dig @172.16.34.70 www.example.com A +short "
+            "+cookie=" + "a" * 80 + " "
+            "-y hmac-sha256:tsigkeyname:" + "B3dEf" * 20)
+    _corrupt(emitted_case, mutate)
+    res = lint_xlsx_case(emitted_case)
+    assert not any(v.code == "dns_label_over_63" for v in res.violations), \
+        [v.code for v in res.violations]
+
+
+def test_lint_catches_dns_label_over_63_host_pool(emitted_case):
+    """补漏扫(MEDIUM 批 S4·§1#15):`sdns host pool <超长>`——「host pool」≠「host name」,
+    旧关键字门不扫→超长标签绿着出厂(994838 痛点平移)。现纳入扫描面。"""
+    def mutate(ws):
+        r = _find_row(ws, 7, "sdns host name")   # 配置步(多行 G)
+        ws.cell(r, 7).value = "sdns host pool " + "z" * 148 + " p1"
+    _corrupt(emitted_case, mutate)
+    res = lint_xlsx_case(emitted_case)
+    assert any(v.code == "dns_label_over_63" for v in res.violations)
+
+
+def test_lint_catches_dns_label_over_63_hostname_word(emitted_case):
+    """补漏扫:单词 `hostname`(非两词 `host name`)承载的超长标签也拦。"""
+    def mutate(ws):
+        rd = _find_row(ws, 7, "dig @")
+        ws.cell(rd, 7).value = "hostname " + "y" * 100
+    _corrupt(emitted_case, mutate)
+    res = lint_xlsx_case(emitted_case)
+    assert any(v.code == "dns_label_over_63" for v in res.violations)
+
+
+def test_lint_catches_dns_label_over_63_line_continuation(emitted_case):
+    """补漏扫:`\\`↵ 续行把 dig 关键字与域名参数拆到不同物理行——续行合并后仍拦。"""
+    def mutate(ws):
+        rd = _find_row(ws, 7, "dig @")
+        ws.cell(rd, 7).value = "dig @172.16.34.70 \\\nwww." + "z" * 70 + ".com"
+    _corrupt(emitted_case, mutate)
+    res = lint_xlsx_case(emitted_case)
+    assert any(v.code == "dns_label_over_63" for v in res.violations)
+
+
 def test_emit_merged_rejects_lint_violation(emitted_case):
     # 直改场景全真模拟:emit 落的 lint 凭证新鲜,但卷面在凭证后被改坏、直改者又把凭证签名
     # 重签回当前 mtime → 合并的 lint 最后防线仍拦下(凭证门放行后 lint 是终卷必经)。

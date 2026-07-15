@@ -123,7 +123,7 @@ def rig(tmp_path, monkeypatch):
 
     # 写回/回滚记录器 + 自愈入库禁用(单独测过)
     wb, rb = [], []
-    monkeypatch.setattr(N, "_writeback_one", lambda aid, lr: wb.append(aid))
+    monkeypatch.setattr(N, "_writeback_one", lambda aid, lr, provisional=False: wb.append(aid))
     monkeypatch.setattr(N, "_rollback_one", lambda aid: rb.append(aid))
     import main.ist_core.compile_engine_v8.uncertain as U8
     monkeypatch.setattr(U8, "_ingest_uncertain_observations", lambda led: None)

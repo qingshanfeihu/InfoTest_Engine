@@ -209,17 +209,24 @@ def _contradiction_question(c: dict) -> dict:
         rc = [str(r.get("outcome") or "") for r in (p.get("retrieval_receipt") or [])]
         searched = "、".join(sorted({_RECEIPT_CN.get(x, x) for x in rc if x}))
         shape_cn = _SHAPE_CN.get(str(p.get("conflict_shape") or ""), _SHAPE_CN["other"])
+        # 双源平摆、无预设首选项(§18.15-B/(45)/(46);与 ask_panel 中性契约成对):
+        # 呈报差异本身+两侧记载,不渲"引擎的理解"、不给"确认按此"默认——两个选项各指
+        # 一侧(实机为准 / 手册为准即缺陷),两读对称,余走 Other。
         q = (f"{who}:{shape_cn}。双方记载——{sides}。"
              + (f"已检索:{searched}。" if searched else "")
-             + f"引擎的理解:{str(p.get('hypothesis') or '')[:300]}。"
-             + str(p.get("ask") or "这样理解对吗?")
+             + f"情况梳理:{str(p.get('hypothesis') or '')[:300]}。"
+             + str(p.get("ask") or "该以哪一方为准?")
              + ("(该用例重编轮次已用尽,你的答案同时决定是否继续)" if c.get("cap_reached") else "")
-             + " 如两者都不对,选 Other 直接写出正确的意图/预期。")
-        return {"question": q, "header": f"确认{aid[-4:]}",
+             + " 若都不对,选 Other 直接写出正确的意图/预期。")
+        # token=correct(非 confirm):中性化后 hypothesis 不再提方向,"confirm=按呈报理解 Z 编"
+        # 失去所指;用户选的那一侧 label 即裁决方向,走 correct("ruling 覆盖 Z、意图最高权威",
+        # briefs.py)——同时与 _answer_token 的 panel 兜底(非缺陷/非确认→correct)一致,
+        # 裸串/token 两路殊途同归,不生歧义(成对机制补齐,§18.15-B/(46))。
+        return {"question": q, "header": f"裁决{aid[-4:]}",
                 "options": [
-                    {"label": "确认,按此继续", "description": "按引擎的理解重编该用例"},
-                    {"label": "确认产品缺陷", "description": "该差异是产品问题——记入缺陷候选单,该用例以缺陷结案"}],
-                "_tokens": {"确认,按此继续": "confirm", "确认产品缺陷": "defect"},
+                    {"label": "预期以实机为准", "description": "以实机实际行为为准,修订该用例的预期断言并重编"},
+                    {"label": "确认产品缺陷", "description": "实机行为是产品问题——记入缺陷候选单,该用例以缺陷结案"}],
+                "_tokens": {"预期以实机为准": "correct", "确认产品缺陷": "defect"},
                 "_key": aid}
     if kind == "cap":
         q = (f"{who} 已重编 {c.get('rounds')} 轮仍未通过"

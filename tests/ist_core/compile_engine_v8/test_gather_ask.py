@@ -38,8 +38,34 @@ def test_terminal_points_gather_when_pending():
     assert _after_diagnose(s) == "ask_decision"           # 全终局+欠定
     assert _after_merge({"phase_status": "nothing_to_merge",
                          "n_awaiting_user": 1}) == "ask_decision"
-    assert _after_merge({"phase_status": "error",
-                         "n_awaiting_user": 1}) == "closing"   # error 如实收口
+
+
+# ── 回归#2 修 B(设计):「批末必有聚合点」立为真不变量——所有到 closing 的 pre-ask
+#    边(硬错误/停滞)有未答欠定必先经 gather,禁静默吞(§16 / §18.2 式③) ──
+def test_flush_awaiting_user_before_error_and_stuck_closings():
+    from main.ist_core.compile_engine_v8.graph import (_after_reconcile, _after_run,
+                                                       _after_merge, _after_bed)
+    s = {"n_awaiting_user": 1}
+    # 有欠定:原本直接 closing 的硬错误/停滞边,现先 gather 呈报
+    assert _after_reconcile({**s, "phase_status": "error"}) == "ask_decision"
+    assert _after_run({**s, "phase_status": "error"}) == "ask_decision"
+    assert _after_run({**s, "phase_status": "device_busy"}) == "ask_decision"
+    assert _after_merge({**s, "phase_status": "error"}) == "ask_decision"
+    assert _after_bed({**s, "phase_status": "bed_blocked"}) == "ask_decision"
+    from main.ist_core.compile_engine_v8.graph import (_after_prep,
+                                                       _after_ask_contradiction)
+    assert _after_prep({**s, "phase_status": "error"}) == "ask_decision"
+    # ask_contradiction 零实答:不同面板,flush needs_decision(不 ping-pong)
+    assert _after_ask_contradiction({**s, "ask_answers_consumed": 0,
+                                     "n_ask_contradiction": 1}) == "ask_decision"
+    # 无欠定:照旧如实收口(不改无欠定路径的硬停语义)
+    assert _after_reconcile({"phase_status": "error"}) == "closing"
+    assert _after_run({"phase_status": "error"}) == "closing"
+    assert _after_merge({"phase_status": "error"}) == "closing"
+    assert _after_bed({"phase_status": "bed_blocked"}) == "closing"
+    assert _after_prep({"phase_status": "error"}) == "closing"
+    assert _after_ask_contradiction({"ask_answers_consumed": 0,
+                                     "n_ask_contradiction": 1}) == "closing"
 
 
 # --------------------------------------------------------------- e2e 金标准
@@ -104,6 +130,56 @@ def test_gather_e2e_undecided_does_not_block_siblings(rig):
     assert asked[0].get("gather") is True and "查不到" in asked[0].get("question", "")   # S3 人话
     dec = [f for f in facts if f.get("ev") == "decision" and f.get("aid") == AIDS[1]]
     assert len(dec) == 1 and dec[0]["answer"] == "改过程"
+
+
+def test_gather_fires_despite_persistent_broken(rig):
+    """回归#2 e2e(yzg 形态):非收敛 broken 案(设备恒 not_run)不得饿死 awaiting_user
+    的 gather。101 pass(交付)+ 102 欠定 + 103 恒 broken——修前 103 让 live 恒 >0、
+    reconcile 恒回 merge、102 永不被问(yzg 实证);修后 103 per-case streak≥2 →
+    escalated 退出 live,101 卷指纹隔离稳居 deliverable,live 归零 → gather 问到 102。"""
+    def fork_undecided_102(skill, brief, *, tag="", effort=""):
+        env = json.loads(brief.splitlines()[0])
+        aid = str(env.get("autoid"))
+        if skill == "compile-worker" and aid == AIDS[1]:
+            d = rig["outputs"] / aid
+            d.mkdir(exist_ok=True)
+            if not (d / "needs_decision.json").exists():
+                (d / "needs_decision.json").write_text(json.dumps({
+                    "autoid": aid, "claims": [{"claim_kind": "command_existence",
+                                               "command": "sdns fulldns on",
+                                               "reason": "命令在 10.5 手册命令集未命中"}]},
+                    ensure_ascii=False), encoding="utf-8")
+            return "cannot verify\nSTATUS: needs_user_decision"
+        return orig_fork(skill, brief, tag=tag, effort=effort)
+
+    from main.ist_core.compile_engine_v8 import nodes as N
+    orig_fork = N._FORK_OVERRIDE
+    rig["monkeypatch"].setattr(N, "_FORK_OVERRIDE", fork_undecided_102)
+
+    # 103 设备恒 unknown → not_run → undetermined broken(yzg 的非收敛 broken 复刻)
+    device = FakeDevice(lambda aid, ctx, n: "unknown" if aid == AIDS[2] else "pass")
+    panels: list[dict] = []
+
+    def answer(payload):
+        panels.append(payload)
+        if payload.get("kind") == "ask_decision":
+            return {q["_autoid"]: "改描述" for q in payload.get("questions", [])}
+        return {}
+
+    res, g, cfgd = _run_graph(rig, device, resume_answers=answer)
+    fs = [json.loads(l) for l in (rig["outputs"] / rig["out_name"] / "facts.jsonl")
+          .read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    # ① gather 真的触发了(102 被问)——修前这里永远为 0(饿死)
+    gathers = [p for p in panels if p.get("kind") == "ask_decision"]
+    assert gathers, "gather 从未触发——awaiting_user 被非收敛 broken 饿死(回归#2 未修)"
+    assert any(q.get("_autoid") == AIDS[1] for q in gathers[0]["questions"])
+    # ② 非收敛 broken(103)per-case streak 升级退出 live(不再无限占 live)
+    esc = [f for f in fs if f.get("ev") == "escalated" and str(f.get("aid")) == AIDS[2]]
+    assert esc, "恒 broken 案未 escalated——per-case streak 未生效,live 不收敛"
+    # ③ 101 pass 案没被 103 的子集复跑卷 churn 降级(卷指纹隔离)
+    assert not any(f.get("ev") == "awaiting_user_unasked" and str(f.get("aid")) == AIDS[1]
+                   for f in fs), "102 被静默吞(收口前未问)"
 
 
 def _fork_undecided_forever(rig, orig):

@@ -85,6 +85,19 @@ def submit_answers(question_id: str, answers: dict[str, str]) -> bool:
         evt = pending.get("_event")
     if evt is not None:
         evt.set()
+    # 生命周期回边:问询发起走 ask_user_request(reducer append 一条 BLOCK_ASK_USER 块),
+    # 答复只 set threading.Event 唤醒工具线程、不回 reducer——那条块永无「已答」标记,全量
+    # 重放(_replay_snapshot)会重新 _begin_ask_user 把答完的面板复活(答后残留根因)。补这条
+    # ask_user_answered:reducer 据 question_id 把块标 answered,重放渲折叠态、不复活。
+    try:
+        from main.ist_core.events import get_default_bus
+        get_default_bus().emit(
+            "ask_user_answered",
+            payload={"question_id": question_id, "answers": dict(answers or {})},
+            tags={"name": "ask_user"},
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return True
 
 

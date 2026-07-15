@@ -28,6 +28,12 @@ _INTENT_INDEX_PATH = (
     Path(__file__).resolve().parents[4]
     / "knowledge" / "framework" / "mirror_intent_index.json"
 )
+# 写回像记忆(§18.15-A / K (45)):先例的「确认状态」旁挂——provisional=子集轮过、未经整卷终验
+# 确认(engine 写回事实里 ctx!=delivery)。与意图索引分文件,不动其热路径/损坏容忍逻辑。
+_PROVENANCE_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "knowledge" / "framework" / "mirror_precedent_provenance.json"
+)
 
 _INTENT_INDEX_CACHE: dict | None = None
 
@@ -344,6 +350,47 @@ def _retrieve_precedent_hits(my_config: str, intent: str, limit: int) -> tuple[l
     return top, my_toks, intent
 
 
+def _precedent_sampling_note(seq: list) -> str:
+    """采样敏感度事实（写回像记忆，§18.15-A / K (45)）：一条先例若在**分布类算法**（rr/wrr…）下
+    断言了**命中计数字段**（Hit/命中/计数…），该计数随 dig 采样窗口变化——同一配置态、不同采样
+    给不同计数。把这个**结构事实**随检索结果摆出来，让读的人对照本案意图判断断言形态能不能照抄
+    （§0 摆事实不替判：只陈述事实+后果，不在此文件写「该用哪种形态」的规则表——守本文件顶部红线）。
+
+    实证锚：593516（wrr 3:2:1）用 `Hit:\\s+3`/`[1-9]\\d*`/`[4-9]\\d*` 断言，flaky pass 写回后
+    live 可检索、断言链可被后继 RR/WRR 案照抄（`docs/forensics/A_oracle.md` §1.4）。
+    分布方法词 / 计数字段词从 `domain_grammar` 数据读（单一事实源），不硬编；纯成员归属断言
+    （`abs_found <成员IP>`，无计数字段）不触发——那是 h-不变式的正确形态、不该被误标。
+    """
+    try:
+        from main.case_compiler.domain_grammar import (
+            count_field_words,
+            distribution_methods,
+        )
+        dmeths = distribution_methods()
+        cwords = count_field_words()
+    except Exception:  # noqa: BLE001
+        logger.debug("domain_grammar 读取失败,跳过采样敏感标注", exc_info=True)
+        return ""
+    config_text = " ".join((g or "") for e, f, g in seq if e.startswith("APV")).lower()
+    has_dist = any(_re.search(rf"\b{_re.escape(m.lower())}\b", config_text) for m in dmeths)
+    if not has_dist:
+        return ""
+    has_count_ck = any(
+        e == "check_point" and any(w.lower() in (g or "").lower() for w in cwords)
+        for e, f, g in seq
+    )
+    if not has_count_ck:
+        return ""
+    return (
+        "sampling-sensitive (memory hint, verify first): this precedent asserts a hit-count "
+        "field under a distribution algorithm (rr/wrr…); hit counts vary with the dig sample "
+        "window (same config, different samples give different counts). Confirm the assertion "
+        "form (membership via abs_found / conserving interval on show statistics / exact count) "
+        "matches THIS case's intent against the manual before copying — an engine-written "
+        "precedent that PASSed once may have passed on sampling luck."
+    )
+
+
 def _load_precedent_annotations() -> dict:
     """先例策展标注(判例化,2026-07-08):不删迁就嫌疑卷(结构仍是金标准),检索返回时附
     警示——pe1 减法实验实证:裸 worker 把迁就卷的断言方向当"产品行为如此"的佐证,
@@ -358,10 +405,37 @@ def _load_precedent_annotations() -> dict:
     return {}
 
 
+def _load_precedent_provenance() -> dict:
+    """读先例确认状态旁挂(best-effort，§18.15-A)：{fn: {"provisional": bool}}。
+    缺失/损坏 → 空 dict（检索照常、只是不显 provisional，与旧行为一致）。"""
+    try:
+        if _PROVENANCE_PATH.is_file():
+            d = json.loads(_PROVENANCE_PATH.read_text(encoding="utf-8"))
+            return {k: v for k, v in d.items() if isinstance(v, dict)} if isinstance(d, dict) else {}
+    except Exception:  # noqa: BLE001
+        logger.debug("mirror_precedent_provenance.json 读取失败(忽略)", exc_info=True)
+    return {}
+
+
+def _record_precedent_provenance(fn: str, provisional: bool) -> None:
+    """写回时如实记 fn 的确认状态（best-effort，进程内锁复用意图索引锁避免并发写撞）。
+    失败不阻断写回主流程——旁挂缺失只是少一个提示，不影响先例可用性。"""
+    try:
+        with _INTENT_INDEX_LOCK:
+            cur = _load_precedent_provenance()
+            cur[fn] = {"provisional": bool(provisional)}
+            tmp = _PROVENANCE_PATH.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(cur, ensure_ascii=False, indent=1), encoding="utf-8")
+            tmp.replace(_PROVENANCE_PATH)
+    except Exception:  # noqa: BLE001
+        logger.debug("mirror_precedent_provenance.json 写入失败(忽略)", exc_info=True)
+
+
 def _format_precedent_hits(hits: list, my_toks: set, intent: str) -> str:
     """把 hits 渲染成 draft 可读的先例文本（触发→断言链 + 警示 + env_facts）。"""
     axis = "config+intent fused" if (my_toks and intent) else ("intent axis" if intent else "config structure axis")
     anns = _load_precedent_annotations()
+    prov = _load_precedent_provenance()
     out = [f"=== compile_precedent (ranked by {axis} similarity; full trigger→assertion chains) ==="]
     for score, cfg_sim, intent_sim, fn, seq, autoid, *_rest in hits:
         lineage = _rest[0] if _rest else "human_suite"
@@ -375,6 +449,14 @@ def _format_precedent_hits(hits: list, my_toks: set, intent: str) -> str:
         lin_tag = " ⟨engine-written; structure only, not an authority⟩" if lineage == "engine_verified" else ""
         fn_show = f"{fn}[{autoid}]" if autoid else fn
         out.append(f"\nPrecedent {fn_show} ({tag}){lin_tag} trigger→assertion chain:")
+        # 采样敏感事实(§18.15-A):分布类算法下的命中计数断言随采样变化,随结果摆出来供读者先核。
+        samp = _precedent_sampling_note(seq)
+        if samp:
+            out.append(f"  ⚠ {samp}")
+        # 确认状态旁挂(写回像记忆,K (45)):子集轮过、未经整卷终验确认的先例摆出来供先核。
+        if prov.get(fn, {}).get("provisional") is True:
+            out.append("  ⚠ provisional (memory hint, verify first): this precedent passed only "
+                       "on a subset re-run, not yet confirmed by a full delivery verify.")
         ann = anns.get(str(autoid)) if autoid else None
         if ann and ann.get("note"):
             out.append(f"  ⚠ curation note [{ann.get('flag', 'curated')}]: {str(ann['note'])[:260]}")
@@ -480,7 +562,8 @@ def compile_precedent(my_config: str, limit: int = 3, intent: str = "") -> str:
 
 
 @tool(parse_docstring=True)
-def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "") -> str:
+def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "",
+                      provisional: bool | None = None) -> str:
     """Write a **true on-device PASS** volume back into the precedent store (mirror + intent index) so later compilations can retrieve it.
 
     Closed-loop self-evolution: growing the precedent store raises retrieval hit rate,
@@ -498,6 +581,11 @@ def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "") ->
         last_run_path: path to the last_run.json recording that run (written by dev_run_batch_digest).
         intent_path: intent path (e.g. "<feature> > <algorithm> > <case intent>"); when empty
             it is best-effort assembled from the sibling batch manifest (falling back to the title).
+        provisional: confirmation status of this pass, recorded alongside the precedent like a
+            memory annotation per K 2.9.4 axiom 45. True means it passed only on a subset re-run
+            and is not yet confirmed by a full delivery verify. False means delivery-confirmed.
+            None means the caller did not say so nothing is recorded. compile_precedent surfaces
+            a provisional precedent as a hint to verify rather than ground truth to copy.
 
     Returns:
         Writeback result (mirror filename + index entry); on gate failure an error stating
@@ -592,6 +680,9 @@ def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "") ->
             _write_intent_index_atomic(idx)
     except Exception as exc:  # noqa: BLE001
         return f"error: writeback failed: {exc}"
+    # 写回像记忆:如实记确认状态(caller 说了才记;None=不记,与旧行为一致)。检索时旁挂摆出。
+    if provisional is not None:
+        _record_precedent_provenance(fn, provisional)
     # 失效进程内缓存:同 run 内后续 compile_precedent 立即能检索到(ρ_k 增长可观测)
     global _INTENT_INDEX_CACHE, _MIRROR_CORPUS_CACHE
     _INTENT_INDEX_CACHE = None

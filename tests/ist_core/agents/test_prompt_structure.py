@@ -100,3 +100,86 @@ def test_no_legacy_english_sections():
     for legacy in ("# Identity", "# Evidence Discipline", "# Faithful Reporting",
                    "# Reading is Not Verification", "# Communication Style"):
         assert legacy not in sp, f"旧英文节标题回流: {legacy}"
+
+
+def _attributor_md() -> str:
+    from pathlib import Path
+    p = (Path(__file__).resolve().parents[3] / "main" / "ist_core" / "agents"
+         / "compile-attributor.md")
+    return p.read_text(encoding="utf-8")
+
+
+def test_compile_attributor_same_case_selfcheck_anchor():
+    """S2(定稿 §B / K (40)):env_blocked 前的同案内一致性自查——用框架自有计数器
+    (passed check point num / Success Num)与主机提示符形态自证,不自动降级、交用户面板。"""
+    md = " ".join(_attributor_md().split())   # 折行归一,锚点不受换行影响
+    # 同案内自查:读框架计数器
+    assert "passed check point num" in md, "attributor 缺同案内计数器自查锚"
+    assert "environment is reachable" in md
+    # 非设备主机提示符 → 派发/通道问题(非环境宕)
+    assert "root@" in md
+    # 不自动降级:仍交既有用户面板(不覆盖用户已选 E)
+    assert "does not auto-downgrade" in md, "attributor 缺'不自动降级'纪律锚"
+
+
+def test_compile_attributor_bloodline_anchor():
+    """S2(定稿 §B / K (45)(45b)):机生同族 verified 非期望极性的独立佐证——
+    不得盖过人源手册、不得预设面板默认倾向。"""
+    md = " ".join(_attributor_md().split()).lower()   # 折行归一 + 小写
+    assert "independent corroboration" in md, "attributor 缺机生血统非独立佐证纪律锚"
+    assert "not preset a default" in md
+
+
+def _worker_md() -> str:
+    from pathlib import Path
+    p = (Path(__file__).resolve().parents[3] / "main" / "ist_core" / "agents"
+         / "compile-worker.md")
+    return p.read_text(encoding="utf-8")
+
+
+def test_compile_worker_two_interface_fact():
+    """S1(定稿 §①):设备两界面事实——APV 产品 CLI(APV_0)vs Linux 壳(test_env/console,
+    root@console),把 show 打到 console 是敲错门、非环境宕。陈述式,不写死具体命令。"""
+    md = " ".join(_worker_md().split())   # 折行归一,锚点不受换行影响
+    assert "root@console" in md, "worker 缺 console=Linux 壳提示符锚"
+    assert "different door" in md, "worker 缺'两界面/敲错门'事实锚"
+    assert "wrong-door symptom" in md, "worker 缺'敲错门≠环境宕'后果锚"
+
+
+def test_compile_worker_distribution_interval_fact():
+    """S1(定稿 §②):分布类=大样本+累计命中守恒区间;小样本精确/非零计数 flaky。
+    源 domain_grammar.json:144-151,给到 worker 构造侧(非新造);确定性映射不误伤。"""
+    md = " ".join(_worker_md().split())   # 折行归一
+    assert "sampling luck" in md, "worker 缺'小样本计数=采样运气'flaky 事实锚"
+    assert "Σ hits == N sent" in md, "worker 缺'累计命中守恒'区间形态锚"
+    assert "algorithm_classes.distribution" in md, "worker 缺 domain_grammar 分布类溯源锚"
+    # 不误伤确定性映射(GA-CUT 回归防护)
+    assert "GA-CUT" in md, "worker 缺'确定性映射固定落点合法'防误伤锚"
+
+
+def test_compile_worker_interval_scoped_to_h_in_lambda():
+    """回归#1/S1 收紧(定稿 §19 / THEORY §0.5):区间正则 scope 对齐**理论 h-位置轴**
+    (h-in-λ 分布采样),且手写区间正则指向 `dist` 组合子(EXCEL_FUNCTIONS.md 手写易错)。"""
+    md = " ".join(_worker_md().split())
+    assert "h-in-λ (distribution sampling) only" in md, "worker 缺'区间正则限 h-in-λ'轴对齐锚"
+    assert "dist` combinator" in md, "worker 缺'手写区间正则→dist 组合子'锚"
+
+
+def test_compile_worker_capacity_membership_fact():
+    """回归#1/S1 收紧(667986 实证):容量/存在性/枚举类(无 h 确定性)验逐条成员
+    abs_found/found_times + dev_probe 现验实际 show 格式,不用假设布局范围正则。"""
+    md = " ".join(_worker_md().split())
+    assert "Capacity / existence / enumeration checks read membership" in md, \
+        "worker 缺'枚举/容量→逐条成员非范围'锚"
+    assert "dev_probe" in md, "worker 缺'先 dev_probe 现验实际 show 格式'锚"
+    assert "667986" in md, "worker 缺 667986 假设布局对不齐实证锚"
+
+
+def test_compile_worker_no_hardcoded_device_field_token():
+    """S1-HIGH(#20):worker prompt 不得写死设备回显计数字段 token(如 `Hit:`)——该 token
+    随 build 漂移,checker_tool.py 红线「never assume one spelling」已在工具侧切除;prompt 侧
+    示例若留裸 token 会从后门逆转红线(本 build 字段若叫 Hits:/表格列→found 恒 fail/not_found
+    恒真假 PASS)。区间形态靠 `dist`/`compile_expected_hits` 抽象字段名,不写死。"""
+    raw = _worker_md()
+    assert "Hit:" not in raw, ("worker prompt 含写死设备字段 token 'Hit:'——随 build 漂移,"
+                               "与 checker_tool 'never assume one spelling' 红线冲突;用 dist 抽象")

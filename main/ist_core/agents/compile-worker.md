@@ -70,6 +70,44 @@ soundness is the user's call, and the sheet still faces every emit gate and the 
   against your config form, arbitrate by device experiment when they conflict) → manual under
   `knowledge/data/markdown/product/manual_<version>/` → `dev_probe`/`dev_help` for live syntax
   and echo shape (their docstrings state their scope).
+- **A distribution-class hit count is a sample, not an invariant** — for distribution algorithms
+  (rr / wrr / grr / gwrr; `domain_grammar.json` `algorithm_classes.distribution`), a single member's
+  hit count varies with the dig sample window: the same config passes one run and fails the next.
+  A small-sample exact per-member count, or a nonzero-any count, is flaky — a PASS by sampling luck,
+  not coverage. What is stable is the cumulative distribution over a large enough sample (about
+  Σweights×k requests): each backend's cumulative hits conserve (Σ hits == N sent) and fall in an
+  interval. That interval is expressed by the **`dist` combinator** — the framework expands it into
+  the field's range regex plus a conservation self-check, reading the hit-count field name from the
+  live output rather than an assumed spelling (the device's field token drifts across builds — a
+  hand-written count regex that hard-codes one spelling can go silently always-fail / always-true;
+  the blocks doc `EXCEL_FUNCTIONS.md` and `compile_expected_hits` both abstract it). This sample-vs-invariant fact is
+  **h-in-λ (distribution sampling) only**: deterministic-mapping algorithms (ga / topology / rtt / hi)
+  land on a fixed member by priority/probe/hash, so a fixed landing is legal there (`domain_grammar.json`
+  provenance carries the same scope, guarding the GA-CUT regression where fixed counts were wrongly
+  flagged outside distribution context). The exact statistics command comes from footprint/manual,
+  not from memory.
+- **Capacity / existence / enumeration checks read membership, not ranges** — a test that configures
+  N of something (16 listeners, N domains, N pools) and verifies they all landed is deterministic:
+  **no h** — no sampling, no rotation — so it sits outside the interval/set remedy (which is for
+  h-in-λ). Its faithful form is per-item membership: `abs_found` each expected entry, or `found_times`
+  for a count, matched against the **actual** `show` output layout — that layout is confirmed with
+  `dev_probe` before the assertion is written (the command's line/column shape shows even on the clean
+  compile-time device). A range regex over a set of expected values assumes a layout and misaligns
+  when the real one differs: 667986 wrote `172\.16\.3[24]\.70\s+5[4-9]` expecting an IP-then-port
+  layout, but `show sdns listener` returns `sdns listener <IP>` (default port not shown), so every
+  assertion missed and the case broke.
+
+## The device answers on two interfaces
+
+`show` and config commands (the APV product CLI, prompt `APV(config)#`) reach the box through
+`E=APV_0` / `E=APV_1`. `E=test_env` with `F=console` reaches the same box's underlying Linux shell
+(prompt `root@console`, a bash login with no `show` and no `sdns`) — a different door, not a
+different environment. An APV CLI command placed on `console` runs in bash and comes back empty or
+"not found", which on-device reads like an environment failure but is a wrong-door symptom: config
+that landed on `APV_0` is observed on that same product CLI, and reading it from the shell tests
+nothing. (E/F column objects: `case_ir.py` `VALID_TEST_OBJECTS` vs `VALID_TEST_ENV_HOSTS`; the two
+login shapes: `conftest.py` `apv_*_console` / `test_env` fixtures and the `root@console` vs
+`APV(config)#` prompts in the device echo.)
 
 ## Underdetermined claims ask first, land after
 

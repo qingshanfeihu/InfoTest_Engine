@@ -269,7 +269,9 @@ class MessageReducer:
             self._on_hil_response(event)
         elif kind == "ask_user_request":
             self._on_ask_user_request(event)
-        
+        elif kind == "ask_user_answered":
+            self._on_ask_user_answered(event)
+
 
     
 
@@ -771,7 +773,38 @@ class MessageReducer:
         )
         self._messages.append(msg)
 
-    
+    def _on_ask_user_answered(self, event: IstCoreEvent) -> None:
+        """ask_user 已答回边:按 question_id 命中那条 BLOCK_ASK_USER 块,原位替换为带
+        ``answered`` 标记 + ``answers`` 的块（生命周期对称:问了/答了都进 snapshot）。
+
+        使全量重放（``_replay_snapshot`` 重走每块）渲折叠摘要、不复活已答面板。倒序找——
+        同一 question_id 只对应一条块。复用 ``_update_tool_use_status`` 的 in-place
+        ``replace_content_block`` 样板（frozen dataclass 标准改法）。"""
+        payload = event.get("payload") or {}
+        qid = str(payload.get("question_id") or "")
+        if not qid:
+            return
+        answers = dict(payload.get("answers") or {})
+        for i in range(len(self._messages) - 1, -1, -1):
+            msg = self._messages[i]
+            for block in msg.content:
+                if (
+                    block.type == BLOCK_ASK_USER
+                    and str(block.payload.get("question_id") or "") == qid
+                ):
+                    new_block = make_payload_block(
+                        BLOCK_ASK_USER,
+                        {**dict(block.payload), "answered": True, "answers": answers},
+                    )
+                    self._messages[i] = replace_content_block(
+                        msg,
+                        predicate=lambda b: (
+                            b.type == BLOCK_ASK_USER
+                            and str(b.payload.get("question_id") or "") == qid
+                        ),
+                        new_block=new_block,
+                    )
+                    return
 
     def _on_error(self, event: IstCoreEvent) -> None:
         payload = event.get("payload") or {}

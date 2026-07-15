@@ -215,6 +215,10 @@ def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
         "n_failed": c.get(V.S_FAILED, 0) + c.get(V.S_CONTRADICTED, 0),
         "n_subset_verified": c.get(V.S_SUBSET_VERIFIED, 0),
         "n_broken": c.get(V.S_BROKEN, 0),
+        # pyATS 子类(§④):errored 走 reflow(reconcile→attribute→diagnose→author)、
+        # blocked 走 env 呈报(reconcile 写机械 env_blocked 归因→env_confirm_waiting→ask)
+        "n_broken_errored": c.get(V.S_BROKEN_ERRORED, 0),
+        "n_broken_blocked": c.get(V.S_BROKEN_BLOCKED, 0),
         "n_deliverable": c.get(V.S_DELIVERABLE, 0),
         "n_contradicted": c.get(V.S_CONTRADICTED, 0),
         "n_settled_bad": (c.get(V.S_ESCALATED, 0) + c.get(V.S_TERMINAL, 0)

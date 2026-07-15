@@ -248,6 +248,15 @@ def _tool_result_summary(name: str, output: str) -> list[str] | None:
     return None
 
 
+def _ask_user_answered_summary(answers: dict) -> str:
+    """已答 ask_user 块的一行摘要(重放用,格式对齐 AskUserSession.result_summary):
+    有答案→绿点「已回答 · Q → A · …」,空(取消)→「已取消」。"""
+    parts = [f"{q} → {a}" for q, a in (answers or {}).items() if a]
+    if not parts:
+        return " \x1b[2m● 已取消\x1b[0m"
+    return " \x1b[32m●\x1b[0m \x1b[2m已回答 · " + " · ".join(parts) + "\x1b[0m"
+
+
 # ---------------------------------------------------------------- fork 卡片渲染
 # 对标 opencode Task 卡形态:运行中 spinner+当前子工具单行实时态,完成定格
 # 「N calls · 耗时 · tokens」摘要行。一张卡=一条 transcript entry(值内嵌 \n),
@@ -1907,6 +1916,15 @@ class IstInkApp:
 
         elif block.type == "ask_user":
             payload = dict(block.payload) if block.payload else {}
+            if payload.get("answered"):
+                # 已答块:重放只渲一行摘要、绝不复活面板——BLOCK_ASK_USER 块永驻 snapshot,
+                # 全量重渲(_replay_snapshot)会重新 _begin_ask_user 把答完的面板拉回来
+                # (答后残留根因)。增量首答由 _finish_ask_user 清面板+留摘要;replay 清了
+                # transcript,这里按 snapshot 里的 answers 补回摘要,保持重放一致。
+                summary = _ask_user_answered_summary(payload.get("answers") or {})
+                if summary:
+                    self._transcript.append_message(summary)
+                return
             self._begin_ask_user(
                 payload.get("question_id", ""),
                 list(payload.get("questions", [])),
@@ -2179,6 +2197,12 @@ class IstInkApp:
             return
         # 清空 + 重置所有增量渲染累积状态(与 run 开始 reset 对齐),再全量重走渲染逻辑
         self._transcript.clear()
+        # ask_user 面板兜底重置(答后残留根因的第二道防线):重放前清活跃问答态,让面板
+        # 只由「未答」块经下方循环的 _begin_ask_user 重建;已答块走摘要分支不复活。防陈旧
+        # _ask_user 会话对象跨重放泄漏。
+        self._ask_user = None
+        if getattr(self, "_ask_user_panel", None) is not None:
+            self._ask_user_panel.clear()
         self._subagent_inner_summaries = {}
         self._subagent_thinking_lines = []
         self._main_thinking_lines = []

@@ -362,26 +362,6 @@ def _format_markdown(query: str, answer: str, elapsed_min: int,
             f"{process_section}\n---\n{footer}")
 
 
-# MCP 文档客户端
-_doc_toolkit = None
-
-
-def _get_doc_toolkit():
-    global _doc_toolkit
-    mcp_url = server_config.mcp_doc_url
-    if mcp_url and _doc_toolkit is None:
-        try:
-            from .tools import DocMcpClient, DocToolKit
-            c = DocMcpClient(mcp_url)
-            c.initialize()
-            _doc_toolkit = DocToolKit(c)
-            logger.info("MCP 文档客户端已就绪")
-        except Exception:
-            logger.exception("MCP 文档客户端初始化失败")
-            return None
-    return _doc_toolkit
-
-
 # 用户目录缓存
 _user_display_cache: dict[str, str] = {}
 _access_token: str = ""
@@ -519,7 +499,7 @@ class SmartBotGateway:
             try:
                 await c.reply_welcome(frame, {
                     "msgtype": "text",
-                    "text": {"content": "您好！我是 InfoTest Engine 智能助手。可直接发送技术问题。"},
+                    "text": {"content": "您好！我是 InfoTest Engine 智能助手。可直接发送技术问题，或发送「帮助」查看完整功能。"},
                 })
             except Exception:
                 logger.debug("欢迎消息发送失败", exc_info=True)
@@ -679,15 +659,30 @@ class SmartBotGateway:
 
         if content in ("帮助", "help"):
             tips = [
-                "InfoTest Engine 智能助手", "",
-                "直接发送技术问题即可获得解答。", "",
-                "命令列表:",
-                "  新会话 / 新对话 -- 开启新对话",
-                "  停止 / 终止 -- 强制终止当前任务",
-                "  帮助 -- 显示此帮助",
+                "📋 InfoTest Engine 智能助手",
+                "",
+                "💬 **智能问答**",
+                "  直接发送技术问题即可获得解答，支持多轮对话。",
+                "",
+                "📁 **文件收发**",
+                "  • 直接发送文件（Excel / PDF / 文档等），我会自动分析内容",
+                "  • 说「把 xxx 发给我」或「发送文件」，我会把最近生成的文件发给您",
+                "",
             ]
             if server_config.mcp_doc_url:
-                tips.append("  报告 -- 将结果生成文档")
+                tips += [
+                    "📄 **云文档**",
+                    "  • 说「生成报告」或发送 /report，自动将测试结果生成企业微信云文档",
+                    "  • 说「搜索文档」可查找历史报告",
+                    "",
+                ]
+            tips += [
+                "⌨️ **命令列表**",
+                "  /report  -- 将最近结果生成云文档报告",
+                "  新会话   -- 开启新对话（清除上下文）",
+                "  停止     -- 强制终止当前任务",
+                "  帮助     -- 显示此帮助",
+            ]
             self._reply_stream(frame, str(uuid.uuid4()), "\n".join(tips), finish=True)
             return
 
@@ -1057,39 +1052,22 @@ class SmartBotGateway:
 
     def _try_create_report(self, frame: dict, query: str,
                            user_id: str, req_id: str) -> None:
-        stream_id = str(uuid.uuid4())
-        last = _last_result.get(user_id)
-        if last:
-            query = last["query"]
-            answer = last["answer"]
-        else:
-            answer = ""
-        if not answer:
-            self._reply_stream(frame, stream_id,
-                               "还没有可用的分析结果。请先发送一个技术问题。", finish=True)
-            return
-        if not server_config.mcp_doc_url:
-            self._reply_stream(frame, stream_id,
-                               "报告功能未配置。请在企微后台授权后设置 WECOM_SMART_MCP_DOC_URL。",
-                               finish=True)
-            return
-        self._reply_stream(frame, stream_id, "正在生成报告文档…")
-        try:
-            from .tools import build_report_markdown
-            tk = _get_doc_toolkit()
-            if tk is None:
-                self._reply_stream(frame, stream_id,
-                                   "MCP 客户端初始化失败", finish=True)
-                return
-            report_md = build_report_markdown(query, answer)
-            doc_url = tk.create_doc_with_content(
-                f"InfoTest 报告 - {query[:50]}", report_md,
-            )
-            if doc_url:
-                self._reply_stream(frame, stream_id,
-                                   f"报告已生成\n\n[点击查看报告]({doc_url})", finish=True)
-            else:
-                self._reply_stream(frame, stream_id, "文档创建失败", finish=True)
-        except Exception as e:
-            logger.exception("报告生成失败")
-            self._reply_stream(frame, stream_id, f"报告生成失败: {e}", finish=True)
+        """将 /report 命令转为 agent query，走正常的 agent 流程。
+
+        报告生成逻辑由 report-gen skill 负责（结构化分析 + 文档创建），
+        gateway 只做意图转译和路由。
+        """
+        parts = query.strip().split(maxsplit=1)
+        extra = parts[1] if len(parts) > 1 else ""
+
+        agent_query = (
+            "请根据当前会话或最近的测试结果生成结构化测试报告，"
+            "并保存为企业微信云文档。"
+            "如果 workspace/outputs/ 下有测试产物（case.xlsx、engine_report.json 等），"
+            "请基于这些数据生成报告；如果没有，请告知用户需要先执行测试。"
+        )
+        if extra:
+            agent_query += f"\n用户补充说明：{extra}"
+
+        logger.info("/report 转 agent query: user=%s extra=%.50s", user_id, extra)
+        self._run_query(frame, user_id, agent_query, req_id)

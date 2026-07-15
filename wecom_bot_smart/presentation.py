@@ -152,6 +152,13 @@ TOOL_DISPLAY_CONFIG: dict[str, ToolDisplayConfig] = {
                                           phase=AgentPhase.EXECUTING),
     "wx_send_file":     ToolDisplayConfig(icon="📤", message="正在发送文件",
                                           phase=AgentPhase.EXECUTING),
+    # ---- 企业微信云文档 ----
+    "wx_create_doc":    ToolDisplayConfig(icon="📋", message="正在创建云文档",
+                                          phase=AgentPhase.GENERATING),
+    "wx_update_doc":    ToolDisplayConfig(icon="📋", message="正在更新云文档",
+                                          phase=AgentPhase.GENERATING),
+    "wx_list_docs":     ToolDisplayConfig(icon="📋", message="正在查询文档列表",
+                                          phase=AgentPhase.SEARCHING),
 }
 
 # 默认配置（三级匹配的兜底）

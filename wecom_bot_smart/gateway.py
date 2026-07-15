@@ -209,6 +209,12 @@ def _register_task(user_id: str, stream_id: str) -> threading.Event:
 def _deregister_task(user_id: str) -> None:
     with _registry_lock:
         _task_registry.pop(user_id, None)
+    # 任务完成时刷新会话活跃时间 + 重置轮数，防止长任务完成后触发空闲切分
+    with _sessions_lock:
+        sess = _sessions.get(user_id)
+        if sess is not None:
+            sess["last_active"] = time.time()
+            sess["turn_count"] = 1  # 长任务后重新计轮
 
 
 def _cancel_task(user_id: str) -> bool:
@@ -259,7 +265,9 @@ def _get_thread_id(user_id: str) -> tuple[str, str | None, int]:
         idle = now - sess["last_active"]
         turns = sess["turn_count"]
         reason = None
-        if idle > MAX_IDLE_SECONDS:
+        # 有活跃任务时跳过空闲检查——agent 长任务（编译/上机）可能跑几十分钟
+        has_active_task = user_id in _task_registry
+        if idle > MAX_IDLE_SECONDS and not has_active_task:
             reason = f"空闲超过 {idle / 60:.0f} 分钟"
         elif turns >= MAX_TURNS:
             reason = f"达到轮数上限（{MAX_TURNS} 轮）"
@@ -297,8 +305,11 @@ def _start_cleanup_thread() -> None:
             time.sleep(CLEANUP_INTERVAL)
             now = time.time()
             with _sessions_lock:
-                stale = [uid for uid, s in _sessions.items()
-                         if now - s["last_active"] > SESSION_CLEANUP_SECONDS]
+                stale = [
+                    uid for uid, s in _sessions.items()
+                    if now - s["last_active"] > SESSION_CLEANUP_SECONDS
+                    and uid not in _task_registry  # 有活跃任务的不清理
+                ]
                 for uid in stale:
                     s = _sessions.pop(uid)
                     logger.info("清理僵尸会话: user=%s idle=%.1fh",

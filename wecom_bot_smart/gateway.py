@@ -350,8 +350,7 @@ def _clean_content(raw: str, user_id: str) -> str:
 
 def _format_markdown(query: str, answer: str, elapsed_min: int,
                      split_reason: str | None = None,
-                     turn_count: int = 0,
-                     process_summary: str = "") -> str:
+                     turn_count: int = 0) -> str:
     body = answer
     d = body.encode("utf-8")
     if len(d) > 20000:
@@ -367,10 +366,8 @@ def _format_markdown(query: str, answer: str, elapsed_min: int,
           if elapsed_min > 0
           else "🚀 Powered by IST-Core")
     footer = f"{turn_info} | {ft}" if turn_info else ft
-    process_section = f"\n{process_summary}\n" if process_summary else ""
     return (f"## InfoTest Engine 结果\n{prefix}"
-            f"> **问题：**{query[:100]}\n---\n{body}\n---"
-            f"{process_section}\n---\n{footer}")
+            f"> **问题：**{query[:100]}\n---\n{body}\n---\n\n---\n{footer}")
 
 
 # 用户目录缓存
@@ -795,11 +792,6 @@ class SmartBotGateway:
         total_min = int((time.monotonic() - start_ts) / 60) or 0
         renderer = ThoughtRenderer()
         process_summary = renderer.render_summary(tool_names, tool_details)
-        final_md = _format_markdown(
-            query[:100], answer, total_min,
-            split_reason=split_reason, turn_count=turn_count,
-            process_summary=process_summary,
-        )
         _last_result[user_id] = {"query": query[:100], "answer": answer}
 
         # ask_user 触发且无答案时，不发空的最终消息（通知已单独发送）
@@ -808,18 +800,25 @@ class SmartBotGateway:
             _deregister_task(user_id)
             return
 
-        # 最终流式消息
-        ok, stream_id = self._reply_stream(frame, stream_id, final_md, finish=True)
+        # 流式消息只保留处理过程，结束流
+        progress_md = f"📋 处理完成（{total_min}分钟）"
+        if process_summary:
+            progress_md = f"{process_summary}\n---\n{progress_md}"
+        ok, stream_id = self._reply_stream(frame, stream_id, progress_md, finish=True)
         if not ok:
             new_sid = str(uuid.uuid4())
-            self._reply_stream(frame, new_sid, final_md, finish=True)
+            self._reply_stream(frame, new_sid, progress_md, finish=True)
         _deregister_task(user_id)
 
-        # 完成通知（红点）
+        # 最终回答作为新消息发送（触发企微红点通知）
+        answer_md = _format_markdown(
+            query[:100], answer, total_min,
+            split_reason=split_reason, turn_count=turn_count,
+        )
         try:
-            self._reply_markdown(frame, f"✅ **回答完成**（{total_min}分钟）")
+            self._reply_markdown(frame, answer_md)
         except Exception:
-            logger.debug("完成通知发送失败", exc_info=True)
+            logger.debug("回答消息发送失败", exc_info=True)
 
         # 文件发送
         logger.info("文件发送检查: written_files=%s wants_file=%s query=%.50s",

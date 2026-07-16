@@ -604,11 +604,12 @@ class SmartBotGateway:
         msgtype = body.get("msgtype", "")
         from_info = body.get("from", {})
         user_id = from_info.get("userid", "unknown")
+        user_name = from_info.get("name", "")  # 企微用户显示名
         req_id = frame.get("headers", {}).get("req_id", "")
         content = ""
 
         if msgtype in ("file", "image", "voice", "video"):
-            self._handle_file_msg(frame, body, user_id, msgtype, req_id)
+            self._handle_file_msg(frame, body, user_id, msgtype, req_id, user_name=user_name)
             return
 
         if msgtype == "text":
@@ -709,7 +710,7 @@ class SmartBotGateway:
     # ------------------------------------------------------------------
 
     def _handle_file_msg(self, frame: dict, body: dict, user_id: str,
-                         msgtype: str, req_id: str) -> None:
+                         msgtype: str, req_id: str, user_name: str = "") -> None:
         from .files import download_qywx_file
         media_info = body.get(msgtype, {})
         file_url = media_info.get("url", "")
@@ -722,7 +723,9 @@ class SmartBotGateway:
         self._reply_stream(frame, stream_id, f"正在接收{msgtype}文件...")
         try:
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            save_dir = os.path.join(project_root, "workspace", "inputs", _resolve_user_dir(user_id))
+            # 优先用企微返回的用户名，降级为 user_id
+            dir_name = _safe_user_dir(user_name) if user_name else _resolve_user_dir(user_id)
+            save_dir = os.path.join(project_root, "workspace", "inputs", dir_name)
             save_path = download_qywx_file(file_url, aeskey, save_dir)
             size_kb = os.path.getsize(save_path) / 1024
             size_mb = size_kb / 1024

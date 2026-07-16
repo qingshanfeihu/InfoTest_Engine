@@ -284,3 +284,157 @@ def test_session_bidirectional_nav_keeps_state(capture_submit):
     s.handle_key("return", "")          # Q1 改成 B，前进到 Q2
     s.handle_key("return", "")          # Q2 = X，提交
     assert capture_submit["ans"] == {"Q1?": "B", "Q2?": "X"}
+
+
+# ── 516576 防呆：已选未提交切题/esc 告警一次 + 带未答整体提交提示 ─────
+# 实弹背景:zhaiyq 7 题丢 2 答——数字/↑↓ 只动高亮,enter 才落答;用户高亮后
+# 直接 Tab/←→ 切题或收尾,答案静默丢。防呆=黄字告警一次,再次同类操作放行。
+
+
+def _two_questions():
+    return [
+        {"question": "Q1?", "options": [
+            {"label": "A", "description": ""}, {"label": "B", "description": ""}]},
+        {"question": "Q2?", "options": [
+            {"label": "X", "description": ""}, {"label": "Y", "description": ""}]},
+    ]
+
+
+def _rendered(s) -> str:
+    return "\n".join(s.render_lines())
+
+
+def test_session_switch_with_unsubmitted_selection_warns_once(capture_submit):
+    """数字高亮未 enter 就 →/Tab 切题：第一次拦下+黄字，再次同键放行（不落答）。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("2", "2")              # 高亮 B，未 enter（用户以为已选）
+    s.handle_key("right", "")           # 第一次切题 → 拦下告警
+    out = _rendered(s)
+    assert "Q1?" in out, "首次切题应被拦在当前题"
+    assert "已选未提交" in out, "应显示黄字告警"
+    s.handle_key("right", "")           # 再次同类操作 → 放行
+    out = _rendered(s)
+    assert "Q2?" in out, "再次切题应放行"
+    assert "已选未提交" not in out, "放行后告警清除"
+    # 放行=按原语义切题不落答：提交后 Q1 仍为空
+    s.handle_key("return", "")          # Q2 = X，进入提交（Q1 未答 → 提交防呆拦一次）
+    s.handle_key("return", "")          # 再次 enter 确认提交
+    assert capture_submit["ans"] == {"Q1?": "", "Q2?": "X"}
+
+
+def test_session_switch_committed_no_warn(capture_submit):
+    """已 enter 落答的题切走不告警；未动过高亮的题自由浏览也不告警。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("return", "")          # Q1 = A（落答，自动进 Q2）
+    s.handle_key("left", "")            # Q2 未动过 → 自由切回 Q1
+    assert "已选未提交" not in _rendered(s)
+    assert "Q1?" in _rendered(s)
+    s.handle_key("right", "")           # Q1 已落答 → 自由切到 Q2
+    assert "已选未提交" not in _rendered(s)
+    assert "Q2?" in _rendered(s)
+
+
+def test_session_switch_warn_rearms_after_other_key(capture_submit):
+    """告警后按了其他键（↑↓ 继续挑）→ armed 重置，再切题重新告警而非静默放行。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("2", "2")
+    s.handle_key("right", "")           # 告警一次
+    s.handle_key("up", "")              # 其他键 → 清提示重新计
+    assert "已选未提交" not in _rendered(s)
+    s.handle_key("right", "")           # 仍未提交 → 重新告警，不切题
+    assert "Q1?" in _rendered(s) and "已选未提交" in _rendered(s)
+    s.handle_key("right", "")           # 再次 → 放行
+    assert "Q2?" in _rendered(s)
+
+
+def test_session_esc_with_unsubmitted_selection_warns_then_cancels(capture_submit):
+    """单题已选未提交按 esc：第一次告警不取消，再次 esc 确认取消。"""
+    s = _session(
+        [{"question": "选?", "options": [
+            {"label": "A", "description": ""}, {"label": "B", "description": ""}]}],
+        capture_submit,
+    )
+    s.handle_key("2", "2")              # 高亮 B 未 enter
+    s.handle_key("escape", "")
+    assert "ans" not in capture_submit, "首次 esc 应被拦下"
+    assert "已选未提交" in _rendered(s)
+    s.handle_key("escape", "")          # 再次 esc → 确认取消
+    assert capture_submit["ans"] == {}
+
+
+def test_session_esc_untouched_multi_question_warns_unanswered(capture_submit):
+    """多题面板带未答题 esc 关闭：提示「还有 N 题未答」，再次 esc 放行。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("escape", "")
+    assert "ans" not in capture_submit
+    out = _rendered(s)
+    assert "还有 2 题未答" in out and "挂起" in out
+    s.handle_key("escape", "")
+    assert capture_submit["ans"] == {}
+
+
+def test_session_submit_with_unanswered_warns_then_submits(capture_submit):
+    """多题末题提交时存在未答题：提示「还有 N 题未答,未答题将按挂起处理」，再次 enter 提交。"""
+    s = _session(
+        [
+            {"question": "Q1?", "options": [
+                {"label": "A", "description": ""}, {"label": "B", "description": ""}]},
+            {"question": "Q2?", "options": [
+                {"label": "X", "description": ""}, {"label": "Y", "description": ""}]},
+            {"question": "Q3?", "options": [
+                {"label": "M", "description": ""}, {"label": "N", "description": ""}]},
+        ],
+        capture_submit,
+    )
+    s.handle_key("return", "")          # Q1 = A → Q2
+    s.handle_key("right", "")           # Q2 未动过 → 自由跳过 → Q3
+    s.handle_key("return", "")          # Q3 = M → 触发提交，Q2 未答 → 拦下
+    assert "ans" not in capture_submit, "带未答题的首次提交应被拦下"
+    out = _rendered(s)
+    assert "还有 1 题未答" in out and "挂起" in out
+    s.handle_key("return", "")          # 再次 enter → 确认提交
+    assert capture_submit["ans"] == {"Q1?": "A", "Q2?": "", "Q3?": "M"}
+
+
+def test_session_submit_warned_then_user_goes_back_to_answer(capture_submit):
+    """提交告警后用户回头补答（不锁死）：←切回补答，再提交时无未答 → 直接提交。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("right", "")           # Q1 未动过 → 自由跳到 Q2
+    s.handle_key("return", "")          # Q2 = X → 提交，Q1 未答 → 拦下
+    assert "还有 1 题未答" in _rendered(s)
+    s.handle_key("left", "")            # 回 Q1（当前题已落答，自由切）
+    s.handle_key("down", "")
+    s.handle_key("return", "")          # Q1 = B → 前进 Q2
+    s.handle_key("return", "")          # 全部已答 → 直接提交，无告警
+    assert capture_submit["ans"] == {"Q1?": "B", "Q2?": "X"}
+
+
+def test_session_other_submit_blocked_then_enter_confirms(capture_submit):
+    """末题 Other 落答后被未答提示拦下：再次 enter 应直接提交，不得误入文本输入态。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("right", "")           # Q1 未动过 → 自由跳到 Q2
+    s.handle_key("o", "o")              # Q2 进 Other 输入
+    s.submit_other_text("自定义答案")     # 落答 → 提交被拦（Q1 未答）
+    assert "ans" not in capture_submit
+    assert "还有 1 题未答" in _rendered(s)
+    assert not s.in_other_input
+    s.handle_key("return", "")          # 再次 enter → 确认提交（高亮停在 Other 行也不得再入输入态）
+    assert not s.in_other_input
+    assert capture_submit["ans"] == {"Q1?": "", "Q2?": "自定义答案"}
+
+
+def test_session_leave_warn_coexists_with_empty_other_guard(capture_submit):
+    """两道防呆共存：切题告警后进 Other，空文本仍被 532862 防呆拦，补内容后正常走。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("2", "2")              # Q1 高亮未提交
+    s.handle_key("right", "")           # 切题告警
+    assert "已选未提交" in _rendered(s)
+    s.handle_key("o", "o")              # 进 Other 输入（切题告警清除）
+    s.submit_other_text("")             # 空文本 → 532862 防呆拦下
+    assert s.in_other_input
+    assert any("不能为空" in ln for ln in s.render_lines())
+    s.submit_other_text("裁决X")         # 补内容 → Q1 落答，前进 Q2
+    assert "不能为空" not in _rendered(s)
+    assert "已选未提交" not in _rendered(s)
+    s.handle_key("return", "")          # Q2 = X → 全部已答直接提交
+    assert capture_submit["ans"] == {"Q1?": "裁决X", "Q2?": "X"}

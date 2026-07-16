@@ -80,9 +80,10 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
         return S_ESCALATED
     if _is_suspended(mine):
         return S_SUSPENDED
-    # 用户来源终态两种:止损(env_blocked)与确认产品缺陷(defect_candidate 走候选单)
+    # 用户来源终态三种:止损记账(user_stop,2026-07-16 N1a 本体分离)/确认环境
+    # (env_blocked,env 题面停止的如实语义)/确认产品缺陷(defect_candidate 走候选单)
     if any(f.get("ev") == "attribution" and _user_sourced(f)
-           and f.get("disposition") in ("env_blocked", "defect_candidate")
+           and f.get("disposition") in ("env_blocked", "defect_candidate", "user_stop")
            for f in mine):
         return S_TERMINAL
     # H2(§18.11 横切,2026-07-14):按 question_id 配对——旧谓词「有任意 decision 即

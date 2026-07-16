@@ -149,6 +149,21 @@
     "gwrr"
    ],
    "provenance": "手册:均摊/加权轮询=分布类(发 N 次→各后端累计命中∈统计区间,守恒 Σ==N);ga/hi/topology/rtt 等=确定性映射(命中由优先级/探测/哈希定,固定落点合法)——分布上下文才判写死落点/固定计数可疑,防误杀确定性映射(GA-CUT 回归教训)"
+  },
+  "uniform_rotation": {
+   "methods": [
+    "rr"
+   ],
+   "provenance": "2026-07-16 E10b:等权严格轮转类——稳态下单成员占且仅占一个模 period 剩余类,是序列↔周期可满足性判定(check_sequence_periodicity, cycle_kind=uniform_rotation)的适用类。手册『均摊轮询』所指=rr;wrr/gwrr 加权变体的剩余类占位依赖调度器交织实现、grr 组语义未上机钉死(C7 probe 清单③同族)——confirmed 前不入本类(不写死未证实文法,同 co_required_params 空置纪律);算法名→周期语义类的映射由本条数据供给(工具壳现查),新算法钉死后加 methods 条目零代码。"
+  },
+  "deterministic_mapping": {
+   "methods": [
+    "ga",
+    "hi",
+    "topology",
+    "rtt"
+   ],
+   "provenance": "2026-07-16 结构化提升:本清单原以散文形态存在于 distribution.provenance(2026-07-08 手册取证『ga/hi/topology/rtt 等=确定性映射——命中由优先级/探测/哈希定,固定落点合法』),此处升为机读数据供 verifiability 三分判定(分布→轮转数学/确定性映射→预期与算法不符走改描述/两者都不中=未知→fail-open 中性放行不误杀)。原文带『等』字=非穷举:未知算法名永远走 fail-open,不因不在本清单被判非分布(封闭世界假设是误杀源);新算法钉死语义后加 methods 条目零代码。"
   }
  },
  "dns_record_types": {
@@ -4697,5 +4712,26 @@
     "value": "per-step read wallclock override in seconds"
    }
   ]
+ },
+ "co_required_params": {
+  "_provenance": "2026-07-16 team3 B1':同语句共需参数(co-required)类型定义。语义:trigger 语句命中且 condition 参数值命中的行,须同行可见 requires_pattern(如 wrr/ga 语句的 weight/priority 参数)。**rules 首发空置**——572708 实证 `sdns host method <域名> wrr` 两轮两种设备响应(早轮静默接受不生效/定稿 run 报错缺 priority),必带性与层级(host method 级 vs pool method 级)未上机钉死(C7 probe 清单③);confirmed_on_device=false 的条目不落——写死未证实文法=advisory 噪声训练 worker 忽略。消费:加载器 co_required_params() + 检测器 missing_co_required()(domain_grammar.py),emit 成功路径 advisory 文本行(非门、不拒绝、不进 lint 凭证判定——参数语义类是内容依赖判断,(47) 硬门红线;与签名闭集的 command_existence 门不同类)。C7 钉死后同类坑(如记录类型↔service 族配对)=纯加 rules 条目零代码。",
+  "_schema_example": {
+   "id": "wrr-weight",
+   "trigger_statement": "<statements 表语句 id,如 method_algorithm_line>",
+   "condition": {
+    "param": "<trigger 正则的命名捕获组名(缺省回退 name 组)",
+    "values": [
+     "wrr",
+     "ga"
+    ]
+   },
+   "requires_pattern": "<同语句行须命中的正则(IGNORECASE),如权重/priority 参数形态>",
+   "scope": "<适用层级说明(文档字段,不参与判定)>",
+   "provenance": {
+    "source": "manual §… / footprint <node_id> / 设备实证 <date>",
+    "confirmed_on_device": false
+   }
+  },
+  "rules": []
  }
 }

@@ -14,10 +14,17 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from typing import Literal
 
 from langchain_core.tools import tool
+
+# last_run.json 读改写互斥(K1 归因并发化的安全前提,2026-07-16):归因 fork 池化后
+# 多个 submit_attribution 并发对同一 last_run.json 做「整读→改一条→整写」,无锁会
+# 相互覆盖丢归因。进程内锁即可——fork 经 execute_fork_skill 跑在引擎进程的线程池里,
+# 无跨进程写方(digest 写 last_run 在 run 节点,与 attribute 节点时序互斥)。
+_LAST_RUN_LOCK = threading.Lock()
 
 # G/E/V/transient 是归因体系的层；attribute_fail 机械预判只产出 G(^ 拒绝) 或
 # undetermined(待 LLM 归因)——E/V/transient 由 LLM 基于 device_context 原文判。
@@ -270,6 +277,17 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
     if not lr.is_file():
         return (f"error: last_run.json does not exist: {lr} — pass the brief's last_run_path "
                 f"(or the volume sheet next to it), not the per-case sheet")
+    # K1 并发安全:读改写整段持锁(校验读的 records 与写回的 records 必须是同一份;
+    # 锁外读锁内写会把并发同伴刚落的 _attribution 覆盖回旧快照)
+    with _LAST_RUN_LOCK:
+        return _submit_attribution_locked(lr, autoid, layer, disposition, evidence,
+                                          fix_direction, defect_candidate, h_position)
+
+
+def _submit_attribution_locked(lr, autoid: str, layer: str, disposition: str,
+                               evidence: str, fix_direction: str,
+                               defect_candidate, h_position: str) -> str:
+    """submit_attribution 的读改写主体(_LAST_RUN_LOCK 持有中;拆函数只为锁边界清晰)。"""
     try:
         records = json.loads(lr.read_text(encoding="utf-8"))
         assert isinstance(records, list)
@@ -277,6 +295,7 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
         return f"error: failed to read last_run.json: {e}"
 
     aid = (autoid or "").strip()
+    ev = (evidence or "").strip()
     rec = next((r for r in records if isinstance(r, dict) and str(r.get("autoid")) == aid), None)
     if rec is None:
         have = [str(r.get("autoid")) for r in records if isinstance(r, dict)][:8]

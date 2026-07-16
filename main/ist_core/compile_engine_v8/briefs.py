@@ -65,6 +65,10 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
     parts = [json.dumps(envelope, ensure_ascii=False)]
     tail: list[str] = []
 
+    # D9 注入措辞去事实化(2026-07-16,777976 洗白链取证驱动):上轮归因以无假设框
+    # 形态注入,worker 逐字采信错误归因把 Hit:0 顺成"步序问题"——标 hypothesis 削盲从;
+    # 措辞是 re-verify 不是 distrust(正确归因的定向价值保留)。IST_BRIEF_HYPOTHESIS_MARKUP=0 回退。
+    hyp_markup = sh.env_flag("IST_BRIEF_HYPOTHESIS_MARKUP")
     is_retry = rounds_used >= 1
     if is_retry:
         # 载荷按引用(X8 效率债):只有最新失败轮的回显全文内联;更早轮给归因结论行
@@ -73,9 +77,15 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
         docs = []
         for i, e in enumerate(evs):
             sig = "/".join(x for x in (e["layer"], e["disposition"]) if x)
+            _att_attr = (f' attribution="{sig}" status="hypothesis"' if hyp_markup
+                         else f' attribution="{sig}"')
+            _fix_open = (('<fix_direction confidence="hypothesis" note="prior-round '
+                          'attribution — a hypothesis to re-verify against this round\'s '
+                          'echo, not established fact">') if hyp_markup
+                         else "<fix_direction>")
             head = (f'<document label="on-device run {e["run_id"]}" ctx="{e["ctx"]}"'
-                    + (f' attribution="{sig}"' if sig else "") + ">\n"
-                    + (f"<fix_direction>{e['fix_direction'][:800]}</fix_direction>\n"
+                    + (_att_attr if sig else "") + ">\n"
+                    + (f"{_fix_open}{e['fix_direction'][:800]}</fix_direction>\n"
                        if e["fix_direction"] else ""))
             # 执行失败行显式高亮(echo-grounding 编译侧对偶,2026-07-13):device_context
             # 里的失败机理行(如 write all 撞文件的 Failed to execute)埋在长回显里易被
@@ -163,6 +173,26 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
                 f"{adj.get(tok, adj['confirm'])}\n"
                 "</user_adjudication>")
 
+    # cap 纠正注入(接线包 2g,2026-07-16;样板=panel 的 <user_adjudication>):
+    # cap 题面 Other 纠正(token=correct)此前无消费者——granted_rounds 已计其授权,
+    # 这里把纠正原文随重编 brief 下发(用户意图最高权威)。panel 裁决已注入时不重复
+    # (panel 是更结构化的同权威源,双块并列会稀释)。
+    cap_corrections = [d for d in mine if d.get("ev") == "decision"
+                       and str(d.get("token")) == "correct"
+                       and str(d.get("question_id", "")).startswith("cap:")
+                       and str(d.get("answer") or "").strip()]
+    if cap_corrections and not (pf and any(
+            str(d.get("question_id")) == f"panel:{aid}:{int(pf[-1].get('round') or 0)}"
+            for d in mine if d.get("ev") == "decision")):
+        parts.append(
+            "<user_adjudication>\n"
+            "At the retry-budget checkpoint the user gave a correction instead of a "
+            "plain continue:\n"
+            f"Ruling: {str(cap_corrections[-1].get('answer'))[:500]}\n"
+            "(The user answered this batch.)\n"
+            "The ruling text above is the highest authority on intent — compile per it.\n"
+            "</user_adjudication>")
+
     atts = [f for f in mine if f.get("ev") == "attribution"]
     if atts and str(atts[-1].get("disposition")) == "defect_candidate":
         tail.append(
@@ -174,8 +204,19 @@ def build_brief(aid: str, state: dict, fs: list[dict]) -> str:
 
     intent = intent_summary(aid, state)
     if intent:
-        parts.append("<intent note=\"this case's intent; full text at manifest_path\">\n"
-                     + intent + "\n</intent>")
+        # D9 意图侧成对措辞(前提洗白链的另一半;设计对抗 §四 D9 裁决):
+        # ①expected 是作者预期非设备已证事实(须落地前 ground);②预期仍是断言期望值的
+        # **唯一来源**——与实机矛盾走呈报,不得以观察值替换(防 observe-then-assert 滑坡,
+        # 「预期以实机为准」是 user 专属裁决)。两句必须成对,单标"未证实"会滑向自决改预期。
+        _note = (("this case's intent; the desc lines are the requirement; each `expected:` "
+                  "is the author's anticipated outcome, not device-verified fact — ground it "
+                  "(manual/precedent/probe) before encoding it as an assertion, and the "
+                  "intent stays the sole source of assertion expectations: if device behavior "
+                  "contradicts it, file the discrepancy (verifiability/panel) — never "
+                  "silently replace the expectation with the observed value; full text at "
+                  "manifest_path") if hyp_markup
+                 else "this case's intent; full text at manifest_path")
+        parts.append(f"<intent note=\"{_note}\">\n" + intent + "\n</intent>")
     # F8a 兄弟上下文(§18.11):脑图组是语义单元——同组 siblings 的 title 一行式内联
     # (manifest 原文=事实性证据,机械注入;X8:check/期望值**不内联**只按引用,防
     # precedent-then-assert 近亲锚定,评审 D14/D15)。worker 据此先陈述组共享 claim

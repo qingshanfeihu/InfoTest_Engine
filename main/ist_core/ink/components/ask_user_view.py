@@ -19,6 +19,14 @@ ist_app 只在 _handle_key 顶部拦截、把按键委托给本模块。
 - enter：单选=确认该项并进入下一题/提交；multiSelect=进入下一题/提交
 - o：选 "Other"，转入自由文本输入（复用 PromptInput）
 - esc：取消整个问答（工具收到空答案 → "User cancelled"）
+
+防呆（2026-07-16 zhaiyq 实弹 7 题丢 2 答；只加黄字提示，不改任何按键语义）：
+- 空 Other 提交（532862）：留在输入态 + 「不能为空」提示，绝不落空答案。
+- 已选未提交切题/esc（516576）：数字/↑↓ 只动高亮，enter(单选)/space(多选) 才落
+  ``_selected``——动过高亮但未落答就 ←→/Tab 切题或 esc，黄字告警一次；紧接着再次
+  同类按键放行（不锁死用户），其他按键则清提示重新计。
+- 多题带未答整体提交/关闭：末题 enter 提交或 esc 取消时仍有未答题 → 提示
+  「还有 N 题未答，未答题将按挂起处理」，再次同类操作放行。
 """
 
 from __future__ import annotations
@@ -53,6 +61,10 @@ class AskUserSession:
         self._other_text: dict[int, str] = {}  # q_idx -> Other 自由文本
         self._other_input = False      # 是否处于 Other 文本输入态
         self._other_empty_hint = False  # 空文本提交被拦→面板显「不能为空」提示(防呆)
+        # 516576 防呆状态:数字/↑↓ 只动高亮不落答,动过高亮即视为「已选」意图
+        self._touched: list[bool] = [False] * len(questions)  # 每题是否动过高亮
+        self._leave_warn: str | None = None  # 黄字告警文案(切题/esc/整体提交防呆),None=不显示
+        self._warned_op: str | None = None   # 已告警的操作类别(switch/cancel/submit)→同类再次操作放行
 
     # ── 渲染 ──────────────────────────────────────────────────────────
 
@@ -123,6 +135,9 @@ class AskUserSession:
             hint += "←→/Tab 切题 · "
         hint += "enter 确认 · o 自定义 · esc 取消"
         lines.append(f"   {D}{hint}{X}")
+        if self._leave_warn:
+            # 防呆黄字(已选未提交切题/esc、带未答整体提交):告警一次,再次同类操作放行
+            lines.append(f"   \x1b[33m⚠ {self._leave_warn}\x1b[0m")
         return lines
 
     # ── 按键处理 ──────────────────────────────────────────────────────
@@ -136,41 +151,58 @@ class AskUserSession:
         rows_count = opts_count + 1  # +1 for Other
 
         if key in ("up", "ctrl+p"):
+            self._clear_warn()
+            self._touched[self._q_idx] = True
             self._highlight = (self._highlight - 1) % rows_count
             self._render()
             return True
         if key in ("down", "ctrl+n"):
+            self._clear_warn()
+            self._touched[self._q_idx] = True
             self._highlight = (self._highlight + 1) % rows_count
             self._render()
             return True
         if key and key.isdigit():
             n = int(key)
             if 1 <= n <= rows_count:
+                self._clear_warn()
+                self._touched[self._q_idx] = True
                 self._highlight = n - 1
                 self._render()
                 return True
         if key == "space":
+            self._clear_warn()
             self._toggle_current()
             self._render()
             return True
         if key == "escape":
-            self.cancel()
+            if self._guard_cancel():
+                self.cancel()
             return True
         # A4：多题双向导航（←→ / Tab / Shift+Tab），可回头改，已选状态保留
         if len(self._questions) > 1:
             if key in ("left", "shift+tab"):
-                self._goto_question(self._q_idx - 1)
+                if self._guard_switch(self._q_idx - 1):
+                    self._goto_question(self._q_idx - 1)
                 return True
             if key in ("right", "tab"):
-                self._goto_question(self._q_idx + 1)
+                if self._guard_switch(self._q_idx + 1):
+                    self._goto_question(self._q_idx + 1)
                 return True
         if key in ("o", "O") or (char in ("o", "O")):
             # 跳到 Other 行并进入文本输入
+            self._clear_warn()
             self._highlight = rows_count - 1
             self._other_input = True
             self._render()
             return True
         if key in ("return", "enter"):
+            if self._warned_op == "submit":
+                # 「还有 N 题未答」告警后的再次 enter=确认提交。不走 _on_enter:
+                # 高亮可能停在 Other 行(Other 文本刚提交的场景),重走会误入文本输入态。
+                self._clear_warn()
+                self._submit()
+                return True
             self._on_enter()
             return True
         return True  # 问答模式下吞掉其他按键，避免漏到下层
@@ -178,10 +210,63 @@ class AskUserSession:
     def _is_other_highlighted(self) -> bool:
         return self._highlight == len(self._options())
 
+    # ── 防呆守卫（516576：已选未提交切题/esc 静默丢答）────────────────
+
+    def _has_uncommitted_selection(self) -> bool:
+        """当前题「已选未提交」判据：动过高亮(数字/↑↓)但 _selected 仍空。
+
+        数字/↑↓ 只动高亮，enter(单选)/space(多选) 才落答——用户动过高亮
+        大概率以为已作答（run15/17 两次 3 题丢 2 的实弹形态），此时切走/取消
+        值得拦一次提示。"""
+        return self._touched[self._q_idx] and not self._selected[self._q_idx]
+
+    def _unanswered_count(self) -> int:
+        return sum(1 for sel in self._selected if not sel)
+
+    def _warn_once(self, op: str, msg: str) -> bool:
+        """同类操作首次→黄字告警拦下(返回 False)；紧接着再次同类操作→放行(返回 True)。
+
+        只提示不锁死：armed 状态被任何其他按键（_clear_warn）重置。"""
+        if self._warned_op == op:
+            self._clear_warn()
+            return True
+        self._warned_op = op
+        self._leave_warn = msg
+        self._render()
+        return False
+
+    def _clear_warn(self) -> None:
+        self._leave_warn = None
+        self._warned_op = None
+
+    def _guard_switch(self, target_idx: int) -> bool:
+        """←→/Tab 切题守卫：带未提交选择时告警一次，再次切题放行。"""
+        if not (0 <= target_idx < len(self._questions)):
+            return True  # 越界本就是 no-op，不告警
+        if not self._has_uncommitted_selection():
+            return True
+        return self._warn_once(
+            "switch", "当前题已选未提交——enter 落答后再切(再次切题将不落答直接切换)",
+        )
+
+    def _guard_cancel(self) -> bool:
+        """esc 守卫：先拦当前题已选未提交，再拦多题带未答关闭；均为告警一次再放行。"""
+        if self._has_uncommitted_selection():
+            return self._warn_once(
+                "cancel", "当前题已选未提交——enter 落答;再次 esc 确认取消整个问答",
+            )
+        n = self._unanswered_count()
+        if n and len(self._questions) > 1:
+            return self._warn_once(
+                "cancel", f"还有 {n} 题未答,未答题将按挂起处理——再次 esc 确认取消",
+            )
+        return True
+
     def _toggle_current(self) -> None:
         q = self._cur_question()
         if not q.get("multiSelect"):
             return
+        self._touched[self._q_idx] = True
         sel = self._selected[self._q_idx]
         if self._is_other_highlighted():
             key = _OTHER_VALUE
@@ -195,6 +280,7 @@ class AskUserSession:
     def _on_enter(self) -> None:
         q = self._cur_question()
         if self._is_other_highlighted():
+            self._clear_warn()
             self._other_input = True
             self._render()
             return
@@ -233,8 +319,16 @@ class AskUserSession:
         if self._q_idx < len(self._questions) - 1:
             self._q_idx += 1
             self._highlight = 0
+            self._clear_warn()
             self._render()
         else:
+            # 多题面板整体提交防呆：存在未答题时告警一次（未答题下游按挂起处理，
+            # 静默提交=516576 同型丢答）。再次 enter 在 handle_key 顶部直接放行提交。
+            n = self._unanswered_count()
+            if n and len(self._questions) > 1 and not self._warn_once(
+                "submit", f"还有 {n} 题未答,未答题将按挂起处理——再次 enter 确认提交",
+            ):
+                return
             self._submit()
 
     def _goto_question(self, idx: int) -> None:
@@ -242,6 +336,7 @@ class AskUserSession:
         if 0 <= idx < len(self._questions):
             self._q_idx = idx
             self._highlight = 0
+            self._clear_warn()
             self._render()
 
     def result_summary(self) -> str:

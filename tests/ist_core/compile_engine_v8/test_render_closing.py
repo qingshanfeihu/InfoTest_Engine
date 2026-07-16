@@ -222,6 +222,84 @@ def test_prep_restores_unfinished_for_resume(engine_env, monkeypatch):
     assert not (env["mdir"] / "delivered").exists()
 
 
+# ── 缺陷候选单持久化(P0 C20,2026-07-16):表单不再随 last_run 湮灭 ──────────────
+
+
+def _dc_attribution(aid, rnd=1, form=True, **kw):
+    f = {"ev": "attribution", "aid": aid, "round": rnd, "run_id": f"r{rnd}",
+         "layer": "product_defect", "disposition": "defect_candidate",
+         "fix_direction": "会话保持超时条目不清除(Timeout=0 仍在表)",
+         "evidence": "Timeout=0 entry still present", **kw}
+    if form:
+        f["defect_candidate"] = {
+            "repro": "配置 IPv6 会话保持并等待超时",
+            "expected_with_source": "手册 §x:超时条目应清除",
+            "actual": "Timeout=0 条目跨超时存活,下次落点仍命中旧池",
+            "version": "10.5.0.585"}
+    return f
+
+
+def test_closing_emits_defect_candidates_files(engine_env, monkeypatch):
+    """构造 dc 案 → closing 后批目录 defect_candidates.md/json 双文件在、表单字段全、
+    进交付清单、delivery_report 提及。"""
+    env = engine_env
+    _mark_b_deliverable(env)
+    F.append_facts(env["facts"], [_dc_attribution(A, rnd=2)])
+    emitted = {}
+    monkeypatch.setattr(sh, "emit_summary", lambda s, d: emitted.update(d))
+    N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
+    mdir = env["mdir"]
+    assert (mdir / "defect_candidates.json").is_file()
+    assert (mdir / "defect_candidates.md").is_file()
+    data = json.loads((mdir / "defect_candidates.json").read_text(encoding="utf-8"))
+    assert len(data) == 1 and data[0]["autoid"] == A
+    form = data[0]["form"]
+    assert form["repro"] and form["expected_with_source"] and form["actual"]
+    assert data[0]["claims"] and "Timeout=0" in data[0]["claims"][0]["evidence"]
+    md = (mdir / "defect_candidates.md").read_text(encoding="utf-8")
+    assert "案A" in md and "复现步骤" in md and "预期(含出处)" in md and "实际" in md
+    assert RD.leak_scan(md) == []
+    # 交付清单与报告提及
+    assert "defect_candidates.md" in emitted["files"]
+    assert "defect_candidates.json" in emitted["files"]
+    dmd = (mdir / "delivery_report.md").read_text(encoding="utf-8")
+    assert "defect_candidates.md" in dmd
+    rep = json.loads((mdir / "engine_report.json").read_text(encoding="utf-8"))
+    assert rep["defect_candidates"]["count"] == 1
+
+
+def test_defect_candidates_floor_lists_overridden_dc(engine_env, monkeypatch):
+    """N1 floor:dc@r1 被 reflow@r2 覆盖仍列入候选单,处置轨迹如实展示改判。"""
+    env = engine_env
+    _mark_b_deliverable(env)
+    F.append_facts(env["facts"], [
+        _dc_attribution(A, rnd=2),
+        {"ev": "attribution", "aid": A, "round": 3, "run_id": "r3", "layer": "V",
+         "disposition": "reflow", "fix_direction": "round2 缺陷已修复",
+         "evidence": "some echo"},
+    ])
+    monkeypatch.setattr(sh, "emit_summary", lambda s, d: None)
+    N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
+    data = json.loads((env["mdir"] / "defect_candidates.json").read_text(encoding="utf-8"))
+    assert len(data) == 1, "后轮弱处置不得让历史 dc 从候选单消失(517027 型)"
+    trail = data[0]["disposition_trail"]
+    assert [t["disposition"] for t in trail][-2:] == ["defect_candidate", "reflow"]
+    md = (env["mdir"] / "defect_candidates.md").read_text(encoding="utf-8")
+    assert "处置轨迹" in md and "带反馈重新编写" in md   # 改判如实可见(中文词表)
+
+
+def test_no_defect_candidates_no_files(engine_env, monkeypatch):
+    """无 dc 案 → 不产文件、报告无缺陷单键(零噪声)。"""
+    env = engine_env
+    _mark_b_deliverable(env)
+    monkeypatch.setattr(sh, "emit_summary", lambda s, d: None)
+    N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
+    assert not (env["mdir"] / "defect_candidates.json").exists()
+    assert not (env["mdir"] / "defect_candidates.md").exists()
+    rep = json.loads((env["mdir"] / "engine_report.json").read_text(encoding="utf-8"))
+    assert "defect_candidates" not in rep
+
+
 # ── TUI 收口卡 ───────────────────────────────────────────────────────────────
 
 

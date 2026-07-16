@@ -34,17 +34,23 @@ def _py_snapshot() -> dict[str, tuple[int, int]]:
 
 
 class _StubLedger:
-    """closing._ingest_uncertain_observations 只用 in_state + data.audit.notes。"""
+    """closing._ingest_uncertain_observations 的适配器替身(A2′ 观察级判据轴):
+    observation_cases 给 (aid, 语境标签),extra_candidates 给 attributor 观察兜底。"""
 
-    def __init__(self, failed: list[str], escalated: list[str] | None = None):
-        self._m = {"failed_terminal": failed, "escalated": escalated or []}
+    def __init__(self, failed: list[str], escalated: list[str] | None = None,
+                 cases: list[tuple[str, str]] | None = None,
+                 extra: dict[str, list[dict]] | None = None):
+        self._cases = cases if cases is not None else (
+            [(a, "fail/escalated 轮观察") for a in failed]
+            + [(a, "升级轮观察") for a in (escalated or [])])
+        self._extra = extra or {}
         self.data = {"audit": {"notes": []}}
 
-    def in_state(self, *states):
-        out: list[str] = []
-        for s in states:
-            out.extend(self._m.get(s, []))
-        return out
+    def observation_cases(self):
+        return list(self._cases)
+
+    def extra_candidates(self, aid: str):
+        return list(self._extra.get(aid) or [])
 
 
 @pytest.fixture()
@@ -185,6 +191,125 @@ def test_env_kill_switch(drill_env, monkeypatch):
     monkeypatch.setenv("FOOTPRINT_UNCERTAIN_WRITEBACK", "0")
     _ingest(outputs, _AID, [_CAND])
     assert not _load_nodes(fp_root)
+
+
+# ── A2′ 观察级判据换轴(2026-07-16):门键不再按案终态枚举 ────────────────────────
+
+
+def test_suspended_case_observations_ingested(drill_env):
+    """挂起案观察入库(zhaiyq 532862 实证驱动:defect_candidate 级观察曾因案态
+    suspended 不在 {failed_terminal, escalated} 白名单而整体丢弃)。案态只作语境。"""
+    outputs, fp_root = drill_env
+    cand = {"observe_cmd": "show sdns host status",
+            "content": "IPv6 会话保持超时条目不清除,Timeout=0 仍在表中", "note": ""}
+    led = _StubLedger([], cases=[(_AID, "挂起轮观察")])
+    _ingest(outputs, _AID, [cand], led=led)
+    nodes = _load_nodes(fp_root)
+    behaviors = [b for n in nodes for b in n.get("behaviors", [])]
+    assert len(behaviors) == 1
+    assert behaviors[0]["validity"] == "uncertain"
+    assert "挂起轮观察" in behaviors[0]["observed_under"]   # 语境=案态标注,非准入条件
+
+
+def test_attribution_observation_fallback_no_candidates(drill_env):
+    """无 behavior_candidates 案(777976/593516 型)经 extra_candidates 通道入库
+    (attributor 结构化观察机械转候选,C5 生产侧兜底)。"""
+    outputs, fp_root = drill_env
+    (outputs / _AID).mkdir(exist_ok=True)   # 无 behavior_candidates.json
+    extra = {_AID: [{"observe_cmd": "show sdns host pool",
+                     "content": "show sdns host pool 只列池名不列成员 IP",
+                     "note": "defect-candidate 轮观察:成员IP需另查"}]}
+    led = _StubLedger([], cases=[(_AID, "挂起轮观察")], extra=extra)
+    from main.ist_core.compile_engine_v8.uncertain import _ingest_uncertain_observations
+    _ingest_uncertain_observations(led)
+    behaviors = [b for n in _load_nodes(fp_root) for b in n.get("behaviors", [])]
+    assert len(behaviors) == 1
+    assert "只列池名" in behaviors[0]["content"]
+
+
+def test_timestamp_variant_dedup(drill_env):
+    """内容归一化去重:同一观察携不同时间戳 → 同 fact_key,不伪造多语境观察组。"""
+    outputs, fp_root = drill_env
+    c1 = {"observe_cmd": "show sdns host status",
+          "content": "2026-07-14 11:47:00 条目仍在表中", "note": "x"}
+    c2 = {"observe_cmd": "show sdns host status",
+          "content": "2026-07-15 09:03:21 条目仍在表中", "note": "x"}
+    _ingest(outputs, _AID, [c1, c2])
+    behaviors = [b for n in _load_nodes(fp_root) for b in n.get("behaviors", [])]
+    assert len(behaviors) == 1, "时间戳变体必须归一化撞同键,不得伪造第二条观察"
+
+
+def test_uncertain_led_axis_and_attribution_observations(tmp_path, monkeypatch):
+    """nodes._UncertainLed:deliverable/broken 三态排除,其余全入源带语境;
+    extra_candidates 从 attribution 事实机械合成(锚=断言来源观测步)。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    from main.ist_core.compile_engine_v8 import views as V
+
+    vw = {"cases": {
+        "1" * 18: {"status": V.S_DELIVERABLE},
+        "2" * 18: {"status": V.S_BROKEN},
+        "3" * 18: {"status": V.S_BROKEN_ERRORED},
+        "4" * 18: {"status": V.S_SUSPENDED},
+        "5" * 18: {"status": V.S_TERMINAL},
+        "6" * 18: {"status": V.S_FAILED},
+    }}
+    led = N._UncertainLed(vw, [])
+    got = dict(led.observation_cases())
+    assert "1" * 18 not in got and "2" * 18 not in got and "3" * 18 not in got
+    assert got["4" * 18] == "挂起轮观察"
+    assert got["5" * 18] == "止损收尾轮观察"
+    assert got["6" * 18] == "fail 轮观察"
+
+    aid = "4" * 18
+    monkeypatch.setattr(N, "_load_case_rows", lambda a: [
+        {"E": "APV_0", "F": "cmds_config", "G": "sdns on"},
+        {"E": "APV_0", "F": "cmd", "G": "show sdns host status"},   # 观测步(锚)
+        {"E": "check_point", "F": "found", "G": r"Timeout"},
+    ])
+    fs = [
+        {"ev": "verdict", "aid": aid, "run_id": "r1", "result": "fail",
+         "ctx": "delivery", "artifact": "a1", "volume": "v", "signatures": []},
+        {"ev": "attribution", "aid": aid, "round": 1, "run_id": "r1", "layer": "V",
+         "disposition": "defect_candidate", "fix_direction": "超时条目不清除",
+         "evidence": "Timeout=0 entry still present",
+         "defect_candidate": {"repro": "步骤", "expected_with_source": "手册:应清除",
+                              "actual": "Timeout=0 条目跨超时存活"}},
+        # broken 轮的归因观察必须被源窗口判据排除
+        {"ev": "verdict", "aid": aid, "run_id": "r2", "result": "broken",
+         "ctx": "delivery", "artifact": "a1", "volume": "v", "signatures": []},
+        {"ev": "attribution", "aid": aid, "round": 2, "run_id": "r2", "layer": "E",
+         "disposition": "reflow", "fix_direction": "x", "evidence": "broken window echo"},
+        # 用户裁决记账行不是设备观察
+        {"ev": "attribution", "aid": aid, "round": 99, "layer": "E",
+         "disposition": "env_blocked", "fix_direction": "user decision: 停",
+         "evidence": "user", "user_stop": True},
+    ]
+    cands = N._attribution_observations(fs, aid)
+    assert len(cands) == 1, "dc 表单观察入;broken 窗口与 user 记账行排除"
+    assert cands[0]["observe_cmd"] == "show sdns host status"
+    assert "Timeout=0 条目跨超时存活" in cands[0]["content"]
+
+    # 无 check_point 的卷面=无锚,如实 no-op(不猜锚)
+    monkeypatch.setattr(N, "_load_case_rows", lambda a: [
+        {"E": "APV_0", "F": "cmds_config", "G": "sdns on"}])
+    assert N._attribution_observations(fs, aid) == []
+
+
+def test_promote_env_flag_regression(tmp_path, monkeypatch):
+    """回归锚(2026-07-16 抓获):sh.env_flag V8 迁移漏带 → _promote 首行
+    AttributeError 被静默吞,PASS 行为晋升从未生效。断言:函数存在且 _promote
+    在开关关/无台账两条路都干净返回(不再异常)。"""
+    from main.ist_core.compile_engine_v8 import _shared as sh2
+    from main.ist_core.compile_engine_v8.uncertain import _promote_behavior_candidates
+
+    assert sh2.env_flag("FOOTPRINT_BEHAVIOR_WRITEBACK") is True   # 默认开
+    monkeypatch.setenv("FOOTPRINT_BEHAVIOR_WRITEBACK", "0")
+    assert sh2.env_flag("FOOTPRINT_BEHAVIOR_WRITEBACK") is False
+    _promote_behavior_candidates(_AID, None)          # 开关关:no-op
+    monkeypatch.delenv("FOOTPRINT_BEHAVIOR_WRITEBACK")
+    monkeypatch.setattr(sh2, "outputs_root", lambda: tmp_path)
+    monkeypatch.setattr(sh2, "project_root", lambda: tmp_path)
+    _promote_behavior_candidates(_AID, None)          # 无候选/无台账:干净返回
 
 
 def test_verified_entries_stay_clean():

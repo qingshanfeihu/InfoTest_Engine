@@ -879,13 +879,21 @@ def test_emit_provenance_trailing_garbage_salvaged():
 def test_fanout_produced_field_probes_disk(monkeypatch, tmp_path):
     # 「产没产出」以落盘为准工具化:worker 派发每项带 produced 机读字段
     import main.ist_core.tools.device.batch_tools as bt
-    aid_has, aid_none = "203099999999900088", "203099999999900089"
+    # 2026-07-16 flaky 真根因修: 原 monkeypatch 目标 `bt._run_skill_fork` 在 batch_tools
+    # git 全史**从未存在**(git log -S 零命中),raising=False 把死 mock 掩盖成静默无效——
+    # 本测试一直在**真跑 execute_fork_skill**(真 LLM fork,违单测密闭化;全量偶发红+
+    # 190s 长跑=真重试退避,produced 探盘恰独立于 fork 结果才多数时候侥幸绿)。
+    # 修=patch 真实缝合点 loader.execute_fork_skill(compile_fanout 函数体内 import,
+    # 调用时现取 loader 属性),并去掉 raising=False——名字漂移时炸出来而非静默失效。
+    # (aid 900188/189 错开 test_expectation_suspect 共目录属次要卫生,保留。)
+    aid_has, aid_none = "203099999999900188", "203099999999900189"
     root = bt._project_root()
     d = root / "workspace" / "outputs" / aid_has
     d.mkdir(parents=True, exist_ok=True)
     (d / "case.xlsx").write_bytes(b"x")
     try:
-        monkeypatch.setattr(bt, "_run_skill_fork", lambda *a, **k: ("说产出了但看盘", True), raising=False)
+        monkeypatch.setattr("main.ist_core.skills.loader.execute_fork_skill",
+                            lambda skill, brief, tag=None, **k: "说产出了但看盘")
         import json as _json
         out = _json.loads(bt.compile_fanout.func(
             skill="compile-worker",

@@ -868,15 +868,72 @@ def _scan_xlsx_for_check_method(xlsx_path: str, method: str) -> list:
         return []
 
 
+def normalize_fail_signature(sig: str) -> str:
+    """签名归一化——新旧格式签名做交集比较前，两侧共同过它（A1 迁移条款）。
+
+    2026-07-16 结构化解析上线前的存量签名是裸 grep "fail to find" 产物：真 Fail 项常带
+    逐步形态的 `` in: <file>`` 尾（如 ``p2 in: xxx.txt``），与新解析的纯 pattern 文本
+    （``p2``）逐字比较交集恒空 → 冻结/跨床反驳在跨界轮静默失效。归一化 = 空白压缩 +
+    剥 `` in: …`` 尾 + 重截 60，对新格式幂等。本文件的跨轮交集从原文现场重提取、天然
+    同格式；真正的跨格式点在引擎读**存量字段**（facts verdict ``signatures`` /
+    last_run ``_fail_signatures``）做交集处——那侧比较前 import 本函数对两侧归一。
+    旧侧的节头假行/Success 项归一不出对齐——它们是多余项，不阻碍「真 Fail 项对齐后
+    交集非空」；唯一盲区是纯 not_found 失败案（旧格式根本没采到真 Fail 项，无从对齐），
+    该形态冻结迟一轮触发（fail-safe 方向），下一轮双侧同格式自愈。
+    """
+    s = _re.sub(r"\s+", " ", str(sig or "")).strip()
+    s = _re.sub(r" in ?: ?\S*\s*$", "", s).strip()
+    return s[:60]
+
+
+def _fail_signatures_legacy(text: str) -> set[str]:
+    """旧签名抽取（裸 grep，2026-07-16 前唯一实现）——仅兼容腿/开关回退用。
+
+    已证病灶（dongkl 9 案 4 案签名脏 + 778072 语义反转）：B1 无分隔拼接收节头假行、
+    B2 收通过的 not_found 断言（Success 行含 "fail to find" 词面）、且漏收 not_found
+    断言失败（``Fail … successed to find``）。"""
+    return {m.group(1).strip()[:60]
+            for m in _re.finditer(r"fail to find:?\s*([^\r\n]{1,80})", text or "")}
+
+
 def _fail_signatures(text: str) -> set[str]:
-    """从裁决明细抽 fail 签名集合（``fail to find[:]? <expect>`` 的 expect 前 60 字符）。
+    """从裁决明细抽 fail 签名集合（按框架裁决行 ``#### (Fail|Success) Num`` 结构化解析）。
 
     跨轮对照用：两轮签名集合**交集非空** = 同签名 fail（同一断言以同样方式不中）。
-    保守短截断——签名只用于同/异判定，不追求完整还原 expect。
+    仅 group(1)==Fail 的行取 pattern 文本（normalize 后入集合）——含
+    ``Fail … successed to find``（not_found 断言失败，旧裸 grep 按词面漏收）；
+    Success 行（通过的 not_found，B2 病灶）与一切非裁决行（节头/文件名/RTNETLINK，
+    B1 病灶）锚定 ``^####`` 天然出局。裁决行两形态都收：逐步
+    ``… find[:]? <pat> in ?: <file>``（_WA_CHECK_RE，pattern 与文件名可分）与案末汇总
+    ``… find: <pat>``（无 in 尾，_WA_SUMMARY_RE——dongkl 778072 实证 Fail 汇总行即此形）。
+    兼容腿：全文零条结构化裁决行（老日志/异构框架版本改 ``####`` 前缀）回退旧正则并
+    warning 留声（签名恒空=冻结门静默失效，比误冻结安全但要可见）；
+    ``IST_FAIL_SIG_STRUCTURED=0`` 整体回退（跨版本对照/紧急逃生，默认开）。
     """
-    import re
-    return {m.group(1).strip()[:60]
-            for m in re.finditer(r"fail to find:?\s*([^\r\n]{1,80})", text or "")}
+    if os.environ.get("IST_FAIL_SIG_STRUCTURED", "1").strip().lower() in ("0", "false", "no"):
+        return _fail_signatures_legacy(text)
+    out: set[str] = set()
+    saw_verdict_line = False
+    for raw in (text or "").splitlines():
+        ln = _WA_TS_RE.sub("", raw.strip())
+        m = _WA_CHECK_RE.match(ln) or _WA_SUMMARY_RE.match(ln)
+        if not m:
+            continue
+        saw_verdict_line = True
+        if m.group(1) != "Fail":
+            continue
+        sig = normalize_fail_signature(m.group(3))
+        if sig:
+            out.add(sig)
+    if not saw_verdict_line:
+        legacy = _fail_signatures_legacy(text)
+        if legacy:
+            logger.warning(
+                "fail-signature: 0 structured verdict lines but legacy 'fail to find' text "
+                "matched (%d sigs) — old-format log or framework verdict-line format drift",
+                len(legacy))
+        return legacy
+    return out
 
 
 def _xlsx_apv_lines(xlsx_path) -> dict[str, list[str]]:
@@ -945,6 +1002,11 @@ _EXEC_MARKERS_CACHE: list | None = None
 _WA_TS_RE = _re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ")
 _WA_CHECK_RE = _re.compile(
     r"^#### (Fail|Success) Num \d+: (fail to find|successed to find):? (.*?) in ?: ?(.*)$")
+# 案末汇总形态的裁决行(无 ` in: <file>` 尾;dongkl 778072 实证 Fail 汇总行即此形:
+# `#### Fail Num 1: fail to find: Hit:\s+[1-9]\d*\b`)。_fail_signatures 先试
+# _WA_CHECK_RE(逐步形态,pattern/文件名可分),不中再用本式(pattern 取到行尾)。
+_WA_SUMMARY_RE = _re.compile(
+    r"^#### (Fail|Success) Num \d+: (fail to find|successed to find):? (.*)$")
 _WA_SEND_RE = _re.compile(r"^\S+ - sends command in (?:config|enable): (.*)$")
 _WA_PROMPT_RE = _re.compile(r"^APV(?:\(config\))?#(.*)$")
 _WA_CARET_RE = _re.compile(r"^\s+\^\s*$")
@@ -1160,7 +1222,9 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
             else:
                 # fail 行表尾展示失败签名(fail to find 前缀),不是 causality 末 90 字——
                 # 后者常落在最后一条**成功**裁决行上,失败断言反而不可见(2026-07-03 取证)。
-                sigs = sorted(_fail_signatures((rec.get("causality") or "") + (detail or "")))
+                # \n 分隔(B1):无分隔拼接曾让 causality 尾行+context 节头粘成一行假签名
+                sigs = sorted(_fail_signatures(
+                    "\n".join(((rec.get("causality") or ""), (detail or "")))))
                 note = ("✗ " + " | ".join(s[:55] for s in sigs[:2])) if sigs else tail
                 rows.append((aid, "fail", "-", "unattributed", note))
 
@@ -1196,8 +1260,12 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
                                (p.get("_attribution") or {}).get("layer")}
                 if "transient" in prev_layers:
                     transient_recur_ids.append(str(rec.get("autoid")))
-                sig_now = _fail_signatures((rec.get("causality") or "") + (rec.get("device_context") or ""))
-                sig_prev = _fail_signatures((p.get("causality") or "") + (p.get("device_context") or ""))
+                # 两侧都从原文现场重提取(非读存量字段)——跨版本升级轮天然同格式;
+                # \n 分隔防跨段假行(B1)。
+                sig_now = _fail_signatures("\n".join(
+                    ((rec.get("causality") or ""), (rec.get("device_context") or ""))))
+                sig_prev = _fail_signatures("\n".join(
+                    ((p.get("causality") or ""), (p.get("device_context") or ""))))
                 if sig_now & sig_prev:
                     rec["_repeat_fail_same_signature"] = True
                     repeat_ids.append(str(rec.get("autoid")))
@@ -1254,8 +1322,8 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
             rec["_round"] = cur_round
             rec["_run_ts"] = now_ts
             if rec.get("verdict") == "fail":
-                rec["_fail_signatures"] = sorted(_fail_signatures(
-                    (rec.get("causality") or "") + (rec.get("device_context") or "")))
+                rec["_fail_signatures"] = sorted(_fail_signatures("\n".join(
+                    ((rec.get("causality") or ""), (rec.get("device_context") or "")))))
                 # 归因历史跨轮保留(2026-07-06 588691 收口):新记录整条替换曾把上一轮
                 # _attribution(含 fix_direction)丢掉——归因 fork 看不到「上轮开过什么
                 # 方子」,无从核对修法生效性,方向错的修法(^ 锚)被按同因重复归因。

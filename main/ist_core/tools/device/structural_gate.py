@@ -1095,11 +1095,8 @@ def _check_parameter_splitting(steps: list, result: StructuralResult) -> None:
 
 
 # DNS 单标签最长 63 字符(RFC 1035 LDH)——超限域名 dig 侧 IDNA 直接拒、查询发不出去,案必 fail。
-# 检测面 = **域名 token 的单标签长度**,不是「关键字行上任意长 alnum 串」——后者是强字典,会误杀
-# dig 行合法长 token(`+cookie=<hex>` / TSIG `-y hmac:key:<base64>` / 64-hex),项目反复回归的
-# GA-CUT 型误杀。双闸:①行含 DNS 名承载命令(dig 名参数 / sdns host name|pool / hostname);
-# ②token 是纯域名形态(LDH+点+下划线,非 flag/非 @server/不含 =:/ 等键材料字符)。再逐点分标签量长度。
-# host pool(994838 漏扫)+ hostname 单词 + 续行 dig 均纳入(§18.15-A MEDIUM 批·regression 矩阵 S4)。
+# 检测面=域名 token 的单标签长度、非「关键字行任意长串」(后者即强字典误杀,GA-CUT 型)——双闸设计
+# 与实证见下方 _check_dns_label_limit docstring;缩写前原文档于 forensics/team2_designdoc_additions.md §D1。
 _DNS_NAME_LINE_RE = re.compile(r"\bdig\b|\bhost\s+(?:name|pool)\b|\bhostname\b", re.IGNORECASE)
 _DNS_NAME_TOKEN_RE = re.compile(r"^[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?$")
 _LINE_CONTINUATION_RE = re.compile(r"\\\s*\n")

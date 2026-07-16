@@ -38,7 +38,7 @@ def recount_deliverable(fs: list[dict], manifest: dict) -> dict:
         if last_susp >= 0 and last_resume < last_susp:
             continue
         if any(f.get("ev") == "attribution" and int(f.get("round") or 0) == 99
-               and f.get("disposition") in ("env_blocked", "defect_candidate")
+               and f.get("disposition") in ("env_blocked", "defect_candidate", "user_stop")
                for f in mine):
             continue
         if any(f.get("ev") == "needs_decision" for f in mine) and not any(

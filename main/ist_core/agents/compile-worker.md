@@ -85,7 +85,23 @@ soundness is the user's call, and the sheet still faces every emit gate and the 
   land on a fixed member by priority/probe/hash, so a fixed landing is legal there (`domain_grammar.json`
   provenance carries the same scope, guarding the GA-CUT regression where fixed counts were wrongly
   flagged outside distribution context). The exact statistics command comes from footprint/manual,
-  not from memory.
+  not from memory. Two trigger clients do not necessarily share one global rotation counter —
+  whether the counter is per-client or shared is a device-implementation fact, so a
+  "client N lands on pool M" expectation stays a distribution-class claim until a precedent or the
+  manual says otherwise; `compile_check_verifiability` (claim_kind `cross_client_landing`) falsifies
+  it and its notes carry the verifiable equivalents (per-client relation assertion, per-client-group
+  distribution interval), so a rewrite is usually available without asking. The statistics counter
+  itself is a fact to ground, not an axiom: a device has been observed serving a member while that
+  member's hit counter stayed at zero — a single counter reading is never the sole evidence for a
+  distribution claim; the evidence surface that survived on-device is "hit set ⊆ live members" plus
+  "per-member cumulative share over a large sample" together (the closing rounds of 593516/778072
+  landed exactly this shape). A found/not_found position sequence must be simultaneously satisfiable
+  with the declared algorithm's period — for a uniform-rotation claim (the algorithm class
+  whose period semantics are data-confirmed in `domain_grammar.json` `algorithm_classes.uniform_rotation`),
+  hand the per-member sequence to `compile_check_verifiability` as `sequence_json` and it runs the
+  residue-class self-check (a contradictory layout is false under every device behavior and every
+  starting point; 778012 shipped one and burned three rounds on it). Classes whose period semantics
+  are not data-confirmed pass through unjudged — unknown is not a license to skip grounding.
 - **The channel you read a fact from separates a sample from a member** — a `show <config>` output
   reflects the static configuration: *is X configured / enumerated* is a membership fact read there.
   A `dig` / traffic result reflects which member the runtime rotation *selected* for that request —
@@ -97,13 +113,27 @@ soundness is the user's call, and the sheet still faces every emit gate and the 
   rewritable claims to falsify with `compile_check_verifiability` (it returns whether the claim is
   verifiable at the sample size at all, and the minimum request count) and to express via
   `dist` / interval. Only "is X configured", read from a `show`, is the `abs_found` membership form.
+- **After a persistence entry expires, the next landing is the runtime's choice** — a
+  session-persistence claim verifies on the entry's own state transition (the entry clears, or its
+  timeout field returns to its reset value), never on "the next request lands on pool X": which
+  member the rotation picks after expiry is h-in-λ sampling again, so a specific-pool expectation
+  reintroduces the absolute-position trap through the persistence door (the zhaiyq live batch
+  surfaced exactly this drift).
 - **Capacity / existence / enumeration checks read membership, not ranges** — a test that configures
   N of something (16 listeners, N domains, N pools) and verifies they all landed is deterministic:
   **no h** — no sampling, no rotation — so it sits outside the interval/set remedy (which is for
   h-in-λ). Its faithful form is per-item membership: `abs_found` each expected entry, or `found_times`
-  for a count, matched against the **actual** `show` output layout — that layout is confirmed with
-  `dev_probe` before the assertion is written (the command's line/column shape shows even on the clean
-  compile-time device). A range regex over a set of expected values assumes a layout and misaligns
+  for a count, matched against the **actual** `show` output layout. Two probe regimes exist for that
+  layout: a static-layout command (line/column shape is a parser property) shows its shape even on the
+  clean compile-time device, so `dev_probe` settles it; a binding-dependent command (output rows exist
+  only once config/traffic populate them) returns nothing informative on a clean box — its shape comes
+  from a precedent / footprint / the manual, read this round. When all three sources come up empty AND
+  the assertion depends on that unknown shape, that is an underdetermined fact to report — not a coin
+  to flip (593516 acknowledged the member-listing shape was unknown and still guessed "p4"; the guess
+  compiled into a multi-round fail). When the claim can be re-anchored on a support whose shape you do
+  know (e.g. the dig-side answer instead of the show-side table), the rewrite beats the report —
+  reporting is for claims that survive re-anchoring. A range regex over a set
+  of expected values assumes a layout and misaligns
   when the real one differs: 667986 wrote `172\.16\.3[24]\.70\s+5[4-9]` expecting an IP-then-port
   layout, but `show sdns listener` returns `sdns listener <IP>` (default port not shown), so every
   assertion missed and the case broke.

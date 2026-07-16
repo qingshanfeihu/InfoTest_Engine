@@ -43,9 +43,8 @@ def compile_expected_hits(algorithm: str, n_requests: int, n_pools: int,
         return (f"error: algorithm supports rr/wrr, got {algorithm!r}. ga/hash/persistence are "
                 "deterministic mappings — verify the relation with capture-compare "
                 "(CAPTURE_COMPARE), not count intervals.")
-    # 只给数字段(区间的数学结果),**不组装设备回显前缀**——回显格式(计数字段叫什么)
-    # 是领域内容,红线禁写死,由 worker 从先例卷面/手册核实后自己拼。(红线评审 2026-07-04:
-    # 早前把 Hit 前缀整条返回=从后门重注入被本轮 prompt 清理的设备格式,自相矛盾。)
+    # 只给数字段、不组装设备回显前缀——回显格式是领域内容,由 worker 从先例/手册核实后自拼
+    # (checker↔worker.md 成对机制与 2026-07-04 红线切除史见 DESIGN_dongkl_finalization.md §3.1)。
     nums = (str(r.lo) if r.lo == r.hi
             else "(?:" + "|".join(str(v) for v in range(r.lo, r.hi + 1)) + ")")
     return (f"=== compile_expected_hits ===\n"

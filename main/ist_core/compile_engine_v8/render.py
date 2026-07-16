@@ -39,10 +39,11 @@ STATUS_CN = {
 CTX_CN = {"delivery": "整卷连跑复验", "subset": "单独验证"}
 LAYER_CN = {"G": "设备拒绝了命令(语法/能力)", "E": "环境/测试床问题",
             "V": "设备真实行为与断言不符", "transient": "偶发波动(重跑消失)",
-            "product_defect": "疑似产品缺陷"}
+            "product_defect": "疑似产品缺陷", "user": "用户裁决"}
 DISP_CN = {"reflow": "带反馈重新编写", "frozen": "原方法已证无效,换法重编",
            "env_blocked": "按环境阻塞收尾", "defect_candidate": "缺陷候选(需换形态坐实)",
-           "fixed": "已修复待复跑", "rerun_isolated": "卷面无嫌疑,隔离复跑对照"}
+           "fixed": "已修复待复跑", "rerun_isolated": "卷面无嫌疑,隔离复跑对照",
+           "user_stop": "按你的裁决停止(未通过如实报告)"}
 SHAPE_CN = {"manual_vs_device": "手册与实机不符",
             "expected_vs_observed": "预期结果与上机行为不符",
             "method_vs_implementation": "验证方法与功能实现不符",
@@ -111,6 +112,16 @@ def _latest_attribution(mine: list[dict]) -> dict:
     return atts[-1] if atts else {}
 
 
+def _latest_semantic_attribution(mine: list[dict]) -> dict:
+    """最后一条**语义**归因(N1a 本体分离):跳过 user_stop 生命周期记账行
+    (契约形态 disposition=="user_stop";过渡形态 user_stop 布尔字段双兼容)——
+    517027 型案的「怎么判断的」显示站立的缺陷主张,而非记账行的假语义。
+    旧事实(env_blocked 无标记)行为不变(向后兼容,在途批照旧渲染)。"""
+    atts = [f for f in mine if f.get("ev") == "attribution"
+            and str(f.get("disposition")) != "user_stop" and not f.get("user_stop")]
+    return atts[-1] if atts else {}
+
+
 def _latest_panel_dict(mine: list[dict], read_json) -> dict:
     """最新 ask_panel 事实 → 盘上面板全文(closing 清理会挪目录,读不到给空)。"""
     pf = [f for f in mine if f.get("ev") == "ask_panel"]
@@ -122,8 +133,8 @@ def _latest_panel_dict(mine: list[dict], read_json) -> dict:
 def diagnosis_text(mine: list[dict], panel: dict | None = None) -> str:
     """怎么判断的:批级诊断(s₀ 配对,片3)优先——它有单案归因没有的批级视野;
     次之 panel 的 hypothesis(归因孔判断时刻写下的中文);再次归因词表+关键证据
-    引文;皆无=如实说明未完成分析。"""
-    att = _latest_attribution(mine)
+    引文;皆无=如实说明未完成分析。取**语义**归因(跳过 user_stop 记账行)。"""
+    att = _latest_semantic_attribution(mine)
     parts = []
     diags = [f for f in mine if f.get("ev") == "diagnosis"]
     diag = diags[-1] if diags else {}
@@ -166,11 +177,24 @@ def remedy_text(queue: list[dict], mine: list[dict], panel: dict | None = None) 
     disp = str(att.get("disposition") or "")
     decs = [f for f in mine if f.get("ev") == "decision" and f.get("answer")]
     if disp == "defect_candidate" and str(att.get("evidence")) == "user":
-        return "**结论**:你已确认为产品缺陷,已记入缺陷候选单,该用例以缺陷结案。"
+        return ("**结论**:你已确认为产品缺陷,已记入缺陷候选单"
+                "(`defect_candidates.md`),该用例以缺陷结案。")
     if disp == "defect_candidate":
-        return "**结论**:疑似产品缺陷(缺陷候选单已列);坐实需换一种配置形态复现。"
-    if disp == "env_blocked" and int(att.get("round") or 0) == 99:
+        return ("**结论**:疑似产品缺陷,已列入缺陷候选单(`defect_candidates.md`);"
+                "坐实需换一种配置形态复现。")
+    if (disp in ("env_blocked", "user_stop")) and int(att.get("round") or 0) == 99:
         who = f"(依据你的裁决「{decs[-1].get('answer')}」)" if decs else ""
+        # N1a:user_stop=用户止损记账(非 env 题面的停止/降级),不是环境结论——
+        # 措辞不说"环境";历史达过缺陷候选的,指到缺陷候选单(N1 floor 报告面)。
+        # env_blocked@99=env 题面停止(用户确认环境)或在途批旧事实,旧文案保持。
+        if disp == "user_stop" or att.get("user_stop"):
+            had_dc = any(f.get("ev") == "attribution"
+                         and str(f.get("disposition")) == "defect_candidate"
+                         for f in mine)
+            tail = ("此前轮次曾达缺陷候选,其主张与证据已汇总在缺陷候选单"
+                    "(`defect_candidates.md`)。" if had_dc else "")
+            return (f"**结论**:按你的止损裁决收尾{who},该用例记入未通过卷,"
+                    f"下批可继续。{tail}")
         return f"**结论**:按环境/取舍收尾{who},该用例记入未通过卷,下批可继续。"
     adopted = [f for f in mine if f.get("ev") == "adopted"]
     if adopted:
@@ -265,10 +289,60 @@ def render_delivery_report(report: dict, fs: list[dict], manifest: dict,
             lines += _case_section(aid, c, mine, mcases.get(aid) or {},
                                    queues.get(aid) or [], (panels or {}).get(aid))
             lines.append("")
+    _dc = report.get("defect_candidates") or {}
     lines.append("---")
     lines.append("交付物:`case.xlsx`(通过卷)"
                  + ("、`unsuccessful_cases.xlsx`+`unsuccessful_cases.md`(未通过卷与详报)" if bad else "")
+                 + (f"、`defect_candidates.md`(缺陷候选单,{int(_dc.get('count') or 0)} 案,"
+                    f"含结构化表单与处置轨迹)" if _dc else "")
                  + "、`engine_report.json`(机读)。全部过程事实在 `facts.jsonl`,可审计可续跑。")
+    return "\n".join(lines) + "\n"
+
+
+def render_defect_candidates_md(entries: list[dict], manifest: dict) -> str:
+    """缺陷候选单人话渲染(P0 C20;判定式,同 fold 投影,渲染零 LLM)。
+
+    每案:结构化表单(repro/expected_with_source/actual/version/ticket_id)+
+    claim 全史(517027 型多主张并列,不只最新)+ 处置轨迹(如实展示后轮改判)。
+    候选≠终判(§11.7 缺陷确认权在人)——轨迹与确认状态如实标注。
+    设备证据放 code fence(leak_scan 豁免面;正文守零术语泄漏)。"""
+    lines = [f"# 缺陷候选单 — {manifest.get('source') or ''}",
+             f"> 生成 {time.strftime('%Y-%m-%d %H:%M', time.localtime())} · "
+             f"共 {len(entries)} 案 · 候选非终判,确认权在人",
+             ""]
+    for e in entries:
+        lines.append(f"## {e.get('title') or ('用例 …' + str(e.get('autoid'))[-6:])}")
+        lines.append(f"- 编号 `{e.get('autoid')}` · 当前状态:"
+                     f"{STATUS_CN.get(str(e.get('status')), e.get('status'))}"
+                     + (" · **你已确认为产品缺陷**" if e.get("user_confirmed")
+                        else " · 待人工确认"))
+        claims = e.get("claims") or []
+        if claims:
+            lines.append("\n**缺陷主张**(全史,后轮改判不隐去先前主张):")
+            for cl in claims:
+                lines.append(f"- 第 {cl.get('round')} 轮:{cl.get('claim') or '(见证据)'}")
+                if cl.get("evidence"):
+                    lines.append("  ```\n  " + clean_device_echo(str(cl["evidence"]), 300)
+                                 + "\n  ```")
+        elif e.get("latest_claim"):
+            lines.append(f"\n**缺陷主张**:{e['latest_claim']}")
+        form = e.get("form") or {}
+        if form:
+            lines.append("\n**结构化表单**:")
+            for key, label in (("repro", "复现步骤"), ("expected_with_source", "预期(含出处)"),
+                               ("actual", "实际"), ("version", "版本"), ("ticket_id", "单号")):
+                v = str(form.get(key) or "").strip()
+                if v:
+                    lines.append(f"- {label}:{v}")
+        trail = e.get("disposition_trail") or []
+        if trail:
+            words = []
+            for t in trail:
+                w = DISP_CN.get(str(t.get("disposition")), str(t.get("disposition")))
+                r = "用户裁决" if int(t.get("round") or 0) == 99 else f"第{t.get('round')}轮"
+                words.append(f"{r} {w}" + ("(你的裁决)" if t.get("by_user") else ""))
+            lines.append("\n**处置轨迹**:" + " → ".join(words))
+        lines.append("")
     return "\n".join(lines) + "\n"
 
 

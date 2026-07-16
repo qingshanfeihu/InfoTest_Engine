@@ -162,6 +162,57 @@ def test_no_exec_failure_block_when_no_anomaly(tmp_path, monkeypatch):
     assert "THIS case's own command sequence" not in b
 
 
+# ── D9 注入措辞去事实化(2026-07-16,777976 洗白链取证驱动) ─────────────────────
+
+
+def test_fix_direction_marked_hypothesis(rig):
+    """retry brief:上轮归因带 confidence="hypothesis" 假设框,原文仍在
+    (措辞是 re-verify 不是 distrust——正确归因的定向价值保留)。"""
+    state, lr_ref = rig
+    b = build_brief(A, state, _facts(lr_ref, rounds=1))
+    assert 'confidence="hypothesis"' in b
+    assert 'status="hypothesis"' in b
+    assert "not established fact" in b
+    assert "FIX0" in b                                  # fix_direction 原文不动
+
+
+def test_intent_note_marks_expected_as_author_claim(rig):
+    """intent note 成对措辞:①作者预期非设备已证事实;②预期仍是断言期望值唯一来源
+    (单标"未证实"会滑向 worker 自决改预期——observe-then-assert 反向重演)。"""
+    state, _ = rig
+    b = build_brief(A, state, [])
+    assert "author's anticipated outcome" in b and "not device-verified" in b
+    assert "sole source of assertion expectations" in b
+    assert "never" in b and "replace the expectation with the observed value" in b
+
+
+def test_user_adjudication_stays_authoritative(rig, tmp_path):
+    """裁决块措辞不被 D9 连带弱化:用户裁决仍是最高权威(highest authority)。"""
+    state, lr_ref = rig
+    panel_path = sh.outputs_root() / "b" / "panel.json"
+    panel_path.write_text(json.dumps({
+        "conflict_shape": "expected_vs_observed", "hypothesis": "H",
+        "sides": [{"source_ref": "s", "quote": "q"}]}), encoding="utf-8")
+    fs = _facts(lr_ref, rounds=1) + [
+        {"ev": "ask_panel", "aid": A, "round": 1, "shape": "expected_vs_observed",
+         "ref": str(panel_path.relative_to(sh.project_root()))},
+        {"ev": "decision", "aid": A, "question_id": f"panel:{A}:1",
+         "answer": "纠正:按手册 X 编", "token": "correct"}]
+    b = build_brief(A, state, fs)
+    assert "highest authority" in b                     # 权威序不因假设框松动
+    assert 'confidence="hypothesis"' in b               # 两块并存、物理分离
+
+
+def test_hypothesis_markup_switch_off(rig, monkeypatch):
+    """IST_BRIEF_HYPOTHESIS_MARKUP=0 → 回退旧措辞(对照轮/紧急回退口)。"""
+    monkeypatch.setenv("IST_BRIEF_HYPOTHESIS_MARKUP", "0")
+    state, lr_ref = rig
+    b = build_brief(A, state, _facts(lr_ref, rounds=1))
+    assert "hypothesis" not in b
+    assert "author's anticipated outcome" not in b
+    assert "FIX0" in b
+
+
 # ── F8a 兄弟上下文(§18.11):同组 title 一行式内联,check 按引用不内联 ──────────
 
 def test_brief_siblings_block(monkeypatch):

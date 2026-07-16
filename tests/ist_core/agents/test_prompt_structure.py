@@ -183,3 +183,22 @@ def test_compile_worker_no_hardcoded_device_field_token():
     raw = _worker_md()
     assert "Hit:" not in raw, ("worker prompt 含写死设备字段 token 'Hit:'——随 build 漂移,"
                                "与 checker_tool 'never assume one spelling' 红线冲突;用 dist 抽象")
+
+
+def test_compile_worker_distribution_construction_facts():
+    """D8(team3,777976/593516/778012/zhaiyq 实证):分布构造事实段承重锚——
+    ①跨客户端落点主张在判例/手册证实前按分布类对待(cross_client_landing 证伪);
+    ②单一统计计数器非唯一证据支点(设备实证:服务成员而计数为零),证据面=
+    命中集合∈存活成员+大样本占比;③时序锚点须与声明算法周期可满足(sequence_json 自查);
+    ④会话保持超时后落点由运行时定,验证轴=条目状态变化非特定池。全部陈述式零写死命令。"""
+    md = " ".join(_worker_md().split())
+    assert "cross_client_landing" in md, "worker 缺跨客户端落点 claim_kind 锚(E10a 接线)"
+    assert "do not necessarily share one global rotation counter" in md, \
+        "worker 缺'跨客户端不必然共享轮转计数'事实锚"
+    assert "serving a member while that member's hit counter stayed at zero" in md, \
+        "worker 缺'计数器是待证事实'设备实证锚"
+    assert "hit set ⊆ live members" in md, "worker 缺'命中集合∈存活成员'证据面锚"
+    assert "sequence_json" in md, "worker 缺时序锚点自查接线锚(E10b)"
+    assert "not a coin to flip" in md, "worker 缺'形态未知不掷硬币'禁令锚(593516 反例)"
+    assert "the rewrite beats the report" in md, "worker 缺'可改写支点优先改写'防 ask 泛滥锚"
+    assert "the next landing is the runtime's choice" in md, "worker 缺会话保持残影锚(zhaiyq §2.3)"

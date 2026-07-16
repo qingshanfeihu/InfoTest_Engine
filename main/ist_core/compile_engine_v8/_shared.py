@@ -83,13 +83,17 @@ def cap_waiting(fs: list[dict]) -> list[str]:
 
 
 def granted_rounds(fs: list[dict], aid: str) -> int:
-    """用户已授权的追加轮次(cap 问询答「继续」每次 +2;token 优先,兼容早期无 token 事实)。"""
+    """用户已授权的追加轮次(cap 问询答「继续」每次 +2;token 优先,兼容早期无 token 事实)。
+
+    cap-correct 同计(接线包 2g,2026-07-16):cap 题面 Other 纠正意见=「带我的纠正
+    继续修」——授权轮次+纠正原文经 briefs 注入重编;不计则 correct 决策落账可见但
+    永不行动(诚实降级但用户意见被闲置)。"""
     n = 0
     for f in fs:
         if (f.get("ev") == "decision" and str(f.get("aid")) == aid
                 and str(f.get("question_id", "")).startswith("cap:")):
             tok = str(f.get("token") or "")
-            if tok == "continue" or (not tok and "继续" in str(f.get("answer", ""))):
+            if tok in ("continue", "correct") or (not tok and "继续" in str(f.get("answer", ""))):
                 n += 2
     return n
 
@@ -305,6 +309,17 @@ def fork_executor(n_items: int):
     limiter = AdaptiveLimiter(start=max(2, ceiling // 2), min_limit=1, max_limit=ceiling)
     wc = float(os.environ.get("IST_FORK_WALLCLOCK_S") or 900)
     return ForkExecutor(limiter, wallclock_s=wc), limiter, ceiling
+
+
+def env_flag(name: str, default: str = "1") -> bool:
+    """布尔环境开关(默认开;"0"/"false"/"no" 关)。
+
+    V6 同名函数 V8 迁移时漏带——uncertain._promote_behavior_candidates 首行
+    sh.env_flag 即 AttributeError,被 _writeback_one 的 debug-except 静默吞,
+    PASS 行为知识晋升自迁移起从未生效(2026-07-16 team3 实现轮抓获,补齐恢复)。
+    """
+    v = (os.environ.get(name) or default).strip().lower()
+    return v not in ("0", "false", "no")
 
 
 def read_json(path: Path, default=None):

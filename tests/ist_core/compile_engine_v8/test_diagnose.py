@@ -216,6 +216,16 @@ def test_attributor_s0_not_upgraded_when_mechanical_finds_no_polluter(rig):
     bed_items = [it for p in panels if p.get("kind") == "ask_contradiction"
                  for it in p.get("cases", []) if it.get("kind") == "bed"]
     assert not any(it.get("autoid") == AIDS[1] for it in bed_items), panels
+    # ③ N2′ 分歧记账(2026-07-16):不升格判定=「fork 假设 vs 机械配对」分歧——
+    # 落 s0_dispute 事实(contra/cap 题面语境数据源;判定本身不变,②已锁)
+    dsp = [f for f in facts if f.get("ev") == "s0_dispute" and f.get("aid") == AIDS[1]]
+    assert dsp and dsp[0]["mech"] == "no_polluter" and dsp[0]["fork_h"] == "h_s0"
+    # ④ 接线包 2f:分歧投影进 contra/cap 题面 item(s0_dispute={count},键名冻结,
+    # questions._s0_dispute_note 渲染)——用户裁决不再盲判
+    proj = [it for p in panels for it in (p.get("cases") or [])
+            if it.get("autoid") == AIDS[1] and it.get("kind") in ("contra", "cap")
+            and it.get("s0_dispute")]
+    assert proj and int(proj[0]["s0_dispute"]["count"]) >= 1
 
 
 def test_transient_recovery_final_verify_not_gated(rig):

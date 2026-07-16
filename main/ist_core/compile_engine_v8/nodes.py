@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -21,6 +22,9 @@ from main.ist_core.compile_engine_v8 import briefs as BR
 from main.ist_core.compile_engine_v8 import facts as F
 from main.ist_core.compile_engine_v8 import persistence as P
 from main.ist_core.compile_engine_v8 import views as V
+# Other 意图归类收编至 questions.py(ask 面板语义单一事实源,2026-07-16 接线包 2a;
+# import-as 绑定模块属性,test_ask_panel/test_tau 直调 `N._answer_token` 路径不断)
+from main.ist_core.compile_engine_v8.questions import answer_token as _answer_token
 
 logger = logging.getLogger(__name__)
 
@@ -424,7 +428,7 @@ def author(state: dict) -> dict:
                                          f"artifact, if any, is reclaimed at merge")
 
     import concurrent.futures as cf
-    with cf.ThreadPoolExecutor(max_workers=max(2, min(8, len(todo)))) as ex:
+    with cf.ThreadPoolExecutor(max_workers=_fanout_pool_size(len(todo))) as ex:
         list(ex.map(_one, todo))
 
     new_facts: list[dict] = []
@@ -1275,6 +1279,79 @@ def _try_adopt(panel: dict, device_corpus: str) -> dict | None:
     return h
 
 
+def _pass_is_vacuous(fs: list[dict], aid: str) -> bool:
+    """对照 PASS 的 (44) 断言级非空真前置:PASS 案的 last_run 记录含执行失败/窗口失真
+    形态 → 该 PASS 是空真嫌疑,没资格当对照证据(778012 三连假过实证——拿可能空真的
+    兄弟 PASS 机械"证伪"本案前提=拿假证据翻真案,GA-CUT 重演)。
+    digest 层 2026-07-14 起已把 anomaly-pass 降 broken(此门对新批幂等冗余);
+    历史批/旧 client 无 window-audit 的记录靠本门兜底。记录读不到=不可判,保守判 True
+    (无凭据的 PASS 不作对照——宁少一条对照,不给假证据)。"""
+    mine = [f for f in fs if str(f.get("aid")) == aid]
+    passes = [f for f in mine if f.get("ev") == "verdict" and f.get("result") == "pass"]
+    if not passes:
+        return True
+    last = passes[-1]
+    ref = str(last.get("evidence_ref") or "")
+    if not ref:
+        return True
+    data = sh.read_json(sh.project_root() / ref, []) or []
+    rec = next((r for r in data if isinstance(r, dict)
+                and str(r.get("autoid")) == aid), None)
+    if rec is None:
+        return True
+    return bool(rec.get("anomaly_lines") or rec.get("window_distortion"))
+
+
+def _sibling_contrast(aid: str, state: dict, fs: list[dict], vw: dict) -> dict | None:
+    """同组兄弟对照差分(F11′ advisory 证据注入;`sibling_contrast` 键名冻结——
+    questions 侧读同键)。机械只到**证据装配**:分裂 {passed, failed},"同断言/同前提
+    /证伪了哪条"的判断留给归因孔——机械改 disposition 是内容依赖判断,(47) 路由红线。
+
+    - 对照集=manifest 同 group_path 兄弟(脑图组=语义单元,briefs F8a 同源);
+    - passed 兄弟必须过 (44) 非空真前置(_pass_is_vacuous 剔除);
+    - 2 轮同签名复现(frozen 谓词)∧ 非空真对照 PASS 在场 → 附 advisory 陈述
+      (禁第三轮同向重编的建议,由 attributor 判,不机械执行)。
+    ``IST_SIBLING_CONTRAST_INJECT=0`` 关。"""
+    if not sh.env_flag("IST_SIBLING_CONTRAST_INJECT"):
+        return None
+    m = sh.manifest(state)
+    cases = m.get("cases") or []
+    me = next((c for c in cases if str(c.get("autoid")) == aid), None)
+    gp = tuple((me or {}).get("group_path") or ())
+    if not gp:
+        return None
+    passed, failed = [], []
+    for c in cases:
+        said = str(c.get("autoid"))
+        if c is me or tuple(c.get("group_path") or ()) != gp:
+            continue
+        st = str((vw["cases"].get(said) or {}).get("status") or "")
+        title = str(c.get("title") or "").splitlines()[0][:80] if c.get("title") else ""
+        entry = {"aid_tail": said[-6:], "title": title}
+        if st in (V.S_DELIVERABLE, V.S_SUBSET_VERIFIED):
+            if _pass_is_vacuous(fs, said):
+                continue
+            passed.append(entry)
+        elif st in (V.S_FAILED, V.S_CONTRADICTED, V.S_TERMINAL):
+            failed.append(entry)
+    if not passed and not failed:
+        return None
+    out: dict = {"passed": passed[:12], "failed": failed[:12],
+                 "note": ("same mindmap group siblings' on-device outcomes (PASS entries "
+                          "passed the vacuous-truth screen). A sibling PASS with the same "
+                          "assertion form is mechanical evidence the shared premise CAN be "
+                          "realized — but which premise differs (record type / address "
+                          "family / client) is your judgement, not a mechanical verdict.")}
+    if bool((vw["cases"].get(aid) or {}).get("frozen")) and passed:
+        out["advisory"] = (
+            "this case failed 2 rounds with the same signature while non-vacuous sibling "
+            "PASS evidence exists — do NOT open a third same-direction reflow; prefer "
+            "expectation_suspect (panel with the contrast cited) or defect_candidate "
+            "(form with sibling citation), or change the evidence plane "
+            "(different observation target / assertion pivot).")
+    return out
+
+
 # --------------------------------------------------------------- [llm] attribute
 def attribute(state: dict) -> dict:
     """归因(fail/矛盾案):机械预判(digest 已附 ^→G/dev_help)→ fork 填 undetermined
@@ -1369,6 +1446,12 @@ def attribute(state: dict) -> dict:
 
     t0 = time.time()   # panel 收割新鲜度基线:早于本轮派发的 ask_panel.json 是陈旧遗留
     executor, limiter, _ = sh.fork_executor(len(todo))
+    # K1 归因并发化(2026-07-16 perf 审计:归因裸 for 串行,36 fork 全程并发=1,
+    # zhaiyq 128min/dongkl 120min 同病;与编写 fanout 对称——两孔同为 fork 派发,
+    # 无理由一个并行一个串行):prepare 段保持串行(事实 append/attr_evidence 落盘/
+    # env 组装全在主线程,零共享写),线程池只跑 _call_fork(结果落盘由 fork 侧
+    # submit_attribution 写,其 last_run.json 读改写段已加进程内锁互斥)。
+    _briefs_by_aid: dict[str, str] = {}
     for aid in todo:
         rec = recs.get(aid, {})
         mine = [f for f in fs if f.get("aid") == aid]
@@ -1400,6 +1483,27 @@ def attribute(state: dict) -> dict:
                                     if c["status"] in (V.S_DELIVERABLE, V.S_SUBSET_VERIFIED)][:6],
             "contradiction": bool(contra),
         }
+        # N1b claim 级证据粘性:历史强处置 claim([主张,证据] 对)注入为必须消费事实
+        # ——517027 型 r2 真缺陷主张不再因 r3 改判从归因视野消失;"另一条 claim 的
+        # 修复"不构成对本条的反驳,须逐条显式处理
+        _claims = F.strong_claims(mine, aid)
+        if _claims:
+            env["strong_claims"] = {
+                "note": ("prior strong-disposition claims with device evidence — address "
+                         "EACH explicitly this round: adopt it, refute it against this "
+                         "round's echo, or state why it no longer applies. A claim must "
+                         "not silently vanish; fixing a DIFFERENT claim in the same case "
+                         "does not refute this one."),
+                "claims": _claims}
+        # F11′ 对照差分(advisory 证据注入;键名 sibling_contrast 冻结):机械装配同组
+        # 兄弟 PASS/FAIL 分裂((44) 非空真前置已筛),判断留给孔;同步落事实供报告/审计
+        _contrast = _sibling_contrast(aid, state, fs, vw)
+        if _contrast:
+            env["sibling_contrast"] = _contrast
+            sh.append(state, [{"ev": "sibling_contrast", "aid": aid,
+                               "run_id": str((F.latest_verdict(mine, aid) or {}).get("run_id") or ""),
+                               "passed": _contrast["passed"], "failed": _contrast["failed"],
+                               "advisory": bool(_contrast.get("advisory"))}])
         if suspect:
             env["evidence_note"] = (
                 "trigger-side capture in this case's evidence is suspected MISATTRIBUTED "
@@ -1423,8 +1527,14 @@ def attribute(state: dict) -> dict:
         brief = json.dumps(env, ensure_ascii=False) + "\n" + (
             "<device_help>\n" + str(rec.get("_device_help"))[:1500] + "\n</device_help>\n"
             if rec.get("_device_help") else "")
-        with limiter:
-            _call_fork(executor, "compile-attributor", brief, tag=f"attr:{aid[-6:]}")
+        _briefs_by_aid[aid] = brief
+
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(max_workers=_fanout_pool_size(len(_briefs_by_aid))) as ex:
+        list(ex.map(
+            lambda kv: _call_fork(executor, "compile-attributor", kv[1],
+                                  tag=f"attr:{kv[0][-6:]}"),
+            _briefs_by_aid.items()))
 
     # 收账:submit_attribution 落盘的 _attribution → attribution 事实
     data2 = sh.read_json(sh.project_root() / lr_ref, []) or []
@@ -1435,13 +1545,30 @@ def attribute(state: dict) -> dict:
         if aid in todo and isinstance(att, dict):
             mine = [f for f in fs if f.get("aid") == aid]
             last = F.latest_verdict(mine, aid)
-            new_facts.append({"ev": "attribution", "aid": aid,
-                              "round": F.rounds_used(mine, aid),
-                              "run_id": (last or {}).get("run_id", ""),
-                              "layer": att.get("layer"), "disposition": att.get("disposition"),
-                              "h_position": str(att.get("h_position") or ""),
-                              "fix_direction": str(att.get("fix_direction") or "")[:800],
-                              "evidence": str(att.get("evidence") or "")[:500]})
+            fact = {"ev": "attribution", "aid": aid,
+                    "round": F.rounds_used(mine, aid),
+                    "run_id": (last or {}).get("run_id", ""),
+                    "layer": att.get("layer"), "disposition": att.get("disposition"),
+                    "h_position": str(att.get("h_position") or ""),
+                    "fix_direction": str(att.get("fix_direction") or "")[:800],
+                    "evidence": str(att.get("evidence") or "")[:500]}
+            # P0 C20:结构化缺陷表单透传进事实流——此前收账只抄 5 字段,表单唯一落点
+            # last_run.json 被 closing 删除,全链湮灭(零消费者);现随事实永久保留,
+            # closing 的缺陷候选单由此投影
+            if isinstance(att.get("defect_candidate"), dict) and att["defect_candidate"]:
+                fact["defect_candidate"] = att["defect_candidate"]
+            new_facts.append(fact)
+            # N1b 粘性审计(摆事实不替判,dongkl 定稿 §0):历史强 claim 在场而本轮
+            # 走弱处置——落审计事实供报告/下批复盘,不硬拒(换形态检验轮属 dc 处置的
+            # 组成部分,硬单调会把推翻误判所需的实验一并封锁,044572 实证)
+            _prior = F.strong_claims(mine, aid)
+            if (_prior and str(att.get("disposition")) not in F.STRONG_DISPOSITIONS
+                    and str(att.get("evidence") or "") != "user"):
+                new_facts.append({
+                    "ev": "strong_claim_unaddressed", "aid": aid,
+                    "run_id": (last or {}).get("run_id", ""),
+                    "prior": [f"{c['disposition']}@r{c['round']}" for c in _prior],
+                    "to": str(att.get("disposition") or "")})
             if att.get("disposition") == "env_blocked":
                 sh.signal("escalated", aid, reason="env_blocked")
     # 收账:submit_ask_panel 落盘的呈报面板 → ask_panel 事实(§11.11 构件四;
@@ -1515,45 +1642,15 @@ def _latest_panel(mine: list[dict], aid: str) -> tuple[dict, int]:
     return panel, int(last.get("round") or 0)
 
 
-def _answer_token(kind: str, a: str) -> str:
-    """用户答案 → 小写决策 token(机械映射;挂起/停止是跨题面常驻特权)。
-    自由输入(Other)按题面语义归并:panel→correct(纠正反馈)、cap→continue(带
-    反馈继续)、env→retry、contra→reorder、suspended→keep(不明确不动)。
-    特权词只在短指令里生效(≤8 字):长句里的「挂起/停止」多为叙述
-    (「不要挂起,按手册来」),按题面默认走、原文全程保留在 decision 里。"""
-    short = len(a) <= 8
-    if kind == "suspended":
-        # 先于特权判定:「保持挂起」是本题面的常规选项,不是特权触发
-        if "恢复" in a:
-            return "resume"
-        return "stop" if ("停止" in a and short) else "keep"
-    if "挂起" in a and (short or a.startswith("挂起")):
-        return "suspend"
-    if "停止" in a and (short or a.startswith("停止")):
-        return "stop"
-    if kind == "panel":
-        if "缺陷" in a:
-            return "defect"
-        if "确认" in a or "按此" in a:
-            return "confirm"
-        return "correct"
-    if kind == "cap":
-        return "continue"
-    if kind == "env":
-        return "stop" if "确认环境" in a else "retry"
-    if kind == "bed":
-        if "降级" in a:
-            return "downgrade"
-        if "重编" in a or "补自清" in a or "补清理" in a:
-            return "reflow_tau"
-        if "已处理" in a or "复跑" in a or "已清" in a:
-            return "retry"
-        return "suspend"   # 不明确=默认挂起到下批(床治理是外部动作,宁等勿猜)
-    if kind == "contra":
-        if "降级" in a or "接受单跑" in a:
-            return "downgrade"
-        return "reorder"
-    return "correct"
+def _fanout_pool_size(n_items: int) -> int:
+    """fork fanout 线程池尺寸(K2,2026-07-16):IST_FANOUT_CONCURRENCY 真接到池——
+    此前该 env 只喂了 limiter 没喂池(编写池硬编码 min(8,n)),配置不生效;
+    默认值 8 不变,默认行为零变化。编写孔与归因孔共用(K1 对称)。"""
+    try:
+        cap = int(os.environ.get("IST_FANOUT_CONCURRENCY") or 8)
+    except (TypeError, ValueError):
+        cap = 8
+    return max(2, min(cap, max(1, n_items)))
 
 
 # --------------------------------------------------------------- [mech] diagnose
@@ -1719,13 +1816,15 @@ def _cross_bed_refuted(mine: list[dict], last: dict) -> bool:
     """跨床对照(run16 实弹:9 案同签名 fail 跨 93/105 两床复现,s₀ 判定第三次
     方向错):s₀ 是床状态属性——同卷面同签名 fail 出现在 ≥2 个不同床=污染假设
     被反驳(污染不跨床),真因在 λ/V 域,必须深归因而非床面板。"""
-    sigs = set(str(x) for x in (last.get("signatures") or []))
+    # 存量签名跨格式归一(A1 迁移条款消费点):facts 里旧轮签名可能是旧格式
+    # (带 `` in: <file>`` 尾),与新轮纯 pattern 交集前两侧归一,防跨界轮静默失效
+    sigs = F._norm_sigs(last.get("signatures"))
     if not sigs:
         return False
     beds = {str(f.get("bed")) for f in mine
             if f.get("ev") == "verdict" and f.get("result") == "fail"
             and str(f.get("artifact")) == str(last.get("artifact"))
-            and sigs & {str(x) for x in (f.get("signatures") or [])}
+            and sigs & F._norm_sigs(f.get("signatures"))
             and f.get("bed")}
     return len(beds) >= 2
 
@@ -1913,6 +2012,12 @@ def diagnose(state: dict) -> dict:
             # 提取失败,配对不可得)时才采信 fork 的 s₀;非 s₀ 候选(h_pi 等)照常回退。
             if cand_h.startswith("h_s0") and aid not in _profile_failures:
                 sh.emit(f"…{aid[-6:]} fork 判 s₀ 但机械配对判无污染者——不升格,保留深归因")
+                # N2′ 分歧记账(2026-07-16):不升格判定本身是「fork 假设 vs 机械配对」
+                # 的分歧事实——落账供 contra/cap 题面呈语境(用户不再盲判),不改判定
+                # (test_attributor_s0_not_upgraded… 锁住的语义不动);幂等键=run_id
+                new_facts.append({"ev": "s0_dispute", "aid": aid,
+                                  "run_id": f"diag:{volume}:{aid}",
+                                  "fork_h": "h_s0", "mech": "no_polluter"})
                 cand_h = ""
             h_pos = cand_h
             basis = "fork candidate (no batch-level counter-evidence)" if h_pos else ""
@@ -1993,6 +2098,24 @@ def ask_contradiction(state: dict) -> dict:
                 "tried": RM.tried_actions(fs, aid),
                 "queue_empty": not _q,
                 "prior_choices": [f.get("answer") for f in mine if f.get("ev") == "decision"]}
+        if kind in ("cap", "env"):
+            # 接线包 2e(claim_history 键名冻结,questions._claim_history_line 消费):
+            # 题面呈全轮归因史——churn 不吞早轮假设(517027 r2「Timeout=0」题面消失);
+            # r99 生命周期记录不入(那是裁决记账,不是技术判断史)
+            item["claim_history"] = [
+                {"round": int(f.get("round") or 0), "layer": str(f.get("layer") or ""),
+                 "disposition": str(f.get("disposition") or ""),
+                 "claim": str(f.get("user_note") or f.get("fix_direction") or "")[:400],
+                 "evidence": str(f.get("evidence") or "")[:200]}
+                for f in mine if f.get("ev") == "attribution"
+                and int(f.get("round") or 0) != 99]
+        if kind in ("contra", "cap"):
+            # 接线包 2f(s0_dispute 键名冻结,questions._s0_dispute_note 消费):
+            # 污染分歧投影——fork 判自污染 vs 机械配对无污染者的次数(N2′ 记账面);
+            # 床态快照 pre_dirty/post_dirty 有数据源后同键补入,渲染自动生效
+            _dsp = [f for f in mine if f.get("ev") == "s0_dispute"]
+            if _dsp:
+                item["s0_dispute"] = {"count": len({str(f.get("run_id")) for f in _dsp})}
         if kind == "panel":
             panel, prnd = _latest_panel(mine, aid)
             item["panel"] = {k: panel.get(k) for k in
@@ -2116,9 +2239,20 @@ def ask_contradiction(state: dict) -> dict:
         if tok == "suspend":
             new_facts.append({"ev": "suspended", "aid": aid, "reason": qid})
         elif tok in ("stop", "downgrade"):
-            # 止损=用户显式裁决(evidence=user → 终态;不符交付预期,记未通过卷)
-            new_facts.append({"ev": "attribution", "aid": aid, "round": 99,
-                              "layer": "E", "disposition": "env_blocked",
+            # 止损=用户显式裁决(N1a 台账本体论,2026-07-16 契约):生命周期记账与
+            # 语义归因分离——zhaiyq 三例 r99 env_blocked(517027/600046/533020)全是
+            # 记账形态,"环境阻塞"语义为假。契约(键名/值冻结,乙 questions 渲染
+            # `_DISP_CN` 已备词条、views/report_gate 终态元组已收):
+            # env 题面 stop → env_blocked 保留(选项原文即「确认环境问题」,用户选它
+            # =确认环境,语义如实);其余题面 → {layer:"user", disposition:"user_stop"}
+            # + 独立 user_stop 事实(questions/报告侧消费)。
+            if kind == "env":
+                acc = {"layer": "E", "disposition": "env_blocked"}
+            else:
+                acc = {"layer": "user", "disposition": "user_stop"}
+                new_facts.append({"ev": "user_stop", "aid": aid, "question_id": qid,
+                                  "answer": a, "token": tok})
+            new_facts.append({"ev": "attribution", "aid": aid, "round": 99, **acc,
                               "fix_direction": f"user decision: {a}", "evidence": "user"})
         elif tok == "defect":
             # 用户确认产品缺陷=唯一合法非 excel 结果(§11.7 telos);走缺陷候选单
@@ -2252,10 +2386,139 @@ def _volume_composition_check(main_xlsx, deliverable: list) -> tuple[list, list]
     return sorted(vol - dset), sorted(dset - vol)
 
 
+def _attribution_observations(fs: list[dict], aid: str) -> list[dict]:
+    """attributor 结构化观察 → 行为候选(A2′ 绑 C5 的生产侧兜底)。
+
+    behavior_candidates 是 attributor **自愿**调 submit_behavior_fact 的产物——
+    777976/593516 型最富信息的案恰好从不自愿登记;它们的归因 verbatim 证据
+    (过了 submit_attribution 子串门)是仅存的设备观察,机械转候选抢救入库。
+    观察级判据在此兑现:
+    - verbatim 证据在:evidence 非空且 ≠"user"(用户裁决记账不是设备观察);
+    - 源窗口 ok:该归因对应的 verdict 是 pass/fail(broken/not_run 轮的"观察"
+      骑在失真窗口上,(43) 吸收态不产观察)。
+    锚命令=失败断言的来源观测步(crash-gate 保证 check_point 前必有不带 H 的观测步;
+    取最后一个 check_point 前最近者)。卷面读不出/无断言=无锚,如实 no-op——
+    行为知识必须挂真实观测命令(merger 门),猜锚=知识挂错节点误导检索。
+    信噪:defect_candidate 表单(actual=行为陈述,价值最高)全收;
+    普通归因只收最新一轮 evidence(每案 ≤1 条,防多轮 churn 刷库)。
+    """
+    rows = _load_case_rows(aid)
+    anchor = ""
+    for i, r in enumerate(rows):
+        if str(r.get("E")) == "check_point":
+            for r2 in reversed(rows[:i]):
+                e2, f2 = str(r2.get("E")), str(r2.get("F") or "")
+                if e2 != "check_point" and "config" not in f2:
+                    g2 = str(r2.get("G") or "").strip()
+                    anchor = g2.splitlines()[-1].strip() if g2 else ""
+                    break
+    if not anchor:
+        return []
+    mine = [f for f in fs if str(f.get("aid")) == aid]
+    verdicts = {str(v.get("run_id")): v for v in mine if v.get("ev") == "verdict"}
+    atts = [f for f in mine if f.get("ev") == "attribution"]
+    out: list[dict] = []
+    for i, att in enumerate(atts):
+        ev = str(att.get("evidence") or "")
+        if not ev or ev == "user":
+            continue
+        v = verdicts.get(str(att.get("run_id") or ""))
+        if v is not None and v.get("result") not in ("pass", "fail"):
+            continue
+        dc = att.get("defect_candidate")
+        if isinstance(dc, dict) and str(dc.get("actual") or "").strip():
+            out.append({"observe_cmd": anchor, "content": str(dc["actual"]).strip(),
+                        "note": ("defect-candidate 轮观察:"
+                                 + str(att.get("fix_direction") or "")[:80])})
+        elif i == len(atts) - 1:
+            out.append({"observe_cmd": anchor, "content": ev,
+                        "note": str(att.get("fix_direction") or "")[:120]})
+    return out
+
+
+class _UncertainLed:
+    """closing→入库器适配(A2′ 观察级判据换轴):案终态不作准入白名单。
+
+    - deliverable 排除:其候选走 _promote 的 verified 晋升通道,不降格 uncertain;
+    - broken 三态排除:源窗口失真((43)),失真窗口上的"观察"不是观察——
+      run13 三条 config 泄漏观察骑在窗口失真上、事后撤销+6 份先例隔离的前科;
+    - 其余(suspended/failed/contradicted/terminal/escalated/subset_verified/…)
+      全部入源,状态只翻译成 observed_under 语境短句。
+    """
+
+    _CTX = {V.S_SUSPENDED: "挂起轮观察", V.S_TERMINAL: "止损收尾轮观察",
+            V.S_ESCALATED: "升级轮观察", V.S_CONTRADICTED: "矛盾轮观察",
+            V.S_FAILED: "fail 轮观察"}
+    data = {"audit": {"notes": []}}
+
+    def __init__(self, vw: dict, fs: list[dict]):
+        self._vw, self._fs = vw, fs
+
+    def observation_cases(self) -> list[tuple[str, str]]:
+        skip = {V.S_DELIVERABLE, V.S_BROKEN, V.S_BROKEN_ERRORED, V.S_BROKEN_BLOCKED}
+        return [(a, self._CTX.get(str(c["status"]), "fail/escalated 轮观察"))
+                for a, c in self._vw["cases"].items() if c["status"] not in skip]
+
+    def extra_candidates(self, aid: str) -> list[dict]:
+        return _attribution_observations(self._fs, aid)
+
+
+def _collect_defect_candidates(fs: list[dict], vw: dict, manifest: dict,
+                               last_run: dict[str, dict] | None = None) -> list[dict]:
+    """缺陷候选单汇总(P0 C20:submit_attribution 结构化表单的唯一交付出口)。
+
+    此前全链湮灭:表单只落 last_run.json._attribution.defect_candidate → attribute
+    收账不抄 → closing 删 last_run → 全 repo 零消费者,render 文案"已记入缺陷候选单"
+    说谎。目标集=任意轮达 defect_candidate 的案(N1 floor:含后轮被弱处置覆盖的——
+    517027 型 r2 真缺陷主张不再消失),排除最终 deliverable(换形态 PASS 证伪了缺陷
+    假设:a pass certifies it was a form problem)。claim 级列全史(F.strong_claims),
+    表单字段(repro/expected_with_source/actual/version/ticket_id)原样透传。
+
+    在途批兼容(2026-07-16 硬要求):老 run 收账的 dc attribution 行**无** form 字段
+    (旧代码只抄 5 字段),表单还躺在盘上 last_run.json(closing 删除前)——form 缺时
+    从 last_run 记录回读补齐(zhaiyq 532862 续跑收口即此路径,活体验收点)。
+    """
+    mcases = {str(c.get("autoid")): c for c in (manifest.get("cases") or [])}
+    out: list[dict] = []
+    for aid, c in sorted(vw["cases"].items()):
+        if c["status"] == V.S_DELIVERABLE:
+            continue
+        mine = [f for f in fs if str(f.get("aid")) == aid]
+        atts = [f for f in mine if f.get("ev") == "attribution"]
+        dcs = [a for a in atts if str(a.get("disposition")) == "defect_candidate"]
+        if not dcs:
+            continue
+        form = next((a.get("defect_candidate") for a in reversed(dcs)
+                     if isinstance(a.get("defect_candidate"), dict)), None)
+        if form is None and last_run:
+            _att = ((last_run.get(aid) or {}).get("_attribution") or {})
+            if (str(_att.get("disposition")) == "defect_candidate"
+                    and isinstance(_att.get("defect_candidate"), dict)):
+                form = _att["defect_candidate"]
+        claims = [cl for cl in F.strong_claims(mine, aid)
+                  if cl["disposition"] == "defect_candidate"]
+        trail = [{"round": int(a.get("round") or 0),
+                  "disposition": str(a.get("disposition") or ""),
+                  "by_user": str(a.get("evidence")) == "user"} for a in atts]
+        out.append({
+            "autoid": aid,
+            "title": str((mcases.get(aid) or {}).get("title") or ""),
+            "status": str(c["status"]),
+            "user_confirmed": any(str(a.get("evidence")) == "user" for a in dcs),
+            "layer": str(dcs[-1].get("layer") or ""),
+            "claims": claims,
+            "latest_claim": str(dcs[-1].get("fix_direction") or ""),
+            "latest_evidence": str(dcs[-1].get("evidence") or ""),
+            "form": form,
+            "disposition_trail": trail,
+        })
+    return out
+
+
 def closing(state: dict) -> dict:
-    """收口(§11.2/11.5/11.9):uncertain 入库(自愈环)→ 机读报告 → 判定式人话双报告
-    (零 LLM,leak_scan 门)→ 未通过卷 xlsx → §11.9 清理(通过案目录删/未决案挪
-    unfinished/ 供续跑/facts 永久保留)→ 交付对账断言 → 收口卡。"""
+    """收口(§11.2/11.5/11.9):uncertain 入库(自愈环)→ 缺陷候选单 → 机读报告 →
+    判定式人话双报告(零 LLM,leak_scan 门)→ 未通过卷 xlsx → §11.9 清理(通过案目录删/
+    未决案挪 unfinished/ 供续跑/facts 永久保留)→ 交付对账断言 → 收口卡。"""
     from main.ist_core.compile_engine_v8 import render as RD
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
@@ -2280,20 +2543,12 @@ def closing(state: dict) -> dict:
                     "下批同参可续问")
     out_name = str(state.get("out_name"))
     mdir = sh.outputs_root() / out_name
-    # 自愈环:fail 终态/升级案观察 uncertain 入库(复用 V6 已验收的入库器)
+    # 自愈环:非 pass 案观察 uncertain 入库(A2′ 观察级判据换轴,2026-07-16——
+    # 旧 _Led 按 {failed_terminal, escalated} 终态枚举,挂起/failed/contradicted 案的
+    # defect_candidate 级观察整体丢弃,zhaiyq 532862 实证)
     try:
         from main.ist_core.compile_engine_v8.uncertain import _ingest_uncertain_observations
-
-        class _Led:  # 适配器:入库器只用 in_state
-            def in_state(self, *states):
-                want = set()
-                if "failed_terminal" in states:
-                    want.add(V.S_TERMINAL)
-                if "escalated" in states:
-                    want.add(V.S_ESCALATED)
-                return [a for a, c in vw["cases"].items() if c["status"] in want]
-            data = {"audit": {"notes": []}}
-        _ingest_uncertain_observations(_Led())
+        _ingest_uncertain_observations(_UncertainLed(vw, fs))
     except Exception:  # noqa: BLE001
         logger.debug("uncertain 入库失败", exc_info=True)
 
@@ -2419,6 +2674,14 @@ def closing(state: dict) -> dict:
     mf = [f for f in fs if f.get("ev") == "merged"]
     moved = list(mf[-1].get("moved_tail") or []) if mf else []
     coexist = list(mf[-1].get("coexist_violations") or []) if mf else []
+    # 缺陷候选单(P0 C20):在删 last_run 之前汇总——表单已随 attribute 收账进事实流,
+    # 此处从 facts 投影(与报告同一 fold,渲染零 LLM);在途批(老 run 收账无表单字段)
+    # 从盘上 last_run.json 回读兜底(532862 型续跑收口)
+    _lr_recs: dict[str, dict] = {}
+    for _rec in (sh.read_json(mdir / "last_run.json", []) or []):
+        if isinstance(_rec, dict) and _rec.get("autoid"):
+            _lr_recs[str(_rec["autoid"])] = _rec
+    dc_entries = _collect_defect_candidates(fs, vw, sh.manifest(state), last_run=_lr_recs)
     report = {
         "engine": "v8",
         "outcome": ("delivered_all_pass" if not others else "delivered_with_labels"),
@@ -2431,6 +2694,9 @@ def closing(state: dict) -> dict:
         "cases": vw["cases"],
         "refs": {"facts": state.get("facts_ref"), "merged": state.get("merged_ref")},
     }
+    if dc_entries:
+        report["defect_candidates"] = {"count": len(dc_entries),
+                                       "autoids": [e["autoid"] for e in dc_entries]}
     (mdir / "engine_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -2498,6 +2764,21 @@ def closing(state: dict) -> dict:
                 f"本批暂不可作为交付依据(详见 REPORT_MISMATCH.json)")
     (mdir / "delivery_report.md").write_text(dmd, encoding="utf-8")
     deliver_files = ["case.xlsx", "delivery_report.md", "engine_report.json", "facts.jsonl"]
+    # 缺陷候选单双文件(P0 C20):json 机读原样、md 人话渲染;进 deliver_files 走
+    # 交付对账断言(报告说有=盘上真有)。写在 §11.9 清理与删 last_run 之前。
+    if dc_entries:
+        try:
+            (mdir / "defect_candidates.json").write_text(
+                json.dumps(dc_entries, ensure_ascii=False, indent=2), encoding="utf-8")
+            (mdir / "defect_candidates.md").write_text(
+                RD.render_defect_candidates_md(dc_entries, m), encoding="utf-8")
+            deliver_files += ["defect_candidates.md", "defect_candidates.json"]
+            sh.emit(f"缺陷候选单:{len(dc_entries)} 案已汇总(defect_candidates.md,"
+                    f"含结构化表单与处置轨迹)")
+        except Exception:  # noqa: BLE001
+            # 产出失败不静默:不加入 deliver_files(对账不报缺),但显式告警
+            logger.warning("缺陷候选单产出失败", exc_info=True)
+            sh.emit("⚠ 缺陷候选单产出失败——结构化表单仍在 facts.jsonl 可审计")
     if others:
         umd = RD.render_unsuccessful_md(report, fs, m, queues, evidence, panels)
         (mdir / "unsuccessful_cases.md").write_text(umd, encoding="utf-8")

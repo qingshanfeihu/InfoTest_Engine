@@ -85,6 +85,54 @@ def _substring_gate(sources: list, corpus: str | None) -> str | None:
     return None
 
 
+def _cycle_kind_from_algo(algo: str) -> str | None:
+    """算法名→周期语义类映射(E10b 通用性红线:映射属领域知识,放调用方且**数据现查**,
+    零算法语义入 .py——新算法=加 grammar JSON 条目零代码)。
+    - `algorithm_classes.uniform_rotation.methods` 命中 → "uniform_rotation"(判);
+    - `distribution.methods` 命中但非 uniform → None(该算法的剩余类语义未上机钉死,
+      纯函数按未知 fail-open 中性放行——wrr/grr/gwrr 现况,C7 钉死后加数据条目);
+    - 两者都不中 → "none"(确定性映射无轮转周期——grammar distribution provenance 背书);
+    - grammar 不可读 → None(fail-open)。
+    worker 显式传 cycle_kind 时本映射不生效(语义抽取优先——LLM 读脑图语境比算法名可靠)。"""
+    a = (algo or "").strip().lower()
+    if not a:
+        return None
+    try:
+        from main.case_compiler.domain_grammar import (distribution_methods,
+                                                       uniform_rotation_methods)
+        if a in uniform_rotation_methods():
+            return "uniform_rotation"
+        if a in distribution_methods():
+            return None
+        return "none"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_sequence_json(sequence_json: str) -> tuple[list[int], list[int]] | str:
+    """sequence_json → (found_idx, notfound_idx)。元素按请求序:"found"|"not_found"|null
+    (null=该次对该成员无断言)。解析失败返回 error 文本。"""
+    try:
+        seq = json.loads(sequence_json)
+    except Exception as e:  # noqa: BLE001
+        return f"error: sequence_json 解析失败: {e}"
+    if not isinstance(seq, list):
+        return f"error: sequence_json 必须是 JSON 数组,收到 {type(seq).__name__}"
+    found_idx: list[int] = []
+    notfound_idx: list[int] = []
+    for i, x in enumerate(seq):
+        if x == "found":
+            found_idx.append(i)
+        elif x == "not_found":
+            notfound_idx.append(i)
+        elif x is None:
+            continue
+        else:
+            return (f"error: sequence_json[{i}]={x!r} 非法——元素取 \"found\"/"
+                    f"\"not_found\"/null(该次无该成员断言)")
+    return found_idx, notfound_idx
+
+
 def _land_needs_decision(autoid: str, claim_kind: str, entry: dict) -> bool:
     """欠定台账落盘(结构化,机读):同 case 多 claim 按 claim_kind 合并。verifiability
     与通用欠定上报共用——A 层「先问后落」要求台账是结构化文件(散文接力会磨掉锚点,
@@ -115,7 +163,8 @@ def _land_needs_decision(autoid: str, claim_kind: str, entry: dict) -> bool:
 @tool(parse_docstring=True)
 def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools: int,
                                 claim_kind: str, weights_json: str = "",
-                                existing_pools: int = -1) -> str:
+                                existing_pools: int = -1, sequence_json: str = "",
+                                cycle_kind: str = "") -> str:
     """判一个算法类 case「如写」能否验证它声称的行为（数学欠定就别编断言，上报用户决策）。
 
     **何时用**：case 的预期落在运行时不确定区（"某一次请求命中第几个 pool"这类由算法
@@ -143,9 +192,22 @@ def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools
             rotation_order（依次轮转）/ new_member_last（新增pool最后才命中，有序轨迹）/
             new_member_participates（新增pool参与轮转/有命中，弱于最后命中）/
             weight_ratio（wrr按权重比例）/ distribution（一般命中分布）/
-            relation_same（两次相同·会话保持）/ relation_diff（两次不同·切换）。
+            relation_same（两次相同·会话保持）/ relation_diff（两次不同·切换）/
+            cross_client_landing（特定客户端命中特定池/跨客户端共享轮转的落点主张——
+            计数器跨客户端共享还是独立由设备实现决定，分布算法下该主张无手册/判例
+            支撑即欠定；可验等价=同客户端关系断言或按客户端分组的分布区间，对应用户
+            拍板形态 captured_relation/dist）。
         weights_json: wrr 各 pool 权重的 JSON 数组（按关联顺序，如 "[3,2,1]"）；非 wrr 留空。
         existing_pools: new_member_last 用——新增前已有的 pool 数；缺省 -1 表示按 n_pools-1 推。
+        sequence_json: 可选，时序自洽自查（claim_kind ∈ rotation_order/absolute_position/
+            new_member_last 时生效）——**单一成员视角**按请求序的 JSON 数组，元素
+            "found"|"not_found"|null（null=该次对该成员无断言），如
+            '["not_found","not_found","not_found","found","found"]'。工具附加做剩余类
+            可满足性判定：排布与声明周期数学恒假（任何设备行为下断言组都不可能全真）
+            → 覆盖为 NEEDS_USER_DECISION 呈报。
+        cycle_kind: 可选，周期语义类（uniform_rotation=等权严格轮转/weighted=加权/
+            none=确定性映射无周期）——从脑图语境语义抽取后传入；留空则按 algo 从
+            domain_grammar.json 算法分类数据现查。语义未知一律中性放行不误杀。
 
     Returns:
         verifiable → "VERIFIABLE: <说明>"（worker 继续选对断言形态落盘）；
@@ -153,7 +215,9 @@ def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools
         （worker **不要**编断言，原样把这段返回给 orchestrator）。
     """
     try:
-        from main.case_compiler.verifiability import check_verifiability, render_needs_user_decision
+        from main.case_compiler.verifiability import (check_sequence_periodicity,
+                                                      check_verifiability,
+                                                      render_needs_user_decision)
     except Exception as e:  # noqa: BLE001
         return f"error: 加载 verifiability 失败: {e}"
 
@@ -173,9 +237,36 @@ def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools
         weights=weights, claim_kind=claim_kind,
         existing_pools=(None if existing_pools is None or existing_pools < 0 else existing_pools),
     )
+
+    # E10b 附加:序列↔周期自洽(advisory;开关+传参双门)。周期语义类=显式传参优先
+    # (worker 语义抽取),否则按 algo 从 grammar 算法分类数据现查——映射是数据不是代码,
+    # 新算法加 JSON 条目零代码(通用性红线 2026-07-16)。
+    seq_verdict = None
+    _seq_on = os.environ.get("IST_SEQ_CONSISTENCY_CHECK", "1").strip().lower() not in (
+        "0", "false", "no")
+    if (_seq_on and sequence_json and sequence_json.strip()
+            and claim_kind in ("rotation_order", "absolute_position", "new_member_last")):
+        parsed_seq = _parse_sequence_json(sequence_json)
+        if isinstance(parsed_seq, str):
+            return parsed_seq
+        found_idx, notfound_idx = parsed_seq
+        ck = (cycle_kind or "").strip().lower() or _cycle_kind_from_algo(algo)
+        seq_verdict = check_sequence_periodicity(ck, n_pools, found_idx, notfound_idx,
+                                                 algo=algo)
+        if not seq_verdict.verifiable:
+            # 数学恒假覆盖主判定:独立落台账条目(claim_kind=sequence_periodicity),
+            # 与主 claim 的台账并存——改法必须同时对得上两条。
+            seq_entry = seq_verdict.to_dict()
+            seq_entry["ordering_sensitive"] = True
+            _land_needs_decision(autoid, "sequence_periodicity", seq_entry)
+            return render_needs_user_decision(autoid, seq_verdict)
+
     if verdict.verifiable:
         note = ("；" + "；".join(verdict.notes)) if verdict.notes else ""
-        return f"VERIFIABLE: {verdict.reason}{note}"
+        seq_note = ""
+        if seq_verdict is not None and seq_verdict.verifiable:
+            seq_note = f"；序列自洽自查:{seq_verdict.reason}"
+        return f"VERIFIABLE: {verdict.reason}{note}{seq_note}"
     # 欠定台账落盘(结构化,机读):工具内部本就是结构化 Verdict,压平成文本后经
     # worker→main→ask_user 两道散文接力会磨掉关键锚点。ordering_sensitive 标记有序
     # 轨迹类 claim——它们的改法必须显式处理顺序语义的去留。

@@ -55,6 +55,22 @@ def distribution_methods() -> tuple[str, ...]:
     return tuple(load_grammar()["algorithm_classes"]["distribution"]["methods"])
 
 
+def uniform_rotation_methods() -> tuple[str, ...]:
+    """等权严格轮转类算法集(E10b cycle_kind 映射的数据源;fail-open 缺键返回 ()——
+    grammar 无该类时序列↔周期检查对一切算法中性放行,未知不误杀)。新算法上机钉死
+    等权语义后加 JSON methods 条目零代码。"""
+    return tuple(((load_grammar().get("algorithm_classes") or {})
+                  .get("uniform_rotation") or {}).get("methods") or ())
+
+
+def deterministic_mapping_methods() -> tuple[str, ...]:
+    """确定性映射类算法集(distribution.provenance 散文知识的机读提升,2026-07-16)。
+    verifiability 三分判定用:分布/确定性映射/未知——未知永远 fail-open(原文带
+    『等』字=非穷举,封闭世界假设是误杀源)。fail-open 缺键返回 ()。"""
+    return tuple(((load_grammar().get("algorithm_classes") or {})
+                  .get("deterministic_mapping") or {}).get("methods") or ())
+
+
 def count_field_words() -> tuple[str, ...]:
     return tuple(load_grammar()["count_field_words"]["words"])
 
@@ -106,6 +122,54 @@ def reference_closures() -> list[dict]:
 
 def anchoring_chains() -> list[dict]:
     return list(load_grammar().get("anchoring_chains", []))
+
+
+def co_required_params() -> list[dict]:
+    """同语句共需参数规则(B1',2026-07-16)。fail-open:键/rules 缺失返回 []——
+    rules 首发空置(572708 两轮两种设备响应,weight/priority 必带性待 C7 上机钉死,
+    confirmed_on_device=false 不落条目),空数据=零行为变化。钉死后加 JSON 条目
+    零代码生效(schema 见 json `co_required_params._schema_example`)。"""
+    return list((load_grammar().get("co_required_params") or {}).get("rules") or [])
+
+
+def missing_co_required(rules: list[dict], lines: list[str]) -> list[dict]:
+    """co-required 参数缺失检测(纯函数,风格同 dangling_references):trigger 语句命中
+    ∧ condition 参数值命中 ∧ 同语句行 requires_pattern 零命中 → 报
+    ``{rule_id, line, provenance}``(结构事实——消费方 emit 成功路径渲染 advisory 文本,
+    非门不拒绝:参数语义是内容依赖判断,硬门化违 (47) 位阶红线,与签名闭集的
+    command_existence 结构门不同类)。
+
+    condition.param 指 trigger 语句正则的**命名捕获组**(组缺失回退 ``name`` 组——
+    statements 表惯用组名);值比较大小写不敏感(CLI 语义,与语句预编译 IGNORECASE
+    一致)。坏规则(trigger 未注册/正则不编译/requires_pattern 空)整条跳过——
+    条目质量由 provenance + confirmed_on_device 字段与单测约束,检测器不硬炸。
+    """
+    out: list[dict] = []
+    for rule in rules or []:
+        req_pat = str(rule.get("requires_pattern") or "")
+        if not req_pat:
+            continue
+        try:
+            trig = stmt_re(str(rule.get("trigger_statement") or ""))
+            req = re.compile(req_pat, re.IGNORECASE)
+        except (KeyError, re.error):
+            continue
+        cond = rule.get("condition") or {}
+        values = {str(v).lower() for v in (cond.get("values") or [])}
+        param = str(cond.get("param") or "")
+        for line in lines:
+            m = trig.search(line)
+            if not m:
+                continue
+            gd = m.groupdict()
+            val = str(gd.get(param) or gd.get("name") or "").lower()
+            if values and val not in values:
+                continue
+            if not req.search(line):
+                out.append({"rule_id": str(rule.get("id") or ""),
+                            "line": line,
+                            "provenance": rule.get("provenance") or {}})
+    return out
 
 
 # ── 文法驱动的通用图查询（原理层：图论/集合性质，对象形态全部来自文法数据） ──────────

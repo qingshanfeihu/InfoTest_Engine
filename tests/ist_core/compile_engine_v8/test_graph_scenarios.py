@@ -96,15 +96,18 @@ def rig(tmp_path, monkeypatch):
                 json.dumps({"xlsx_mtime": xp.stat().st_mtime, "source": "lint"}),
                 encoding="utf-8")
             return "done\nSTATUS: produced\nARTIFACT: case.xlsx"
-        # attributor:把 reflow 结论落进 last_run(submit_attribution 的假体)
+        # attributor:把 reflow 结论落进 last_run(submit_attribution 的假体;
+        # 读改写持真锁——K1 池化后多 fail 案并发,假体不持锁会相互覆盖丢归因)
+        from main.ist_core.tools.device.fail_attribution import _LAST_RUN_LOCK
         lrp = tmp_path / str(env.get("last_run_path"))
-        data = json.loads(lrp.read_text(encoding="utf-8"))
-        for r in data:
-            if str(r.get("autoid")) == aid:
-                r["_attribution"] = {"layer": "V", "disposition": "reflow",
-                                     "fix_direction": "adjust expectation",
-                                     "evidence": f"echo for {aid}"}
-        lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        with _LAST_RUN_LOCK:
+            data = json.loads(lrp.read_text(encoding="utf-8"))
+            for r in data:
+                if str(r.get("autoid")) == aid:
+                    r["_attribution"] = {"layer": "V", "disposition": "reflow",
+                                         "fix_direction": "adjust expectation",
+                                         "evidence": f"echo for {aid}"}
+            lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         return "VERDICT: V/reflow"
     monkeypatch.setattr(N, "_FORK_OVERRIDE", fake_fork)
 

@@ -151,6 +151,19 @@ def subset_verified(facts: list[dict], aid: str, current_artifact: str) -> bool:
     return bool(v and v.get("result") == "pass")
 
 
+def _norm_sigs(xs) -> set[str]:
+    """存量签名归一化(A1 迁移条款消费点):新旧格式签名做交集前两侧共同过
+    normalize_fail_signature——旧格式真 Fail 项带 `` in: <file>`` 尾,与新解析纯
+    pattern 逐字比较交集恒空 → 冻结/跨床反驳在跨界轮静默失效。惰性 import
+    (facts 是引擎纯层,不常驻依赖工具层);取不到时恒等回退(同格式内零影响)。"""
+    try:
+        from main.ist_core.tools.device.batch_tools import normalize_fail_signature as _n
+    except Exception:  # noqa: BLE001
+        def _n(s):
+            return s
+    return {_n(str(x)) for x in (xs or [])}
+
+
 def frozen(facts: list[dict], aid: str, current_artifact: str | None = None) -> bool:
     """同签名连续两裁决 fail=同法已证伪(按 aid 派生,与路径/目录无关——#7 根治)。
 
@@ -166,7 +179,7 @@ def frozen(facts: list[dict], aid: str, current_artifact: str | None = None) -> 
     a, b = vs[-2], vs[-1]
     if a.get("result") != "fail" or b.get("result") != "fail":
         return False
-    sa, sb = set(a.get("signatures") or []), set(b.get("signatures") or [])
+    sa, sb = _norm_sigs(a.get("signatures")), _norm_sigs(b.get("signatures"))
     return bool(sa & sb)
 
 
@@ -205,6 +218,44 @@ def contradictions(facts: list[dict], aid: str) -> int:
 def rounds_used(facts: list[dict], aid: str) -> int:
     """重编轮次=authored 事实数(首败即升 max 的判据来源)。"""
     return len(_facts_of(facts, aid, "authored"))
+
+
+# 强处置(N1b claim 级证据粘性的作用域):这两类结论携带「设备行为≠预期」的证据主张,
+# 后轮归因不得让它静默消失——弱处置(reflow/rerun_isolated/transient/env_blocked/frozen)
+# 是过程动作,不承载跨轮主张
+STRONG_DISPOSITIONS = ("defect_candidate", "expectation_suspect")
+
+
+def strong_claims(facts: list[dict], aid: str) -> list[dict]:
+    """强处置 claim 历史([主张, 证据] 对,append 序)——N1b claim 级证据粘性。
+
+    粒度在 **claim 级不在处置标签级**(517027 一手复核:r1 dc「不返回 AAAA」是误判、
+    r2 dc「Timeout=0」是真缺陷主张——同一标签下两条独立 claim,标签级单调律两头都错);
+    事实流 append-only 本就保留历史,本函数是消费端读法:brief/题面/缺陷单由此取全史,
+    r3 的改判不再让 r2 的 claim 从消费面消失。
+    用户来源(evidence=="user")的行是裁决记账不是设备证据主张,不算 claim(N1a 本体分离);
+    同 (disposition, claim) 跨轮重复只记首轮(幂等,防 churn 刷屏)。
+    """
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for f in _facts_of(facts, aid, "attribution"):
+        if str(f.get("disposition")) not in STRONG_DISPOSITIONS:
+            continue
+        ev = str(f.get("evidence") or "")
+        if not ev or ev == "user":
+            continue
+        claim = str(f.get("fix_direction") or "")[:300]
+        k = (str(f.get("disposition")), claim)
+        if k in seen:
+            continue
+        seen.add(k)
+        # 键形态与题面 claim_history 契约同构([{round,layer,disposition,claim,evidence}],
+        # 乙队 questions 消费冻结)——本函数是其强处置子集(brief 注入面)
+        out.append({"round": int(f.get("round") or 0),
+                    "layer": str(f.get("layer") or ""),
+                    "disposition": str(f.get("disposition")),
+                    "claim": claim, "evidence": ev[:300]})
+    return out
 
 
 # ── reconcile:全射对账(公式17;oracle 残差公理的执行体) ─────────────────────

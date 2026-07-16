@@ -207,7 +207,8 @@ def test_eval3_cap_bisection_panel_presented(tmp_path):
 
 
 def test_eval3_cap_without_panel_is_engineering_report(tmp_path):
-    """③无 panel 的封顶 → 工程故障呈报(证据附题面,选项=继续/挂起/停止)。"""
+    """③无 panel 的封顶 → 工程故障呈报(证据附题面,选项=继续/缺陷/挂起/停止——
+    2026-07-16 P0-新②a:cap 补「确认产品缺陷」出口,517027 实弹)。"""
     fs = _fs_failed_with_panel(tmp_path, answered=True)
     fs.append({"ev": "cap_reached", "aid": A, "round": 3})
     vw = _vw(fs)
@@ -215,7 +216,8 @@ def test_eval3_cap_without_panel_is_engineering_report(tmp_path):
     assert A not in t["panel"] and A in t["cap"]
     q = ET._contradiction_question({"autoid": A, "kind": "cap", "title": "",
                                     "rounds": 3, "evidence": "修法方向x", "prior_choices": []})
-    assert "未收敛" in q["question"] and len(q["options"]) == 3
+    assert "未收敛" in q["question"] and len(q["options"]) == 4
+    assert "确认产品缺陷" in [o["label"] for o in q["options"]]
 
 
 # ── 挂起/恢复(eval ⑥)与终态语义 ────────────────────────────────────────────

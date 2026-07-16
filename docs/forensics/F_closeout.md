@@ -4,6 +4,7 @@
 > 任务：不信定稿——逐个去实现代码 + 测试里核实三 TODO 是否真 RESOLVED；
 > TODO_tui_ask_user_panel_clear 根因定位（仍开）。
 > 数据：dongkl（pid 30390，34 案）盘上产物 + 全量测试实跑（仓库外 venv）。
+> （挪档注 2026-07-16：本文核销的 4 份 `TODO_*.md` 已移至 `docs/archive/`，正文裸名引用不再逐处改。）
 
 ---
 

@@ -189,6 +189,10 @@ def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
 _task_registry: dict[str, dict[str, Any]] = {}
 _registry_lock = threading.Lock()
 
+# ask_user 用户回答暂存（供 drain_stream 记录到 status_lines）
+_pending_answers: dict[str, str] = {}
+_pending_answers_lock = threading.Lock()
+
 
 def _register_task(user_id: str, stream_id: str) -> threading.Event:
     with _registry_lock:
@@ -209,12 +213,11 @@ def _register_task(user_id: str, stream_id: str) -> threading.Event:
 def _deregister_task(user_id: str) -> None:
     with _registry_lock:
         _task_registry.pop(user_id, None)
-    # 任务完成时刷新会话活跃时间 + 重置轮数，防止长任务完成后触发空闲切分
+    # 任务完成时刷新会话活跃时间，防止长任务完成后触发空闲切分
     with _sessions_lock:
         sess = _sessions.get(user_id)
         if sess is not None:
             sess["last_active"] = time.time()
-            sess["turn_count"] = 1  # 长任务后重新计轮
 
 
 def _cancel_task(user_id: str) -> bool:
@@ -646,6 +649,9 @@ class SmartBotGateway:
                     answers[q_text] = content.strip()
             if qid:
                 submit_answers(qid, answers)
+                # 暂存回答内容，供 drain_stream 记录到 status_lines
+                with _pending_answers_lock:
+                    _pending_answers[user_id] = content.strip()
                 self._reply_stream(frame, str(uuid.uuid4()),
                                    f"✅ 已收到您的回答：{content.strip()}", finish=True)
                 logger.info("ask_user 答案已提交: qid=%s answer=%.100s", qid, content)
@@ -862,6 +868,7 @@ class SmartBotGateway:
         tool_names: list[str] = []
         tool_details: dict[str, str] = {}
         ask_user_triggered = False
+        ask_user_completed = False  # ask_user 工具返回后切换新流
         status_lines: list[str] = []   # 累积状态行
 
         def _send_status() -> None:
@@ -913,6 +920,10 @@ class SmartBotGateway:
             elif etype == UserEventType.ASK_USER:
                 ask_user_triggered = True
                 self._send_ask_user_notification(frame, event.metadata, user_id)
+                # 记录到 status_lines，新流切换后能看到问了什么
+                questions = event.metadata.get("questions") or []
+                q_texts = [q.get("question", "") for q in questions[:3]]
+                status_lines.append(f"❓ 等待用户回答：{'；'.join(q_texts)}")
 
             # --- 工具状态（经 ThoughtRenderer 渲染） ---
             elif etype == UserEventType.TOOL_STATUS:
@@ -931,6 +942,17 @@ class SmartBotGateway:
                         input_data = {"raw": inp}
                 else:
                     input_data = {}
+                # ask_user 工具返回后，切换到新流（后续处理在新消息中显示）
+                if tname == "ask_user" and event.metadata.get("status") == "done":
+                    if ask_user_triggered and not ask_user_completed:
+                        # 读取暂存的用户回答
+                        with _pending_answers_lock:
+                            answer_text = _pending_answers.pop(user_id, "")
+                        if answer_text:
+                            status_lines.append(f"💬 用户回答：{answer_text}")
+                        ask_user_completed = True
+                        stream_id = str(uuid.uuid4())
+                        logger.info("ask_user 完成，切换到新流: %s", stream_id[:8])
                 # 收集 detail 用于最终摘要
                 detail = renderer._extract_detail(tname, input_data)
                 if detail and tname and tname not in tool_details:

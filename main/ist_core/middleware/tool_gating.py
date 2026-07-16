@@ -63,6 +63,10 @@ _SKILL_GROUPS: dict[str, set[str]] = {
     "test-list-review": set(),
     "review-verifier": set(),
     "escalate-when-stuck": set(),
+    # 文档/报告生成(origin/main 2026-07-16 并入):用 wx_*/report_to_doc/fs_*,
+    # 均不在门控前缀内=基础组常驻,无需激活 compile/device
+    "doc-authoring": set(),
+    "report-gen": set(),
     # 旧下划线名(B1 连字符化前的历史对话/续聊线程里仍会出现,与新名同义)
     "ist_compile_engine": {"compile", "device"},
     "compile_worker": {"compile", "device"},

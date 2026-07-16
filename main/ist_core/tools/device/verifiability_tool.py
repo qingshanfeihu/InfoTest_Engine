@@ -13,10 +13,21 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
+
+
+def _write_json_atomic(path, obj) -> None:
+    """原子落盘 JSON:tmp + os.replace(同 batch_tools last_run 先例)。裸 write_text 被
+    Ctrl-C/崩溃打断会留截断文件——needs_decision/user_decision 是「先问后落」台账 + 放行凭据,
+    截断=损坏(96 份交付中 1 份实证 needs_decision.json 截断),下轮读崩或凭据失效。
+    os.replace 是原子操作、无半写窗口;内容与旧 write_text 逐字节等价(仅崩溃安全性变化)。"""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _norm(s: str) -> str:
@@ -94,7 +105,7 @@ def _land_needs_decision(autoid: str, claim_kind: str, entry: dict) -> bool:
                 pass
         data["claims"] = [c for c in data["claims"] if c.get("claim_kind") != claim_kind]
         data["claims"].append({**entry, "claim_kind": claim_kind})
-        nd_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_json_atomic(nd_path, data)
         return True
     except Exception:  # noqa: BLE001
         logger.debug("needs_decision.json 落盘失败", exc_info=True)
@@ -367,7 +378,7 @@ def compile_user_decision(autoid: str, decision: str, assertion_form: str = "",
         ud["ordering_dropped_by_user"] = True
 
     ud_path = outd / "user_decision.json"
-    ud_path.write_text(json.dumps(ud, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json_atomic(ud_path, ud)
     rel = ud_path.relative_to(root)
     return (f"已落盘 {rel}\n{json.dumps(ud, ensure_ascii=False)}\n"
             "重派 brief 引用该文件路径即可,emit 出口会按它机械核对产物;"

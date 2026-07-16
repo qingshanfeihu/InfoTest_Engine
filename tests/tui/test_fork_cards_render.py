@@ -10,10 +10,12 @@ from __future__ import annotations
 import time
 
 from main.ist_core.ink.components.ist_app import (
+    _ENGINE_PHASE_CN,
     IstInkApp,
     _middle_ellipsis,
     _render_engine_bottom_line,
     _render_fork_card,
+    _tool_short_name,
 )
 from main.ist_core.tui.message_model import (
     BLOCK_FORK_CARD,
@@ -172,6 +174,46 @@ def test_render_engine_bottom_line_and_progress():
     prog_done = _render_fork_card({"kind": "progress", "phase": "上机", "status": "done",
                                    "elapsed_s": 812, "n_cases": 32}, now=now)
     assert "✓" in prog_done and "上机完成" in prog_done
+
+
+def test_tool_short_names_cover_v8_fork_tools():
+    # 2026-07-16 审计:两个 fork agent 白名单里这些工具此前掉裸 snake_case(zhaiyq 活体实证
+    # dev_help×36 / kb_intent_search×18 / submit_ask_panel×9 / submit_behavior_fact×8 / …×1)
+    for raw, want in [
+        ("dev_help", "Help"),
+        ("kb_intent_search", "IntentSearch"),
+        ("submit_ask_panel", "AskPanel"),
+        ("submit_behavior_fact", "BehaviorFact"),
+        ("compile_report_underdetermined", "Underdet"),
+    ]:
+        got = _tool_short_name(raw)
+        assert got == want, f"{raw} 应映射为 {want},实得 {got}"
+        assert got != raw, f"{raw} 仍掉裸名(未进 _TOOL_SHORT_NAMES)"
+
+
+def test_render_engine_bottom_line_residual_bucket():
+    # broken(第三态)未进 engine_tick 的 9 键投影(事件侧 emit_tick 缺陷),渲染层残差桶兜底:
+    # 复刻 zhaiyq 活体 round1——total=53,5 桶之和=51(passed36+failed_active14+escalated1),漏 2。
+    eng = _render_engine_bottom_line({"kind": "engine", "run": "zhaiyq", "phase": "reconcile",
+                                      "round": 1, "status": "running", "total": 53,
+                                      "counts": {"passed": 36, "failed_active": 14, "escalated": 1}})
+    assert "其他2" in eng, "broken 漏计的 2 案必须以『其他2』现身,不得在进度行静默消失"
+    assert "53" in eng and "通过36" in eng
+    # 桶和==total(正常轮)时不显残差桶,不给底行添噪
+    ok = _render_engine_bottom_line({"kind": "engine", "run": "zhaiyq", "phase": "author",
+                                     "round": 0, "status": "running", "total": 10,
+                                     "counts": {"produced": 10}})
+    assert "其他" not in ok
+
+
+def test_engine_phase_cn_covers_all_v8_nodes():
+    # V8 图 11 节点(compile_engine_v8/state.py NODE_TYPES)在底行都须有中文名,无一掉裸英文
+    # (user-facing 全中文纪律)。diagnose 是 2026-07-16 审计补的最后一个缺口。
+    v8_nodes = ["prep", "bed_gate", "author", "ask_decision", "merge", "run",
+                "reconcile", "attribute", "diagnose", "ask_contradiction", "closing"]
+    for node in v8_nodes:
+        assert node in _ENGINE_PHASE_CN, f"phase {node} 缺中文映射,底行会显裸英文"
+        assert _ENGINE_PHASE_CN[node] != node
 
 
 def test_render_expanded_appends_recent():

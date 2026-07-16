@@ -2235,6 +2235,23 @@ def _archive_unsuccessful(aids: list[str], out_name: str) -> str | None:
         return None
 
 
+def _volume_composition_check(main_xlsx, deliverable: list) -> tuple[list, list]:
+    """交付主卷组成对账(item2,§11.9 扩展,恢复设计符合性):交付 case.xlsx 实际 autoid 集
+    vs deliverable 集。设计承诺「deliverable N == case.xlsx 内容」——止损转 failed_terminal/
+    被 G3 封堵但未经新 merge 剔除的案会滞留物理卷(778041 实证 23≠22),即 swallowed verdict。
+    返回 (leaked, absent):leaked=卷含非交付案;absent=deliverable 案缺席物理卷。任一非空=违约。
+    卷读不出 autoid(读失败/非数字特殊卷)→ ([], [])(宁漏勿杀,同 _xlsx_real_autoids 契约)。"""
+    from main.ist_core.tools.device.batch_tools import _xlsx_real_autoids
+    try:
+        vol = set(_xlsx_real_autoids(str(main_xlsx)))
+    except Exception:  # noqa: BLE001
+        vol = set()
+    if not vol:
+        return [], []
+    dset = set(deliverable)
+    return sorted(vol - dset), sorted(dset - vol)
+
+
 def closing(state: dict) -> dict:
     """收口(§11.2/11.5/11.9):uncertain 入库(自愈环)→ 机读报告 → 判定式人话双报告
     (零 LLM,leak_scan 门)→ 未通过卷 xlsx → §11.9 清理(通过案目录删/未决案挪
@@ -2521,6 +2538,32 @@ def closing(state: dict) -> dict:
             (mdir / name).unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
+
+    # item2 主卷组成对账门(§11.9 扩展,方案 b:纯加门,不碰 merge 元数据不变量):交付主卷
+    # case.xlsx=最后 delivery merge 物理卷,可能含"止损转 failed_terminal/G3 封堵但未经新
+    # merge 剔除"的案(778041 实证 23≠22)。核对实际组成 vs deliverable——设计承诺
+    # 「deliverable N == case.xlsx 内容」,失配=swallowed verdict→落事实 + outcome 如实降级
+    # (不静默交付超集卷)。重合并纠正(方案 a,涉 moved_tail/coexist 重设计)留行为修复专项轮。
+    _leaked, _absent = _volume_composition_check(mdir / "case.xlsx", deliverable)
+    if _leaked or _absent:
+        logger.warning("主卷组成对账失配:泄漏=%s 缺失=%s", _leaked[:8], _absent[:8])
+        sh.append(state, [{"ev": "volume_composition_mismatch", "aid": a, "kind": k,
+                           "reason": r, "run_id": f"g_compose:{k}:{a}"}
+                          for a, k, r in (
+                              [(x, "leaked", "case.xlsx 含非 deliverable autoid(止损/G3 后未剔除)")
+                               for x in _leaked]
+                              + [(x, "absent", "deliverable 案缺席交付主卷 case.xlsx")
+                                 for x in _absent])])
+        if str(report.get("outcome", "")).startswith("delivered"):
+            report["outcome"] = "delivery_incomplete"
+        report["volume_composition_mismatch"] = {"leaked": _leaked, "absent": _absent}
+        try:
+            (mdir / "engine_report.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+        sh.emit(f"⚠ 主卷组成对账失配(泄漏 {len(_leaked)}/缺失 {len(_absent)};尾号 "
+                + "、".join(a[-6:] for a in (_leaked + _absent)[:4]) + ")——收口结论如实降级")
 
     # 交付对账断言(§11.9:报告说有=盘上真有)+ 收口卡
     missing = [f for f in deliver_files if not (mdir / f).is_file()]

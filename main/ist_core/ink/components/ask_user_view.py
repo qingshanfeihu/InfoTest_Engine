@@ -52,6 +52,7 @@ class AskUserSession:
         self._highlight = 0            # 当前题的高亮 option 索引
         self._other_text: dict[int, str] = {}  # q_idx -> Other 自由文本
         self._other_input = False      # 是否处于 Other 文本输入态
+        self._other_empty_hint = False  # 空文本提交被拦→面板显「不能为空」提示(防呆)
 
     # ── 渲染 ──────────────────────────────────────────────────────────
 
@@ -111,6 +112,9 @@ class AskUserSession:
             lines.append(line)
             if is_other and self._other_text.get(self._q_idx):
                 lines.append(f"       {G}→ {self._other_text[self._q_idx]}{X}")
+            if is_other and self._other_empty_hint:
+                # 防呆提示(空文本提交被拦):黄字,仅在 Other 空提交后驻留,补内容/esc 后清
+                lines.append("       \x1b[33m⚠ 自定义输入不能为空——请输入内容,或按 esc 取消\x1b[0m")
 
         hint = "↑↓ 选择 · 数字直选 · "
         if multi:
@@ -200,8 +204,18 @@ class AskUserSession:
         self._advance_or_submit()
 
     def submit_other_text(self, text: str) -> None:
-        """Other 自由文本输入完成后由 ist_app 调用。"""
-        self._other_text[self._q_idx] = text.strip()
+        """Other 自由文本输入完成后由 ist_app 调用。
+
+        空文本防呆(2026-07-16 532862 实弹):高亮 Other→enter→提交空文本曾落成空答案,
+        而空答案与 esc 取消的空答案在下游无法区分→引擎判「已取消」→案被自动挂起。空文本
+        不构成有效裁决:留在输入态并提示,让用户补内容或显式 esc 取消,绝不落空 Other。"""
+        stripped = text.strip()
+        if not stripped:
+            self._other_empty_hint = True
+            self._render()   # 面板重渲显提示;仍在 _other_input 态,继续收文本
+            return
+        self._other_empty_hint = False
+        self._other_text[self._q_idx] = stripped
         q = self._cur_question()
         if q.get("multiSelect"):
             self._selected[self._q_idx].add(_OTHER_VALUE)
@@ -211,6 +225,7 @@ class AskUserSession:
         self._advance_or_submit()
 
     def cancel_other_input(self) -> None:
+        self._other_empty_hint = False
         self._other_input = False
         self._render()
 

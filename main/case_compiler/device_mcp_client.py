@@ -641,7 +641,7 @@ def cli_qhelp(command: str, build: str = "", env: Any = None,
         except Exception:  # noqa: BLE001
             pass
 
-        def _ru(expect: str, t: float = 6.0) -> str:
+        def _read_until(expect: str, t: float = 6.0) -> str:
             out = ""
             rx = re.compile(expect)
             dl = time.time() + t
@@ -657,14 +657,14 @@ def cli_qhelp(command: str, build: str = "", env: Any = None,
 
         # enable（空密码）→ 需要则 config
         ch.send("enable\n")
-        o = _ru(r"(#)|(sword:)", 5)
+        o = _read_until(r"(#)|(sword:)", 5)
         if "sword" in o.lower():
             ch.send("\n")
-            _ru(r"#", 5)
+            _read_until(r"#", 5)
         mode = "enable"
         if use_config:
             ch.send("config terminal\n")
-            cf = _ru(r"\(config\)#", 5)
+            cf = _read_until(r"\(config\)#", 5)
             if "(config)#" not in cf:
                 return {"ok": False, "error": "未能进入 config 模式", "device_ip": device_ip}
             mode = "config"
@@ -716,7 +716,7 @@ def cli_qhelp(command: str, build: str = "", env: Any = None,
         try:
             ch.send("\x15")
             ch.send("end\n")
-            _ru(r"#", 3)
+            _read_until(r"#", 3)
         except Exception:  # noqa: BLE001
             pass
 

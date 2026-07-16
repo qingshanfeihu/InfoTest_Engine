@@ -261,28 +261,38 @@ def emit(text: str) -> None:
         logger.debug("engine 进度 emit 失败", exc_info=True)
 
 
+# V8 内部 13 态 → V6 footer 九态词汇的投影(显示契约与引擎词汇解耦,前端零改动消费)。
+# 九桶必须覆盖全部 13 个 case 状态、每态恰入一桶——否则 footer 桶和<total、案在 footer 凭空
+# 消失(活证 29906 round1:51<53,broken 三态漏投)。纯遥测,不碰编译行为。
+# 测试锚:test_footer_projection_complete(全 13 态 → Σ九桶==total,残差 0)。
+def _footer_bucket_counts(c: dict) -> dict:
+    return {
+        "pending": c.get("pending", 0),
+        "dispatched": 0,
+        "produced": c.get("authored", 0) + c.get("subset_verified", 0),
+        "pending_decision": c.get("awaiting_user", 0),
+        "awaiting_user": 0,
+        "passed": c.get("deliverable", 0),
+        # broken 三态(broken/broken_errored/broken_blocked)=非通过、非终态、仍在编译环内
+        # (复跑/reflow/env 呈报)——折进 failed_active(九态词汇无 broken 桶,这是最近的非通过桶)。
+        "failed_active": (c.get("failed", 0) + c.get("contradicted", 0)
+                          + c.get("broken", 0) + c.get("broken_errored", 0)
+                          + c.get("broken_blocked", 0)),
+        "failed_terminal": c.get("failed_terminal", 0) + c.get("suspended", 0),
+        "escalated": c.get("escalated", 0),
+    }
+
+
 def emit_tick(state: dict, phase: str, fs: list[dict] | None = None) -> None:
     """引擎聚合 → events.jsonl(TUI 契约:V6 定稿的九态词汇,V8 视图标签在此翻译——
     显示契约与引擎内部词汇解耦,前端零改动消费)。"""
     try:
         from main.ist_core.skills.loader import _fork_emit_event
         vw = view(state, fs)
-        c = vw["counts"]
-        counts = {
-            "pending": c.get("pending", 0),
-            "dispatched": 0,
-            "produced": c.get("authored", 0) + c.get("subset_verified", 0),
-            "pending_decision": c.get("awaiting_user", 0),
-            "awaiting_user": 0,
-            "passed": c.get("deliverable", 0),
-            "failed_active": c.get("failed", 0) + c.get("contradicted", 0),
-            "failed_terminal": c.get("failed_terminal", 0) + c.get("suspended", 0),
-            "escalated": c.get("escalated", 0),
-        }
         _fork_emit_event({"event": "engine_tick",
                           "run": str(state.get("out_name") or "engine"),
                           "phase": phase, "round": int(state.get("vol_seq") or 0),
-                          "wave": 0, "counts": counts,
+                          "wave": 0, "counts": _footer_bucket_counts(vw["counts"]),
                           "total": len(vw["cases"])})
     except Exception:  # noqa: BLE001
         logger.debug("engine tick emit 失败", exc_info=True)

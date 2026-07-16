@@ -77,6 +77,17 @@ _TOOL_SHORT_NAMES: dict[str, str] = {
     "dev_run_batch": "RunBatch",
     "dev_run_batch_digest": "RunDigest",
     "agent_define": "AgentDefine",
+    # V8 fork 工具短名补全(2026-07-16 TUI 审计:zhaiyq 活体样本里这些真名在卡片/
+    # transcript 掉裸 snake_case——dev_help×36、kb_intent_search×18、submit_ask_panel×9、
+    # submit_behavior_fact×8、compile_report_underdetermined×1;两个 fork agent 白名单里
+    # 但此前未进映射表)。命名沿用既有规约:去 dev_/kb_ 前缀 + CamelCase。
+    "dev_help": "Help",
+    "dev_init_device": "InitDevice",
+    "kb_intent_search": "IntentSearch",
+    "compile_report_underdetermined": "Underdet",
+    "compile_user_decision": "UserDecision",
+    "submit_ask_panel": "AskPanel",
+    "submit_behavior_fact": "BehaviorFact",
 }
 
 
@@ -135,6 +146,9 @@ _AUTOID_ARG_TOOLS = frozenset({
     "compile_emit", "compile_precedent",
     "compile_check_verifiability", "compile_attribute", "compile_runtime_slots",
     "compile_runtime_fill", "submit_attribution",
+    # 2026-07-16 审计补:均以 autoid 为域内标识,否则落通用首值兜底——submit_ask_panel
+    # 首参是 last_run_path 长路径,会渲染成路径噪声;取 …autoid 尾6位最有辨识度。
+    "submit_ask_panel", "submit_behavior_fact", "compile_report_underdetermined",
 })
 
 
@@ -268,8 +282,11 @@ _ENGINE_PHASE_CN = {
     "merge": "合并", "run_digest": "上机", "attribute": "归因",
     "writeback": "写回", "report": "收尾",
     # V8 节点(2026-07-10;bed_gate 床检/reconcile 对账/ask_contradiction 矛盾问询/closing 收口)
+    # diagnose 诊断补于 2026-07-16 审计(11 节点里唯一缺映射;当前不发 tick 故无害,
+    # 防御性补全——将来给 diagnose 加 engine_tick 时不至于底行显裸英文 diagnose)。
     "bed_gate": "床检", "author": "编写", "run": "上机",
     "reconcile": "对账", "ask_contradiction": "矛盾问询", "closing": "收口",
+    "diagnose": "诊断",
 }
 _B, _C2, _D2, _X2 = "\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m"
 _G2, _R2, _Y2 = "\x1b[32m", "\x1b[31m", "\x1b[33m"
@@ -283,7 +300,13 @@ def _render_engine_bottom_line(p: dict) -> str:
     failed_active(待重跑),欠定=pending_decision+awaiting_user,失败=failed_terminal+escalated。
     max 思考深度状态不在此行——移到 thinking 焦点行(footer._state「最大深度思考中」,
     2026-07-15 用户裁决:该显在视线焦点的 thinking 行,不藏引擎进度行尾)。
-    """
+
+    「其他N」兜底(2026-07-16 审计):engine_tick 的 counts 是事件侧 emit_tick 把 V8 内部
+    13 态翻译回 V6 九键的投影,broken/broken_errored/broken_blocked 三态未进任何键(事件侧
+    缺陷,已另记报告)。有 broken 案时上述 5 桶之和 < total,案会在进度行凭空消失(zhaiyq
+    活体 round1 实测漏计 2)。这里补一个残差桶:凡 total 减 5 桶之和 >0,显「其他N」,保证
+    可见计数恒等于 total——渲染层不因事件侧投影不全而静默丢案。事件侧补全后残差自然归 0、
+    该桶消失,不冲突。"""
     p = dict(p or {})
     counts = dict(p.get("counts") or {})
     total = int(p.get("total") or 0)
@@ -294,6 +317,7 @@ def _render_engine_bottom_line(p: dict) -> str:
     pend = counts.get("pending_decision", 0) + counts.get("awaiting_user", 0)
     bad = counts.get("failed_terminal", 0) + counts.get("escalated", 0)
     done = produced + passed
+    other = total - (produced + passed + spin + pend + bad)
     barw = 20
     filled = round(barw * done / total) if total else 0
     bar = "█" * filled + "░" * (barw - filled)
@@ -301,9 +325,10 @@ def _render_engine_bottom_line(p: dict) -> str:
     if p.get("status") == "done":
         phase = "已收尾"
     D, X = _D2, _X2
+    other_seg = f" 其他{other}" if other > 0 else ""
     return (f" 编译 {p.get('run', '')} · 轮次{p.get('round', 0)} {phase} "
             f"{bar} {done}/{total}{D} · 产出{produced} 编写中{spin} "
-            f"欠定{pend} 通过{passed} 失败{bad}{X}")
+            f"欠定{pend} 通过{passed} 失败{bad}{other_seg}{X}")
 
 
 def _payloads_have_max_thinking(payloads) -> bool:

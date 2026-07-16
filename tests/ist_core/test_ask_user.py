@@ -161,6 +161,39 @@ def test_session_other_freetext(capture_submit):
     assert capture_submit["ans"] == {"其他?": "自定义X"}
 
 
+def test_session_other_empty_text_guard(capture_submit):
+    # 防呆(2026-07-16 532862 实弹):高亮 Other→enter→空文本提交曾落成空答案,而空答案
+    # 与 esc 取消无法区分→引擎判取消→案自动挂起。空文本不得提交,须留在输入态并提示。
+    s = _session(
+        [{"question": "其他?", "options": [{"label": "A", "description": ""}]}],
+        capture_submit,
+    )
+    s.handle_key("o", "o")
+    assert s.in_other_input
+    s.submit_other_text("")            # 空文本提交
+    assert "ans" not in capture_submit, "空文本不得提交(否则空答案=取消→案被自动挂起)"
+    assert s.in_other_input, "空文本后仍留在输入态,等用户补内容或 esc 显式取消"
+    assert any("不能为空" in ln for ln in s.render_lines()), "面板须显防呆提示"
+    # 补上真实内容后正常提交,提示清除
+    s.submit_other_text("真实裁决")
+    assert capture_submit["ans"] == {"其他?": "真实裁决"}
+
+
+def test_session_other_whitespace_only_guard(capture_submit):
+    # 纯空白(空格/制表符)strip 后为空,同样不得落成有效 Other
+    s = _session(
+        [{"question": "其他?", "options": [{"label": "A", "description": ""}]}],
+        capture_submit,
+    )
+    s.handle_key("o", "o")
+    s.submit_other_text("   \t ")
+    assert "ans" not in capture_submit
+    assert s.in_other_input
+    # esc 取消清除提示并退回选项
+    s.cancel_other_input()
+    assert not s.in_other_input
+
+
 def test_session_cancel(capture_submit):
     s = _session(
         [{"question": "取消?", "options": [{"label": "A", "description": ""}]}],

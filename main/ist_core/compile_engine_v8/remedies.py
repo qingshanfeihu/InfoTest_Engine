@@ -22,7 +22,7 @@ from main.ist_core.compile_engine_v8 import facts as F
 from main.ist_core.compile_engine_v8 import views as V
 
 
-def _mine(fs: list[dict], aid: str) -> list[dict]:
+def _facts_for_aid(fs: list[dict], aid: str) -> list[dict]:
     return [f for f in fs if str(f.get("aid")) == aid]
 
 
@@ -33,7 +33,7 @@ def derive_queue(fs: list[dict], vw: dict, aid: str,
     status = str(c.get("status") or "")
     if status not in (V.S_FAILED, V.S_CONTRADICTED):
         return []
-    mine = _mine(fs, aid)
+    mine = _facts_for_aid(fs, aid)
     atts = [f for f in mine if f.get("ev") == "attribution"]
     att = atts[-1] if atts else {}
     disp = str(att.get("disposition") or "")
@@ -87,7 +87,7 @@ def derive_queue(fs: list[dict], vw: dict, aid: str,
 def tried_actions(fs: list[dict], aid: str) -> list[str]:
     """已试修法的机械清单(题面「队列空证明」的另一半:不是没试,是试尽了)。
     user-facing 中文——直接进面板题面。"""
-    mine = _mine(fs, aid)
+    mine = _facts_for_aid(fs, aid)
     out: list[str] = []
     rounds = F.rounds_used(mine, aid)
     if rounds > 1:

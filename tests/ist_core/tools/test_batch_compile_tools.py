@@ -184,6 +184,14 @@ def _make_merged_xlsx(tmp_path):
 @pytest.fixture
 def _patch_client(monkeypatch):
     _FakeClient.instances = []
+    # 密闭化：dev_run_batch 在 deliver 前有两个 bare 探测会真连跳板机——
+    # _probe_device_reachable(ping 设备) 与 _probe_stale_pytest(SSH 探残留 ist_staging pytest)。
+    # 本套只 mock 了 MCP client，漏了这两个探测；真机占床时（如并行 zhaiyq 编译）会探到残留
+    # 进程 → 返回 stale_run_on_device，与被测的 deliver/run/verdict 逻辑无关却令断言失败。
+    # 置为「床空闲、设备可达」使测试密闭（不触真网络），落回 mock client 路径。
+    import main.ist_core.tools.device.batch_tools as bt
+    monkeypatch.setattr(bt, "_probe_stale_pytest", lambda env=None: None)
+    monkeypatch.setattr(bt, "_probe_device_reachable", lambda env=None: True)
 
     def _install(**kwargs):
         import main.case_compiler.device_mcp_client as dmc

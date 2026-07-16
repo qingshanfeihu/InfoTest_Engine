@@ -1,8 +1,9 @@
 """E 列对象名规范化器。
 
 把 .py 先例代码里的对象名（设备别名 Seg0/APV0_C/apv_0、check_point、主机名等）
-归一成 xlsx 标准 E 列对象名（APV_0 / check_point / test_env / time）。corpus 解析 .py
-先例时用它还原 E 列；framework_sync 同步时一并采集 conftest 的 fixture 别名。
+归一成 xlsx 标准 E 列对象名（APV_0 / check_point / test_env / time）。
+（注:原生产消费方 corpus.py 已于 2026-07-16 删除,本模块现仅 test_object_normalizer 覆盖——
+去留待 team-lead 终局裁决,见 team2_code_align.md §4.1。）
 
 设计红线：**不写死某个测试床的 {APV_0, APV_1} 具体集合**——按结构规则归一
 （APV+序号 → APV_<n>；断言/环境/等待关键字保留；其余主机名归 test_env）。
@@ -63,5 +64,5 @@ class ObjectNameNormalizer:
 
 @lru_cache(maxsize=1)
 def get_object_normalizer() -> ObjectNameNormalizer:
-    """进程级单例（corpus 解析先例时复用）。"""
+    """进程级单例（解析先例时复用,免重复构造别名表）。"""
     return ObjectNameNormalizer()

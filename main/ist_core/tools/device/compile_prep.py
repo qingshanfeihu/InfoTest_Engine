@@ -35,11 +35,11 @@ def _load_mindmap(path: Path) -> list:
     return json.loads(raw[i:].decode("utf-8"))
 
 
-def _text(node: dict) -> str:
+def _node_text(node: dict) -> str:
     return ((node.get("data") or {}).get("text") or "").strip()
 
 
-def _kids(node: dict) -> list:
+def _node_children(node: dict) -> list:
     return node.get("children") or []
 
 
@@ -60,17 +60,17 @@ def _extract_cases(root: dict) -> list[dict]:
         if autoid:
             # 这是一个 case:text=标题,children=步骤描述,步骤的 children=期望
             step_intents = []
-            for step_node in _kids(node):
-                step_desc = _text(step_node)
+            for step_node in _node_children(node):
+                step_desc = _node_text(step_node)
                 # 步骤的子节点 = 期望值(脑图原文,如 "命中第一个pool")
-                expects = [_text(c) for c in _kids(step_node) if _text(c)]
+                expects = [_node_text(c) for c in _node_children(step_node) if _node_text(c)]
                 step_intents.append({
                     "desc": step_desc,
                     "expected": "  ".join(expects) if expects else "",
                 })
             cases.append({
                 "autoid": autoid,
-                "title": _text(node),          # 脑图原文标题,重名不去重
+                "title": _node_text(node),          # 脑图原文标题,重名不去重
                 "group_path": list(group_path),  # 分组链(父节点 text)
                 "priority": d.get("priority"),
                 "step_intents": step_intents,
@@ -85,9 +85,9 @@ def _extract_cases(root: dict) -> list[dict]:
             # case 节点下不再找嵌套 case(autoid 节点是叶层 case 单元)
             return
         # 非 case 节点:继续下钻,把自己的 text 加进分组链
-        title = _text(node)
+        title = _node_text(node)
         next_path = group_path + [title] if title else group_path
-        for c in _kids(node):
+        for c in _node_children(node):
             walk(c, next_path)
 
     walk(root, [])

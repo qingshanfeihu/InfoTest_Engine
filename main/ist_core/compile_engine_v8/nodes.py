@@ -941,11 +941,19 @@ def run(state: dict) -> dict:
     comp = list(mf[-1].get("composition") or []) if mf else []
     sh.emit(f"上机[{state.get('run_ctx')}]:{len(comp)} 案 @ {state.get('bed_host')}")
     out = _digest_fn(str(merged), comp)
-    if isinstance(out, str) and ("device_busy" in out or "run_in_progress" in out):
+    if isinstance(out, str) and ("device_busy" in out or "run_in_progress" in out
+                                 or "stale_run_on_device" in out):
+        # stale_run_on_device 同属"床被占"语义(被打断批的 pytest 残留)——
+        # 2026-07-16 zhaiyq 三跑实证:此前掉进 error 路,digest 原话被丢弃
         return {"phase_status": "device_busy", **sh.counts_update(state, fs)}
     lr = merged.parent / "last_run.json"
     if not lr.is_file():
-        return {"phase_status": "error", "error": "digest produced no last_run"}
+        # digest 原话必须留声(2026-07-16 zhaiyq 续跑实证:两轮秒回收口,error 只有
+        # "no last_run" 七个字,deliver 失败/探测拒绝的真实原因全被吞——盲修两轮)
+        head = str(out)[:300] if out is not None else "(digest returned None)"
+        sh.emit(f"⚠ 上机未产出结果——digest 返回:{head}")
+        return {"phase_status": "error",
+                "error": f"digest produced no last_run; digest said: {head}"}
     return {"phase_status": "ok",
             "last_run_ref": str(lr.relative_to(sh.project_root())),
             **sh.counts_update(state, fs)}

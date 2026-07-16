@@ -1,5 +1,10 @@
 # V6 编译引擎设计(1.0.5-beta.1)
 
+> ⚠️ **历史存档(V6 于 2026-07-07 过时;2026-07-16 标注)**:本文描述的 V6 引擎已被 `DESIGN_v8_engine.md`
+> 取代;V6 代码目录 `main/ist_core/compile_engine/` 已删除(现役编译只有 V8 一条路,`compile_engine_v8/`)。
+> **事实存档不删**——本文仅作 V8 前身设计记录,下方「已落地/现役/唯一一条路」等措辞均属**当年语境**、勿当现状;
+> V8 的取舍清单见 `DESIGN_v8_engine.md §7「抛弃的 V6 包袱」`。
+
 > 状态:已落地并经三域对照轮验收(dongkl 21/34 重灾域 / yzg 25/26 / zhaiyq 51/53,编排事故 0)。
 > 代码:`main/ist_core/compile_engine/`;资产包:`main/ist_core/skills/ist-compile-engine/SKILL.md`;
 > 编译只有 V6 这一条路(2026-07-07 起,v5 main-orchestrated / `compile_pipeline` / grade 闸全删,无 `IST_COMPILE_ENGINE` 开关)。

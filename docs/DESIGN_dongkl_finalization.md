@@ -15,6 +15,36 @@
 **prompt 编写红线(用户重申)**:改 prompt 一律**陈述事实+后果+为什么**,**禁**「建议/必须/应该」这类
 预设结论/指令词(违 skill 编写标准的按自由度分层)。
 
+### 0.1 两类机械门:语义门(禁) vs 结构门(留)——2026-07-16 精炼(593516 团队调研 + 用户"为什么它死"挑战驱动)
+
+§0"唯一保留=协议级三事实"的"唯一"措辞会误读成"删掉全部结构门",与 `DESIGN_v8:252`"保留 emit 全部
+机械门(17+单调门)"字面打架。真相:§0 禁的**只是语义门**,结构门整类一直在用、从没想删。理论归 K §2.9.6
+(47) 执行位阶律。
+
+- **语义门(禁)**:对断言/配置**内容是否正确**下判——LLM 判 LLM、命令文本关键字白名单、预消化信号表替
+  worker 拍板。无判别力(grade 942 配对 3pp)、误伤金标准(GA-CUT 强字典误杀)。语义终判归上机 oracle 与人。
+- **结构门(留,本就在用)**:只强制断言的**形态/物理事实**、**不判内容对错**(`found_times` 必崩、末锚恒真、
+  撞命令原文恒真、零 checkpoint 恒 fail…`structural_gate.py` 全 17 门)。判据从 mirror 源/文法**结构化解析**
+  (读 F 列算子+配置 method 行,非 grep 命令文本)。
+- **一句话判据**:删掉该门——"换内容就翻案"→判内容=语义门(禁);"任何设备回显下恒真/恒假/必崩、内容无关"
+  →判形态=结构门(留)。判据从严即 ABC 记忆 `[[compile-quality-abc-three-layer]]` A 层"**误判即必然真错、
+  不误杀好制品**"。
+
+**分布形态的执行位阶分解(纠正 §A;不是一道新硬门)**:调查揭出 `grade_extract:357-408` 分布诊断器"死"是
+设计使然——它的 `count_hardcoded_suspect`/`asserts_literal_hit_ip` 是 **B 层可证伪性判断**("命中随轮转变化"、
+membership-vs-distribution 语义歧义),按 ABC 框架**刻意做诊断非硬门**(硬门化=GA-CUT,记忆专警"我这次差点
+做的")。故分布修法**分解到多位阶**:
+| 分解 | 位阶 | 修法 |
+|---|---|---|
+| `Hit:\d+` 恒真 | L_struct(A) | 结构门(若崩溃门未覆盖;有 edge-case 需独立 eval,不急落) |
+| 命中计数/落点可证伪性 | L_oracle(B) | **既有 `compile_check_verifiability` 回灌**(advisory,非硬拒) |
+| claim_kind「分布 vs membership」 | L_model | **worker.md 通道消歧**(dig=运行时选中/采样→分布;show=静态配置/存在→membership) |
+| env_blocked→reflow | — | 已落地 prompt(attributor 同案自查) |
+
+**根因非"§0 禁了该有的门",是 B 层 advisory 工具(`compile_check_verifiability`,在 worker 工具箱、md:116 明令调)
+因 claim_kind 灰区没被触发**(593516 worker 把「p4 参与加权轮转」误归 membership→没走 falsify)。∴ 此纠正
+**印证 §0 对**(B 保持 advisory)、只把结构门二分说清。**绝不把 hardcoded/member 判断硬门化**(=GA-CUT)。
+
 ## 1. 逐项定稿
 
 ### A · RR/分布类断言 + 写回洗白(修正 oracle,不需要 D)

@@ -153,7 +153,7 @@ user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
 | `main.common`   | 通用工具与外部依赖封装 | paths / env / utils / progress / cli_commands |
 | `main.ingest`   | HTML 抓取（Bugzilla / 禅道） | defect_fetch / defect_parse / html_extractors/ |
 | `main.ist_core` | IST-Core 对话式 Agent | graph / runner / tui/ / ink/ + agents/ + tools/ + memory/ |
-| `main.case_compiler` | 用例编译运行时 | config / env_pool / device_mcp_client / corpus / xlsx_emit |
+| `main.case_compiler` | 用例编译运行时 | config / env_pool / device_mcp_client / xlsx_emit |
 
 顶层管线模块：
 

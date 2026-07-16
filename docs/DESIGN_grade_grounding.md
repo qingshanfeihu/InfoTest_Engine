@@ -1,5 +1,11 @@
 # 设计：grade = 设备实验循环——让 worker 的错模型在交货前被设备戳破
 
+> ⚠️ **历史决策存档(grade 于 2026-07-07 删除;2026-07-16 标注)**:grade 闸已整条删除(942 对配对判别力
+> 仅 3pp,LLM 审 LLM 不构成质量门);V8 图无 grade 节点、无 grade skill。本文核心提案 **B1 末轮设备实验环
+> 未获采纳**(见下 §「B1 设备实验环取消」自述);真正存活的只有 **A 级检测器**(空断言门/引用图/brief 去劫持/
+> 归因收紧等),已并入 `structural_gate.py`/`grade_extract_script.py`,不依赖本文存活。**事实存档不删**——留作
+> 「为何拒绝 LLM 意见型 grade + 为何拒绝设备实验环」的决策考古;质量门现状以 `DESIGN_v8_engine.md` 为准。
+
 > 全链条证据：`docs/DIAG_035413_reasoning_divergence.md`（LangSmith trace + 设备实证 3 实验 + 学界调研 + infotest 最小实验 8 轮 + 工具可行性验证）。本文是定案 + 执行入口（compact 后从这里续）。
 
 ## 一句话

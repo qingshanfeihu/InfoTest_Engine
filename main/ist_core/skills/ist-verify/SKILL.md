@@ -1,6 +1,6 @@
 ---
 name: ist-verify
-description: "Runs an already-compiled case.xlsx on the device once: collects the framework's real verdicts, backfills empty RUNTIME assertions, attributes each failure across four layers (G/E/V/transient), dispatches compile-worker for targeted recompiles by layer, and writes true-PASS results back to footprint. Verifies existing excel only — never generates new cases. Use when the user says 上机验证 / 上机复验 / verify this case.xlsx / run it on-device and check / 验证用例, or wants an already-compiled excel confirmed on the real device."
+description: "Runs an already-compiled APV load-balancer (SLB / SDNS) case.xlsx on the device once: collects the framework's real verdicts, backfills empty RUNTIME assertions, attributes each failure across four layers (G/E/V/transient), dispatches compile-worker for targeted recompiles by layer, and writes true-PASS results back to footprint. Verifies existing excel only — never generates new cases. Use when the user says 上机验证 / 上机复验 / verify this case.xlsx / run it on-device and check / 验证用例, or wants an already-compiled excel confirmed on the real device."
 context: inline
 user-invocable: true
 effort: medium

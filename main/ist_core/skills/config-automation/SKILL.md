@@ -1,6 +1,6 @@
 ---
 name: config-automation
-description: IP replacement tool. Replaces example IPs (10.x/192.168.x) in a network configuration the LLM has already generated with real IPs from the automation environment, and generates a verification script.
+description: IP replacement tool for APV load-balancer (SLB / SDNS) configurations. Replaces example IPs (10.x / 192.168.x) in a network configuration the LLM has already generated with the automation environment's real IPs, and generates a verification script.
 context: inline
 when_to_use: |
   Use when the LLM has already produced a configuration containing example IPs and the user asks to replace them with the environment's real IPs.
@@ -9,24 +9,19 @@ when_to_use: |
 allowed-tools: [fs_read, fs_write, fs_grep, fs_ls]
 ---
 
-<Role>
 # IP Replacement Skill
 
 This skill is an IP replacement tool. Its sole responsibility: **take configuration text the LLM has already generated, replace the example IPs in it with real IPs from the automation environment, and generate a verification script.**
 
 It does not look up documentation, search command syntax, or discover configurations. The configuration text is supplied by the caller (the LLM).
-</Role>
 
-<Rules>
 ## Core rules
 
 1. **IP replacement only**: never change domains, names, ports, weights, TTLs, or any other non-IP parameter
 2. **No config line lost**: process line by line; do not drop a single line
 3. **Verification paired**: automatically generate the matching verification commands
-4. **Write to file**: results are written to workspace/outputs/yzg/
-</Rules>
+4. **Write to file**: results are written under `workspace/outputs/` (the agent's only writable root) — one subdirectory per run
 
-<Agentic_Workflow>
 ## Execution flow
 
 **The LLM's responsibility**: find documentation → understand command syntax → generate the complete configuration containing example IPs
@@ -43,9 +38,9 @@ A single call performs all replacements. The returned `Pipeline Execution Result
 - `config_script` — the fully IP-replaced configuration script
 - `verify_script` — verification commands
 - `output_files` — list of output files
-</Agentic_Workflow>
 
-<Output_Format>
+## Output format
+
 ### IP映射表
 | 原始IP | 替换IP | 角色 |
 |--------|--------|------|
@@ -63,33 +58,17 @@ A single call performs all replacements. The returned `Pipeline Execution Result
 ### 输出文件
 | 文件名 | 说明 |
 |-------|------|
-</Output_Format>
 
-<Reference>
-# ============================================================
-# IP resource pool (reference for the programmatic mapping;
-# the actual work is done automatically by the Python pipeline)
-# ============================================================
+## IP resource pool (reference)
 
-| Device | Available IPv4 |
-|------|---------|
-| APV0 | 172.16.32.70, 172.16.34.70, 172.16.35.70 |
-| APV1 | 172.16.32.71, 172.16.34.71, 172.16.35.71 |
-| server213 | 172.16.35.213 |
-| server231 | 172.16.35.224, 172.16.35.225, 172.16.35.226, 172.16.35.231 |
-| server232 | 172.16.35.232 |
-| routerA | 172.16.33.206, 172.16.34.206 |
-| routerB | 172.16.32.210, 172.16.33.210 |
-| clientC/D | 172.16.33.217 |
-| console | 172.16.32.215, 172.16.33.215, 172.16.34.215, 172.16.35.215 |
+The real device/server addresses are **not inlined here** — the single source of truth is the
+automation topology, read at run time so a testbed swap needs no edit to this skill:
+- `knowledge/data/auto_env/network_topology.json` — device / server / segment addresses (machine source)
+- `knowledge/data/auto_env/network_topology_rag.md` — the human-readable topology description
 
-## VIP allocation rules (executed automatically by the Python pipeline)
-- VIP → any unoccupied IP on the segment (starting from .50, skipping the gateway)
-- Backend services → real server IPs (server213/231/232)
-- Never seize an IP already held by an existing device
-
-## Example IP ranges (auto-detected and replaced)
-- 10.0.0.0/8, 192.168.0.0/16, 127.0.0.0/8
-- 172.16.0.0 ~ 172.16.31.255
-- 172.16.32.0 ~ 172.16.35.255 → IPs of this environment, never replaced
-</Reference>
+The Python pipeline (`config_generator.py`) performs the mapping automatically from that topology; the
+rules it applies (mechanism, not addresses):
+- **VIP** → any unoccupied IP on the segment (starting from `.50`, skipping the gateway)
+- **Backend services** → the real server IPs from the topology
+- **Never** seize an IP already held by an existing device
+- **Example IP ranges** auto-detected and replaced: `10.0.0.0/8`, `192.168.0.0/16`, `127.0.0.0/8`, and `172.16.0.0`–`172.16.31.255`. The environment's own segments (`172.16.32.0`–`172.16.35.255`) are real addresses and are never replaced.

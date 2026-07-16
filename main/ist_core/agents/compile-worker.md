@@ -86,6 +86,17 @@ soundness is the user's call, and the sheet still faces every emit gate and the 
   provenance carries the same scope, guarding the GA-CUT regression where fixed counts were wrongly
   flagged outside distribution context). The exact statistics command comes from footprint/manual,
   not from memory.
+- **The channel you read a fact from separates a sample from a member** — a `show <config>` output
+  reflects the static configuration: *is X configured / enumerated* is a membership fact read there.
+  A `dig` / traffic result reflects which member the runtime rotation *selected* for that request —
+  that is h-in-λ sampling. So "does the newly-added pool participate in the rotation", "which pool
+  does request N land on", "is the split 3:2:1" are read from dig/traffic and are distribution
+  claims, even though "does member IP X appear" is phrased like existence: a handful of digs
+  asserting a specific member appears passes whether the rotation is correct or is stuck on one
+  pool — it reads presence, not participation-rate, and is right-by-sampling-luck. These are the
+  rewritable claims to falsify with `compile_check_verifiability` (it returns whether the claim is
+  verifiable at the sample size at all, and the minimum request count) and to express via
+  `dist` / interval. Only "is X configured", read from a `show`, is the `abs_found` membership form.
 - **Capacity / existence / enumeration checks read membership, not ranges** — a test that configures
   N of something (16 listeners, N domains, N pools) and verifies they all landed is deterministic:
   **no h** — no sampling, no rotation — so it sits outside the interval/set remedy (which is for

@@ -1,6 +1,6 @@
 ---
 name: test-list-review
-description: "Reviews test cases / test strategy and delivers an independently cross-verified conclusion (VERDICT / P level / improvement suggestions). Use when the user wants to review (评审) a Test List, a test-case or test-strategy file (xlsx / markdown / case list), asks for a case review against a defect ticket (e.g. BUG-121100), wants case coverage assessed, or asks to re-check against previous review requirements. Trigger phrases: 评审, review, 测试用例评审, Test List, 用例审查, 用例覆盖评审, 缺陷用例评审. Any request to review / assess / re-check the quality of existing test cases or test strategy enters here."
+description: "Reviews APV load-balancer (SLB / SDNS / HTTP / IPv6) test cases / test strategy and delivers an independently cross-verified conclusion (VERDICT / P level / improvement suggestions). Use when the user wants to review (评审) a Test List, a test-case or test-strategy file (xlsx / markdown / case list), asks for a case review against a defect ticket (e.g. BUG-121100), wants case coverage assessed, or asks to re-check against previous review requirements. Trigger phrases: 评审, review, 测试用例评审, Test List, 用例审查, 用例覆盖评审, 缺陷用例评审. Any request to review / assess / re-check the quality of existing test cases or test strategy enters here."
 context: inline
 when_to_use: |
   Use when the user wants to review test cases (评审 / Test List / 用例评审).

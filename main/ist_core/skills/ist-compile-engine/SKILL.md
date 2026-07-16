@@ -1,6 +1,6 @@
 ---
 name: ist-compile-engine
-description: "V8 compile engine entry point: turns a mindmap into on-device-verified case.xlsx deliverables in one call. An event-sourced fact ledger drives the loop (bed check → author → ask on underdetermined → merge → run → reconcile → attribute → targeted recompile → final delivery verify → writeback → report); every device verdict is reconciled with an explicit outcome, so swallowed verdicts are structurally impossible. Resumable from checkpoint. Preferred whenever the user asks to 编译 / 脑图转excel / compile-and-verify."
+description: "V8 compile engine entry point: turns a mindmap of APV load-balancer (SLB / SDNS) test cases into on-device-verified case.xlsx deliverables in one call. An event-sourced fact ledger drives the loop (bed check → author → ask on underdetermined → merge → run → reconcile → attribute → targeted recompile → final delivery verify → writeback → report); every device verdict is reconciled with an explicit outcome, so swallowed verdicts are structurally impossible. Resumable from checkpoint. Preferred whenever the user asks to 编译 / 脑图转excel / compile-and-verify."
 context: inline
 user-invocable: true
 effort: low

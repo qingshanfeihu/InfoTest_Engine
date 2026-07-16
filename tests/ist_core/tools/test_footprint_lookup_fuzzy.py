@@ -42,8 +42,8 @@ def _make_index(tmp_path, monkeypatch, nodes: list[dict]) -> FootprintIndex:
     for n in nodes:
         (d / f"{n['feature_id']}.json").write_text(json.dumps(n), encoding="utf-8")
     idx = FootprintIndex(d)
-    monkeypatch.setattr(fl, "get_footprint_index", lambda: idx, raising=False)
-    monkeypatch.setattr(fp_mod, "get_footprint_index", lambda: idx, raising=False)
+    monkeypatch.setattr(fl, "get_footprint_index", lambda nodes_subdir="nodes": idx, raising=False)
+    monkeypatch.setattr(fp_mod, "get_footprint_index", lambda nodes_subdir="nodes": idx, raising=False)
     return idx
 
 

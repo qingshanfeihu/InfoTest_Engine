@@ -485,6 +485,16 @@ def qa_node(state: IstCoreState, config: RunnableConfig | None = None) -> dict[s
         base_messages: list[Any] = [HumanMessage(content=f"[intent={intent}] {query}")]
         agent_input = {"messages": base_messages}
 
+    # 企微模式：注入上下文提示，让 agent 知道用户通过手机交互、回复慢
+    cfg = (config or {}).get("configurable") or {}
+    wx_uid = cfg.get("wx_user_id") or ""
+    if wx_uid:
+        from langchain_core.messages import SystemMessage  # noqa: PLC0415
+        agent_input["messages"].insert(0, SystemMessage(
+            content=f"[当前通过企业微信与用户 {wx_uid} 交互，用户在手机上回复，响应慢。"
+                    "请优先自行解决问题，减少 ask_user 调用。]"
+        ))
+
     handler = _MainAgentProgressHandler()
     # Langfuse 链路追踪(2026-07-09 替代 LangSmith 全局自动 tracing):env 门控,
     # 未启用返回 None。主 agent 是主链路,缺它则整条对话不进 Langfuse。

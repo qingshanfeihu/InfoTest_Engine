@@ -66,6 +66,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Web Terminal 管理：start/stop/restart（默认 start）")
     parser.add_argument("-P", "--port", type=int, default=8080,
                         help="Web Terminal 监听端口（默认 8080）")
+    parser.add_argument("-H", "--host", default="127.0.0.1",
+                        help="Web Terminal 监听地址（默认 127.0.0.1；0.0.0.0 监听所有接口）")
     return parser
 
 
@@ -143,7 +145,7 @@ def _resolve_continue_thread() -> Optional[str]:
     return CheckpointRepo().most_recent_thread_id()
 
 
-def _run_server_command(action: str, port: int) -> int:
+def _run_server_command(action: str, port: int, host: str = "127.0.0.1") -> int:
     """Web Terminal 管理：start / stop / restart。"""
     import os
     import signal
@@ -209,7 +211,7 @@ def _run_server_command(action: str, port: int) -> int:
         try:
             proc = subprocess.Popen(
                 [sys.executable, "-m", "main.ist_core.web_server",
-                 "--port", str(port)],
+                 "--host", host, "--port", str(port)],
                 cwd=str(project_root),
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
@@ -225,7 +227,7 @@ def _run_server_command(action: str, port: int) -> int:
             return False
         print(f"Web Terminal 已启动 (PID {proc.pid}, port {port})")
         print(f"  日志: {log_file}")
-        print(f"  访问: http://localhost:{port}")
+        print(f"  访问: http://{host}:{port}")
         return True
 
     if action == "stop":
@@ -267,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
 
     
     if args.server:
-        return _run_server_command(args.server, args.port)
+        return _run_server_command(args.server, args.port, args.host)
 
     
     log_level = args.log_level or ("WARNING" if args.print else "ERROR")

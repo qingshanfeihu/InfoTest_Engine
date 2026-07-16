@@ -31,12 +31,14 @@ def _feature_id_safe(feature_id: str) -> bool:
     return all(_SAFE_FEATURE_SEG.fullmatch(seg) for seg in feature_id.split("."))
 
 
-def route_facts(facts: list[RawFact], footprint_dir=None) -> list[RoutedFact]:
+def route_facts(facts: list[RawFact], footprint_dir=None,
+                nodes_subdir: str = "nodes") -> list[RoutedFact]:
     """LLM 已给齐 feature_path + fact_kind，路由是纯结构判断。
 
     Args:
         facts: extractor 输出
         footprint_dir: 未使用
+        nodes_subdir: nodes 子目录名（默认 "nodes"，版本隔离时如 "nodes_10.4.6r2"）
     """
     results: list[RoutedFact] = []
     for fact in facts:
@@ -54,7 +56,7 @@ def route_facts(facts: list[RawFact], footprint_dir=None) -> list[RoutedFact]:
         results.append(RoutedFact(
             fact=fact,
             level="leaf",  # type: ignore[arg-type]
-            target_file=f"{NODES_DIR}/{feature_id}.json",
+            target_file=f"{nodes_subdir}/{feature_id}.json",
         ))
 
     return results

@@ -45,6 +45,29 @@ from main.ist_core.tools.skills.file_server import qa_file_server
 from main.ist_core.tools.skills.download_case import download_agile_case
 from main.ist_core.tools.ask_user import ask_user
 from main.ist_core.tools.memory_tool import remember
+from main.ist_core.tools.wx_send_file import wx_send_file
+
+# 企业微信云文档工具
+# 查询类工具（wx_read_doc/wx_list_docs/wx_search_doc）直接暴露给 main agent
+# 创建/更新类工具（wx_create_doc/wx_update_doc）只给 fork agent（document-author）使用
+# main agent 通过 invoke_skill("doc-authoring") → fork agent 间接触发文档创建
+try:
+    from wecom_bot_smart.doc_tool import wx_read_doc, wx_list_docs, wx_search_doc
+    _HAS_DOC_QUERY_TOOLS = True
+except Exception:
+    _HAS_DOC_QUERY_TOOLS = False
+
+try:
+    from wecom_bot_smart.doc_tool import wx_create_doc, wx_update_doc
+    _HAS_DOC_WRITE_TOOLS = True
+except Exception:
+    _HAS_DOC_WRITE_TOOLS = False
+
+try:
+    from wecom_bot_smart.report_tool import report_to_doc
+    _HAS_REPORT_TOOL = True
+except Exception:
+    _HAS_REPORT_TOOL = False
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +126,26 @@ def _default_generic_tools() -> list[Any]:
 
         ask_user,
         remember,
-
+        wx_send_file,
     ]
+
+    # 企业微信云文档（查询类直接暴露，创建类只给 fork agent）
+    # wx_read_doc/wx_list_docs/wx_search_doc: main agent 可直接用
+    # wx_create_doc/wx_update_doc: 只在 loader fork registry 中，main agent 不可见
+    if os.environ.get("WECOM_SMART_MCP_DOC_URL"):
+        if _HAS_DOC_QUERY_TOOLS:
+            tools.extend([wx_read_doc, wx_list_docs, wx_search_doc])
+        if _HAS_REPORT_TOOL:
+            tools.append(report_to_doc)
+
+    # 权限策略过滤：risk_level=high 或 allowed_skills 非空的工具从主 agent 过滤
+    # 被过滤的工具仍可通过 loader fork registry 供 skill 子流程使用
+    from main.ist_core.tools._shared.metadata import filter_tools_for_main_agent
+    tools = filter_tools_for_main_agent(tools)
+
+    logger.info("主 agent 工具列表 (%d): %s", len(tools), [getattr(t, 'name', '?') for t in tools])
+
+    return tools
 
 def build_main_agent(**kwargs: Any):
     """Build the phase-one main agent.
@@ -225,6 +266,24 @@ def build_main_agent(**kwargs: Any):
             middleware.append(ToolGatingMiddleware())
         except Exception as exc:  # noqa: BLE001
             logger.info("ToolGatingMiddleware 不可用: %s", exc)
+
+        # 意图路由工具过滤:根据用户意图动态裁剪工具表（CHAT/CREATE_DOCUMENT/...）
+        # 在 ToolGating（能力域）之后运行，两层过滤叠加。默认关，IST_INTENT_GATING_ENABLED=1 开。
+        try:
+            from main.ist_core.middleware.intent_gating import IntentToolGatingMiddleware
+
+            middleware.append(IntentToolGatingMiddleware())
+        except Exception as exc:  # noqa: BLE001
+            logger.info("IntentToolGatingMiddleware 不可用: %s", exc)
+
+        # Intent → Skill 强制路由:高置信度意图注入 system-reminder 强制调用对应 skill
+        # 默认关，IST_INTENT_ROUTING_ENABLED=1 开。
+        try:
+            from main.ist_core.middleware.intent_routing import IntentRoutingMiddleware
+
+            middleware.append(IntentRoutingMiddleware())
+        except Exception as exc:  # noqa: BLE001
+            logger.info("IntentRoutingMiddleware 不可用: %s", exc)
 
         # 工具结果剪枝(MiMo-Code prune 移植):摘要之前的零成本上下文释放——
         # 旧工具结果保头 160 字符+剪枝标记,最近 2 轮/invoke_skill/ask_user 受保护。

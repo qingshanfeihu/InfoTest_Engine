@@ -116,6 +116,20 @@ def ask_user(questions: list[dict[str, Any]]) -> str:
     yourself. In those cases pick the obvious option, mention it in your response,
     and proceed.
 
+    **企业微信模式约束（用户回复慢，每次 round-trip 数分钟）：**
+    优先从知识库（kb_footprint / kb_memory_search）、上下文、用户请求原文中自行获取信息。
+
+    典型可用场景（须满足"确实无法自行获取"）：
+    - 用户请求有明确歧义，不同理解会导致完全不同的操作
+    - 上机验证结果需人工判断（如"fail 是产品缺陷还是用例问题"）
+    - 用例编译中脑图缺少关键字段（预期结果、测试步骤等），且从知识库/先例/手册无法推断——
+      必须问用户补充，不得自行编造
+
+    禁止使用场景：
+    - 能从知识库/文档/上下文推断的信息（即使不确定，先尝试再在回答中说明假设）
+    - 有合理默认值的选择（直接用默认值，在回答中说明）
+    - 纯粹为了确认自己的理解（先执行，在回答中说明假设）
+
     Usage notes:
     - Users will always be able to select "Other" to provide custom text input
     - Use `multiSelect: true` to allow multiple answers to be selected for a question
@@ -176,7 +190,12 @@ def ask_user(questions: list[dict[str, Any]]) -> str:
     # 生产接口只有 TUI；在非交互下命中 ask_user 一定是「测试输入缺信息」或「设计/bug」。
     # 立即返回明确错误把问题暴露出来——而不是 event.wait() 死等一个永不到来的应答。
     import os as _os
-    if (_os.environ.get("IST_NON_INTERACTIVE") or "").strip() in ("1", "true", "True"):
+    _non_interactive = (_os.environ.get("IST_NON_INTERACTIVE") or "").strip() in ("1", "true", "True")
+    _wecom_bot = (_os.environ.get("IST_WECOM_BOT") or "").strip() in ("1", "true", "True")
+
+    # 企微机器人模式：无 TUI 但有外部通道（企微）会通过 submit_answers 唤醒——
+    # 正常阻塞等待，不提前报错退出。
+    if _non_interactive and not _wecom_bot:
         with _PENDING_LOCK:
             _PENDING.pop(question_id, None)
         _q_summary = " | ".join(str(q.get("question", "")) for q in questions)
@@ -187,6 +206,9 @@ def ask_user(questions: list[dict[str, Any]]) -> str:
             "不要臆测或自行选默认值。"
             f" 你本想问的是：{_q_summary}"
         )
+    if _wecom_bot:
+        # 企微通道：延长等待时间（用户可能在手机上看、回复慢）
+        pass  # event.wait() 不设超时，由 gateway 端管理生命周期
 
     # 诊断：把 agent 实际想问的问题打到 stderr，便于排查"为什么 ask_user"。
     try:

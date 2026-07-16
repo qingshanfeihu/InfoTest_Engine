@@ -32,7 +32,7 @@ Your job is to **generate APV CLI commands** from a requirement or a source conf
 | group | one group per pool | Never drop a pool, even when multiple pools share the same backend |
 | virtual protocol | the virtual's `profiles` list | **Contains http/http1 → slb virtual http; tcp only → slb virtual tcp; contains udp → slb virtual udp** |
 | virtual→pool binding | the virtual's `pool` field | No pool field → do not add a binding |
-| iRule / epolicy | the full iRule text | **APV epolicy supports direct import of F5 iRules** — do not translate them into slb policy. Save each iRule's **complete original Tcl script** as a separate file, annotated with its associated virtual |
+| iRule / epolicy | the full iRule text | **APV epolicy supports direct import of F5 iRules** — do not translate them into slb policy. Save each iRule's **complete original Tcl script** as a separate file, annotated with its associated virtual. Then you MUST use `build_command` to generate three commands: ① `epolicy import script` (import the script); ② `epolicy attach script` (bind it to its virtual); ③ `epolicy class` (create the key-value entries) whenever the iRule uses Class/datagroups. **Never save the file and skip command generation — a missing epolicy command equals a translation omission** |
 
 ### Generation flow
 

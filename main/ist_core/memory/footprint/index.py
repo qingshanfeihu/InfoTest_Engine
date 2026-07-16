@@ -362,23 +362,27 @@ class FootprintIndex:
         self._token_index.clear()
 
 
-_FOOTPRINT_INDEX_SINGLETON: FootprintIndex | None = None
+_FOOTPRINT_INDEX_SINGLETONS: dict[str, FootprintIndex] = {}
 
 
-def get_footprint_index() -> FootprintIndex:
-    """获取进程级 FootprintIndex 单例。"""
-    global _FOOTPRINT_INDEX_SINGLETON
-    if _FOOTPRINT_INDEX_SINGLETON is None:
+def get_footprint_index(nodes_subdir: str = "nodes") -> FootprintIndex:
+    """获取进程级 FootprintIndex 单例（按 nodes_subdir 缓存）。"""
+    idx = _FOOTPRINT_INDEX_SINGLETONS.get(nodes_subdir)
+    if idx is None:
         from main import knowledge_paths as kp
-        # 扫描根必须是 nodes/ 子目录,不是 footprints/ 父目录:_ensure_loaded 用 rglob 递归,
-        # 指父目录会把 footprints/.archive_*/ 里的旧/畸形节点一并加载(归档清理形同虚设、
-        # 同 fid 两份还会按 rglob 顺序互相 shadow)。与 reconcile(footprint_dir/nodes) 对齐。
-        fp_dir = kp.KNOWLEDGE_FOOTPRINTS_NODES
-        _FOOTPRINT_INDEX_SINGLETON = FootprintIndex(fp_dir)
-    return _FOOTPRINT_INDEX_SINGLETON
+        fp_dir = kp.KNOWLEDGE_FOOTPRINTS / nodes_subdir
+        idx = FootprintIndex(fp_dir)
+        _FOOTPRINT_INDEX_SINGLETONS[nodes_subdir] = idx
+    return idx
 
 
-def invalidate_footprint_index() -> None:
-    """全局失效（dream 写入后或测试时使用）。"""
-    if _FOOTPRINT_INDEX_SINGLETON is not None:
-        _FOOTPRINT_INDEX_SINGLETON.invalidate()
+def invalidate_footprint_index(nodes_subdir: str | None = None) -> None:
+    """失效索引。nodes_subdir=None 失效全部版本。"""
+    if nodes_subdir is not None:
+        idx = _FOOTPRINT_INDEX_SINGLETONS.pop(nodes_subdir, None)
+        if idx is not None:
+            idx.invalidate()
+    else:
+        for idx in _FOOTPRINT_INDEX_SINGLETONS.values():
+            idx.invalidate()
+        _FOOTPRINT_INDEX_SINGLETONS.clear()

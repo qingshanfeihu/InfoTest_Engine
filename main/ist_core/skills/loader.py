@@ -305,6 +305,20 @@ def _build_tool_registry_locked() -> dict[str, Any]:
             _TOOL_REGISTRY["build_command"] = build_command
         except ImportError:
             logger.debug("工具 build_command 未可用，跳过注册")
+        # 企业微信云文档工具（fork skill 如 report-gen / bug-report-gen 可用）
+        try:
+            from wecom_bot_smart.doc_tool import (
+                wx_create_doc, wx_update_doc, wx_read_doc, wx_list_docs, wx_search_doc,
+            )
+            _TOOL_REGISTRY["wx_create_doc"] = wx_create_doc
+            _TOOL_REGISTRY["wx_update_doc"] = wx_update_doc
+            _TOOL_REGISTRY["wx_read_doc"] = wx_read_doc
+            _TOOL_REGISTRY["wx_list_docs"] = wx_list_docs
+            _TOOL_REGISTRY["wx_search_doc"] = wx_search_doc
+            from wecom_bot_smart.report_tool import report_to_doc
+            _TOOL_REGISTRY["report_to_doc"] = report_to_doc
+        except ImportError:
+            logger.debug("文档工具未可用（缺少 langchain_core 或 wecom_bot_smart），跳过注册")
     return _TOOL_REGISTRY
 
 

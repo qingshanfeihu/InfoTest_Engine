@@ -38,9 +38,9 @@ def _parent_id(feature_id: str) -> str | None:
     return feature_id.rsplit(".", 1)[0]
 
 
-def reconcile(footprint_dir: Path) -> dict:
+def reconcile(footprint_dir: Path, nodes_subdir: str = "nodes") -> dict:
     """重算整棵树的结构。返回统计 dict。"""
-    nodes_dir = footprint_dir / NODES_DIR
+    nodes_dir = footprint_dir / nodes_subdir
     if not nodes_dir.exists():
         return {"total": 0, "created": 0, "by_level": {}}
 

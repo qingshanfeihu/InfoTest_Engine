@@ -19,6 +19,12 @@ from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
+_IPV6_RE = re.compile(
+    r"^[0-9a-fA-F:]+$"          # 仅含十六进制与冒号
+    r"(?=.*:)"                   # 至少一个冒号
+    r"(?!.*::.*::)",            # 不超一个 ::
+)
+
 # ── 手册文法解析（与 verify_commands.py 同算法）───────────
 
 _CMD_RE = re.compile(r"\*{1,2}([^*]+?)\*{1,2}\s+_(.+)_", re.MULTILINE)
@@ -131,7 +137,9 @@ def _load_grammar() -> dict:
 def _format_value(val) -> str:
     """将参数值格式化为命令 token。"""
     s = str(val)
-    if any(c in s for c in ('"', "'", " ", "@", "!", "~", ":", "-", ".", "<", ">")):
+    if _IPV6_RE.match(s):
+        return s
+    if any(c in s for c in ('"', "'", " ", "@", "!", "~", ":", "<", ">")):
         return f'"{s}"'
     return s
 

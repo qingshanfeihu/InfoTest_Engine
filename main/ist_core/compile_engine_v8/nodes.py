@@ -703,6 +703,28 @@ def _reclaim_late_artifacts(state: dict, fs: list[dict]) -> list[dict]:
     return out
 
 
+def _delivery_verify_skippable(vw: dict, comp: list[str], volume: str,
+                               fs: list[dict]) -> bool:
+    """终验幂等闸(V8.5 片3;纯判定,抽出可测):同卷组成指纹的 delivery 裁决已在
+    事实流 → 重跑零信息,跳过。两个**不可吸收**例外(重跑有信息):
+    - 待升格案(subset_verified):子集过待终验确认(瞬态复跑恢复案卷面/组成都没变
+      但必须重跑拿 delivery-pass,redline 实证回归);
+    - broken 三态案(2026-07-16 zhaiyq 续跑实证,K5 窄化子集):同卷裁决存在但组成
+      内仍有 broken/broken_errored/broken_blocked=那次终验是**断批快照**(设备
+      中途断,17 过后 27 not_run),重跑不是零信息——否则真通过案被断批 marker
+      钉死在 broken 直到 delivery_incomplete 收口。
+    没有此闸,s₀ 停车案保持 failed 会驱动 reconcile→attribute→merge 循环把兄弟
+    案无限重复终验(实测 livelock);闸只吸收「组成/卷面/无待升格/无断批」四稳态。"""
+    st = {a: vw["cases"][a]["status"] for a in comp}
+    if any(s == V.S_SUBSET_VERIFIED for s in st.values()):
+        return False
+    if any(s in (V.S_BROKEN, V.S_BROKEN_ERRORED, V.S_BROKEN_BLOCKED)
+           for s in st.values()):
+        return False
+    return any(f.get("ev") == "verdict" and f.get("ctx") == F.CTX_DELIVERY
+               and str(f.get("volume")) == volume for f in fs)
+
+
 # --------------------------------------------------------------- [mech] merge
 def merge(state: dict) -> dict:
     """组卷:确定语境(全部非终态案就绪=delivery,否则 subset)+ 通道①排序 + ④共存检查
@@ -827,16 +849,7 @@ def merge(state: dict) -> dict:
 
     pairs = [(a, sh.artifact_fingerprint(a)) for a in comp_ordered]
     volume = sh.volume_fingerprint(pairs)
-    # 终验幂等闸(V8.5 片3):同卷组成指纹的 delivery 裁决已在事实流、且组成内没有
-    # 待升格案(subset_verified——子集过待终验确认,如瞬态复跑恢复案:卷面与组成都
-    # 没变但**必须**重跑终验拿 delivery-pass,redline 实证回归) → 不重跑。
-    # 没有它,s₀ 停车案保持 failed 会驱动 reconcile→attribute→merge 循环把兄弟案
-    # 无限重复终验(实测 livelock);组成/卷面/待升格三者都没变时重跑零信息。
-    _has_upgrade = any(vw["cases"][a]["status"] == V.S_SUBSET_VERIFIED
-                       for a in comp_ordered)
-    if is_delivery and not _has_upgrade and any(
-            f.get("ev") == "verdict" and f.get("ctx") == F.CTX_DELIVERY
-            and str(f.get("volume")) == volume for f in fs):
+    if is_delivery and _delivery_verify_skippable(vw, comp_ordered, volume, fs):
         return {"phase_status": "nothing_to_merge", **sh.counts_update(state, fs)}
 
     seq = int(state.get("vol_seq") or 0) + 1

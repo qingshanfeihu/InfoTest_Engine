@@ -189,6 +189,10 @@ def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
 _task_registry: dict[str, dict[str, Any]] = {}
 _registry_lock = threading.Lock()
 
+# ask_user 用户回答暂存（供 drain_stream 记录到 status_lines）
+_pending_answers: dict[str, str] = {}
+_pending_answers_lock = threading.Lock()
+
 
 def _register_task(user_id: str, stream_id: str) -> threading.Event:
     with _registry_lock:
@@ -209,12 +213,11 @@ def _register_task(user_id: str, stream_id: str) -> threading.Event:
 def _deregister_task(user_id: str) -> None:
     with _registry_lock:
         _task_registry.pop(user_id, None)
-    # 任务完成时刷新会话活跃时间 + 重置轮数，防止长任务完成后触发空闲切分
+    # 任务完成时刷新会话活跃时间，防止长任务完成后触发空闲切分
     with _sessions_lock:
         sess = _sessions.get(user_id)
         if sess is not None:
             sess["last_active"] = time.time()
-            sess["turn_count"] = 1  # 长任务后重新计轮
 
 
 def _cancel_task(user_id: str) -> bool:
@@ -350,8 +353,7 @@ def _clean_content(raw: str, user_id: str) -> str:
 
 def _format_markdown(query: str, answer: str, elapsed_min: int,
                      split_reason: str | None = None,
-                     turn_count: int = 0,
-                     process_summary: str = "") -> str:
+                     turn_count: int = 0) -> str:
     body = answer
     d = body.encode("utf-8")
     if len(d) > 20000:
@@ -367,10 +369,8 @@ def _format_markdown(query: str, answer: str, elapsed_min: int,
           if elapsed_min > 0
           else "🚀 Powered by IST-Core")
     footer = f"{turn_info} | {ft}" if turn_info else ft
-    process_section = f"\n{process_summary}\n" if process_summary else ""
     return (f"## InfoTest Engine 结果\n{prefix}"
-            f"> **问题：**{query[:100]}\n---\n{body}\n---"
-            f"{process_section}\n---\n{footer}")
+            f"> **问题：**{query[:100]}\n---\n{body}\n---\n\n---\n{footer}")
 
 
 # 用户目录缓存
@@ -604,11 +604,12 @@ class SmartBotGateway:
         msgtype = body.get("msgtype", "")
         from_info = body.get("from", {})
         user_id = from_info.get("userid", "unknown")
+        user_name = from_info.get("name", "")  # 企微用户显示名
         req_id = frame.get("headers", {}).get("req_id", "")
         content = ""
 
         if msgtype in ("file", "image", "voice", "video"):
-            self._handle_file_msg(frame, body, user_id, msgtype, req_id)
+            self._handle_file_msg(frame, body, user_id, msgtype, req_id, user_name=user_name)
             return
 
         if msgtype == "text":
@@ -648,6 +649,9 @@ class SmartBotGateway:
                     answers[q_text] = content.strip()
             if qid:
                 submit_answers(qid, answers)
+                # 暂存回答内容，供 drain_stream 记录到 status_lines
+                with _pending_answers_lock:
+                    _pending_answers[user_id] = content.strip()
                 self._reply_stream(frame, str(uuid.uuid4()),
                                    f"✅ 已收到您的回答：{content.strip()}", finish=True)
                 logger.info("ask_user 答案已提交: qid=%s answer=%.100s", qid, content)
@@ -709,7 +713,7 @@ class SmartBotGateway:
     # ------------------------------------------------------------------
 
     def _handle_file_msg(self, frame: dict, body: dict, user_id: str,
-                         msgtype: str, req_id: str) -> None:
+                         msgtype: str, req_id: str, user_name: str = "") -> None:
         from .files import download_qywx_file
         media_info = body.get(msgtype, {})
         file_url = media_info.get("url", "")
@@ -722,7 +726,9 @@ class SmartBotGateway:
         self._reply_stream(frame, stream_id, f"正在接收{msgtype}文件...")
         try:
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            save_dir = os.path.join(project_root, "workspace", "inputs", _resolve_user_dir(user_id))
+            # 优先用企微返回的用户名，降级为 user_id
+            dir_name = _safe_user_dir(user_name) if user_name else _resolve_user_dir(user_id)
+            save_dir = os.path.join(project_root, "workspace", "inputs", dir_name)
             save_path = download_qywx_file(file_url, aeskey, save_dir)
             size_kb = os.path.getsize(save_path) / 1024
             size_mb = size_kb / 1024
@@ -792,11 +798,6 @@ class SmartBotGateway:
         total_min = int((time.monotonic() - start_ts) / 60) or 0
         renderer = ThoughtRenderer()
         process_summary = renderer.render_summary(tool_names, tool_details)
-        final_md = _format_markdown(
-            query[:100], answer, total_min,
-            split_reason=split_reason, turn_count=turn_count,
-            process_summary=process_summary,
-        )
         _last_result[user_id] = {"query": query[:100], "answer": answer}
 
         # ask_user 触发且无答案时，不发空的最终消息（通知已单独发送）
@@ -805,18 +806,25 @@ class SmartBotGateway:
             _deregister_task(user_id)
             return
 
-        # 最终流式消息
-        ok, stream_id = self._reply_stream(frame, stream_id, final_md, finish=True)
+        # 流式消息只保留处理过程，结束流
+        progress_md = f"📋 处理完成（{total_min}分钟）"
+        if process_summary:
+            progress_md = f"{process_summary}\n---\n{progress_md}"
+        ok, stream_id = self._reply_stream(frame, stream_id, progress_md, finish=True)
         if not ok:
             new_sid = str(uuid.uuid4())
-            self._reply_stream(frame, new_sid, final_md, finish=True)
+            self._reply_stream(frame, new_sid, progress_md, finish=True)
         _deregister_task(user_id)
 
-        # 完成通知（红点）
+        # 最终回答作为新消息发送（触发企微红点通知）
+        answer_md = _format_markdown(
+            query[:100], answer, total_min,
+            split_reason=split_reason, turn_count=turn_count,
+        )
         try:
-            self._reply_markdown(frame, f"✅ **回答完成**（{total_min}分钟）")
+            self._reply_markdown(frame, answer_md)
         except Exception:
-            logger.debug("完成通知发送失败", exc_info=True)
+            logger.debug("回答消息发送失败", exc_info=True)
 
         # 文件发送
         logger.info("文件发送检查: written_files=%s wants_file=%s query=%.50s",
@@ -860,6 +868,7 @@ class SmartBotGateway:
         tool_names: list[str] = []
         tool_details: dict[str, str] = {}
         ask_user_triggered = False
+        ask_user_completed = False  # ask_user 工具返回后切换新流
         status_lines: list[str] = []   # 累积状态行
 
         def _send_status() -> None:
@@ -911,6 +920,10 @@ class SmartBotGateway:
             elif etype == UserEventType.ASK_USER:
                 ask_user_triggered = True
                 self._send_ask_user_notification(frame, event.metadata, user_id)
+                # 记录到 status_lines，新流切换后能看到问了什么
+                questions = event.metadata.get("questions") or []
+                q_texts = [q.get("question", "") for q in questions[:3]]
+                status_lines.append(f"❓ 等待用户回答：{'；'.join(q_texts)}")
 
             # --- 工具状态（经 ThoughtRenderer 渲染） ---
             elif etype == UserEventType.TOOL_STATUS:
@@ -929,6 +942,17 @@ class SmartBotGateway:
                         input_data = {"raw": inp}
                 else:
                     input_data = {}
+                # ask_user 工具返回后，切换到新流（后续处理在新消息中显示）
+                if tname == "ask_user" and event.metadata.get("status") == "done":
+                    if ask_user_triggered and not ask_user_completed:
+                        # 读取暂存的用户回答
+                        with _pending_answers_lock:
+                            answer_text = _pending_answers.pop(user_id, "")
+                        if answer_text:
+                            status_lines.append(f"💬 用户回答：{answer_text}")
+                        ask_user_completed = True
+                        stream_id = str(uuid.uuid4())
+                        logger.info("ask_user 完成，切换到新流: %s", stream_id[:8])
                 # 收集 detail 用于最终摘要
                 detail = renderer._extract_detail(tname, input_data)
                 if detail and tname and tname not in tool_details:

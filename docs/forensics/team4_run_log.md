@@ -260,6 +260,40 @@ engine_report.json（16:46 写入，非臆想）：34 案 = **deliverable 29 / f
 
 **方法论固化**：`effective=false` 必须追 auth/verd——auth=0 且裁决是重编指令→链断缺陷；auth>0 verd>0→诚实failed。此判据加入终检脚本长期用。
 
+## 2.10 批3 续跑 P0 停滞（hang）——续跑令后实弹暴露
+
+**背景**：leader 续跑令（P0 修复 a6237d5f，qid/G5门/P1-11）。新 PID 46022 加载修复，同参数续跑 yzg 补完 4 pending（668000/015/030/044）。
+
+**部分达标**：①checkpoint 接续正确（21 已交付不重烧）；②P1-11 footer 续跑显真值 21/26 非 0/0；③验证点⑤ 655233 resume 面板正常（我答保持挂起，测试床仍未建模 VLAN）；④**验证点② 二次欠定新 qid `:2:verification_path_absent` 确入账 facts 不再被吞**（首跑被吞→现记录，qid 修复生效）；⑤这次 4 案真重编（fork 探 write memory/listener，对照首跑直接吞）。
+
+**P0 停滞（硬 hang）**：4 案二次欠定重编 → worker 调 `compile_report_underdetermined kind=verification_path_absent **equivalent=yes**` → 判例"同键禁令机制命中免问采用"改过程 → fork_end → **引擎 engine_tick 后 hang**。
+- 硬 hang 铁证：**CPU 0.0%**（非思考——思考会占 CPU）+ worker idle 467s 攀升 + fastlog 冻结（204 行不增）+ token 冻结（↑1688.0k 跨 5+ 采样）+ events 末尾 fork_end→engine_tick×2 后无活动 + 18m11s 无进展。round=0 未 loop。
+- **根因研判**：qid 修复让二次欠定入账（对），但 worker 把 verification_path_absent（"这床测不了"类，同 655233）**误标 equivalent=yes** → 被 forbidden-mechanism 判例吸收采纳改过程（leader 预期"kind 不同→问我"未实现）；改过程不可解"测不了" → 引擎在"全判例采纳且改过程不可解"态 **hang**（疑 gather/路由死锁，非首跑的收尾-pending）。
+- **交付缺陷是否复发**：首跑=收尾 pending（chain break 但引擎正常收尾）；续跑=**引擎 hang**（更严重，卡死无法收尾）。P0 fix 换了失败形态：从"静默 pending"变"硬 hang"。
+- 处置：报 leader，留完整现场（PID 46022/events/fastlog 冻结态），建议 A（abort 交 Py-Eng 查 hang）。
+
+## 2.11 批3 续跑活锁 + 干预通道失效（缺陷 B 本体，供 #24）
+
+**活锁形态**：4 案（668xxx 持久化）续跑 → worker author → 探 write/config → 声明 `compile_report_underdetermined kind=verification_path_absent equivalent=yes` → 判例（intent_signature×conflict_shape×version_family 匹配的 forbidden-mechanism）"免问采用改过程" → re-author → 再声明 equivalent=yes → 判例再采纳 → **循环**。round=0 不增、auth=0 verd=0 全零、token 从 ~1.7M 烧到 4M+（¥13+），引擎不收尾。这是缺陷 B（判例采纳盲区）的活体：worker 把"测试床测不了"（verification_path_absent，同 655233）误标 equivalent=yes → 被 forbidden-mechanism 判例反复吸收 → 改过程不可解"测不了" → 活锁。
+
+**leader 预期的判例分诊未生效**：leader 原判"新 qid kind 不同→判例不匹配→问我"，但判例匹配键是 intent_signature×conflict_shape×version_family（非 claim_kind，leader 已更正），故 verification_path_absent 仍匹配 forbidden-mechanism → 继续采纳、不问我。
+
+**两条干预通道实测均失效**：
+- **面板通道**：欠定面板被判例秒 resolve（免问采用），我来不及答；即便答了（我答 668000 挂起、668015 空），判例复发下一轮又采纳。
+- **message-box 注入通道（结构性失效）**：user 消息只在 compile_engine_run tool **完全返回**时被 main agent 处理；活锁下引擎回合永不结束 → 注入消息永久排队"(busy)"、无法消化。**修正认知**：message-box 注入的前提是引擎回合会结束；活锁场景下此通道结构性失效。
+
+**结论**：C 面（TUI/人工裁决）的两条注入通道都被"判例复发+回合不终止"架空——**活锁只能靠 B 面（引擎代码：判例匹配收窄 / nd_seq 硬止损 / verification_path_absent 不走判例强制问人）根治**。已报 leader，荐 B（停批3 等 Py-Eng 修复）。
+
+**Ctrl-C 中断结果（leader A+B 组合令，A 立即执行）**：
+- nd_seq 飙升铁证（缺陷B 核心证据，#24 定级"批3补完前必修"）：`:2(×8)→:3(×9)→:4(×8)→:5(×4)→:6(×4)→:7(×4)` 七级再欠定循环；token 1.7M→4.6M（¥5→¥14.7，~460k/min）；每圈判例吸收 verification_path_absent 又采纳改过程。修法（leader #24 定）：同案同判例采纳次数上限 + 强制问人兜底。
+- 中断干净：回合结束（Cooked 11m32s+[interrupted]）、facts 完好（末3行 authored/authored/merged 解析无损）、输入态恢复。批2断网中断先例背书（checkpoint 保护 21 案幂等）。
+- **改写"纯活锁"认知**：中断前一刻引擎已跳出活锁——668015/668030 authored=1 真产出、merged 入 yzg__sub4、正在上机（41s/600s）。即缺陷 B 是"高成本兜圈后可能勉强产出"（¥14.7 换 2 案半成品），非"永不产出"。668000挂起/668044无产出仍未解。
+- 排队消息被 Ctrl-C 清除（未处理），plan 文件持久可下轮重引。
+- ⚠ 设备残留风险：668015 上机 run 被中途打断（批2教训设备侧 pytest 可能不死），下轮 dev_run_batch 自愈探测 force_clean，重启续跑首次上机留意 stale_log。
+- 当前：不续跑，等 B 线判例止损闸 commit → 重启 TUI 带闸续跑（判例采纳被拦、欠定真问人、答 plan 方案）。
+
+**我今日操作失误合并记录（UI 可用性证据，转 TUI-Eng/#24）**：①hang 误判（漏 read-screen 第一判据）；②选1+enter 空提交（选项1"附文"语义但 enter 直接提交空 freeform，无拦截）；③send-key o vs send o 混淆（'o' 交互假设错，非 send 文本路径错）；④message-box 注入活锁下失效。②③④均指向"选项附文/自定义输入流程对 cmux 驱动不友好+无空提交拦截"——UI 可用性缺口。
+
 ## 3. ask 面板前端交付质量发现清单（P0/P1/P2）
 
 - **P1-1（TUI 渲染·数据完好显示丢段）**：ask 面板双侧引用拼行渲染丢中段——「www.local.co」直接接「0.md:」，实机回显尾『m.』+手册文件名『cli_10.5_Chapter2』不可见；数据源 ask_panel.json 完好；疑与含 \t 制表符文本 wrap 相关。影响：用户无法核证引文出处。（035413 面板实证，已转 TUI-Eng）

@@ -502,7 +502,8 @@ def ask_decision(state: dict) -> dict:
                            and d.get("question_id") == f.get("question_id") for d in fs)]
     if not pending:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
-    from main.ist_core.compile_engine_v8.questions import load_ledgers, build_questions
+    from main.ist_core.compile_engine_v8.questions import (
+        load_ledgers, build_questions, _first_clause)
     aids = [str(f.get("aid")) for f in pending]
     ledgers = load_ledgers(sh.outputs_root(), aids)
     _qid_by_aid = {str(f.get("aid")): f.get("question_id") for f in pending}
@@ -572,6 +573,7 @@ def ask_decision(state: dict) -> dict:
     # 不用 B 片的回显子串条件——键精确匹配即采信变体。
     fm_meta = {aid: _fm_meta(aid) for aid in aids}
     adopted: set[str] = set()
+    adopt_stalled: dict[str, int] = {}   # 采纳止损案→已采纳圈次(题面附"多轮未解决"语境)
     for aid in aids:
         m = fm_meta.get(aid)
         if not m:
@@ -586,11 +588,34 @@ def ask_decision(state: dict) -> dict:
         toks = {str(h.get("token") or "") for h in hits}
         if len(toks) == 1 and next(iter(toks)) in ("改过程", "改预期", "改描述"):
             tok = next(iter(toks))
+            slug = str(hits[0].get("slug") or "")
+            # 采纳止损闸(与轮次封顶 :381 同级同构):同 aid 同 slug 的判例采纳裁决已 ≥2 条
+            # → 本次不采纳,留案进 gather 问人。封的活锁:判例采纳「改过程」→ worker 再证
+            # 不可行再欠定 → 下轮再采纳……rounds_used 恒 0 不触轮闸、矛盾计数不覆盖(批3
+            # 668 族实测 7 圈、auth=0 verd=0 空烧 fork)。计数读**事实流的 decision 事实**
+            # (采纳裁决携 provenance=adopted:slug,qid 逐轮递增→不去重、重放稳定,与 nd_seq
+            # 同款锚,(48) 幂等键完备);不数 adopted 事实——其 round:0 恒同、内容键去重恒=1,
+            # 数不出圈次((48) 反例)。
+            n_adopt = sum(1 for f in fs if f.get("ev") == "decision"
+                          and str(f.get("aid")) == aid
+                          and str(f.get("provenance") or "") == f"adopted:{slug}")
+            if n_adopt >= 2:
+                # ②-1/2 完整语境(Design 令:被要求给可行改法却看不到脉络=盲裁):捞判例主张
+                # (hits[0].ruling,同 :605 取法)+ worker 最新论证(needs_decision claims 的
+                # reason,同 build_questions 取法),题面下发让用户在全信息下裁决。
+                _nd = ledgers.get(aid) or {}
+                _claims = [c for c in (_nd.get("claims") or []) if isinstance(c, dict)]
+                adopt_stalled[aid] = {
+                    "n": n_adopt,
+                    "ruling": str(hits[0].get("ruling") or hits[0].get("body") or "")[:100],
+                    "reason": "；".join(_first_clause(str(c.get("reason") or ""))
+                                        for c in _claims[:3] if c.get("reason"))[:200]}
+                sh.emit(f"…{aid[-6:]} 同键判例已 {n_adopt} 次采纳未解决,止损转人工裁决")
+                continue
             ruling = str(hits[0].get("ruling") or hits[0].get("body") or "")[:500]
-            if _land(aid, tok, ruling or tok,
-                     provenance=f"adopted:{hits[0].get('slug', '')}"):
+            if _land(aid, tok, ruling or tok, provenance=f"adopted:{slug}"):
                 new_facts.append({"ev": "adopted", "aid": aid, "round": 0,
-                                  "slug": str(hits[0].get("slug") or ""),
+                                  "slug": slug,
                                   "token": tok, "ruling": ruling})
                 adopted.add(aid)
                 sh.emit(f"…{aid[-6:]} 同键禁令机制判例命中,免问采用")
@@ -626,6 +651,23 @@ def ask_decision(state: dict) -> dict:
                              + f"(本题代表同组 {len(mem)} 案:尾号 {tails}——采纳即认可各案"
                              "各自的等价方案,答案广播全组、逐案落盘)")
             q["header"] = f"欠定·组{len(mem)}案"
+    # 采纳止损案:题面附完整语境(引擎已止损、不再静默续烧 fork),让用户在有全部信息
+    # 下裁决;任一折叠成员触发止损即标代表题、取组内最大圈次。语境随 ask_shown 入账(可回放)。
+    if adopt_stalled:
+        for q in qs:
+            rep = str(q.get("_autoid", ""))
+            stalled = [adopt_stalled[mem] for mem in fold.get(rep, [rep])
+                       if mem in adopt_stalled]
+            if stalled:
+                top = max(stalled, key=lambda d: int(d.get("n") or 0))
+                extra = (f"(此判例方向已多轮尝试未解决:同键判例已 {top['n']} 次采纳、"
+                         "worker 每次重编仍验证不可行,引擎已止损转人工。")
+                if top.get("ruling"):
+                    extra += f"判例主张:{top['ruling']}。"
+                if top.get("reason"):
+                    extra += f"worker 最新论证:{top['reason']}。"
+                extra += "请据完整情况给出可行改法,或选改预期/改描述)"
+                q["question"] = str(q.get("question", "")) + extra
     # 题面入账(run11 体检#6:问了什么必须入账;oracle 残差 (16) 对称应用到问询侧)。
     # 折叠组:每成员一条 ask_shown,非代表标 folded_into(账目完整,答案可回放归属)
     shown: list[dict] = []

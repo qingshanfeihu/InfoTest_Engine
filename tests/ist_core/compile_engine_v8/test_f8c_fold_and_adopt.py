@@ -215,3 +215,86 @@ def test_sibling_distinct_variants_clean(monkeypatch):
     rows = {A: [{"G": "write memory"}], B: [{"G": "write file f1"}]}
     monkeypatch.setattr(N, "_load_case_rows", lambda aid: rows.get(aid, []))
     assert N._sibling_collisions({}, [A, B]) == []
+
+
+# ── 判例采纳止损闸(B 线急派:批3 668 族 7 圈活锁,rounds_used 恒 0 不触轮闸) ────────
+
+
+def _adopt_dec(aid, slug, n):
+    """一条判例采纳 decision(provenance=adopted:slug,qid 逐轮递增→不去重、可计数)。"""
+    return {"ev": "decision", "aid": aid, "question_id": f"nd:{aid}:{n}",
+            "answer": "改过程", "provenance": f"adopted:{slug}"}
+
+
+def _seed_adj():
+    adj.write_adjudication(
+        key={"intent_signature": "配置保存|reboot".lower(),
+             "conflict_shape": "forbidden_mechanism", "version_family": "10.5"},
+        ruling="改过程:采纳 clear 等价", anchor={"version": "10.5", "lineage": "user_proxy"},
+        meta={"token": "改过程"})
+    return adj.find_adjudications(conflict_shape="forbidden_mechanism")[0]["slug"]
+
+
+def test_adoption_stoploss_third_hit_asks_user(monkeypatch):
+    """复现锚:同 slug 已 2 次采纳(事实流 2 条 adopted decision)→第 3 次命中不采纳,
+    案留 pending 进 gather 问人,题面附止损语境。封 668 族「采纳→再欠定→再采纳」活锁。"""
+    _mk_case(A1)
+    slug = _seed_adj()
+    facts = [_pend(A1, 3), _adopt_dec(A1, slug, 1), _adopt_dec(A1, slug, 2)]
+    appended, asked = _drive(monkeypatch, facts, {A1: "用受控维护窗重启一次"})
+    # 不再采纳:无新 adopted 事实
+    assert not any(f.get("ev") == "adopted" for f in appended)
+    # 转人工:interrupt 被调用,题面带完整止损语境(多轮未解决+实际圈次,leader 令)
+    assert sum(len(b) for b in asked) == 1
+    _q = asked[0][0]["question"]
+    assert "止损" in _q and "多轮尝试未解决" in _q and "2 次采纳" in _q
+    # ②-1/2 完整语境(Design 令):判例主张(ruling 摘句)+ worker 最新论证(reason 摘句)在题面
+    assert "判例主张" in _q and "clear" in _q            # ruling="改过程:采纳 clear 等价"
+    assert "worker 最新论证" in _q and "reboot" in _q     # reason="intent requires reboot;…"
+    # 用户答案落地=真人裁决(provenance 非 adopted),打破活锁
+    dec = [f for f in appended if f.get("ev") == "decision"]
+    assert dec and dec[0]["aid"] == A1
+    assert str(dec[0].get("provenance") or "") == ""
+
+
+def test_adoption_stoploss_first_two_hits_adopt(monkeypatch):
+    """回归锚:止损闸不误伤收敛律——0/1 条前采纳时照常自动采纳(免问)。A1=0 前、A2=1 前,
+    两案都 <2 阈值,均采纳、零 interrupt。"""
+    _mk_case(A1), _mk_case(A2)
+    slug = _seed_adj()
+    facts = [_pend(A1, 1), _pend(A2, 2), _adopt_dec(A2, slug, 1)]
+    appended, asked = _drive(monkeypatch, facts, {})
+    assert {f["aid"] for f in appended if f.get("ev") == "adopted"} == {A1, A2}
+    assert sum(len(b) for b in asked) == 0
+
+
+def test_adoption_stoploss_livelock_exits_at_round3(monkeypatch):
+    """活锁端到端形态(668 族 7 圈):逐圈累积 adopted decision,断言第 3 圈(2 前采纳)
+    即止损问人——远不到 7 圈就出循环。"""
+    slug = _seed_adj()
+    # 圈1(0 前):采纳,零问
+    _mk_case(A1)
+    ap1, ask1 = _drive(monkeypatch, [_pend(A1, 1)], {})
+    assert any(f["ev"] == "adopted" for f in ap1) and sum(len(b) for b in ask1) == 0
+    # 圈2(1 前):采纳,零问
+    _mk_case(A1)
+    ap2, ask2 = _drive(monkeypatch, [_pend(A1, 2), _adopt_dec(A1, slug, 1)], {})
+    assert any(f["ev"] == "adopted" for f in ap2) and sum(len(b) for b in ask2) == 0
+    # 圈3(2 前):止损→问人,不再采纳(7 圈活锁在此第 3 圈截断)
+    _mk_case(A1)
+    ap3, ask3 = _drive(monkeypatch, [_pend(A1, 3), _adopt_dec(A1, slug, 1),
+                                     _adopt_dec(A1, slug, 2)], {A1: "维护窗重启"})
+    assert not any(f["ev"] == "adopted" for f in ap3)
+    assert sum(len(b) for b in ask3) == 1
+    assert "止损" in ask3[0][0]["question"] and "多轮尝试未解决" in ask3[0][0]["question"]
+    # Theory 建议:重放稳定——止损后重放 ask_decision(同事实流),n_adopt 不虚涨、
+    # 止损语境不重复叠加(止损分支不落 adopted decision→计数只读持久前轮,重放恒定)。
+    import re
+    _mk_case(A1)
+    ap3b, ask3b = _drive(monkeypatch, [_pend(A1, 3), _adopt_dec(A1, slug, 1),
+                                       _adopt_dec(A1, slug, 2)], {A1: "维护窗重启"})
+    assert not any(f["ev"] == "adopted" for f in ap3b)          # 重放不产生采纳
+    n1 = re.search(r"已 (\d+) 次采纳", ask3[0][0]["question"]).group(1)
+    n2 = re.search(r"已 (\d+) 次采纳", ask3b[0][0]["question"]).group(1)
+    assert n1 == n2 == "2"                                       # n_adopt 不虚涨(重放稳定)
+    assert ask3b[0][0]["question"].count("此判例方向已多轮") == 1   # 语境单份,不重复叠加

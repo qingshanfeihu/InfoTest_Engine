@@ -333,3 +333,25 @@ def test_ink_engine_summary_card_renders_human_words():
     assert "delivery_report.md" in text
     import re as _re
     assert RD.leak_scan(_re.sub(r"\x1b\[[0-9;]*m", "", text)) == []
+
+
+def test_p1_11_closing_tick_fires_before_manifest_delete(engine_env, monkeypatch):
+    """P1-11 收尾 footer 真值断言:emit_tick(closing) 必须在 §11.9 删 manifest.json 之前发。
+    原 bug:emit_tick 在删 manifest 之后→batch_view(fs, manifest={})→aids=[]→counts 全 0
+    →footer 收尾恒显 0/0。断言:emit_tick(closing) 触发时 manifest.json 磁盘文件仍在,
+    且此刻真 counts 非空(两案)。修法回退(tick 移回节点尾)则 manifest 已删→本测试红。"""
+    env = engine_env
+    _mark_b_deliverable(env)
+    mdir = env["mdir"]
+    seen = {}
+    monkeypatch.setattr(sh, "emit_summary", lambda s, d: None)
+
+    def spy_tick(state, phase, fs=None):
+        if phase == "closing":
+            seen["manifest_on_disk"] = (mdir / "manifest.json").is_file()
+            seen["total"] = len(sh.view(state, fs)["cases"])
+    monkeypatch.setattr(sh, "emit_tick", spy_tick)
+
+    N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
+    assert seen.get("manifest_on_disk") is True   # tick 在删 manifest 之前(P1-11 修的核心)
+    assert seen.get("total") == 2                  # 真值(两案),非 0/0

@@ -353,6 +353,37 @@ def _stamp_intent(aid: str, state: dict) -> None:
         logger.debug("intent 盖章失败 %s", aid, exc_info=True)
 
 
+def _needs_decision_qid(aid: str, mine: list[dict], nd_json: dict) -> str:
+    """needs_decision 事实的 question_id(P0 修,批3 yzg 668 族根因)。
+
+    原 qid=`nd:{aid}:{rounds_used+1}`——案从未成功 authored 时 rounds_used 恒 0→两轮同案
+    同 qid `nd:aid:1`→idem_key 内容键碰撞→二次欠定(采纳判例改过程后重编报的
+    verification_path_absent,fastlog L175 forbidden_mechanism vs L1247)被去重吞掉→案停
+    S_PENDING→closing 未上机即交付。差异化两轮即修。
+
+    判别子=**decision 数**(mine 里 ev==decision 计数),不是 needs_decision 数:
+    - 轮次只在裁决后推进(ask_decision 产 decision 才回 author 重派),崩溃重放不新增
+      decision→nd_seq 稳定→重放同 qid→去重(INV-10 保持);
+    - needs_decision 数会被重放的 append 抬高(第二次 load_facts 见已落盘的那条)→nd_seq
+      变→新 qid→重复,破 INV-10(实证对比见交付说明)——故不用它。此处与队内初议
+      "nd_seq=needs_decision 数"不同,已报 lead 定夺采纳。
+    claim_kind 仅作语义可读(读盘 best-effort;二次写盘存疑不影响正确性——nd_seq 独立
+    保证差异化,disk 无关)。跨轮同 kind→decision+1→nd_seq+1→新 qid→入账新问题
+    (宪法优先级:上轮裁决没解决就该再问,宁重复问询不吞裁决)。
+
+    格式 `nd:{aid}:{nd_seq}:{ck}`——nd_seq 紧跟 aid 置于 ck 之前(Design M-1 定稿)。
+    截断承重的精确归属(redline 评审勘定):needs_decision 自身走 idem_key 内容键(全
+    字段,不截断,天然不碰撞);取 `question_id[:120]` 的是 **decision 事实**的幂等键
+    (facts.py decision 分支)——nd_seq 前移保证两轮 decision 引用的 qid 在 120 窗内
+    即已差异化,末尾只可能切掉可读 ck(多 kind `"+"` 拼接超 120 也只切 ck)。
+    """
+    cks = sorted({str(c.get("claim_kind") or "") for c in (nd_json.get("claims") or [])
+                  if isinstance(c, dict)} | {str(nd_json.get("claim_kind") or "")})
+    ck = "+".join(c for c in cks if c) or "und"
+    nd_seq = sum(1 for f in mine if f.get("ev") == "decision") + 1
+    return f"nd:{aid}:{nd_seq}:{ck}"
+
+
 def author(state: dict) -> dict:
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
@@ -450,8 +481,10 @@ def author(state: dict) -> dict:
             new_facts.append({"ev": "authored", "aid": aid, "round": rnd,
                               "artifact": art})
         elif kind == "needs_decision":
+            # P0 修(批3 yzg 668 族根因):qid 判别子换 decision-count(见 _needs_decision_qid)
+            _nd = sh.read_json(sh.outputs_root() / aid / "needs_decision.json", {}) or {}
             new_facts.append({"ev": "needs_decision", "aid": aid,
-                              "question_id": f"nd:{aid}:{rnd}"})
+                              "question_id": _needs_decision_qid(aid, mine, _nd)})
         else:
             new_facts.append({"ev": "escalated", "aid": aid, "reason": detail[:200]})
     sh.append(state, new_facts)
@@ -2813,6 +2846,12 @@ def closing(state: dict) -> dict:
         if leaks:
             logger.warning("报告术语泄漏(渲染门):%s", sorted(set(leaks))[:8])
 
+    # 收尾 footer tick(P1-11 修:必须在下方 §11.9 删 manifest 之前发)——emit_tick 内部
+    # view()→batch_view(fs, manifest(state)),manifest 删后 aids=[]→cases={}→counts 全 0
+    # →footer 收尾恒显 0/0(TUI 每批必现)。此处 manifest 还在、fs 含全部 authored/verdict
+    # 事件,counts 为真值。
+    sh.emit_tick(state, "closing", fs)
+
     # §11.9 清理:per-case 目录全部收进批目录(outputs/ 根不留散目录)——
     # 通过案挪 delivered/(挂起案恢复后终验重组全卷时,merge 仍需其 xlsx,删=断链)、
     # 未通过/挂起案挪 unfinished/(续跑输入);两者 prep 开工都还原。
@@ -2899,5 +2938,5 @@ def closing(state: dict) -> dict:
     sh.emit(f"交付:{len(deliverable)}/{len(vw['cases'])} 可交付"
             + (f",{len(others)} 案带标注" if others else "")
             + f" · 交付物 {len(deliver_files)} 件已核对")
-    sh.emit_tick(state, "closing", fs)
+    # emit_tick(closing) 已前移到 §11.9 删 manifest 之前(P1-11),此处不再重复
     return {"phase_status": "done", **sh.counts_update(state, fs)}

@@ -41,8 +41,13 @@ def recount_deliverable(fs: list[dict], manifest: dict) -> dict:
                and f.get("disposition") in ("env_blocked", "defect_candidate", "user_stop")
                for f in mine):
             continue
-        if any(f.get("ev") == "needs_decision" for f in mine) and not any(
-                f.get("ev") == "decision" for f in mine):
+        # 未答呈报压过交付——按 question_id 配对(H2,独立重算,不复用 views.case_status:
+        # 双路同口径是本门设计,漂移=告警)。旧口径「有 needs_decision 且无任意 decision」
+        # 会漏:同案二次欠定(round1 已答+round2 未答)时 any(decision)==True→放行未上机卷
+        # (批3 yzg 668 族根因在门层的同源分叉,F-1/G5)。
+        _answered_q = {f.get("question_id") for f in mine if f.get("ev") == "decision"}
+        if any(f.get("ev") == "needs_decision"
+               and f.get("question_id") not in _answered_q for f in mine):
             continue
         authored = [f for f in mine if f.get("ev") == "authored"]
         art = str(authored[-1].get("artifact")) if authored else ""

@@ -198,3 +198,34 @@ def test_closing_g5_refuses_on_render_tamper(engine_env, monkeypatch):
     assert emitted["report_mismatch"] is True
     fs = F.load_facts(engine_env["facts"])
     assert any(f.get("ev") == "report_mismatch" for f in fs)
+
+
+# ── F-1/G5:未答呈报按 question_id 配对(批3 yzg 668 族门层同源分叉) ──────────────
+
+
+def test_recount_g5_withdraws_on_second_unanswered_decision():
+    """同案二次欠定:round1 已答 + round2 未答。旧口径「有 needs_decision 且无任意
+    decision」因 any(decision)==True 漏放行未上机卷;按 question_id 配对(H2)才挡住。
+    这是 views.case_status 已修的 H2 在 G5 独立重算路径的同口径义务(双路不得漂移)。"""
+    q1 = f"nd:{A}:1:forbidden_mechanism"
+    q2 = f"nd:{A}:2:verification_path_absent"
+    fs = _delivered_facts() + [
+        {"ev": "needs_decision", "aid": A, "question_id": q1},
+        {"ev": "decision", "aid": A, "question_id": q1, "answer": "改过程"},
+        {"ev": "needs_decision", "aid": A, "question_id": q2},   # 未答
+    ]
+    assert RG.recount_deliverable(fs, MANIFEST)["deliverable"] == set()
+
+
+def test_recount_g5_all_answered_still_deliverable():
+    """对照(防过修):两轮欠定都已答→question_id 全配对→残留 needs_decision 不误挡。
+    旧口径唯一正确处=全答案的案放行,新口径必须仍放行。"""
+    q1 = f"nd:{A}:1:forbidden_mechanism"
+    q2 = f"nd:{A}:2:verification_path_absent"
+    fs = _delivered_facts() + [
+        {"ev": "needs_decision", "aid": A, "question_id": q1},
+        {"ev": "decision", "aid": A, "question_id": q1, "answer": "x"},
+        {"ev": "needs_decision", "aid": A, "question_id": q2},
+        {"ev": "decision", "aid": A, "question_id": q2, "answer": "y"},
+    ]
+    assert RG.recount_deliverable(fs, MANIFEST)["deliverable"] == {A}

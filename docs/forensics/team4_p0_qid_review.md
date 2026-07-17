@@ -4,7 +4,11 @@
 > 方法：设计四处原文（§2.1/§16.1/§11.9/§11.11）+ 代码亲核（nodes.py:356-378/470-487、report_gate.py:44-46、facts.py:96-103、views.py:89-94、判例采纳键 :575/:1310）+ 子agent qid 全消费点全景。
 > **证据边界**：结论基于工作树当前 diff（生成侧 +35/−2，消费侧未动）+ 上述亲核代码点确认；未跑测试、未见 Py-Eng 后续补丁。report_gate 缺陷经我逐行亲读原文确认（非仅子agent转述）。
 
-## 总裁决：PARTIAL（核心修法设计正确，1 个 F 级漏改消费点 + 1 个中危核对项须补齐后 P）
+## 总裁决：PASS（2026-07-17 复核转正——F-1 已修、M-1 已结构性消除、锚 f/g 到位）
+
+> 初裁 PARTIAL → 复核 PASS。Py-Eng 交付 F-1（report_gate.py:48-50 按 qid 配对，逐字段同 views.py:92-94，独立重算保双路交叉校验）+ M-1（qid 前移 `nd:{aid}:{nd_seq}:{ck}`，nd_seq 置截断安全位）+ 锚 f（test_report_gate.py:206 休眠分叉激活场景+ :220 防过修对照，用新 qid 格式）。三判据亲核全绿，清单 1产6消完整。下方初裁表保留作演进记录。
+
+### 初裁表（PARTIAL，历史）
 
 | 维度 | 结论 | 依据 |
 |---|---|---|
@@ -38,6 +42,10 @@
 - 无消费方对 qid 做 `split(":")` 结构解析（仅 cap: 有 startswith，nd: 无）——加段不破解析 ✅
 - INV-10 重放幂等：nd_seq=decision 数（裁决后才+1，崩溃重放不新增）而非 needs_decision 数——注释详论正确，保 INV-10 ✅
 
-## §2.1 同步条文定稿（按实现修正草稿——claim_kind 降为可读性、正确性锚归 nd_seq）
+## §2.1 同步条文定稿（终格式；M-1 前移后 qid=`nd:{aid}:{nd_seq}:{ck}`）
 
-> **幂等键（按事实族分模板，2026-07-17 批3 蒸发修）**：每条事实带确定性幂等键，fold 去重（`facts.py::idem_key`）——键模板随事实类型而变：verdict 类 `(ev,aid,run_id)`；authored 类 `(ev,aid,round)`；**带 question_id 的问询族（needs_decision/decision）`(ev,aid,question_id[:120])`**，其中 needs_decision 的 qid=`nd:{aid}:{claim_kind}:{nd_seq}`——`nd_seq`=该 aid 事实流中 **decision 事实计数+1**（读事实流现算），是差异化的**正确性锚**（裁决后才前进→崩溃重放不新增→重放稳定，保 INV-10）；`claim_kind` 段仅语义可读（best-effort 读盘，为空作 `und`，不承载正确性）。**入账层宪法**：欠定事实一旦产生必落账，nd_seq 保证同案跨轮多次欠定不被前一条去重蒸发（批3 根因：旧 qid `nd:{aid}:{round}` 的 round 恒 1→二次欠定同键被吞→案未上机即交付）。**入账层与采纳层正交**：nd_seq 只进入账幂等键（决定"落不落账"），**不进采纳层判例匹配键**（收敛律(20) 判例键=intent_signature×conflict_shape×version_family，决定"入账后问不问人"）；故 nd_seq 递增不绕过收敛律——跨轮同 kind 再报仍入账，但 gather 时判例同键命中且未证伪→自动采纳不问人。**双路口径一致义务**：所有独立重算 awaiting 的路径（views.case_status + report_gate.recount_deliverable）必须同按 question_id 配对（H2），不得用"有任意 decision 即非等待"旧口径（F-1 教训）。
+> **幂等键（按事实族分模板，2026-07-17 批3 蒸发修）**：每条事实带确定性幂等键，fold 去重（`facts.py::idem_key`）——键模板随事实类型而变：verdict 类 `(ev,aid,run_id)`；authored 类 `(ev,aid,round)`；attribution 类 `(ev,aid,run_id)`（无 run_id 退轮键）。**问询族两键机制不同（redline 校正，勿混为一键）**：
+> - **needs_decision：内容键** `(ev, aid, json(全部非 `_` 字段, sort_keys))`——**不截断**，question_id **全文**进内容 JSON；两轮 qid 全文不同→内容 JSON 不同→天然不碰撞（批3 根因即在此侧：旧 qid `nd:{aid}:{round}` 的 round 恒 1→两轮 needs_decision 内容完全相同→内容键碰撞被去重吞→案未上机即交付）。
+> - **decision：截断键** `(ev, aid, question_id[:120])`——decision 复制 needs_decision 的 qid；**M-1 前移的承重在此侧**：qid=`nd:{aid}:{nd_seq}:{claim_kind}`，nd_seq 紧跟 aid、置 claim_kind 之前，使正确性锚落在 120 字窗内→两条 decision 的截断键必因 nd_seq 相异而不同（多 kind `"+"` 拼接超 120 只切末尾可读 claim_kind、不切锚）。
+>
+> `nd_seq`=该 aid 事实流中 **decision 事实计数+1**（读事实流现算），是差异化的**正确性锚**（裁决后才前进→崩溃重放不新增→重放稳定，保 INV-10）；`claim_kind` 段仅语义可读（best-effort 读盘，为空作 `und`，不承载正确性）。**入账层宪法**：欠定事实一旦产生必落账，两键机制共同保证同案跨轮多次欠定不被前一条去重蒸发。**入账层与采纳层正交**：nd_seq 只进入账幂等键（决定"落不落账"），**不进采纳层判例匹配键**（收敛律(20) 判例键=intent_signature×conflict_shape×version_family，决定"入账后问不问人"）；故 nd_seq 递增不绕过收敛律——跨轮同 kind 再报仍入账，但 gather 时判例同键命中且未证伪→自动采纳不问人。**双路口径一致义务**：所有独立重算 awaiting 的路径（views.case_status + report_gate.recount_deliverable）必须同按 question_id 配对（H2），不得用"有任意 decision 即非等待"旧口径（F-1 教训）。

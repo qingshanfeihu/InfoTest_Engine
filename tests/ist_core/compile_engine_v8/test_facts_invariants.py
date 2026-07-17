@@ -232,3 +232,105 @@ def test_pid_stamp_excluded_from_idempotency(tmp_path):
     assert len(got) == 1 and got[0].get("_pid") == os.getpid()
     other = {**f, "_pid": 99999}                       # 模拟另一进程写的同一事实
     assert idem_key(other) == idem_key(got[0])         # 键不含 _pid
+
+
+# ── P0 修复回归族(批3 yzg 668 族:二次欠定 qid 碰撞被吞) ─────────────────────────
+
+def test_p0_a_distinct_kinds_persist():
+    """a) 复现锚:同案两轮不同 kind 的 needs_decision 都入账(修前碰撞被吞)。
+    round1(0 decision,forbidden_mechanism)/round2(1 decision=adopted 后,
+    verification_path_absent)。"""
+    from main.ist_core.compile_engine_v8.nodes import _needs_decision_qid
+    nd_f = {"claim_kind": "forbidden_mechanism", "claims": [{"claim_kind": "forbidden_mechanism"}]}
+    nd_v = {"claim_kind": "verification_path_absent", "claims": [{"claim_kind": "verification_path_absent"}]}
+    q1 = _needs_decision_qid("A", [], nd_f)
+    q2 = _needs_decision_qid("A", [{"ev": "decision", "aid": "A"}], nd_v)
+    assert q1 != q2
+    n1 = {"ev": "needs_decision", "aid": "A", "question_id": q1}
+    n2 = {"ev": "needs_decision", "aid": "A", "question_id": q2}
+    assert idem_key(n1) != idem_key(n2)
+    assert len(dedup([n1, n2])) == 2
+
+
+def test_p0_b_replay_same_round_deduped_inv10():
+    """b) 幂等回归锚(INV-10):同轮崩溃重放→decision 数不变→nd_seq 稳定→同 qid→去重。
+    判别子用 decision-count 而非 needs_decision-count:后者会被重放已落盘的 nd 抬高
+    →新 qid→重复破 INV-10。本测试锁 decision-count 的重放稳定性。"""
+    from main.ist_core.compile_engine_v8.nodes import _needs_decision_qid
+    nd_f = {"claim_kind": "forbidden_mechanism", "claims": [{"claim_kind": "forbidden_mechanism"}]}
+    q_first = _needs_decision_qid("A", [], nd_f)
+    # 重放:fs 现含首次已落盘的 needs_decision,但 decision 仍 0
+    mine_replay = [{"ev": "needs_decision", "aid": "A", "question_id": q_first}]
+    assert _needs_decision_qid("A", mine_replay, nd_f) == q_first
+    n = {"ev": "needs_decision", "aid": "A", "question_id": q_first}
+    assert len(dedup([n, dict(n)])) == 1
+
+
+def test_p0_c_second_underdetermination_routes_awaiting():
+    """c) 路由锚:首轮欠定被 decision 配对 answered 后,二次不同 kind 欠定入账→
+    case_status=S_AWAITING_USER(gather 会问),非被首轮 decision 误配对→S_PENDING→closing。"""
+    from main.ist_core.compile_engine_v8 import views as V
+    q1, q2 = "nd:A:1:forbidden_mechanism", "nd:A:2:verification_path_absent"
+    fs = [
+        {"ev": "needs_decision", "aid": "A", "question_id": q1},
+        {"ev": "decision", "aid": "A", "question_id": q1, "answer": "改过程"},
+        {"ev": "needs_decision", "aid": "A", "question_id": q2},
+    ]
+    assert V.case_status(fs, "A", "", "") == V.S_AWAITING_USER
+
+
+def test_p0_d_cross_round_same_kind_new_question():
+    """d) 设计语义锚(leader 令):跨轮同 kind→decision+1→nd_seq+1→新 qid→入账新问题。
+    宪法优先级:上轮裁决没解决该 kind 的问题就该再问——宁可重复问询,不可吞裁决
+    (吞裁决在结构上不可能=宪法承诺)。"""
+    from main.ist_core.compile_engine_v8.nodes import _needs_decision_qid
+    nd = {"claim_kind": "forbidden_mechanism", "claims": [{"claim_kind": "forbidden_mechanism"}]}
+    q1 = _needs_decision_qid("A", [], nd)
+    q2 = _needs_decision_qid("A", [{"ev": "decision", "aid": "A"}], nd)  # 同 kind,轮次推进
+    assert q1 != q2
+    n1 = {"ev": "needs_decision", "aid": "A", "question_id": q1}
+    n2 = {"ev": "needs_decision", "aid": "A", "question_id": q2}
+    assert len(dedup([n1, n2])) == 2
+
+
+def test_p0_compat_old_qid_coexists_batch3_resume():
+    """兼容专项(leader 令,批3续跑不炸账):已交付 facts 的旧 qid(nd:aid:1)与新格式并存——
+    旧 needs_decision 仍被旧 decision 配对(不受影响);续跑产的新格式 needs_decision
+    (decision-count→nd:aid:2:kind)未答→案 awaiting→被问。旧答案不误清,新问题不被吞。"""
+    from main.ist_core.compile_engine_v8.nodes import _needs_decision_qid
+    from main.ist_core.compile_engine_v8 import views as V
+    old_q = "nd:A:1"   # 旧格式(已交付批)
+    mine = [
+        {"ev": "needs_decision", "aid": "A", "question_id": old_q},
+        {"ev": "decision", "aid": "A", "question_id": old_q, "answer": "改过程"},
+    ]
+    nd_v = {"claim_kind": "verification_path_absent", "claims": [{"claim_kind": "verification_path_absent"}]}
+    new_q = _needs_decision_qid("A", mine, nd_v)   # decision 数=1 → nd_seq=2,新格式
+    assert new_q != old_q and new_q == "nd:A:2:verification_path_absent"
+    fs = mine + [{"ev": "needs_decision", "aid": "A", "question_id": new_q}]
+    assert V.case_status(fs, "A", "", "") == V.S_AWAITING_USER
+
+
+def test_p0_g_long_multikind_qid_truncation_keeps_nd_seq_no_collision():
+    """g) M-1 结构锚(leader 令):超长多 kind qid 在 `[:120]` 截断窗内仍保差异化。
+    截断归属精确化(redline 勘定):needs_decision 自身走内容键不截断;`[:120]` 是
+    **decision 事实**幂等键对 question_id 的截断——nd_seq 置于 aid 后、ck 前,保证
+    两轮 decision 引用的 qid 前 120 字符即已不同。对照锁死:同数据按旧序
+    `nd:aid:ck:nd_seq` 时 ck 撑长会把 nd_seq 挤出 120→decision 键截断成同键(批3
+    蒸发在长 qid 的复发面)。M-1 把锚放截断安全区,比「确认恒<120」的假设更硬。"""
+    from main.ist_core.compile_engine_v8.nodes import _needs_decision_qid
+    aid = "203601753067668000"
+    kinds = ["forbidden_mechanism", "verification_path_absent", "distribution_algorithm",
+             "position_algorithm", "rotation_algorithm", "zero_information_assertion"]
+    nd = {"claims": [{"claim_kind": k} for k in kinds]}
+    q1 = _needs_decision_qid(aid, [], nd)                                # nd_seq=1
+    q2 = _needs_decision_qid(aid, [{"ev": "decision", "aid": aid}], nd)  # nd_seq=2
+    assert len(q1) > 120 and len(q2) > 120           # 截断确实发生(否则测不到 M-1)
+    n1 = {"ev": "needs_decision", "aid": aid, "question_id": q1}
+    n2 = {"ev": "needs_decision", "aid": aid, "question_id": q2}
+    assert idem_key(n1) != idem_key(n2)              # 截断后 nd_seq 仍差异化
+    assert len(dedup([n1, n2])) == 2                 # 两轮都落账,无蒸发
+    # 对照:旧序同数据 [:120] 会碰撞(nd_seq 被 ck 挤出截断窗)——锁死 M-1 的必要性
+    ck = "+".join(sorted(kinds))
+    old1, old2 = f"nd:{aid}:{ck}:1", f"nd:{aid}:{ck}:2"
+    assert old1[:120] == old2[:120]

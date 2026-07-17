@@ -167,3 +167,48 @@ def test_paste_with_different_content_stacks():
     pi.handle_paste(b)
     assert pi.value == "[Pasted text #1 +10 lines][Pasted text #2 +10 lines]"
     assert pi._pasted_contents == {1: a, 2: b}
+
+
+# ── D10 长输入水平滚动(治长文本溢出污染 footer,2026-07-18 修复轮) ──────────────
+
+def test_d10_horizontal_window_short_text_unchanged():
+    """短文本(显示宽≤width)原样返回——正常输入行为不变,不影响非长输入。"""
+    from main.ist_core.ink.components.prompt_input import _horizontal_window
+    assert _horizontal_window("abc", 3, 20) == ("abc", 3)
+    assert _horizontal_window("", 0, 20) == ("", 0)
+    assert _horizontal_window("你好世界", 4, 20) == ("你好世界", 8)  # CJK 短文本全显
+
+
+def test_d10_horizontal_window_long_text_windows_to_width():
+    """长文本超 width:窗口显示宽≤width(防溢出),**光标三位置(头/中/尾)都可见**
+    (Design 完备性点:锁"光标在哪窗口跟到哪",防窗口只跟末尾致中间光标看不到)。
+    "光标可见"判据=col(光标在窗口内列偏移) ∈ [0, 窗口显示宽]。"""
+    from main.ist_core.ink.components.prompt_input import _horizontal_window
+    from main.ist_core.ink.string_width import string_width
+    # 光标在尾:窗口含尾部,光标在窗口末端可见
+    disp, col = _horizontal_window("a" * 100, 100, 20)
+    assert string_width(disp) <= 20 and disp.endswith("a")
+    assert 0 <= col <= string_width(disp), "尾光标须在窗口显示宽内(可见)"
+    # 光标在中间:窗口跟随到中间,光标可见
+    disp, col = _horizontal_window("b" * 100, 50, 20)
+    assert string_width(disp) <= 20
+    assert 0 <= col <= string_width(disp), "中间光标须在窗口内(防窗口只跟末尾)"
+    # 光标在头:窗口从头,光标在最左可见
+    disp, col = _horizontal_window("x" * 100, 0, 20)
+    assert col == 0 and string_width(disp) <= 20
+    # CJK 光标在中间:宽字符窗口跟随,光标列按显示宽(非字符数)
+    disp, col = _horizontal_window("中" * 50, 25, 20)
+    assert string_width(disp) <= 20 and 0 <= col <= string_width(disp)
+
+
+def test_d10_horizontal_window_cjk_no_half_char():
+    """CJK 宽字符按显示宽算,窗口不含半个宽字符(否则错位/半字)。"""
+    from main.ist_core.ink.components.prompt_input import _horizontal_window
+    from main.ist_core.ink.string_width import string_width
+    disp, col = _horizontal_window("中" * 50, 50, 20)  # 每字宽2,总宽100
+    assert string_width(disp) <= 20
+    assert all(string_width(c) == 2 for c in disp), "窗口不得含半个宽字符"
+    # 混合 CJK+ASCII
+    mix = "abc中文def" * 20
+    disp2, _ = _horizontal_window(mix, len(mix), 20)
+    assert string_width(disp2) <= 20

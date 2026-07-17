@@ -114,6 +114,17 @@ class PromptInput:
     def cursor_pos(self) -> int:
         return self._cursor_pos
 
+    @property
+    def placeholder(self) -> str:
+        return self._placeholder
+
+    @placeholder.setter
+    def placeholder(self, text: str) -> None:
+        # D10/F-TUI-5:ask 输入态改「输入裁决答案」去掉「输入消息」错误残留(value 空才显)。
+        self._placeholder = text
+        if not self._value:
+            self._refresh()
+
     def set_value(self, text: str, *, cursor: int | None = None) -> None:
         self._value = text
         self._cursor_pos = len(text) if cursor is None else max(0, min(cursor, len(text)))

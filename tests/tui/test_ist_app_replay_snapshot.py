@@ -47,10 +47,11 @@ class _StubApp:
 
 
 class _StubPrompt:
-    """最小 PromptInput —— value/clear/set_value，供 F-TUI-1 串框隔离断言。"""
+    """最小 PromptInput —— value/clear/set_value/placeholder，供串框+placeholder 断言。"""
 
-    def __init__(self, value: str = "") -> None:
+    def __init__(self, value: str = "", placeholder: str = "输入消息") -> None:
         self._value = value
+        self._placeholder = placeholder
 
     @property
     def value(self) -> str:
@@ -61,6 +62,14 @@ class _StubPrompt:
 
     def set_value(self, text: str, *, cursor=None) -> None:
         self._value = text
+
+    @property
+    def placeholder(self) -> str:
+        return self._placeholder
+
+    @placeholder.setter
+    def placeholder(self, text: str) -> None:
+        self._placeholder = text
 
 
 class _StubAskPanel:
@@ -298,3 +307,15 @@ def test_ftui1_ask_empty_global_box_no_restore_noise():
     assert app._prompt.value == ""
     app._finish_ask_user()
     assert app._prompt.value == ""
+
+
+def test_ftui5_ask_switches_placeholder_and_restores():
+    """F-TUI-5 placeholder 切换(Design 建议):ask begin 改「输入裁决答案」(去「输入消息」
+    错误残留,与 A1 顶部提示互补);finish 恢复原 placeholder。"""
+    app = _bare_app()
+    assert app._prompt.placeholder == "输入消息"
+    app._begin_ask_user("q1", [{"question": "选?", "options": [
+        {"label": "A", "description": ""}, {"label": "B", "description": ""}]}])
+    assert "输入裁决答案" in app._prompt.placeholder, "ask 输入态应显裁决答案提示"
+    app._finish_ask_user()
+    assert app._prompt.placeholder == "输入消息", "ask 结束应恢复原 placeholder"

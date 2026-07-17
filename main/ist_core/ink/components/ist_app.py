@@ -2042,6 +2042,10 @@ class IstInkApp:
         # ask 是引擎 interrupt 强制交互,期间全局框的草稿本就发不出去,清空零损失。
         self._ask_saved_prompt = self._prompt.value
         self._prompt.clear()
+        # D10/F-TUI-5:ask 输入态 placeholder 改「输入裁决答案」(去「输入消息」错误残留,
+        # 与 A1 顶部提示互补:顶部说"在输入态"、框内说"输入什么");finish 恢复原值。
+        self._ask_saved_placeholder = self._prompt.placeholder
+        self._prompt.placeholder = "输入裁决答案（回答上方问题）"
         from main.ist_core.ink.components.ask_user_view import AskUserSession
         self._ask_user = AskUserSession(
             question_id,
@@ -2070,6 +2074,11 @@ class IstInkApp:
         if _saved:
             self._prompt.set_value(_saved)
         self._ask_saved_prompt = ""
+        # D10/F-TUI-5:恢复 ask 前的 placeholder(去掉"输入裁决答案"临时值)
+        _saved_ph = getattr(self, "_ask_saved_placeholder", None)
+        if _saved_ph is not None:
+            self._prompt.placeholder = _saved_ph
+            self._ask_saved_placeholder = None
         # A3：留完成提示，让用户/对话历史看到选择结果
         try:
             if session is not None:

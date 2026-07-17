@@ -108,11 +108,11 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             q_text = (f"用例 {aid}(尾号 {aid[-6:]})的配置写会在测试床留下框架清理"
                       f"够不着的网络层残留(同类残留曾一批内六次弄坏共享床):{reasons}。")
             opt_process = {"label": "改过程",
-                           "description": f"案尾追加恢复步(建议:{tau or '逆序 no 回放'}),断言之后执行——推荐。"}
+                           "description": f"让引擎在用例末尾加一步把配置改回去(建议:{tau or '按相反顺序用 no 命令撤掉配置'}),在断言之后执行——推荐。对你的用例:被测行为不变,只是跑完把测试床恢复干净,不影响后面的用例。"}
             opt_expect = {"label": "改预期",
-                          "description": "该写是被测行为本身、必须保留残留——按此意图重编(残留将由批末床态收敛处理,交付报告声明)。"}
+                          "description": "这条配置本身就是要测的行为、必须保留它的残留——按这个意图重编(残留由批次结束时统一清理测试床处理,交付报告会声明)。对你的用例:确认这残留是有意的、不是问题。"}
             opt_desc = {"label": "改描述",
-                        "description": "用例意图待人工厘清,本轮不产出(挂起)。"}
+                        "description": "用例意图需人工厘清,本轮先不做(挂起)。对你的用例:这轮不出这个用例,留着等你确认意图。"}
             questions.append({"question": q_text, "header": f"清理·{aid[-6:]}",
                               "options": [opt_process, opt_expect, opt_desc],
                               "multiSelect": False, "_autoid": aid,
@@ -137,15 +137,15 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             if proc:
                 lbl = f"采纳「{proc[:60]}」"
                 opts.append({"label": lbl,
-                             "description": "采纳此等价验证重编(引擎按它编写;差异声明随交付报告)。"})
+                             "description": "采纳这个等价验证方法来重编(引擎按它编写;和原方法的差异会在交付报告声明)。对你的用例:用能在这个床上跑的等价办法验证同样的行为。"})
                 tok[lbl] = "改过程"
             lbl_other = "我给别的等价方案"
             opts.append({"label": lbl_other,
-                         "description": "在自定义输入里给出你的等价方案,原文随裁决下发 worker。"})
+                         "description": "在下面自定义输入里给出你的等价方案,原文原样交引擎去编。对你的用例:你来指定用什么等价办法。"})
             tok[lbl_other] = "改预期"
             lbl_susp = "挂起,如实报告"
             opts.append({"label": lbl_susp,
-                         "description": f"{no_eq or obs}。本轮不产出,待可执行环境。"})
+                         "description": f"{no_eq or obs}。这轮先不做(挂起),等能跑的环境。对你的用例:这轮不出、留着等环境。"})
             tok[lbl_susp] = "改描述"
             questions.append({"question": q_text, "header": f"欠定·{aid[-6:]}",
                               "options": opts, "multiSelect": False, "_autoid": aid,
@@ -163,13 +163,13 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
                       + (f"worker 按配置面模型推导的等价实现:{prop}。" if prop else "")
                       + "等价性为模型条件(启动通道等差异已在报告声明),如何处置?")
             opt_process = {"label": "改过程",
-                           "description": ("采纳等价实现重编(推荐;差异声明随交付报告)。"
-                                           "若命中词并非本案执行机制(如计数/字段名),同选此项"
-                                           "并注明,照常编写。")}
+                           "description": ("让引擎采纳它推导的等价实现来编(推荐;和原机制的差异会在交付报告声明)。"
+                                           "若被点名的词其实不是本用例真正要用的机制(如只是计数/字段名撞名),也选这项"
+                                           "并注明,照常编写。对你的用例:用能跑的等价办法达到同样验证目的。")}
             opt_expect = {"label": "改预期",
-                          "description": "等价实现方向不对——在自定义输入里给出你的等价方案,原文将随裁决下发 worker。"}
+                          "description": "引擎给的等价方向不对——在下面自定义输入里写你的等价方案,原文原样交引擎去编。对你的用例:你来指定用什么替代办法。"}
             opt_desc = {"label": "改描述",
-                        "description": "确认无有效替代/必须真机制——本轮不产出,挂起待可执行环境(如实报告)。"}
+                        "description": "确认没有有效替代、必须用那个真机制——这轮先不做(挂起),等有能跑它的环境;情况如实写进报告。对你的用例:这轮不出、留着等环境。"}
             questions.append({"question": q_text, "header": f"禁令·{aid[-6:]}",
                               "options": [opt_process, opt_expect, opt_desc],
                               "multiSelect": False, "_autoid": aid,
@@ -183,12 +183,12 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             q_text = (f"用例 {aid[-6:]} 用到的命令 {cmds} 在被测版本的 CLI 手册里"
                       f"查不到(可能这版没有此功能,或命令改了名)。")
             opt_process = {"label": "改过程",
-                           "description": f"换用版本内存在的等价命令/形态重写 {cmds}(引擎继续编写)。"}
+                           "description": f"让引擎改用本版本确实有的等价命令/写法重写 {cmds},继续编。对你的用例:换成本版本支持的命令达到同样目的。"}
             opt_expect = {"label": "改预期",
-                          "description": "保留过程,改用版本内可观测的替代验证形态。"}
+                          "description": "保留测试过程,改用本版本能观测到的替代验证形态。对你的用例:测的东西不变、换个本版本看得到的方式验证。"}
             opt_desc = {"label": "改描述",
-                        "description": ("确认该功能不属本版本/记载互斥(fulldns 先例)——"
-                                        "本轮不产出,挂起待适用版本;文档不一致如实写报告。")}
+                        "description": ("确认本版本就没这功能、或文档相互矛盾(类似 fulldns 那次)——"
+                                        "这轮先不做(挂起),等适用版本;文档不一致如实写报告。对你的用例:本版本做不了、留着等对的版本。")}
             questions.append({"question": q_text, "header": f"存在性·{aid[-6:]}",
                               "options": [opt_process, opt_expect, opt_desc],
                               "multiSelect": False, "_autoid": aid,
@@ -204,15 +204,15 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
                       f"{reasons}。该落点由设备调度实现决定,轮转/加权算法推不出"
                       "「某客户端必中某成员」;在手册/判例证实前按原样验证不了。你希望怎么改?")
             opt_process = {"label": "改过程",
-                           "description": ("改为可验形态:同一客户端内多次请求做关系断言"
-                                           "(两次应答相同/不同),或按客户端分组做分布区间;"
-                                           f"请求次数同步加到可验水平。断言形态按 {form}。")}
+                           "description": ("改成能验证的形态:同一个客户端连发多次请求、断言它们之间的关系"
+                                           "(两次应答相同/不同),或按客户端分组看命中分布区间;"
+                                           f"请求次数同步加到能稳定验证的水平。断言形态按 {form}。对你的用例:换成可稳定复现的验证方式。")}
             opt_expect = {"label": "改预期",
-                          "description": ("你确认存在确定性映射(如按地址族过滤/固定绑定)"
-                                          "——在自定义输入里给出手册/判例依据,保留原预期"
-                                          "按该映射重编。")}
+                          "description": ("你确认这里是固定映射(比如按 IPv4/IPv6 地址族分流、或固定绑定)"
+                                          "——在下面自定义输入给出手册/判例依据,保留原预期"
+                                          "按该映射重编。对你的用例:确认落点是定死的、不是随机轮转。")}
             opt_desc = {"label": "改描述",
-                        "description": "用例意图待人工厘清,本轮不产出(挂起)。"}
+                        "description": "用例意图需人工厘清,本轮先不做(挂起)。对你的用例:这轮不出、留着等你确认。"}
             questions.append({"question": q_text, "header": f"落点·{aid[-6:]}",
                               "options": [opt_process, opt_expect, opt_desc],
                               "multiSelect": False, "_autoid": aid,
@@ -250,13 +250,13 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             "label": "改过程",
             "description": ("；".join(dict.fromkeys(proc_parts))
                             + (";顺序语义**保留**(产物须能证明顺序)" if ordering else "")
-                            + f"。断言形态按 {form}。")}
+                            + f"。断言形态按 {form}。对你的用例:把每条主张改成能稳定验证的写法。")}
         opt_expect = {
             "label": "改预期",
-            "description": ("把不可证伪的绝对预期改成可验形态(关系/归属)"
+            "description": ("把没法证伪的『绝对预期』改成能稳定验证的形态(改成验关系/验归属)"
                             + (";⚠ 顺序语义将**放弃**——选这项即显式批准放弃「按序命中」的覆盖"
-                               if ordering else "") + "。")}
-        opt_desc = {"label": "改描述", "description": "用例描述本身有歧义/与设备行为矛盾,待人工厘清(本轮不产出)。"}
+                               if ordering else "") + "。对你的用例:期望值改成跑几次都一致的判断。")}
+        opt_desc = {"label": "改描述", "description": "用例描述本身有歧义/与设备行为矛盾,待人工厘清(本轮不做)。对你的用例:描述要测啥不清楚、留着等你厘清。"}
         questions.append({
             "question": q_text,
             "header": f"欠定·{aid[-6:]}",
@@ -535,12 +535,12 @@ def build_ask_question(c: dict) -> dict:
                    if dc_rounds else "")
         return {"question": q, "header": f"轮次{aid[-4:]}",
                 "options": [
-                    {"label": "继续,再修 2 轮", "description": "授权追加重编轮次"},
+                    {"label": "继续,再修 2 轮", "description": "授权引擎再多编两轮试试。对你的用例:再给它两次机会修好。"},
                     {"label": "确认产品缺陷", "description":
-                        f"实机行为是产品问题{dc_note}——记入缺陷候选单,该用例以缺陷结案"},
-                    {"label": "挂起该案", "description": "先放一放,跑完其他用例;重跑同参数时会再次询问"},
+                        f"实机行为是产品的问题{dc_note}——记进缺陷候选清单,这个用例按缺陷结案。对你的用例:判定是产品问题、不是用例写错。"},
+                    {"label": "挂起该案", "description": "先放一放,跑完其他用例;重跑同参数时会再次询问。对你的用例:这轮先跳过、下次再问你。"},
                     {"label": "停止该案", "description":
-                        "以未通过如实报告,不再消耗轮次(记为你的停止裁决,不覆盖在案技术判断)"}],
+                        "以未通过如实报告,不再花轮次(记为你的停止决定,不覆盖在案技术判断)。对你的用例:就此打住、如实记未通过。"}],
                 "_tokens": {"继续,再修 2 轮": "continue", "确认产品缺陷": "defect",
                             "挂起该案": "suspend", "停止该案": "stop"},
                 "_key": aid}
@@ -629,7 +629,7 @@ def build_ask_question(c: dict) -> dict:
          + ",如何处置?")
     return {"question": q, "header": f"矛盾{aid[-4:]}",
             "options": [
-                {"label": "重排复验", "description": "重排卷序后再终验一轮(互扰案排卷尾)"},
-                {"label": "如实降级", "description": "该案不入交付卷,以未通过如实报告"}],
+                {"label": "重排复验", "description": "把用例在卷里的顺序重排后再上机终验一轮(会把互相干扰的用例排到卷末)。对你的用例:换个跑批顺序再验一次,排除用例间互扰。"},
+                {"label": "如实降级", "description": "这个用例不放进交付卷,按未通过如实报告。对你的用例:不硬塞进成品、如实记它没过。"}],
             "_tokens": {"重排复验": "reorder", "如实降级": "downgrade"},
             "_key": aid}

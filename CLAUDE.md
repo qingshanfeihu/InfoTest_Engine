@@ -122,22 +122,22 @@ main/ist_core/tools/
 
 ## Skills（`main/ist_core/skills/`）
 
-| Skill | 类型 | 用途 |
+| Skill | 类型（执行形态 · 触发方式） | 用途 |
 |-------|------|------|
-| `test-list-review` | user-invocable | 测试用例/策略评审（主入口） |
-| `ist-compile-engine` | user-invocable | **V8 编译唯一入口**:一句话跑整条闭环(事件溯源 StateGraph 引擎,断点续跑) |
-| `compile-worker` | fork | 编译孔:单 case 自由理解编写(引擎 author 节点派发) |
-| `compile-attributor` | fork | V8 归因孔:上机 fail 读原文判层(+h 位置候选/ask panel),submit_attribution 落盘 |
-| `ist-verify` | user-invocable | 成品 excel 上机验证 + 归因(reflow 派 compile-worker) |
-| `device-verify` | user-invocable | 设备 SSH 只读/配置验证 |
-| `config-automation` | user-invocable | 示例 IP → 环境真实 IP 替换 |
-| `config-answer` | inline | 配置问答 |
-| `config-answer-draft` / `config-answer-verifier` | fork | 配置问答的起草/复核孔 |
-| `review-verifier` | fork | 评审验证子流程（独立对抗复核评审草稿） |
-| `escalate-when-stuck` | inline | 连续失败上报 |
-| `doc-authoring` / `report-gen` | user-invocable | 文档撰写 / 报告生成（2026-07 新增,gating 映射已入） |
+| `test-list-review` | inline · 用户可调 | 测试用例/策略评审（主入口） |
+| `ist-compile-engine` | inline · 用户可调 | **V8 编译唯一入口**:一句话跑整条闭环(事件溯源 StateGraph 引擎,断点续跑) |
+| `compile-worker` | fork · 内部 | 编译孔:单 case 自由理解编写(引擎 author 节点派发) |
+| `compile-attributor` | fork · 内部 | V8 归因孔:上机 fail 读原文判层(+h 位置候选/ask panel),submit_attribution 落盘 |
+| `ist-verify` | inline · 用户可调 | 成品 excel 上机验证 + 归因(reflow 派 compile-worker) |
+| `device-verify` | inline · 用户可调 | 设备 SSH 只读/配置验证 |
+| `config-automation` | inline · 用户可调 | 示例 IP → 环境真实 IP 替换 |
+| `config-answer` | inline · 用户可调 | 配置问答 |
+| `config-answer-draft` / `config-answer-verifier` | fork · 内部 | 配置问答的起草/复核孔 |
+| `review-verifier` | fork · 内部 | 评审验证子流程（独立对抗复核评审草稿） |
+| `escalate-when-stuck` | inline · 用户可调 | 连续失败上报 |
+| `doc-authoring` / `report-gen` | fork · 用户可调 | 文档撰写 / 报告生成（2026-07 新增,gating 映射已入） |
 
-user-invocable skill 同时注册为 TUI slash 命令（`/<skill-name>`）。
+**类型两维正交**（2026-07-18 Design 裁定，纠正原单列 inline/user-invocable 维度混淆）：**执行形态** `inline`（注入主对话）/ `fork`（独立子 agent 孔）；**触发方式** `用户可调`（`user-invocable:true`，注册为 TUI slash 命令 `/<skill-name>`、进用户菜单）/ `内部`（`user-invocable:false`，仅 LLM 经 invoke_skill 派发、不进用户菜单）。二维独立——`fork · 用户可调`（doc-authoring/report-gen：用户可 slash、执行走 fork）合法。
 
 **资产封装标准**（2026-07-05 对标官方 Agent Skills 规范收口，全景见 `docs/AUDIT_skill_bestpractice_v2.md`（第二轮,覆盖第一轮全部条目））：skill 名一律小写连字符（旧下划线名经 `loader.resolve_skill_dirname` 别名互通，TUI slash 本就互通）；SKILL.md frontmatter 必带 name/description/context（fork 另带 agent），user-invocable 必带 when_to_use；agent 定义（`agents/*.md`）统一 `<role>→<task>→<rules>` XML 骨架（rules 收尾紧邻 brief），frontmatter 必带 tools 白名单；主 agent 系统提示五块 XML（`<role>/<rules>/<workflow>/<tool_guidance>/<env>`，`_prompt.py`）。机器门：`tests/ist_core/skills/test_skill_package_standard.py` + `tests/ist_core/agents/test_prompt_structure.py`（承重锚点保真）。**工具渐进披露**（`middleware/tool_gating.py`，默认开——dongkl 对照轮实测零 gating 异常后翻默认，`IST_TOOL_GATING_ENABLED=0` 关）：基础组常驻，compile_*/submit_*/dev_* 按 invoke_skill 映射或既有使用激活，未知 skill fail-open——基础模式常驻工具 schema 67k→26k 字符。**动态子 agent**：`agent_define` 工具按同一骨架生成 `dyn-*` fork agent（tools ⊆ 注册表、inherit-parent-prompt 强制、runtime/ 落盘仅此一条有闸路径），invoke_skill 单发 / `compile_fanout(skill="dyn-…", briefs_path=…)` 批量派发。
 

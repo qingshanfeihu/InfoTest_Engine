@@ -220,14 +220,58 @@ def test_session_multi_question_navigation(capture_submit):
 
 
 def test_session_digit_select(capture_submit):
+    """F-TUI-1 数字直选(Design 裁,治 run15/17 丢答):单选题数字键直接落答+提交,
+    不再"只高亮+必须 enter"。一次 handle_key("2") 即落 B 并提交(单题)。"""
     s = _session(
         [{"question": "数字?", "options": [
             {"label": "A", "description": ""}, {"label": "B", "description": ""}]}],
         capture_submit,
     )
-    s.handle_key("2", "2")              # 高亮第 2 项
-    s.handle_key("return", "")
-    assert capture_submit["ans"] == {"数字?": "B"}
+    s.handle_key("2", "2")              # 数字直选第 2 项 → 直接落答 B + 提交(单题单选)
+    assert capture_submit["ans"] == {"数字?": "B"}, "数字直选应立即落答,无需再 enter"
+
+
+def test_session_digit_direct_select_multi_question(capture_submit):
+    """F-TUI-1 数字直选·多题:每题数字键直接落答并前进下一题,末题数字落答即提交。"""
+    s = _session(
+        [
+            {"question": "Q1?", "options": [
+                {"label": "A", "description": ""}, {"label": "B", "description": ""}]},
+            {"question": "Q2?", "options": [
+                {"label": "X", "description": ""}, {"label": "Y", "description": ""}]},
+        ],
+        capture_submit,
+    )
+    s.handle_key("1", "1")              # Q1 数字选 A → 落答 + 自动前进 Q2
+    assert "Q2?" in _rendered(s), "数字直选应落答并自动前进下一题"
+    s.handle_key("2", "2")              # Q2 数字选 Y → 末题落答即提交
+    assert capture_submit["ans"] == {"Q1?": "A", "Q2?": "Y"}
+
+
+def test_session_digit_multi_select_toggles(capture_submit):
+    """F-TUI-1 数字直选·多选题:数字键=勾选/取消(toggle,非直选提交),enter 才提交。"""
+    s = _session(
+        [{"question": "多选?", "multiSelect": True, "options": [
+            {"label": "A", "description": ""}, {"label": "B", "description": ""}]}],
+        capture_submit,
+    )
+    s.handle_key("1", "1")              # 数字勾选 A(toggle)
+    s.handle_key("2", "2")              # 数字勾选 B(toggle)
+    assert "ans" not in capture_submit, "多选数字只 toggle 不提交"
+    s.handle_key("return", "")          # enter 提交
+    assert capture_submit["ans"] == {"多选?": "A, B"}
+
+
+def test_session_digit_on_other_row_enters_text_input(capture_submit):
+    """F-TUI-1 数字直选·Other 行:数字选中 Other 行 → 进文本输入态(不直选空 Other)。"""
+    s = _session(
+        [{"question": "选?", "options": [{"label": "A", "description": ""}]}],
+        capture_submit,
+    )
+    # 2 选项行: 1=A, 2=Other → 数字 2 选 Other 行
+    s.handle_key("2", "2")
+    assert s.in_other_input, "数字选中 Other 行应进文本输入态,不落空 Other"
+    assert "ans" not in capture_submit
 
 
 # ── A2/A3/A4 渲染与导航 ───────────────────────────────────────────────
@@ -307,7 +351,7 @@ def _rendered(s) -> str:
 def test_session_switch_with_unsubmitted_selection_warns_once(capture_submit):
     """数字高亮未 enter 就 →/Tab 切题：第一次拦下+黄字，再次同键放行（不落答）。"""
     s = _session(_two_questions(), capture_submit)
-    s.handle_key("2", "2")              # 高亮 B，未 enter（用户以为已选）
+    s.handle_key("down", "")            # ↓移高亮 B，未 enter（数字直选后用 ↑↓ 造未提交态）
     s.handle_key("right", "")           # 第一次切题 → 拦下告警
     out = _rendered(s)
     assert "Q1?" in out, "首次切题应被拦在当前题"
@@ -337,7 +381,7 @@ def test_session_switch_committed_no_warn(capture_submit):
 def test_session_switch_warn_rearms_after_other_key(capture_submit):
     """告警后按了其他键（↑↓ 继续挑）→ armed 重置，再切题重新告警而非静默放行。"""
     s = _session(_two_questions(), capture_submit)
-    s.handle_key("2", "2")
+    s.handle_key("down", "")            # ↓移高亮，未落答（数字直选后用 ↑↓ 造未提交态）
     s.handle_key("right", "")           # 告警一次
     s.handle_key("up", "")              # 其他键 → 清提示重新计
     assert "已选未提交" not in _rendered(s)
@@ -354,7 +398,7 @@ def test_session_esc_with_unsubmitted_selection_warns_then_cancels(capture_submi
             {"label": "A", "description": ""}, {"label": "B", "description": ""}]}],
         capture_submit,
     )
-    s.handle_key("2", "2")              # 高亮 B 未 enter
+    s.handle_key("down", "")            # ↓移高亮 B 未 enter（数字直选后用 ↑↓ 造未提交态）
     s.handle_key("escape", "")
     assert "ans" not in capture_submit, "首次 esc 应被拦下"
     assert "已选未提交" in _rendered(s)
@@ -362,14 +406,23 @@ def test_session_esc_with_unsubmitted_selection_warns_then_cancels(capture_submi
     assert capture_submit["ans"] == {}
 
 
-def test_session_esc_untouched_multi_question_warns_unanswered(capture_submit):
-    """多题面板带未答题 esc 关闭：提示「还有 N 题未答」，再次 esc 放行。"""
+def test_session_esc_empty_panel_quits_immediately(capture_submit):
+    """A2 分级守卫(F-TUI-5,Design 2026-07-18 裁):空面板(无任何已答)esc 秒退——
+    正常逃生口,不告警(改自旧"未答告警":Design 改用"有无已答内容"分流)。"""
     s = _session(_two_questions(), capture_submit)
-    s.handle_key("escape", "")
-    assert "ans" not in capture_submit
-    out = _rendered(s)
-    assert "还有 2 题未答" in out and "挂起" in out
-    s.handle_key("escape", "")
+    s.handle_key("escape", "")   # 无已答 → 秒退,不告警
+    assert capture_submit["ans"] == {}
+
+
+def test_session_esc_with_answered_content_double_confirms(capture_submit):
+    """A2 分级守卫(F-TUI-5,Design 裁):有已答内容 esc 二次确认「已答 N 题确认放弃」,
+    防大面板误触全丢已答(用户答了半天)。首次告警、再次 esc 才真 cancel。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("return", "")   # Q1=A 落答(前进 Q2)——已答 1 题
+    s.handle_key("escape", "")   # 有已答 → 首次 esc 告警,不 cancel
+    assert "ans" not in capture_submit, "有已答时首次 esc 应拦下"
+    assert "已答 1 题" in _rendered(s) and "确认放弃" in _rendered(s)
+    s.handle_key("escape", "")   # 再次 esc → 真 cancel
     assert capture_submit["ans"] == {}
 
 
@@ -426,7 +479,7 @@ def test_session_other_submit_blocked_then_enter_confirms(capture_submit):
 def test_session_leave_warn_coexists_with_empty_other_guard(capture_submit):
     """两道防呆共存：切题告警后进 Other，空文本仍被 532862 防呆拦，补内容后正常走。"""
     s = _session(_two_questions(), capture_submit)
-    s.handle_key("2", "2")              # Q1 高亮未提交
+    s.handle_key("down", "")            # Q1 ↓移高亮未提交（数字直选后用 ↑↓ 造未提交态）
     s.handle_key("right", "")           # 切题告警
     assert "已选未提交" in _rendered(s)
     s.handle_key("o", "o")              # 进 Other 输入（切题告警清除）
@@ -452,7 +505,7 @@ def test_session_multi_enter_uncommitted_warns_once(capture_submit):
         ],
         capture_submit,
     )
-    s.handle_key("2", "2")              # 高亮 B，未 space（用户以为已选）
+    s.handle_key("down", "")            # ↓移高亮 B，未 space（数字直选后用 ↑↓ 造未提交态）
     s.handle_key("return", "")          # 首次 enter → 拦下告警，不推进
     out = _rendered(s)
     assert "M1?" in out, "首次 enter 应被拦在当前题"
@@ -513,3 +566,91 @@ def test_session_hint_matches_actual_key_semantics(capture_submit):
     s2.handle_key("return", "")         # 进末题
     h2 = _rendered(s2)
     assert "enter 提交" in h2
+
+
+def test_ask_user_records_folded_members_untruncated():
+    """F-Py-1 T1b+T3:ask_user :247 落 folded_members 批级并集(专用字段);大 fold(30 成员)+
+    题文超 500 → folded_members 仍含全 30 aid(专用字段不经题文 [:500] 截断,599838 根因)。"""
+    import json as _j
+    from main.ist_core.tools import ask_user as au
+    from main.common.runtime_paths import runtime_path
+    qa = runtime_path("ask_user_answers.jsonl")
+    qa.parent.mkdir(parents=True, exist_ok=True)
+    big = sorted(f"2030000000000{i:05d}" for i in range(30))
+    result: dict = {}
+
+    def run_tool():
+        result["out"] = au.ask_user.invoke({"questions": [
+            {"question": "组题" + "长" * 600 + "?",   # 题文 >500 (T3)
+             "options": [{"label": "是", "description": ""}, {"label": "否", "description": ""}],
+             "folded_members": big}]})
+
+    t = threading.Thread(target=run_tool, daemon=True)
+    t.start()
+    qid = None
+    q_text = None
+    for _ in range(300):
+        pend = au.list_pending_questions()
+        if pend:
+            qid = pend[0]["question_id"]
+            q_text = pend[0]["questions"][0]["question"]
+            break
+        threading.Event().wait(0.01)
+    assert qid is not None
+    assert au.submit_answers(qid, {q_text: "是"})
+    t.join(timeout=3.0)
+    rec = _j.loads(qa.read_text(encoding="utf-8").splitlines()[-1])
+    assert rec.get("folded_members") == big              # 批级并集 + 全 30 aid 未被 [:500] 截断
+
+
+def test_ftui5_other_input_shows_visible_hint(capture_submit):
+    """F-TUI-5 A1 o 输入态可见提示(Design 裁;Test-Eng 卡壳:进了文本输入态却不自知)。
+    hint 文案「o 输入自定义文本」说清;进 other 态面板顶部醒目提示「正在输入自定义文本」。"""
+    s = _session(
+        [{"question": "选?", "options": [{"label": "A", "description": ""}]}],
+        capture_submit,
+    )
+    # 非 other 态:hint 说清 o 是输入文本(旧「o 自定义」易误解)
+    assert "o 输入自定义文本" in _rendered(s)
+    assert "正在输入自定义文本" not in _rendered(s)
+    # 进 other 态:顶部醒目输入提示
+    s.handle_key("o", "o")
+    assert s.in_other_input
+    out = _rendered(s)
+    assert "正在输入自定义文本" in out and "enter 提交" in out and "esc 取消" in out
+
+
+def test_ftui1_last_q_digit_submit_passes_unanswered_gate(capture_submit):
+    """F-TUI-1 裁点1×2 补点(Design 2026-07-18 必带):末题"数字直选提交"走的是数字键
+    (非 enter)——未答挡板必须挂在提交动作本身(_advance_or_submit),而非只 enter 路径,
+    否则"前面题未答→末题数字直选提交"绕过挡板成后门。验证数字直选提交也过未答挡板。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("right", "")   # Q1 未答,切题跳到 Q2(Q1 未落答)
+    s.handle_key("1", "1")      # Q2(末题)数字直选提交 → 前面 Q1 未答 → 挡板拦一次
+    assert "ans" not in capture_submit, "末题数字直选遇未答题必须过挡板(不是后门)"
+    assert "还有 1 题未答" in _rendered(s)
+    s.handle_key("1", "1")      # 再次数字直选 → 挡板放行,提交(Q1 空/Q2=X)
+    assert capture_submit["ans"] == {"Q1?": "", "Q2?": "X"}
+
+
+def test_ftui1_cross_path_armed_enter_then_digit(capture_submit):
+    """跨路径 armed 共享(Design 2026-07-18 完备性点):_warned_op=="submit" 是共享 armed,
+    enter 提交告警后 → **数字**二次确认也放行(非"enter告警只enter确认")。锁死共享语义
+    防将来 armed 做成 enter/数字各自独立致跨路径确认失效。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("right", "")   # Q1 未答,跳到 Q2
+    s.handle_key("return", "")  # Q2 enter:落答 X + 末题提交 → Q1 未答 → 告警 armed(submit)
+    assert "ans" not in capture_submit, "enter 提交遇未答应告警"
+    assert "还有 1 题未答" in _rendered(s)
+    s.handle_key("1", "1")      # 数字二次确认(跨路径:enter 告警→数字放行)
+    assert capture_submit["ans"] == {"Q1?": "", "Q2?": "X"}
+
+
+def test_ftui1_cross_path_armed_digit_then_enter(capture_submit):
+    """跨路径 armed 共享(对称):数字直选提交告警后 → **enter** 二次确认也放行。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("right", "")   # Q1 未答,跳到 Q2
+    s.handle_key("1", "1")      # Q2 数字直选提交 → Q1 未答 → 告警 armed(submit)
+    assert "ans" not in capture_submit, "数字提交遇未答应告警"
+    s.handle_key("return", "")  # enter 二次确认(跨路径:数字告警→enter 放行)
+    assert capture_submit["ans"] == {"Q1?": "", "Q2?": "X"}

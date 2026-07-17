@@ -46,7 +46,7 @@
 |---|---|---|---|---|---|
 | **F-TUI-10** | 失败卡英文黑话→中文映射（`fork returned no text output` 等→人话+去向） | P1 | Test-Eng D1/D7；User 21:36 | 【纯渲染】TUI 建映射表（配 F-Doc-1 条款），与 F-Py-6 假完成同卡 | 重跑观测失败卡中文 |
 | —（并入 F-Py-2/F-LLM-1） | ask 题面英文透传系统性（TUI ④）——Py-Eng 题面拼装层主导、TUI 渲染配合 | P0 | Test-Eng D1；precheck 面2② | **【跨域】主责 Py-Eng 题面拼装（F-Py-2）+LLM 源头产中文（F-LLM-1），TUI 渲染侧配合**，不单列 | 见 F-Py-2/F-LLM-1 |
-| **F-TUI-11**（D10 拆出，独立小批·防漏） | 长文本单行渲染边界统一（PromptInput 长文本溢出污染 footer + P2-9 busy 行截断同族）——根因 PromptInput height=1 固定单行+全渲染超宽 value 无水平滚动 | P2 | Test-Eng D10（溢出面）；User 00:03；根因 prompt_input.py:65/257 | 【纯渲染】**拆单独批**（正确修=跟光标水平滚动+CJK 宽字符窗口，复杂度不匹配 F-TUI-5）；PromptInput+busy 行复用同一窗口逻辑 | CJK 守门测试；长文本不溢出污染 footer |
+| **F-TUI-11**（D10 拆出·**已做**） | 长文本单行渲染边界（PromptInput 溢出污染 footer + P2-9 busy 行同族）——根因 height=1 固定单行无水平滚动 | P2 | Test-Eng D10（溢出面）；User 00:03；根因 prompt_input.py:65/257 | 【纯渲染】**PromptInput 部分已做**（`_horizontal_window` CJK 感知+光标跟随，407 绿，Design P）+ **P2-9 busy 行已修**（53c2338e ANSI 感知截断）；**"统一"=共享 CJK 显示宽精神（非强行同窗口函数——两者场景不同：跟光标 vs ANSI）** | CJK 守门测试；长文本不溢出；**确认 CJK 宽度计算是否共用一函数（防漂移）** |
 
 ### A-LLM · LLM-Eng 域（skill/agent md prompt）
 

@@ -326,11 +326,17 @@ def test_p0_g_long_multikind_qid_truncation_keeps_nd_seq_no_collision():
     q1 = _needs_decision_qid(aid, [], nd)                                # nd_seq=1
     q2 = _needs_decision_qid(aid, [{"ev": "decision", "aid": aid}], nd)  # nd_seq=2
     assert len(q1) > 120 and len(q2) > 120           # 截断确实发生(否则测不到 M-1)
-    n1 = {"ev": "needs_decision", "aid": aid, "question_id": q1}
-    n2 = {"ev": "needs_decision", "aid": aid, "question_id": q2}
-    assert idem_key(n1) != idem_key(n2)              # 截断后 nd_seq 仍差异化
-    assert len(dedup([n1, n2])) == 2                 # 两轮都落账,无蒸发
-    # 对照:旧序同数据 [:120] 会碰撞(nd_seq 被 ck 挤出截断窗)——锁死 M-1 的必要性
+    # 承重点:配对 decision 事实走 [:120] 截断键(facts.py decision 分支)——M-1 后两轮差异化
+    d1 = {"ev": "decision", "aid": aid, "question_id": q1}
+    d2 = {"ev": "decision", "aid": aid, "question_id": q2}
+    assert idem_key(d1) != idem_key(d2)              # decision 截断键差异化(M-1 保护点)
+    assert len(dedup([d1, d2])) == 2                 # 两轮裁决都落账,无蒸发
+    # 对照锁死:同数据旧序 decision 经 idem_key [:120] 截断成同键→碰撞(nd_seq 被 ck 挤出
+    # 窗)——M-1 必要性。这里走真 idem_key(非裸切片),锁的正是 decision 幂等键退化。
     ck = "+".join(sorted(kinds))
     old1, old2 = f"nd:{aid}:{ck}:1", f"nd:{aid}:{ck}:2"
-    assert old1[:120] == old2[:120]
+    assert idem_key({"ev": "decision", "aid": aid, "question_id": old1}) == \
+           idem_key({"ev": "decision", "aid": aid, "question_id": old2})
+    # 正交层:needs_decision 自身走内容键(不截断)→ P0 nd_seq 差异化已足,与截断无关
+    assert idem_key({"ev": "needs_decision", "aid": aid, "question_id": q1}) != \
+           idem_key({"ev": "needs_decision", "aid": aid, "question_id": q2})

@@ -12,22 +12,26 @@ from pathlib import Path
 import pytest
 
 from main.ist_core.tools.device import compile_user_decision
+from main.ist_core.compile_engine_v8 import _shared as sh
 
-_ROOT = Path(__file__).resolve().parents[3]
 _A = "203099999999900077"
-_OUT = _ROOT / "workspace" / "outputs" / _A
+
+
+def _out():
+    # F-Py-9b-2:原 outputs 目录模块常量(import 时=生产)改测试时求值——随全局 fixture 落 tmp。
+    return sh.outputs_root() / _A
 
 
 @pytest.fixture(autouse=True)
 def _clean():
-    shutil.rmtree(_OUT, ignore_errors=True)
+    shutil.rmtree(_out(), ignore_errors=True)
     yield
-    shutil.rmtree(_OUT, ignore_errors=True)
+    shutil.rmtree(_out(), ignore_errors=True)
 
 
 def _ledger(claims):
-    _OUT.mkdir(parents=True, exist_ok=True)
-    (_OUT / "needs_decision.json").write_text(
+    _out().mkdir(parents=True, exist_ok=True)
+    (_out() / "needs_decision.json").write_text(
         json.dumps({"autoid": _A, "claims": claims}, ensure_ascii=False), encoding="utf-8")
     # 「先问后落」门:测试补一条含该 autoid 的问答记录(真实链路由 ask_user 工具自动落)。
     # 取径经 runtime_path——pytest 下=tmp,与门读侧同径,不再污染生产台账(2426 条 ts=0 前科)
@@ -40,7 +44,7 @@ def _ledger(claims):
 
 
 def _ud():
-    return json.loads((_OUT / "user_decision.json").read_text(encoding="utf-8"))
+    return json.loads((_out() / "user_decision.json").read_text(encoding="utf-8"))
 
 
 def test_ledger_facts_copied_not_judged():
@@ -88,7 +92,7 @@ def test_bad_inputs_rejected():
 def test_ask_before_decide_gate():
     # 「先问后落」:没有含该 case 指代的真实问答记录 → 拒绝落盘(越权事故的 A 层预防)
     aid2 = "203099999999900078"
-    d2 = _ROOT / "workspace" / "outputs" / aid2
+    d2 = sh.outputs_root() / aid2
     import shutil as _sh
     _sh.rmtree(d2, ignore_errors=True)
     try:
@@ -165,7 +169,7 @@ def test_mixed_ledger_still_requires_form():
 
 def _seed_gate(aid, qa_records):
     """建 ledger + 追写指定 ask_user_answers 记录(独立 aid 避跨测试干扰),返回门结果串。"""
-    out = _ROOT / "workspace" / "outputs" / aid
+    out = sh.outputs_root() / aid
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True, exist_ok=True)
     (out / "needs_decision.json").write_text(json.dumps(

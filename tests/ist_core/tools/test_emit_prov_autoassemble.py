@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
-_ROOT = Path(__file__).resolve().parents[3]
 _A = "203099999999900301"
 
 _BLOCKS = [
@@ -28,16 +28,16 @@ _BLOCKS = [
 
 @pytest.fixture(autouse=True)
 def _clean():
-    shutil.rmtree(_ROOT / "workspace" / "outputs" / _A, ignore_errors=True)
+    shutil.rmtree(_sh.outputs_root() / _A, ignore_errors=True)
     yield
-    shutil.rmtree(_ROOT / "workspace" / "outputs" / _A, ignore_errors=True)
+    shutil.rmtree(_sh.outputs_root() / _A, ignore_errors=True)
 
 
 def test_autoassemble_from_refs(monkeypatch):
     monkeypatch.delenv("IST_PROVENANCE_OPTIONAL", raising=False)
     out = compile_emit.func(_A, blocks=_BLOCKS)
     assert "produced structurally-correct" in out, out[:300]
-    prov = json.loads((_ROOT / "workspace" / "outputs" / _A / "case.provenance.json")
+    prov = json.loads((_sh.outputs_root() / _A / "case.provenance.json")
                       .read_text(encoding="utf-8"))
     steps = prov["steps"]
     assert [s["layer"] for s in steps] == ["G", "G", "V", "E"]
@@ -55,7 +55,7 @@ def test_explicit_provenance_wins(monkeypatch):
         {"layer": "E", "source": {"kind": "emit_auto", "ref": ""}}]}
     out = compile_emit.func(_A, blocks=_BLOCKS, provenance=explicit)
     assert "produced structurally-correct" in out, out[:300]
-    prov = json.loads((_ROOT / "workspace" / "outputs" / _A / "case.provenance.json")
+    prov = json.loads((_sh.outputs_root() / _A / "case.provenance.json")
                       .read_text(encoding="utf-8"))
     assert prov["steps"][0]["source"]["kind"] == "manual"   # 显式优先,非 footprint
 

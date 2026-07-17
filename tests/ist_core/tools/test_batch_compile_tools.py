@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 from main.ist_core.tools.device import compile_emit_merged, dev_run_batch
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 
 def _cases():
@@ -440,7 +441,7 @@ def _emit_gate_case(autoid: str) -> str:
     })
     assert "produced structurally-correct" in out, f"前置 emit 失败: {out}"
     from pathlib import Path
-    return str(Path("workspace/outputs") / autoid / "case.xlsx")
+    return str(_sh.outputs_root() / autoid / "case.xlsx")
 
 
 def test_merged_autoids_lint_credential_gate():
@@ -459,8 +460,8 @@ def test_merged_autoids_lint_credential_gate():
                                           "out_name": "_pytest_gate_merged"})
         assert "已合并" in out, out
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
-        shutil.rmtree(Path("workspace/outputs") / "_pytest_gate_merged", ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / "_pytest_gate_merged", ignore_errors=True)
 
 
 def test_merged_autoids_rejects_stale_grade_credential():
@@ -478,8 +479,8 @@ def test_merged_autoids_rejects_stale_grade_credential():
                                           "out_name": "_pytest_gate_merged"})
         assert "lint-credential gate" in out and "re-compiled but not re-emitted" in out
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
-        shutil.rmtree(Path("workspace/outputs") / "_pytest_gate_merged", ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / "_pytest_gate_merged", ignore_errors=True)
 
 
 def test_merged_autoids_passes_with_fresh_grade_credential():
@@ -498,8 +499,8 @@ def test_merged_autoids_passes_with_fresh_grade_credential():
         assert "lint 凭证门" not in out
         assert "已合并 1 个真 case + 1 哨兵" in out
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
-        shutil.rmtree(Path("workspace/outputs") / "_pytest_gate_merged", ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / "_pytest_gate_merged", ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +532,7 @@ def test_emit_parse_error_echoes_param_and_escalates_on_streak():
         import shutil
         from pathlib import Path
         _emit_fail_streak_clear(aid)
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +554,7 @@ def test_emit_native_steps_array():
         out = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
         assert "produced structurally-correct" in out
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 def test_emit_steps_array_stringified_still_accepted():
@@ -566,7 +567,7 @@ def test_emit_steps_array_stringified_still_accepted():
                                    "out_name": aid})
         assert "produced structurally-correct" in out
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 def test_emit_steps_path_channel_and_sandbox():
@@ -585,7 +586,7 @@ def test_emit_steps_path_channel_and_sandbox():
         assert "must be inside workspace/" in out2
     finally:
         f.unlink(missing_ok=True)
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 def test_emit_parse_error_suggests_channel_switch():
@@ -625,7 +626,7 @@ def test_dev_run_batch_rejects_autoid_not_in_xlsx():
         from main.ist_core.tools.device import compile_emit
         out = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
         assert "produced structurally-correct" in out
-        xp = f"workspace/outputs/{aid}/case.xlsx"
+        xp = str(_sh.outputs_root() / aid / "case.xlsx")
         assert _xlsx_real_autoids(xp) == [aid]
         # 手抄截断 id → 显式拒绝(不静默误匹配)
         res = dev_run_batch.invoke({"xlsx_path": xp, "autoids_json": ["778012"]})
@@ -634,7 +635,7 @@ def test_dev_run_batch_rejects_autoid_not_in_xlsx():
         res2 = dev_run_batch.invoke({"xlsx_path": xp, "autoids_json": '["778012"]'})
         assert "not in this xlsx data area" in res2  # 字符串通道同样校验
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -648,7 +649,7 @@ def test_submit_attribution_evidence_gate_and_writeback(tmp_path, monkeypatch):
     aid = "203031750000000002"
     try:
         compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
-        outd = Path("workspace/outputs") / aid
+        outd = _sh.outputs_root() / aid
         lr = outd / "last_run.json"
         lr.write_text(json.dumps([{
             "autoid": aid, "verdict": "fail", "_round": 2,
@@ -679,7 +680,7 @@ def test_submit_attribution_evidence_gate_and_writeback(tmp_path, monkeypatch):
             "defect_candidate": {"repro": "x"}})
         assert "missing required fields" in r3
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 def test_digest_merge_keeps_other_rounds_and_revives_transient_guard(monkeypatch):
@@ -690,9 +691,15 @@ def test_digest_merge_keeps_other_rounds_and_revives_transient_guard(monkeypatch
     from main.ist_core.tools.device import batch_tools
     aid = "203031750000000003"
     other = "203031750000000099"   # 上一轮跑过、本轮不在结果里的 case
+    # F-Py-9b-2:同 test_digest_repeat_fail——digest 走 file_tools 沙箱根校 xlsx_path,对齐到 tmp。
+    import main.ist_core.tools.deepagent.file_tools as _ft
+    _r = _sh.project_root()
+    monkeypatch.setattr(_ft, "_PROJECT_ROOT", _r)
+    monkeypatch.setattr(_ft, "_WORKSPACE_ROOT", _r / "workspace")
+    monkeypatch.setattr(_ft, "_AGENT_ROOT", _r / "knowledge" / "data")
     try:
         compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
-        outd = Path("workspace/outputs") / aid
+        outd = _sh.outputs_root() / aid
         lr = outd / "last_run.json"
         lr.write_text(json.dumps([
             {"autoid": aid, "verdict": "fail", "_round": 1,
@@ -714,7 +721,7 @@ def test_digest_merge_keeps_other_rounds_and_revives_transient_guard(monkeypatch
         assert data[aid]["_round"] == 2                            # round 自增
         assert data[aid]["_fail_signatures"]                       # 签名落盘
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -731,12 +738,14 @@ def test_needs_decision_ledger_written_on_underdetermined():
             "autoid": aid, "algo": "rr", "n_requests": 1, "n_pools": 3,
             "claim_kind": "new_member_last"})
         assert "NEEDS_USER_DECISION" in out
-        nd = json.loads((Path("workspace/outputs") / aid / "needs_decision.json")
+        # F-Py-9b-1b 后:compile_check_verifiability 已收敛到 _sh.project_root(),needs_decision.json
+        # 随全局 fixture 落 tmp——测试读/清同一 _sh.outputs_root()(tmp)即匹配、不污染生产。
+        nd = json.loads((_sh.outputs_root() / aid / "needs_decision.json")
                         .read_text(encoding="utf-8"))
         c = next(x for x in nd["claims"] if x["claim_kind"] == "new_member_last")
         assert c["ordering_sensitive"] is True and c.get("min_requests")
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 def test_user_decision_gate_blocks_form_and_ordering_downgrade():
@@ -744,7 +753,7 @@ def test_user_decision_gate_blocks_form_and_ordering_downgrade():
     from pathlib import Path
     from main.ist_core.tools.device import compile_emit
     aid = "PYTEST_UD_GATE"
-    outd = Path("workspace/outputs") / aid
+    outd = _sh.outputs_root() / aid
     try:
         outd.mkdir(parents=True, exist_ok=True)
         (outd / "user_decision.json").write_text(json.dumps({
@@ -790,7 +799,7 @@ def test_frozen_gate_requires_override_reason():
     from pathlib import Path
     from main.ist_core.tools.device import compile_emit
     aid = "PYTEST_FROZEN"
-    outd = Path("workspace/outputs") / aid
+    outd = _sh.outputs_root() / aid
     try:
         outd.mkdir(parents=True, exist_ok=True)
         (outd / ".frozen.json").write_text(json.dumps({
@@ -813,9 +822,17 @@ def test_digest_repeat_fail_writes_frozen_marker(monkeypatch):
     from main.ist_core.tools.device import compile_emit, dev_run_batch_digest
     from main.ist_core.tools.device import batch_tools
     aid = "203031750000000004"
+    # F-Py-9b-2:digest 经 file_tools._resolve_inside_root 校 xlsx_path 于 file_tools 沙箱根
+    # (_WORKSPACE_ROOT,独立于 _sh.project_root)——全局 fixture 只 patch 了 _sh,这里把 file_tools
+    # 沙箱根也对齐到同一 tmp(=_sh.project_root),否则 tmp 的 case.xlsx 被判 outside sandbox。
+    import main.ist_core.tools.deepagent.file_tools as _ft
+    _r = _sh.project_root()
+    monkeypatch.setattr(_ft, "_PROJECT_ROOT", _r)
+    monkeypatch.setattr(_ft, "_WORKSPACE_ROOT", _r / "workspace")
+    monkeypatch.setattr(_ft, "_AGENT_ROOT", _r / "knowledge" / "data")
     try:
         compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS, "out_name": aid})
-        outd = Path("workspace/outputs") / aid
+        outd = _sh.outputs_root() / aid
         (outd / "last_run.json").write_text(json.dumps([
             {"autoid": aid, "verdict": "fail", "_round": 1,
              "causality": "#### Fail Num 1: fail to find: PATTERN_Y in:",
@@ -830,7 +847,7 @@ def test_digest_repeat_fail_writes_frozen_marker(monkeypatch):
         assert "Same-approach recompiles are frozen" in out
         assert (outd / ".frozen.json").is_file()
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 def test_user_decision_gate_ordering_by_ledger_flag():
@@ -839,7 +856,7 @@ def test_user_decision_gate_ordering_by_ledger_flag():
     from pathlib import Path
     from main.ist_core.tools.device import compile_emit
     aid = "PYTEST_UD_LEDGER"
-    outd = Path("workspace/outputs") / aid
+    outd = _sh.outputs_root() / aid
     try:
         outd.mkdir(parents=True, exist_ok=True)
         (outd / "user_decision.json").write_text(json.dumps({
@@ -875,9 +892,9 @@ def test_emit_provenance_trailing_garbage_salvaged():
         out = compile_emit.invoke({"autoid": aid, "steps": _GATE_STEPS,
                                    "out_name": aid, "provenance_json": prov})
         assert "produced structurally-correct" in out and "provenance parse failed" not in out
-        assert (Path("workspace/outputs") / aid / "case.provenance.json").is_file()
+        assert (_sh.outputs_root() / aid / "case.provenance.json").is_file()
     finally:
-        shutil.rmtree(Path("workspace/outputs") / aid, ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 def test_fanout_produced_field_probes_disk(monkeypatch, tmp_path):

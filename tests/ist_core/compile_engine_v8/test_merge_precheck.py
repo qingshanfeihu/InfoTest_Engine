@@ -14,8 +14,7 @@ import pytest
 
 from main.ist_core.tools.device.emit_xlsx_tool import precheck_merge_case
 from main.ist_core.compile_engine_v8 import views as V
-
-ROOT = Path(__file__).resolve().parents[3]
+from main.ist_core.compile_engine_v8 import _shared as _sh
 A = "203699999999000801"
 
 
@@ -31,9 +30,9 @@ def emitted_case():
     ]
     out = compile_emit.func(autoid=A, steps=steps, init_commands="", out_name=A)
     assert "produced structurally-correct xlsx" in out, out[:300]
-    yield ROOT / "workspace" / "outputs" / A
+    yield _sh.outputs_root() / A
     import shutil
-    shutil.rmtree(ROOT / "workspace" / "outputs" / A, ignore_errors=True)
+    shutil.rmtree(_sh.outputs_root() / A, ignore_errors=True)
 
 
 def test_precheck_fresh_case_ready(emitted_case):

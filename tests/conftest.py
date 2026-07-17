@@ -5,32 +5,14 @@ from pathlib import Path
 
 import pytest
 
-# F-Py-9(C):conftest 污染门的**过渡债豁免面**——F-Py-9b 系统性隔离(~10 硬编码写点走
-# sh.outputs_root + 全局隔离 + 41 读点同改)本修复轮内落地前,这批测试伪键仍再生。
-# **精确列名**(非通配模式=fail-closed):门放行这些已知名、硬拒任何**新**伪键(R_sig 已
-# F-Py-9 修、故意不列入=其再生即回归被抓)。**★过渡债、非永久放行**(Design 条件2):F-Py-9b
-# 落地后按下方来源逐组清除、本集清零、门恢复零豁免(防"过渡态摆烂成永久")。
-# 来源映射(F-Py-9b 按此溯源清零):
-#   _pytest_merged/_pytest_runbatch/_pytest_gate_merged → test_batch_compile_tools(out_name)
-#   _pytest_lint_merged → test_xlsx_lint_gates;   _pytest_prep_* → test_compile_prep
-#   t_dist* → test_distribution_emit;   t_prov*/t_good/t_noprov → test_provenance_ir + test_emit_prov_autoassemble
-#   t_fill_* → test_runtime_fill;   t_rt_* → test_runtime_fill_replay;   _fanout/wave1/b → test_fanout_concurrency
-# 名单=广扫 970 测试实测再生集 + 少数自清理但可能漏网的已知名。
-_F_PY_9B_KNOWN_POLLUTION = frozenset({
-    "_pytest_merged", "_pytest_runbatch", "_pytest_gate_merged", "_pytest_lint_merged",
-    "_pytest_prep_dongkl", "_pytest_prep_dup", "_pytest_prep_redline",
-    "_pytest_prep_yzg", "_pytest_prep_zhaiyq", "_fanout", "wave1", "b",
-    "t_dist", "t_dist_prov", "t_fill_apply", "t_fill_blank", "t_fill_list",
-    "t_fill_lock", "t_fill_prov", "t_good", "t_noprov", "t_prov",
-    "t_prov_backfill", "t_prov_mismatch", "t_rt_bad", "t_rt_ok",
-})
-
-
+# F-Py-9b 已系统性隔离(下方 _isolate_outputs_to_tmp 全局 fixture monkeypatch _sh.project_root→tmp
+# + 写侧编译工具收敛单一根 + 读侧测试改 _sh.outputs_root() 测试时求值)——**过渡债豁免集已清零、
+# 门恢复零豁免**(Design 条件2 兑现:过渡态没摆烂成永久)。门现纯断言:任何再生即某测试未隔离写生产。
 @pytest.fixture(scope="session", autouse=True)
 def _no_new_test_pollution_in_prod_outputs():
-    """F-Py-9(C 门·硬拒):session 收尾扫生产 workspace/outputs/ 无**本 session 新增**的**未知**
-    测试伪键(非 18 位 autoid、非点开头、不在 F-Py-9b 过渡豁免集)。抓 R_sig 类回归 + 任何新
-    硬编码写生产路径。只断言新增、不碰既有真产物(yzg/dongkl 在 before 集)。豁免集随 F-Py-9b 清零。"""
+    """污染门(硬拒·零豁免):session 收尾扫生产 workspace/outputs/ 无**本 session 新增**的伪键
+    (非 18 位 autoid、非点开头)。F-Py-9b 系统性隔离后门零豁免——任何再生即某测试未隔离写生产
+    (硬编码路径回归)。只断言新增、不碰既有真产物(yzg/dongkl 在 before 集)。"""
     root = Path(__file__).resolve().parents[1] / "workspace" / "outputs"
     before = {p.name for p in root.iterdir()} if root.is_dir() else set()
     yield
@@ -38,10 +20,26 @@ def _no_new_test_pollution_in_prod_outputs():
         return
     new = {p.name for p in root.iterdir()} - before
     bad = sorted(n for n in new if not re.fullmatch(r"\d{18}", n)
-                 and not n.startswith(".") and n not in _F_PY_9B_KNOWN_POLLUTION)
+                 and not n.startswith("."))
     assert not bad, (
-        f"测试污染生产 workspace/outputs/ 新增**未知**伪键: {bad} —— 某测试未隔离写生产路径"
-        "(R_sig 类回归或新硬编码);补该测试 tmp 隔离,或若属 F-Py-9b 已知族加进豁免集。")
+        f"测试污染生产 workspace/outputs/ 新增伪键: {bad} —— 某测试未隔离写生产路径(硬编码路径回归);"
+        "补该测试用 _sh.outputs_root() 求路径(走全局 _isolate_outputs_to_tmp fixture 落 tmp)。")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_outputs_to_tmp(tmp_path, monkeypatch):
+    """F-Py-9b-2(D1 零豁免全局隔离):把 workspace/outputs 写隔离到 per-test tmp——monkeypatch
+    `_sh.project_root`→tmp_path,则 emit_xlsx/batch_tools/引擎全部 outputs 写随之落 tmp
+    (F-Py-9b-1 写侧已收敛到 `_sh.project_root()` 单一根)。
+
+    安全依据(linchpin,F-Py-9b-2 已 de-risk):全库 33 处 `sh.project_root()` 全喂
+    outputs/runtime 引擎态路径、**零喂 knowledge/data 读**(knowledge 走独立 parents[N],不经
+    project_root)——故全局 patch 只隔离 outputs+runtime、不破 knowledge 读。
+    真数据读者 test_fail_signatures 已快照固化读 tests/fixtures/、不经 project_root。
+    既有自 patch `_sh.project_root` 的测试(如 test_batch_compile_tools):其显式 setattr 后置、
+    覆盖本 autouse,兼容。测试若需在 tmp 下预置 outputs 文件,用 `_sh.outputs_root()` 求路径(测试时)。"""
+    from main.ist_core.compile_engine_v8 import _shared as _sh
+    monkeypatch.setattr(_sh, "project_root", lambda: tmp_path)
 
 
 @pytest.fixture(autouse=True)

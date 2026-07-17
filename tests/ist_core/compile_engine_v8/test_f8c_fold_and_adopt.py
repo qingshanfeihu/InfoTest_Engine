@@ -18,14 +18,13 @@ from main.ist_core.compile_engine_v8 import nodes as N
 from main.ist_core.compile_engine_v8 import _shared as sh
 from main.ist_core.tools.knowledge import adjudication_store as adj
 
-_ROOT = Path(__file__).resolve().parents[3]
 A1, A2 = "203099999999900101", "203099999999900102"
 
 
 @pytest.fixture(autouse=True)
 def _env(tmp_path, monkeypatch):
     for a in (A1, A2):
-        shutil.rmtree(_ROOT / "workspace" / "outputs" / a, ignore_errors=True)
+        shutil.rmtree(sh.outputs_root() / a, ignore_errors=True)
     monkeypatch.setattr(adj, "adjudications_root", lambda: tmp_path / "adj")
     # 「先问后落」凭证(compile_user_decision 的 A 层门)。取径经 runtime_path——
     # pytest 下=tmp,与门读侧同径,不再污染生产台账
@@ -37,11 +36,11 @@ def _env(tmp_path, monkeypatch):
                             "answers": {"t": "改"}}, ensure_ascii=False) + "\n")
     yield
     for a in (A1, A2):
-        shutil.rmtree(_ROOT / "workspace" / "outputs" / a, ignore_errors=True)
+        shutil.rmtree(sh.outputs_root() / a, ignore_errors=True)
 
 
 def _mk_case(aid):
-    d = _ROOT / "workspace" / "outputs" / aid
+    d = sh.outputs_root() / aid
     d.mkdir(parents=True, exist_ok=True)
     (d / "needs_decision.json").write_text(json.dumps({
         "autoid": aid, "claims": [{"claim_kind": "forbidden_mechanism",
@@ -88,7 +87,7 @@ def test_fold_one_question_fanout_both_land(monkeypatch):
     assert "2 案" in asked[0][0]["question"]
     # 扇出:两案 user_decision.json 均落盘,decision 事实各携本案 question_id
     for a in (A1, A2):
-        ud = json.loads((_ROOT / "workspace" / "outputs" / a / "user_decision.json")
+        ud = json.loads((sh.outputs_root() / a / "user_decision.json")
                         .read_text(encoding="utf-8"))
         assert ud["decision"] == "改过程"
     dec = [f for f in appended if f.get("ev") == "decision"]
@@ -113,7 +112,7 @@ def test_adoption_skips_question_next_batch(monkeypatch):
         meta={"token": "改过程"})
     appended, asked = _drive(monkeypatch, [_pend(A1, 1)], {})
     assert asked == [] or sum(len(b) for b in asked) == 0
-    assert (_ROOT / "workspace" / "outputs" / A1 / "user_decision.json").is_file()
+    assert (sh.outputs_root() / A1 / "user_decision.json").is_file()
     assert any(f.get("ev") == "adopted" for f in appended)
 
 
@@ -122,7 +121,7 @@ def test_other_freeform_lands_as_process_for_fm(monkeypatch):
     _mk_case(A1)
     appended, _ = _drive(monkeypatch, [_pend(A1, 1)],
                          {A1: "用受控维护窗真重启一次,周五凌晨"})
-    ud = json.loads((_ROOT / "workspace" / "outputs" / A1 / "user_decision.json")
+    ud = json.loads((sh.outputs_root() / A1 / "user_decision.json")
                     .read_text(encoding="utf-8"))
     assert ud["decision"] == "改过程" and "维护窗" in ud["note"]
 

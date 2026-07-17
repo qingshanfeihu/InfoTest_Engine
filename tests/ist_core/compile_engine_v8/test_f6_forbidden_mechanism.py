@@ -15,23 +15,27 @@ import pytest
 from main.ist_core.compile_engine_v8 import nodes as N
 from main.ist_core.compile_engine_v8 import _shared as sh
 
-_ROOT = Path(__file__).resolve().parents[3]
 _A = "203099999999900066"
-_OUT = _ROOT / "workspace" / "outputs" / _A
+
+
+def _out():
+    # F-Py-9b-2:原 outputs 目录模块常量(import 时=生产)改测试时求值——随全局 fixture
+    # (_sh.project_root→tmp)落 tmp、与工具写侧同址、不污染生产 outputs/。
+    return sh.outputs_root() / _A
 
 
 @pytest.fixture(autouse=True)
 def _clean():
-    shutil.rmtree(_OUT, ignore_errors=True)
+    shutil.rmtree(_out(), ignore_errors=True)
     yield
-    shutil.rmtree(_OUT, ignore_errors=True)
+    shutil.rmtree(_out(), ignore_errors=True)
 
 
 def _stamp_with_title(monkeypatch, title):
     monkeypatch.setattr(sh, "manifest", lambda st: {"cases": [
         {"autoid": _A, "title": title, "step_intents": [], "group_path": ["功能", "配置保存"]}]})
     N._stamp_intent(_A, {})
-    return json.loads((_OUT / "intent.json").read_text(encoding="utf-8"))
+    return json.loads((_out() / "intent.json").read_text(encoding="utf-8"))
 
 
 # ── 盖章扫描 ────────────────────────────────────────────────────────────────
@@ -62,7 +66,7 @@ def test_emit_gate_blocks_until_user_decision(monkeypatch):
     err = _gate_forbidden_mechanism(_A)
     assert err and "bed-forbidden mechanism" in err and "重启" in err
     # 用户裁决落盘(H1:机制类免 form)→ 门放行
-    (_OUT / "user_decision.json").write_text(json.dumps(
+    (_out() / "user_decision.json").write_text(json.dumps(
         {"autoid": _A, "decision": "改过程", "note": "重启→clear 验证(模型条件等价)"},
         ensure_ascii=False), encoding="utf-8")
     assert _gate_forbidden_mechanism(_A) is None
@@ -84,7 +88,7 @@ def test_brief_no_longer_carries_forbidden_block(monkeypatch):
     b = BR.build_brief(_A, {"manifest_ref": "", "max_rounds": 3}, [])
     assert "<forbidden_mechanism" not in b   # brief 不再喂词表命中给 worker
     # 但盖章仍在 intent.json(emit 门读它做安全 backstop)
-    it = json.loads((_OUT / "intent.json").read_text(encoding="utf-8"))
+    it = json.loads((_out() / "intent.json").read_text(encoding="utf-8"))
     assert it.get("forbidden_mechanism")     # telemetry 盖章保留
     # emit 门仍拦(先问后落 backstop 保留——评审 BLOCKER)
     from main.ist_core.tools.device.emit_xlsx_tool import _gate_forbidden_mechanism

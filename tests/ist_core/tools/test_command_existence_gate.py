@@ -14,8 +14,7 @@ import pytest
 
 from main.case_compiler.command_inventory import (available_versions, load_inventory,
                                                   match_command, nearest_heads)
-
-ROOT = Path(__file__).resolve().parents[3]
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 
 # ---------------------------------------------------------------- 清单与匹配
@@ -85,7 +84,7 @@ def _steps_with(cmd: str) -> list:
 @pytest.fixture()
 def aid(tmp_path, monkeypatch):
     autoid = "203699999999000001"
-    outd = ROOT / "workspace" / "outputs" / autoid
+    outd = _sh.outputs_root() / autoid
     yield autoid
     import shutil
     shutil.rmtree(outd, ignore_errors=True)
@@ -95,14 +94,14 @@ def test_gate_reports_and_refuses(aid):
     out = _emit(aid, _steps_with("sdns fulldns on"))
     assert out.startswith("error: command-existence gate"), out
     assert "NEEDS_USER_DECISION" in out and "command_existence_evidence" in out
-    nd = ROOT / "workspace" / "outputs" / aid / "needs_decision.json"
+    nd = _sh.outputs_root() / aid / "needs_decision.json"
     assert nd.is_file(), "呈报台账未落盘"
     claims = json.loads(nd.read_text(encoding="utf-8"))["claims"]
     ce = [c for c in claims if c.get("claim_kind") == "command_existence"]
     assert ce and ce[0]["command"] == "sdns fulldns on"
     assert "手册" in ce[0]["reason"]  # 检索证明(user-facing 中文)
-    assert not (ROOT / "workspace" / "outputs" / aid / "case.xlsx").exists(), "拒落卷失败"
-    assert not (ROOT / "workspace" / "outputs" / aid / ".grade_credential.json").exists()
+    assert not (_sh.outputs_root() / aid / "case.xlsx").exists(), "拒落卷失败"
+    assert not (_sh.outputs_root() / aid / ".grade_credential.json").exists()
 
 
 def test_gate_evidence_escape_manual_ref(aid):
@@ -127,7 +126,7 @@ def test_gate_evidence_escape_end_to_end(aid):
 
 
 def test_gate_user_decision_escape(aid):
-    outd = ROOT / "workspace" / "outputs" / aid
+    outd = _sh.outputs_root() / aid
     outd.mkdir(parents=True, exist_ok=True)
     (outd / "needs_decision.json").write_text(json.dumps({
         "autoid": aid, "claims": [{"claim_kind": "command_existence",

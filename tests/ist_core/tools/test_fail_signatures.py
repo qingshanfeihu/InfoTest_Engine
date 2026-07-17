@@ -167,10 +167,12 @@ def test_normalizer_idempotent_and_whitespace():
     assert normalize_fail_signature(long) == "x" * 60
 
 
-# ── dongkl 9 案实数据等值校验（workspace 不入 git；本机在场即跑，CI 自动 skip）──────
+# ── dongkl 实数据等值校验（F-Py-9b-2 快照固化:读 tests/fixtures/、脱离生产数据存在性依赖）──────
 
-_DONGKL_UNFINISHED = (Path(__file__).resolve().parents[3]
-                      / "workspace" / "outputs" / "dongkl" / "unfinished")
+# 快照自 workspace/outputs/dongkl/unfinished/<autoid>/attr_evidence.json(2026-07-18 固化)——
+# 原读生产区(workspace 不入 git),这次 outputs 清理/隔离会清掉 dongkl 致本测试崩;固化进 git 后恒读。
+_DONGKL_UNFINISHED = (Path(__file__).resolve().parents[2]
+                      / "fixtures" / "dongkl_unfinished")
 
 
 def _naive_fail_patterns(text: str) -> set[str]:
@@ -189,13 +191,11 @@ def _naive_fail_patterns(text: str) -> set[str]:
     return out
 
 
-@pytest.mark.skipif(not _DONGKL_UNFINISHED.is_dir(),
-                    reason="dongkl workspace 实数据不在盘(不入 git)")
 def test_real_dongkl_cases_reextraction_equals_fail_lines():
-    """9 案 attr_evidence 实数据：新提取签名 == 原文 Fail 裁决行集合，逐案相等；
-    且不再含节头假行/Success not_found 项。"""
+    """3 案 attr_evidence 快照(F-Py-9b-2 固化,tests/fixtures/dongkl_unfinished/)：新提取签名
+    == 原文 Fail 裁决行集合，逐案相等；且不再含节头假行/Success not_found 项。固化后恒跑不 skip。"""
     evidences = sorted(_DONGKL_UNFINISHED.glob("*/attr_evidence.json"))
-    assert evidences, "unfinished 目录在而 attr_evidence 全缺——样本被挪动?"
+    assert evidences, "快照 fixture 缺失——tests/fixtures/dongkl_unfinished/ 被挪动?"
     checked = 0
     for ev in evidences:
         rec = json.loads(ev.read_text(encoding="utf-8"))

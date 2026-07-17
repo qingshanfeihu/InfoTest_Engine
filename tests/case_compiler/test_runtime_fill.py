@@ -18,8 +18,7 @@ from main.case_compiler.provenance_ir import (
 )
 from main.case_compiler.runtime_fill import list_runtime_slots, apply_fills
 from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
-
-_ROOT = Path(__file__).resolve().parents[2]
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 
 def _emit_fixture(out_name: str):
@@ -47,7 +46,7 @@ def _emit_fixture(out_name: str):
                              "init_commands": "sdns on", "out_name": out_name,
                              "provenance_json": prov.to_json()})
     assert "produced structurally-correct" in r, r
-    return _ROOT / "workspace" / "outputs" / out_name / "case.xlsx", prov
+    return _sh.outputs_root() / out_name / "case.xlsx", prov
 
 
 def _g_at(xlsx_path, row):
@@ -81,7 +80,7 @@ def test_apply_fills_whole_and_partial():
     res = apply_fills(xlsx, [
         {"slot_id": whole.slot_id, "runtime_value": "active"},
         {"slot_id": partial.slot_id, "runtime_value": "42"},
-    ], project_root=_ROOT, run_meta="build=test")
+    ], project_root=_sh.project_root(), run_meta="build=test")
     assert set(res.filled) == {whole.slot_id, partial.slot_id}
     assert _g_at(xlsx, whole.row) == "active"              # 整值替换
     assert _g_at(xlsx, partial.row) == r"Hits:\s*42"       # 部分模式只换槽位
@@ -93,10 +92,10 @@ def test_lock_no_overwrite_after_filled():
     """不反复改：已填槽位重填 → not_found，值不变；且不会错填到别的槽位。"""
     xlsx, _ = _emit_fixture("t_fill_lock")
     _, whole, partial = _slots_by_g(xlsx)
-    apply_fills(xlsx, [{"slot_id": whole.slot_id, "runtime_value": "first"}], project_root=_ROOT)
+    apply_fills(xlsx, [{"slot_id": whole.slot_id, "runtime_value": "first"}], project_root=_sh.project_root())
     assert _g_at(xlsx, whole.row) == "first"
     # 用同一 slot_id 再填不同值 → 锁死，not_found，不覆盖
-    res2 = apply_fills(xlsx, [{"slot_id": whole.slot_id, "runtime_value": "SECOND"}], project_root=_ROOT)
+    res2 = apply_fills(xlsx, [{"slot_id": whole.slot_id, "runtime_value": "SECOND"}], project_root=_sh.project_root())
     assert res2.not_found == [whole.slot_id]
     assert res2.filled == []
     assert _g_at(xlsx, whole.row) == "first"            # 已填值绝不被改
@@ -111,7 +110,7 @@ def test_empty_value_left_blank_not_guessed():
     res = apply_fills(xlsx, [
         {"slot_id": whole.slot_id, "runtime_value": ""},        # 抽不出
         {"slot_id": whole.slot_id, "runtime_value": None},      # 同上(None)
-    ], project_root=_ROOT)
+    ], project_root=_sh.project_root())
     assert whole.slot_id in res.left_blank
     assert res.filled == []
     assert RUNTIME_PLACEHOLDER in _g_at(xlsx, whole.row)   # 仍是占位,没被猜
@@ -124,8 +123,8 @@ def test_provenance_synced_to_device_verified():
     _, whole, _partial = _slots_by_g(xlsx)
     apply_fills(xlsx, [{"slot_id": whole.slot_id, "runtime_value": "active",
                         "evidence": "service status: active"}],
-                project_root=_ROOT, run_meta="build=test;task=t1")
-    sidecar = _ROOT / "workspace" / "outputs" / "t_fill_prov" / "case.provenance.json"
+                project_root=_sh.project_root(), run_meta="build=test;task=t1")
+    sidecar = _sh.outputs_root() / "t_fill_prov" / "case.provenance.json"
     prov = CaseProvenance.from_json(sidecar.read_text(encoding="utf-8"))
     # 被填的 check_point 来源转 device_verified，G 更新，且不再含占位
     cp0 = [s for s in prov.steps if s.E == "check_point"][0]

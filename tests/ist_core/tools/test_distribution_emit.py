@@ -8,6 +8,7 @@ from pathlib import Path
 from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
 
 _ROOT = Path(__file__).resolve().parents[3]
+from main.ist_core.compile_engine_v8 import _shared as _sh  # F-Py-9b-2:outputs 读走单一根、随全局 fixture 落 tmp
 
 
 def _dist_steps(buckets, total=30):
@@ -64,7 +65,7 @@ def test_dist_provenance_expands_in_tandem():
                              "strict_structural": True, "provenance_json": json.dumps(prov)})
     assert "provenance side-mounted" in r, r
     # dist 1 步 → 展开成 2 条 distribution_derived V，与展开后 steps 逐位对齐
-    p = _ROOT / "workspace" / "outputs" / "t_dist_prov" / "case.provenance.json"
+    p = _sh.outputs_root() / "t_dist_prov" / "case.provenance.json"
     d = json.loads(p.read_text(encoding="utf-8"))
     vd = [s for s in d["steps"] if s["source"]["kind"] == "distribution_derived"]
     assert len(vd) == 2

@@ -17,6 +17,7 @@ from main.ist_core.tools.device.precedent_tools import (
     _MIRROR,
     compile_writeback,
 )
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 AID = "203031750000000901"
 
@@ -33,10 +34,10 @@ def verified_case(tmp_path):
     ]
     out = compile_emit.invoke({"autoid": AID, "blocks": blocks, "out_name": AID})
     assert "produced structurally-correct" in out
-    lr = Path("workspace/outputs") / AID / "last_run.json"
+    lr = _sh.outputs_root() / AID / "last_run.json"
     lr.write_text(json.dumps([{"autoid": AID, "verdict": "pass"}]), encoding="utf-8")
     yield lr
-    shutil.rmtree(Path("workspace/outputs") / AID, ignore_errors=True)
+    shutil.rmtree(_sh.outputs_root() / AID, ignore_errors=True)
     (_MIRROR / f"verified_{AID}.xlsx").unlink(missing_ok=True)
     try:
         idx = json.loads(_INTENT_INDEX_PATH.read_text(encoding="utf-8"))
@@ -57,7 +58,7 @@ def test_writeback_pass_case(verified_case):
 
 
 def test_writeback_rejects_fail_verdict(verified_case):
-    lr = Path("workspace/outputs") / AID / "lr_fail.json"
+    lr = _sh.outputs_root() / AID / "lr_fail.json"
     lr.write_text(json.dumps([{"autoid": AID, "verdict": "fail"}]), encoding="utf-8")
     r = compile_writeback.invoke({"autoid": AID, "last_run_path": str(lr)})
     assert r.startswith("error") and "PASS" in r
@@ -66,7 +67,7 @@ def test_writeback_rejects_fail_verdict(verified_case):
 def test_writeback_rejects_stale_volume(verified_case):
     # 凭证之后直改卷面 → mtime 不匹配 → 拒(上机验证的不是这份)
     import os
-    xp = Path("workspace/outputs") / AID / "case.xlsx"
+    xp = _sh.outputs_root() / AID / "case.xlsx"
     os.utime(xp)
     r = compile_writeback.invoke({"autoid": AID, "last_run_path": str(verified_case)})
     assert r.startswith("error") and "modified after its credential" in r

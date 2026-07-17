@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from main.ist_core.tools.device import compile_emit
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 AID = "203031750000000202"
 
@@ -41,8 +42,8 @@ _STEPS_A_ONLY = [
 def volume_with_aaaa():
     out = compile_emit.invoke({"autoid": AID, "steps": _STEPS_A_AAAA, "out_name": AID})
     assert "produced structurally-correct" in out, out
-    yield Path("workspace/outputs") / AID / "case.xlsx"
-    shutil.rmtree(Path("workspace/outputs") / AID, ignore_errors=True)
+    yield _sh.outputs_root() / AID / "case.xlsx"
+    shutil.rmtree(_sh.outputs_root() / AID, ignore_errors=True)
 
 
 def test_fresh_emit_not_gated(volume_with_aaaa):

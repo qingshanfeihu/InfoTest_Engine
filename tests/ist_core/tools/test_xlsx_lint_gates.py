@@ -16,6 +16,7 @@ import pytest
 
 from main.ist_core.tools.device import compile_emit, compile_emit_merged
 from main.ist_core.tools.device.structural_gate import lint_xlsx_case
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 AID = "203031750000000201"
 
@@ -31,7 +32,7 @@ _STEPS = [
 def emitted_case():
     out = compile_emit.invoke({"autoid": AID, "steps": _STEPS, "out_name": AID})
     assert "produced structurally-correct" in out
-    xp = Path("workspace/outputs") / AID / "case.xlsx"
+    xp = _sh.outputs_root() / AID / "case.xlsx"
     yield xp
     shutil.rmtree(xp.parent, ignore_errors=True)
 
@@ -196,7 +197,7 @@ def test_emit_merged_rejects_lint_violation(emitted_case):
         merged = compile_emit_merged.invoke({"autoids": [AID], "out_name": "_pytest_lint_merged"})
         assert merged.startswith("error") and "lint" in merged and AID in merged
     finally:
-        shutil.rmtree(Path("workspace/outputs") / "_pytest_lint_merged", ignore_errors=True)
+        shutil.rmtree(_sh.outputs_root() / "_pytest_lint_merged", ignore_errors=True)
 
 
 # ---- 分发白名单 + 直连槽/execute/变量注入(2026-07-05 框架源码取证轮) ----

@@ -15,6 +15,7 @@ from main.ist_core.tools.device import compile_prep
 
 _ROOT = Path(__file__).resolve().parents[3]
 _INPUTS = _ROOT / "workspace" / "inputs" / "automatic_case"
+from main.ist_core.compile_engine_v8 import _shared as _sh  # F-Py-9b-2:outputs 读走单一根、随全局 fixture 落 tmp(inputs 读仍 _ROOT 真数据)
 
 # 计划已核实的基线(本会话实测):dongkl 34 / yzg 26 / zhaiyq 53
 _EXPECTED = {"dongkl": 34, "yzg": 26, "zhaiyq": 53}
@@ -36,7 +37,7 @@ def test_prep_manifest_has_no_commands():
     """红线:manifest 里 case 的 init_commands/steps/assertions_provenance 全 null。"""
     compile_prep.invoke(
         {"mindmap_path": str(_INPUTS / "dongkl.txt"), "out_name": "_pytest_prep_redline"})
-    mpath = _ROOT / "workspace" / "outputs" / "_pytest_prep_redline" / "manifest.json"
+    mpath = _sh.outputs_root() / "_pytest_prep_redline" / "manifest.json"
     m = json.loads(mpath.read_text(encoding="utf-8"))
     assert m["case_count"] == 34
     for c in m["cases"]:
@@ -54,7 +55,7 @@ def test_prep_keeps_duplicate_titles_unique_autoid():
     """zhaiyq 有 10 组重名标题:标题不去重,autoid 全唯一。"""
     compile_prep.invoke(
         {"mindmap_path": str(_INPUTS / "zhaiyq.txt"), "out_name": "_pytest_prep_dup"})
-    mpath = _ROOT / "workspace" / "outputs" / "_pytest_prep_dup" / "manifest.json"
+    mpath = _sh.outputs_root() / "_pytest_prep_dup" / "manifest.json"
     m = json.loads(mpath.read_text(encoding="utf-8"))
     autoids = [c["autoid"] for c in m["cases"]]
     titles = [c["title"] for c in m["cases"]]

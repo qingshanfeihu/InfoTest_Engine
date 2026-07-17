@@ -138,12 +138,11 @@ import shutil as _shutil
 from pathlib import Path as _Path
 
 from main.ist_core.tools.device.emit_xlsx_tool import _intent_save_variant
-
-_OUT = _Path(__file__).resolve().parents[2] / "workspace" / "outputs"
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 
 def _stamp(autoid: str, title: str):
-    d = _OUT / autoid
+    d = _sh.outputs_root() / autoid
     d.mkdir(parents=True, exist_ok=True)
     (d / "intent.json").write_text(_json.dumps(
         {"autoid": autoid, "title": title, "step_intents": [],

@@ -15,17 +15,21 @@ from pathlib import Path
 import pytest
 
 from main.ist_core.tools.device.fail_attribution import submit_attribution
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
-_ROOT = Path(__file__).resolve().parents[3]
 _A = "203099999999900088"
-_OUT = _ROOT / "workspace" / "outputs" / _A
+
+
+def _out():
+    # F-Py-9b-2:原 outputs 目录模块常量(import 时=生产)改测试时求值——随全局 fixture 落 tmp。
+    return _sh.outputs_root() / _A
 
 
 @pytest.fixture(autouse=True)
 def _clean():
-    shutil.rmtree(_OUT, ignore_errors=True)
+    shutil.rmtree(_out(), ignore_errors=True)
     yield
-    shutil.rmtree(_OUT, ignore_errors=True)
+    shutil.rmtree(_out(), ignore_errors=True)
 
 
 def test_expectation_suspect_requires_panel():
@@ -36,8 +40,8 @@ def test_expectation_suspect_requires_panel():
 
 
 def test_expectation_suspect_passes_gate_with_panel():
-    _OUT.mkdir(parents=True, exist_ok=True)
-    (_OUT / "ask_panel.json").write_text(json.dumps(
+    _out().mkdir(parents=True, exist_ok=True)
+    (_out() / "ask_panel.json").write_text(json.dumps(
         {"autoid": _A, "conflict_shape": "expected_vs_observed"}, ensure_ascii=False),
         encoding="utf-8")
     out = submit_attribution.func(xlsx_path="workspace/outputs/none.xlsx", autoid=_A,

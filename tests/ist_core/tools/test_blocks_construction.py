@@ -10,6 +10,7 @@ from __future__ import annotations
 import random
 
 from main.case_compiler.blocks import expand_blocks
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 
 def _norm(steps):
@@ -84,7 +85,7 @@ def test_roundtrip_on_verified_volumes():
     HEADER = ("case描述", "可以有很多行", "如：a=1", "测试对象")
     total = ok = 0
     try:
-        for d in sorted(pathlib.Path("workspace/outputs").iterdir()):
+        for d in sorted(_sh.outputs_root().iterdir()):
             if not (d.name.startswith("20303175") and len(d.name) == 18
                     and (d / "case.xlsx").exists()):
                 continue
@@ -123,7 +124,7 @@ def test_roundtrip_on_verified_volumes():
         assert ok / total >= 0.9, f"round-trip {ok}/{total}"
     finally:
         for aid in seed_aids:
-            shutil.rmtree(pathlib.Path("workspace/outputs") / aid, ignore_errors=True)
+            shutil.rmtree(_sh.outputs_root() / aid, ignore_errors=True)
 
 
 def test_fuzz_expansion_always_passes_crash_gates():

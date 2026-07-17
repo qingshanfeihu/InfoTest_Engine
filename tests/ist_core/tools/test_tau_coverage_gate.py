@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from main.case_compiler.tau_coverage import check_tau_coverage
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -79,7 +80,7 @@ def aid():
     autoid = "203699999999000003"
     yield autoid
     import shutil
-    shutil.rmtree(ROOT / "workspace" / "outputs" / autoid, ignore_errors=True)
+    shutil.rmtree(_sh.outputs_root() / autoid, ignore_errors=True)
 
 
 def _polluter_steps(with_tau: bool = False) -> list:
@@ -102,11 +103,11 @@ def test_gate_reports_missing_tau(aid):
     out = _emit(aid, _polluter_steps(with_tau=False))
     assert out.startswith("error: paired-teardown gate"), out[:200]
     assert "no vlan vlan100" in out and "NEEDS_USER_DECISION" in out
-    nd = ROOT / "workspace" / "outputs" / aid / "needs_decision.json"
+    nd = _sh.outputs_root() / aid / "needs_decision.json"
     claims = json.loads(nd.read_text(encoding="utf-8"))["claims"]
     mt = [c for c in claims if c.get("claim_kind") == "missing_teardown"]
     assert mt and "no vlan vlan100" in mt[0]["suggested_tau"]
-    assert not (ROOT / "workspace" / "outputs" / aid / "case.xlsx").exists()
+    assert not (_sh.outputs_root() / aid / "case.xlsx").exists()
 
 
 def test_gate_passes_with_tau(aid):
@@ -115,7 +116,7 @@ def test_gate_passes_with_tau(aid):
 
 
 def test_gate_user_decision_escape(aid):
-    outd = ROOT / "workspace" / "outputs" / aid
+    outd = _sh.outputs_root() / aid
     outd.mkdir(parents=True, exist_ok=True)
     (outd / "needs_decision.json").write_text(json.dumps({
         "autoid": aid, "claims": [{"claim_kind": "missing_teardown",

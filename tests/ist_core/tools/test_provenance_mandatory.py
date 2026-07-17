@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from main.ist_core.tools.device import compile_emit
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 AID = "203031750000000601"
 
@@ -34,7 +35,7 @@ _PROV = {"autoid": AID, "steps": [
 def _mandatory(monkeypatch):
     monkeypatch.delenv("IST_PROVENANCE_OPTIONAL", raising=False)
     yield
-    shutil.rmtree(Path("workspace/outputs") / AID, ignore_errors=True)
+    shutil.rmtree(_sh.outputs_root() / AID, ignore_errors=True)
 
 
 def test_emit_rejects_missing_provenance(_mandatory):
@@ -47,7 +48,7 @@ def test_emit_accepts_native_provenance_object(_mandatory):
     out = compile_emit.invoke({"autoid": AID, "steps": _STEPS, "init_commands": _INIT,
                                "out_name": AID, "provenance": _PROV})
     assert "produced structurally-correct" in out, out
-    pv = Path("workspace/outputs") / AID / "case.provenance.json"
+    pv = _sh.outputs_root() / AID / "case.provenance.json"
     assert pv.is_file()
     j = json.loads(pv.read_text(encoding="utf-8"))
     assert j.get("steps") and j["steps"][0].get("layer") in ("G", "E", "V")

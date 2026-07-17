@@ -19,14 +19,14 @@ import pytest
 from main.ist_core.tools.device.emit_xlsx_tool import compile_emit, compile_emit_merged
 from main.ist_core.tools.device.runtime_fill_tools import compile_runtime_fill
 from main.case_compiler.runtime_fill import list_runtime_slots, RUNTIME_PLACEHOLDER
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
-_ROOT = Path(__file__).resolve().parents[3]
 _A = "203099999999900011"
 _SUB = "rt_replay_ut"
 
 
 def _dirs():
-    return _ROOT / "workspace" / "outputs" / _A, _ROOT / "workspace" / "outputs" / _SUB
+    return _sh.outputs_root() / _A, _sh.outputs_root() / _SUB
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +54,7 @@ def _emit(observe="show sdns service status"):
 
 def _merged():
     compile_emit_merged.func(autoids=[_A], out_name=_SUB)
-    return _ROOT / "workspace" / "outputs" / _SUB / "case.xlsx"
+    return _sh.outputs_root() / _SUB / "case.xlsx"
 
 
 def _fill(merged):

@@ -9,6 +9,7 @@ from main.case_compiler.provenance_ir import (
     CaseProvenance, StepIR, StepSource, parse_provenance, steps_match,
 )
 from main.ist_core.tools.device.emit_xlsx_tool import compile_emit
+from main.ist_core.compile_engine_v8 import _shared as _sh
 
 
 def _prov():
@@ -67,9 +68,11 @@ def test_emit_without_provenance_writes_no_sidecar(tmp_path):
     r = compile_emit.invoke({"autoid": "t_noprov", "steps_json": json.dumps(steps),
                              "init_commands": "sdns on", "out_name": "t_noprov"})
     assert "produced structurally-correct" in r
-    assert "provenance" not in r
-    root = Path(__file__).resolve().parents[2]
-    assert not (root / "workspace" / "outputs" / "t_noprov" / "case.provenance.json").exists()
+    # F-Py-9b-2:窄化到实际旁挂注记——tmp 隔离目录名(源自本测试函数名)含 "provenance"
+    # 子串,会污染宽松的 `"provenance" not in r`;此处真正要验的是"没旁挂 sidecar"。
+    assert "provenance side-mounted" not in r
+    # F-Py-9b-2:改测试时求值——随全局 fixture(_sh.project_root→tmp)落 tmp、与 emit 写侧同址。
+    assert not (_sh.outputs_root() / "t_noprov" / "case.provenance.json").exists()
 
 
 def test_emit_with_provenance_writes_sidecar():
@@ -79,8 +82,8 @@ def test_emit_with_provenance_writes_sidecar():
                              "init_commands": "sdns on", "out_name": "t_prov",
                              "provenance_json": p.to_json()})
     assert "provenance side-mounted: G=2 E=0 V=1" in r
-    root = Path(__file__).resolve().parents[2]
-    sidecar = root / "workspace" / "outputs" / "t_prov" / "case.provenance.json"
+    # F-Py-9b-2:改测试时求值——随全局 fixture(_sh.project_root→tmp)落 tmp、与 emit 写侧同址。
+    sidecar = _sh.outputs_root() / "t_prov" / "case.provenance.json"
     assert sidecar.exists()
     loaded = CaseProvenance.from_json(sidecar.read_text(encoding="utf-8"))
     assert len(loaded.steps) == 3

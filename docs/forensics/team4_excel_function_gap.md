@@ -205,7 +205,7 @@
 
 **活样本**（run_log:110，autoid …044538，连续两轮 broken）：脑图意图「ga 不能配置相同优先级」（负面测试），worker 照字面用 `cmd_config` 直发被拒命令 + `found "already used this priority"`。
 
-- **A 面事实（我细读修正 run_log 的表述）**：cmd_config **本身不判成败**（apv_ssh.py:125-152 返回错误回显），负面测试在**框架层可表达**（found 错误消息能 pass）。判 broken 的是**引擎 digest 层**（把 device_context 的执行失败 marker 一律当编译缺陷），**不是框架**。
+- **A 面事实（证据边界分级）**：① **firsthand 坐实**——cmd_config **本身不判成败**（apv_ssh.py:125-152 我读过,返回错误回显),故负面测试在**框架层可表达**（found 错误消息能 pass）。② **推断（未核 digest/reconcile 代码）**——"判 broken 的是引擎 digest 层"系据 run_log 现象 + 架构模型推断,**我未读赋 broken verdict 的那段代码**;结论方向大概率成立(框架层已排除,broken 只能来自上层判定),但归属层待 grep 坐实(处置见 leader,#24/#15)。
 - **B 面事实**：EXCEL_FUNCTIONS.md 通篇 266 行**无一处**负面测试范式——CONFIG/cmd_config 描述全预设"命令应成功"；worker 无从知道"意图是验证设备拒绝"该怎么写。
 - **框架有无现成"允许失败"方法**：无。execute 动作是 func_N 具体业务封装（func_7/8=HTTP errpage），非通用"期望拒绝"原语。
 - **正解**（两条，与 run_log 修法方向一致）：①改正向观测——配置后 `show` 验证约束真生效（如"只有一个成员持有该优先级"），绕开 digest broken 判定；②若必须直验拒绝——需引擎 digest 区分「意图内拒绝(负面测试合法)vs 意图外失败(编译缺陷)」，这是更深的引擎能力缺口。

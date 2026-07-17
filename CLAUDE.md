@@ -33,6 +33,16 @@ InfoTest Engine 把技术文档（网络 / IPv6 / HTTP/2 / 网关配置指南等
 11. **改闸门前先画状态生命周期、核对设计意图。** 门的条件常与远处机制成对（如 frozen 闸配 override 通道）；门挂凭证路不挂编辑路（直改文件会绕过编辑入口门），翻案需行级证据（`[[gate-change-verify-design-intent]]`、`[[gates-on-credential-path-not-edit-path]]`）。
 12. **写 prompt/skill 讲事实、按自由度分层。** 陈述现象+后果+为什么，别造术语、别把 ALL-CAPS「必须/绝不」当默认；高自由度给方向信任模型，低自由度才上精确护栏；参考文档只写机制、数据按引用（fs_read mirror 现查）（`[[prompt-facts-not-coined-terms]]`、`[[reference-docs-mechanism-not-data]]`）。
 
+## Claude Team 工作流（cmux claude-teams，2026-07-17 实战定型）
+
+多 agent 协作任务（全量跑批+审计修复轮等）按 `docs/TEAM_WORKFLOW.md` 执行，机制骨架：
+
+- **组建**：六角色 named teammates（Theory/Design/LLM-Eng/Py-Eng/TUI-Eng/Test-Eng——Test-Eng 是唯一行动角色，其余只读审计先行）；任务系统承载工作项与依赖，metadata 锚基线数字（断线不丢）。
+- **编排**：侦察→并行审计∥跑批主线→域互斥修复→**批间隙合入窗口**（台账清理→leader 权威 pytest→分域 commit→重启加载→双保险放行令）→下一批实弹验证修复项→行为增强类改动押批后收口批。
+- **评审链**（工程改动强制）：Eng 出 diff+测试（附消费点清单）→ **Theory+Design 双专家评审**（理论不变量/设计条款同步+影响面）→ redline-reviewer → **leader 亲跑权威 pytest** → leader commit。验证数字只认 leader 亲跑；成员不 commit；宪法级不变量必须带机器守门测试。
+- **核心纪律**（全文十条见 TEAM_WORKFLOW §6）：证据边界声明（"基于 X 确认 Y，Z 未核"）、机读账优先于观察和记忆、工具成功≠落盘（grep 核实再报）、结论冲突先互对证据面再上报、勤落盘抗断线、编造观察=最严重违规（主动自曝+停手是唯一正确自纠）、设计变更须 leader 回执、裁决上呈不替用户决定（memo 格式+执行冻结待确认）。
+- **Test-Eng 终检三铁律**：裁决执行链对账（decision→authored→verdict→终局，链断三分判据）、引擎自认异常字段（effective=false 等）零放过、该交付而没交付的比交付了什么更要查。
+
 ## 常用命令
 
 ```bash

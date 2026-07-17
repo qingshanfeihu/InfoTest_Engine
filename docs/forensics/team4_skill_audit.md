@@ -216,7 +216,23 @@ agents/*.md 补充:9/9 过骨架门与 metadata 门;`explore.md` 名字小写已
 - **主链路零影响**(不升 P0):OTLP 导出在后台线程,fastlog 显示 16:12-16:14 归因工具调用连续推进、submit_attribution 均落盘;失败只丢当批 span(read-timeout 属不可重试类,该 batch 丢弃)。
 - **观测缺口很小**:trace 级 **21/21** 对齐引擎侧 fork 事实(events.jsonl 20 fork + 主链);3 个归因 trace 的 GENERATION 链首尾完整(含 VERDICT 尾块);丢失限于 2 个 batch 内的部分中间 span(丢失内容不可见,无法逐 span 对账——如实声明);16:15Z 后恢复正常。本报告各节结论不受影响。
 - **定性:我们的配置缺口为主**(先怀疑自己):`LANGFUSE_TIMEOUT` 未按自托管慢后端调优(默认 5s 是对 cloud 的假设);服务器响应慢(synology,2s+ 常态)是环境侧放大因子。
-- **修复建议**(并入 #19/#15):① P2:`environment`(及 environment.example §Langfuse 节)加 `LANGFUSE_TIMEOUT=30`(一行,零代码);② P3:footbar 告警带失败计数+末次时间,或导出恢复后自动降级——现粘性告警无法区分「偶发丢批」与「持续断流」。
+- **修复建议**(并入 #19/#15):① P2:`environment`(及 environment.example §Langfuse 节)加 `LANGFUSE_TIMEOUT=30`(一行,零代码,已落地——见 8-bis 表);② P3:footbar 告警带失败计数+末次时间,或导出恢复后自动降级——现粘性告警无法区分「偶发丢批」与「持续断流」。
+
+### 6.6 批3 实弹验证 + 批2 引擎中断因果定论(leader 指派 #8 收尾,2026-07-17)
+
+**(1) 批3 实弹通过**:批3 新进程(PID 83994,≥17:00)全程零黄字 banner;`tui.log` mtime 停 14:48(批3 零写入=零 OTLP 失败)。`LANGFUSE_TIMEOUT=30` 生效。
+
+**(2) 批2 断网性质(非我们代码)**:tui.log 批2 段 14:45-48 四条 OTLP 均 `[Errno 8] nodename nor servname provided`=**DNS 解析完全失败**=本机网络全断。与批1 的 `Read timed out(5s)` 是两种形态:批1=慢后端单次超时(30s 修的对象);批2=断网 max-retries 耗尽(任何超时值都救不了,属预期)。
+
+**(3) 「14:47 引擎异常」= tui.log 唯一行是 Langfuse OTLP,非引擎**:`grep "14:47" tui.log` 仅 1 行=OTLP 失败;全 tui.log 6 条 OTLP+34 空行,零 Traceback。引擎中断的证据**不在 tui.log**(它只收 stderr),"14:47 引擎异常"是下面(5)那组现象的转述,非独立日志行。
+
+**(4) Langfuse 传导路径架构层排除(铁证,无论引擎是否中断均成立)**:Langfuse span 导出跑在 OTEL BatchSpanProcessor 独立守护线程(`LangfuseSpanProcessor(BatchSpanProcessor)`,`langfuse/_client/span_processor.py:37`;tui.log "Failed to export span **batch**" 即该后台线程签名),失败只写 stderr、不 raise 回引擎主线程;加 `observability.py`/`langfuse_sink.py` 全 best-effort try/except(#8 已核)=**线程边界+异常边界双重物理隔离**。批2 可观测性 4 轮全挂期间引擎主链路不受其影响——best-effort 隔离设计的天然压测背书。
+
+**(5) 引擎中断真实证据在 fastlog 94478,分两通道按证据等级如实记**(leader 首诊 + 我 firsthand 复核):
+- **LLM 通道(我 fastlog 复核坐实)**:`compile_evidence.94478.events.jsonl` 有 **12 条 `"error":"Connection error."`**,全部 `calls:0, ai_rounds:0`(零 LLM 往返=连接建立阶段即失败=本机网络已死),`elapsed_s` 分布 1.3s×6 / 1.4s×4 / 1.5s×2=重编 fork 断网期连续秒失败。`calls:0` 是铁证:失败在连接层,与下游(含可观测性)无关。
+- **SSH/digest 通道(leader 首诊,我未在 fastlog 独立定位该串)**:leader 亲诊子集上机 digest 返回 `[Errno 51] Network is unreachable` + 屏面 turn Cooked。我 grep fastlog 94478 未命中 `Errno 51`/`Network is unreachable`/`Cooked`(该文件 2 条 "unreachable" 系无关的 compile_emit 引用校验错误)——故此条以 leader 首诊/digest 返回值面为准,非 fastlog 落盘串。
+
+**归因定论**:引擎中断 = LLM API 通道(fastlog 铁证)+ SSH 通道(leader 首诊)**随本机断网直接失败**,与 Langfuse 失败是**同一「本机断网」根因的并列后果,非 a→b 传导**;引擎错误经 fastlog fork_end / 屏面呈现、不落 tui.log stderr 属预期。**三层锁定**:①14:47 tui.log 唯一异常=Langfuse OTLP;②Langfuse 传导架构层物理排除;③引擎中断=自身 LLM/SSH 通道断网直接失败(LLM 侧 fastlog 坐实、SSH 侧 leader 首诊)。#8 因果定论干净收口。
 
 ---
 

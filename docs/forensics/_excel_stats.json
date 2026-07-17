@@ -1,0 +1,498 @@
+{
+ "C_manual": {
+  "label": "C-人工金标准(smoke_test)",
+  "n_vol": 380,
+  "n_rows": 51007,
+  "n_H_rows": 605,
+  "n_I_rows": 1426,
+  "special": {
+   "multiline_cmd": 6767,
+   "format_placeholder": 1720,
+   "mask_form": 1105
+  },
+  "methods_top": [
+   [
+    "found",
+    15842
+   ],
+   [
+    "cmd_config",
+    8550
+   ],
+   [
+    "cmds_config",
+    7249
+   ],
+   [
+    "routera",
+    6873
+   ],
+   [
+    "server231",
+    4179
+   ],
+   [
+    "sleep",
+    3257
+   ],
+   [
+    "execute",
+    2208
+   ],
+   [
+    "not_found",
+    1641
+   ],
+   [
+    "console",
+    301
+   ],
+   [
+    "cmd",
+    249
+   ],
+   [
+    "server232",
+    120
+   ],
+   [
+    "routerb",
+    117
+   ],
+   [
+    "importKey",
+    97
+   ],
+   [
+    "importCert",
+    97
+   ],
+   [
+    "csrVhost",
+    73
+   ],
+   [
+    "importRootCA",
+    48
+   ],
+   [
+    "clientc",
+    26
+   ],
+   [
+    "server213",
+    23
+   ],
+   [
+    "sm2ImportKey",
+    16
+   ],
+   [
+    "sm2ImportCert",
+    16
+   ]
+  ],
+  "checkpoint_ops": {
+   "found": 15842,
+   "not_found": 1641,
+   "abs_found": 12
+  },
+  "ef_top": [
+   [
+    "check_point.found",
+    15842
+   ],
+   [
+    "APV_0.cmd_config",
+    7679
+   ],
+   [
+    "test_env.routera",
+    6873
+   ],
+   [
+    "APV_0.cmds_config",
+    6093
+   ],
+   [
+    "test_env.server231",
+    4179
+   ],
+   [
+    "time.sleep",
+    3257
+   ],
+   [
+    "APV_0.execute",
+    1712
+   ],
+   [
+    "check_point.not_found",
+    1641
+   ],
+   [
+    "APV_1.cmds_config",
+    1114
+   ],
+   [
+    "APV_1.cmd_config",
+    867
+   ],
+   [
+    "test_env.console",
+    301
+   ],
+   [
+    "server232.execute",
+    249
+   ],
+   [
+    "APV_0.cmd",
+    173
+   ],
+   [
+    "routera.execute",
+    142
+   ],
+   [
+    "test_env.server232",
+    120
+   ],
+   [
+    "test_env.routerb",
+    117
+   ],
+   [
+    "APV_1.execute",
+    105
+   ],
+   [
+    "APV_1.cmd",
+    76
+   ],
+   [
+    "APV_0.importKey",
+    69
+   ],
+   [
+    "APV_0.importCert",
+    69
+   ],
+   [
+    "APV_1.csrVhost",
+    55
+   ],
+   [
+    "APV_0.importRootCA",
+    44
+   ],
+   [
+    "Seg0_tmp.cmds_config",
+    42
+   ],
+   [
+    "test_env.clientc",
+    26
+   ],
+   [
+    "test_env.server213",
+    23
+   ],
+   [
+    "Seg0_tmp.importKey",
+    21
+   ],
+   [
+    "Seg0_tmp.importCert",
+    21
+   ],
+   [
+    "APV_0.csrVhost",
+    18
+   ],
+   [
+    "APV_0.sm2ImportKey",
+    14
+   ],
+   [
+    "APV_0.sm2ImportCert",
+    14
+   ]
+  ]
+ },
+ "D_writeback": {
+  "label": "D-引擎写回(verified_)",
+  "n_vol": 123,
+  "n_rows": 1406,
+  "n_H_rows": 228,
+  "n_I_rows": 0,
+  "special": {
+   "multiline_cmd": 219,
+   "format_placeholder": 0,
+   "mask_form": 0
+  },
+  "methods_top": [
+   [
+    "routera",
+    362
+   ],
+   [
+    "cmds_config",
+    315
+   ],
+   [
+    "found",
+    202
+   ],
+   [
+    "cmd_config",
+    195
+   ],
+   [
+    "sleep",
+    116
+   ],
+   [
+    "not_found",
+    99
+   ],
+   [
+    "abs_found",
+    92
+   ],
+   [
+    "routerb",
+    25
+   ]
+  ],
+  "checkpoint_ops": {
+   "found": 202,
+   "not_found": 99,
+   "abs_found": 92
+  },
+  "ef_top": [
+   [
+    "test_env.routera",
+    362
+   ],
+   [
+    "APV_0.cmds_config",
+    306
+   ],
+   [
+    "check_point.found",
+    202
+   ],
+   [
+    "APV_0.cmd_config",
+    195
+   ],
+   [
+    "time.sleep",
+    116
+   ],
+   [
+    "check_point.not_found",
+    99
+   ],
+   [
+    "check_point.abs_found",
+    92
+   ],
+   [
+    "test_env.routerb",
+    25
+   ],
+   [
+    "APV_1.cmds_config",
+    9
+   ]
+  ]
+ },
+ "D_workspace": {
+  "label": "D-批1/2产出(workspace)",
+  "n_vol": 49,
+  "n_rows": 745,
+  "n_H_rows": 2,
+  "n_I_rows": 0,
+  "special": {
+   "multiline_cmd": 138,
+   "format_placeholder": 0,
+   "mask_form": 0
+  },
+  "methods_top": [
+   [
+    "found",
+    222
+   ],
+   [
+    "cmds_config",
+    190
+   ],
+   [
+    "cmd_config",
+    142
+   ],
+   [
+    "routera",
+    84
+   ],
+   [
+    "not_found",
+    39
+   ],
+   [
+    "abs_found",
+    32
+   ],
+   [
+    "sleep",
+    31
+   ],
+   [
+    "routerb",
+    3
+   ],
+   [
+    "clientc",
+    2
+   ]
+  ],
+  "checkpoint_ops": {
+   "found": 222,
+   "not_found": 39,
+   "abs_found": 32
+  },
+  "ef_top": [
+   [
+    "check_point.found",
+    222
+   ],
+   [
+    "APV_0.cmds_config",
+    188
+   ],
+   [
+    "APV_0.cmd_config",
+    142
+   ],
+   [
+    "test_env.routera",
+    84
+   ],
+   [
+    "check_point.not_found",
+    39
+   ],
+   [
+    "check_point.abs_found",
+    32
+   ],
+   [
+    "time.sleep",
+    31
+   ],
+   [
+    "test_env.routerb",
+    3
+   ],
+   [
+    "test_env.clientc",
+    2
+   ],
+   [
+    "APV_1.cmds_config",
+    2
+   ]
+  ]
+ },
+ "D_history": {
+  "label": "D-历史备份卷",
+  "n_vol": 112,
+  "n_rows": 2258,
+  "n_H_rows": 438,
+  "n_I_rows": 0,
+  "special": {
+   "multiline_cmd": 359,
+   "format_placeholder": 4,
+   "mask_form": 0
+  },
+  "methods_top": [
+   [
+    "routera",
+    602
+   ],
+   [
+    "cmds_config",
+    441
+   ],
+   [
+    "cmd_config",
+    337
+   ],
+   [
+    "found",
+    319
+   ],
+   [
+    "not_found",
+    177
+   ],
+   [
+    "sleep",
+    171
+   ],
+   [
+    "abs_found",
+    159
+   ],
+   [
+    "routerb",
+    52
+   ]
+  ],
+  "checkpoint_ops": {
+   "found": 319,
+   "abs_found": 159,
+   "not_found": 177
+  },
+  "ef_top": [
+   [
+    "test_env.routera",
+    602
+   ],
+   [
+    "APV_0.cmds_config",
+    423
+   ],
+   [
+    "APV_0.cmd_config",
+    337
+   ],
+   [
+    "check_point.found",
+    319
+   ],
+   [
+    "check_point.not_found",
+    177
+   ],
+   [
+    "time.sleep",
+    171
+   ],
+   [
+    "check_point.abs_found",
+    159
+   ],
+   [
+    "test_env.routerb",
+    52
+   ],
+   [
+    "APV_1.cmds_config",
+    18
+   ]
+  ]
+ }
+}

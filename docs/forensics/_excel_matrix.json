@@ -1,0 +1,76 @@
+{
+ "C_manual": {
+  "nvol": 380,
+  "execN": 2208,
+  "ftN": 0,
+  "importN": 354,
+  "Hn": 605,
+  "In": 1426,
+  "ck": {
+   "found": 15842,
+   "not_found": 1641,
+   "abs_found": 12
+  },
+  "trig": {
+   "routera": 6873,
+   "server231": 4179,
+   "console": 301,
+   "server232": 120,
+   "routerb": 117,
+   "clientc": 26,
+   "server213": 23
+  }
+ },
+ "D_writeback": {
+  "nvol": 123,
+  "execN": 0,
+  "ftN": 0,
+  "importN": 0,
+  "Hn": 228,
+  "In": 0,
+  "ck": {
+   "found": 202,
+   "not_found": 99,
+   "abs_found": 92
+  },
+  "trig": {
+   "routera": 362,
+   "routerb": 25
+  }
+ },
+ "D_workspace": {
+  "nvol": 49,
+  "execN": 0,
+  "ftN": 0,
+  "importN": 0,
+  "Hn": 2,
+  "In": 0,
+  "ck": {
+   "found": 222,
+   "not_found": 39,
+   "abs_found": 32
+  },
+  "trig": {
+   "routera": 84,
+   "routerb": 3,
+   "clientc": 2
+  }
+ },
+ "D_history": {
+  "nvol": 112,
+  "execN": 0,
+  "ftN": 0,
+  "importN": 0,
+  "Hn": 438,
+  "In": 0,
+  "ck": {
+   "found": 319,
+   "abs_found": 159,
+   "not_found": 177
+  },
+  "trig": {
+   "routera": 602,
+   "routerb": 52
+  }
+ }
+}

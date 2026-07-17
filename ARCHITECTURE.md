@@ -3,7 +3,7 @@
 本文档是 InfoTest Engine 的核心架构说明，覆盖端到端数据流、模块职责、以及历史兼容性机制。
 
 为了进一步深入理解系统的设计细节，请阅读以下底座架构设计文档：
-- **V6 编译引擎(1.0.5-beta.1 主路)**：[docs/DESIGN_v6_engine.md](docs/DESIGN_v6_engine.md) (LangGraph StateGraph 图 DSL、三层栈数据形态、质量门与知识闭环)
+- **V8 编译引擎(现役主路)**：[docs/DESIGN_v8_engine.md](docs/DESIGN_v8_engine.md) (事件溯源台账、LangGraph StateGraph、质量门与知识闭环;V6 历史版见 docs/archive/DESIGN_v6_engine.md)
 - **深度记忆系统**：[docs/memory_system.md](docs/memory_system.md) (L1/L2/L3层、庄周梦蝶 DreamTask、足迹 Footprint 知识树)
 - **零信任多根沙箱**：[docs/file_sandbox.md](docs/file_sandbox.md) (多根路径、遍历防护、三闸与四闸拦截防御)
 - **KMS 知识管线**：[docs/kms_pipeline.md](docs/kms_pipeline.md) (去向量化 RAG 决策、知识库/工作区分流、Markdown 高保真直出)
@@ -990,7 +990,7 @@ architecture sidecar schema v2 只对 root feature 生成，字段包含 `subsys
 | Skill 系统 | Skill 注入 + 触发 + 执行 + 工具白名单 | `middleware/per_turn_skill_reminder.py` + `tools/skills/__init__.py` + `skills/<name>/SKILL.md` |
 | Subagent 系统 | Subagent 注册 + fresh 零上下文 + relay 用户 | `agents/main_agent.py` + `agents/<x>_agent.py` |
 | 节点编排 | 硬闸 + 工程兜底 + 状态字段 | `nodes/review_gate.py` + `graph.py:finalize` |
-| 文档与规范 | Skill 编写模板 + 框架设计说明 | `docs/skill_authoring_standard.md` + `docs/framework_design_notes.md` |
+| 文档与规范 | Skill 编写模板 + 框架设计说明 | `docs/skill_authoring_standard.md` + `docs/archive/framework_design_notes.md`(历史) |
 
 ### 13.2 主 agent system prompt 反偷懒 sections
 
@@ -1124,7 +1124,7 @@ runner / TUI 展示 final_answer（9000+ 字完整评审报告）
 | `main/ist_core/tools/skills/__init__.py` | qa_invoke_skill 工具 |
 | `scripts/maintenance/archive_review_findings.py` | 历史 findings archive 脚本 |
 | `docs/skill_authoring_standard.md` | Skill 编写模板与规范 |
-| `docs/framework_design_notes.md` | 框架设计说明（差异 + 待补齐项） |
+| `docs/archive/framework_design_notes.md` | 框架设计说明（历史存档,差异+待补齐项多已落地） |
 
 ### 13.11 与历史模块的差异
 

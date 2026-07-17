@@ -7,13 +7,19 @@
 ```text
 main/ist_core/skills/<skill-name>/
 ├── SKILL.md             ← 主 skill 文件（必须）
-├── reference/           ← 可选：reference 文件供 read_file 按需读取
+├── reference/           ← 可选：参考文件（目录名用单数——invoke_skill 的引用注入只识别 reference/）
 │   └── *.md
 └── scripts/             ← 可选：辅助脚本
     └── *.py
 ```
 
 `<skill-name>` 必须是 kebab-case，全局唯一。
+
+> ⚠️ **给 agent 读的参考资料放 `knowledge/data/` 下，不放 skill 包内**（2026-07-17 team4 审计
+> P1-1 实证）：`main/` 在文件工具平台黑名单内，skill 包内 reference 文件对 agent 的 `fs_read`
+> 是死链（`error: path is in platform-denied directory`）。编译链的 EXCEL_FUNCTIONS.md /
+> domain_grammar.json 落在 `knowledge/data/compile_ref/` 正是这个原因。skill 包内 reference/
+> 仅适合维护者文档（如 ist-compile-engine 的 theory-map）。沙箱级修复方案见任务 #20。
 
 ## 二、SKILL.md 结构
 
@@ -70,9 +76,10 @@ arguments:                                    # 可选，参数列表
 | --- | --- | --- |
 | `name` | YES | kebab-case，与目录名一致 |
 | `description` | YES | 一句话；**首句含用户会用的词**（如"脑图/txt/excel/编译"）放在前 ~60 字符；≤**250 字符**（超出在 listing 被截断）；设计动机/防御说明移到 body，不占 description 预算 |
-| `allowed-tools` | YES | 列表语法；工具名后可加 path 模式限制（如 `fs_grep(qa/*)`） |
-| `when_to_use` | YES | 四行格式：`Use when ...` + `Examples: ...` + `Trigger keywords: ...`（行首独立）+ `SKIP when: ...` |
-| `context` | NO | `inline`（默认，注入主对话）或 `fork`（独立 subagent，经 `invoke_skill` 派发） |
+| `allowed-tools` | NO | 建议 inline skill 需限定工具面时声明（列表语法；工具名后可加 path 模式限制，如 `fs_grep(qa/*)`）。**fork skill 的工具白名单在 `agents/<agent>.md` frontmatter `tools`**（机器门强制），SKILL.md 不重复。现状如实：14 skill 中 5 个声明（2026-07-17 盘点），指引性非强制 |
+| `when_to_use` | user-invocable 时 YES | 四行格式：`Use when ...` + `Examples: ...` + `Trigger keywords: ...`（行首独立）+ `SKIP when: ...`（机器门强制 user-invocable 必带） |
+| `context` | YES | `inline`（注入主对话）或 `fork`（独立 subagent，经 `invoke_skill` 派发）——加载语义必须显式声明（机器门强制），不靠默认值 |
+| `effort` | NO | fork/inline 的思考深度档（`low`/`medium`/`high`），loader 消费；缺省继承会话档 |
 | `user-invocable` | NO | `true`（默认，进 TUI `/skill` 用户菜单）或 `false`（fork 子流程，不进用户菜单）。**注意：`false` 仍进主 agent 的 model listing**——fork 子流程由 inline 编排 skill 的 body 引导主 agent 经 `invoke_skill` 派发，派发者是主 agent，必须对模型可见 |
 | `disable-model-invocation` | NO | `true` 时 `invoke_skill` 直接 ERROR 拒绝该 skill（主 agent 与编排 skill 都调不动）。**这是 model listing 的唯一过滤条件**。慎用：会切断所有派发路径 |
 | `argument-hint` / `arguments` | NO | 仅在 skill 接受用户参数时用 |

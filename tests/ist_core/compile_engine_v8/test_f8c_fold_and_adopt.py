@@ -325,3 +325,13 @@ def test_adoption_stoploss_survives_zero_hits_this_round(monkeypatch):
     assert "止损" in _q and "多轮尝试未解决" in _q and "3 次采纳" in _q
     # 判例主张取历史 adopted 事实 ruling(与当轮 find 解耦→noeq 0 hits 时仍有)
     assert "判例主张" in _q and "clear" in _q
+
+
+def test_folded_members_on_rep_question(monkeypatch):
+    """F-Py-1 T1a:代表题 dict 带 folded_members==fold[rep](全 aid)——凭证组装侧恒等,
+    防单题偷塞(引擎供的清单恰等于折叠组成员)。经 payload 流到 ask_user:247 落凭证。"""
+    _mk_case(A1), _mk_case(A2)   # 同 group_path → 折成一题
+    _appended, asked = _drive(monkeypatch, [_pend(A1, 1), _pend(A2, 1)], {min(A1, A2): "改过程"})
+    assert sum(len(b) for b in asked) == 1                      # 组一题(代表)
+    fm = asked[0][0].get("folded_members")
+    assert fm is not None and set(fm) == {A1, A2}              # 代表题带全组成员 aid,恰等

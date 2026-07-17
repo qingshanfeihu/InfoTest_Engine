@@ -671,6 +671,17 @@ def ask_decision(state: dict) -> dict:
                     extra += f"worker 最新论证:{top['reason']}。"
                 extra += "请据完整情况给出可行改法,或选改预期/改描述)"
                 q["question"] = str(q.get("question", "")) + extra
+    # F-Py-1(§6 变体A·凭证层):代表题带 folded_members 专用字段(全 aid,源 fold[rep])——门凭证。
+    # 经 _panel(engine_tool.py:33 剥 _ 前缀键;folded_members 无 _ 存活)→ ask_user.func → :247
+    # 落 ask_user_answers.jsonl(凭证路)。门按集合成员判定放行折叠成员;凭证走专用字段、不走题文
+    # [:500] 后缀(599838 根因),截断免疫。gates-on-credential-path+时序判据:凭证在真实应答后写
+    # (event.wait→write 结构锁 post-signal),引擎不可自达、独立于被检查方。**批级并集只是记录
+    # 形式、非松门**:门(compile_user_decision)在 _land 时查、只对用户答了的题的 fold[rep] 落
+    # decision→查门;一 aid 一 rep(_rep_of.setdefault),"aid 在并集"⟺"aid 唯一题在本批被答"→
+    # 无跨题误放行。用户所见完整披露(大 fold 组题面尾号列表)靠展示层(面2② TUI 渲染修,同批非本 diff)。
+    for q in qs:
+        _rep = str(q.get("_autoid", ""))
+        q["folded_members"] = list(fold.get(_rep, [_rep]))
     # 题面入账(run11 体检#6:问了什么必须入账;oracle 残差 (16) 对称应用到问询侧)。
     # 折叠组:每成员一条 ask_shown,非代表标 folded_into(账目完整,答案可回放归属)
     shown: list[dict] = []

@@ -412,9 +412,20 @@ def compile_user_decision(autoid: str, decision: str, assertion_form: str = "",
     _asked = False
     try:
         if _qa_log.is_file():
-            _tail6 = aid[-6:]
             for _line in _qa_log.read_text(encoding="utf-8").splitlines():
-                if aid in _line or _tail6 in _line:
+                # F-Py-1(§6 变体A):折叠成员凭证按 folded_members 集合成员判定(全 aid,精确)——
+                # 修 599838「折叠成员尾 6 被题文 [:500] 截断丢→门假拒」。半写/损坏行 json 解析失败
+                # → continue 跳过(fail-closed:不 fail-open 放行、不匹配损坏行、损坏行不污染有效行);
+                # 旧记录(无 folded_members 键)退全 aid 子串兜底(去 tail6,根治裸数字子串误撞)。
+                try:
+                    _rec = json.loads(_line)
+                except Exception:  # noqa: BLE001
+                    continue
+                _fm = _rec.get("folded_members")
+                if _fm is not None and aid in _fm:
+                    _asked = True
+                    break
+                if _fm is None and aid in _line:
                     _asked = True
                     break
     except Exception:  # noqa: BLE001

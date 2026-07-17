@@ -159,3 +159,51 @@ def test_mixed_ledger_still_requires_form():
              {"claim_kind": "weight_ratio", "min_requests": 4}])
     out = compile_user_decision.func(_A, "改过程")
     assert str(out).startswith("error")
+
+
+# ── F-Py-1 先问后落门·folded_members 集合成员判定(§6 变体A,folding 门修) ────────────
+
+def _seed_gate(aid, qa_records):
+    """建 ledger + 追写指定 ask_user_answers 记录(独立 aid 避跨测试干扰),返回门结果串。"""
+    out = _ROOT / "workspace" / "outputs" / aid
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "needs_decision.json").write_text(json.dumps(
+        {"autoid": aid, "claims": [{"claim_kind": "new_member_last",
+         "min_requests": 4, "ordering_sensitive": True}]}, ensure_ascii=False), encoding="utf-8")
+    from main.common.runtime_paths import runtime_path
+    qa = runtime_path("ask_user_answers.jsonl")
+    qa.parent.mkdir(parents=True, exist_ok=True)
+    with qa.open("a", encoding="utf-8") as f:
+        for r in qa_records:
+            f.write((r if isinstance(r, str) else json.dumps(r, ensure_ascii=False)) + "\n")
+    res = compile_user_decision.func(aid, "改过程", assertion_form="member")
+    shutil.rmtree(out, ignore_errors=True)
+    return res
+
+
+def test_gate_folded_member_set_membership_passes():
+    """T2:折叠成员 aid 在记录 folded_members → 集合成员判定过门(599838 反向:真答成员放行)。"""
+    a = "203099999999900078"
+    assert "已落盘" in _seed_gate(a, [{"ts": 0, "folded_members": [a], "answers": {"t": "改"}}])
+
+
+def test_gate_old_record_substring_fallback_compat():
+    """T-compat①:旧记录无 folded_members、aid 在 questions 文本 → 全 aid 子串兜底命中(兼容)。"""
+    a = "203099999999900079"
+    assert "已落盘" in _seed_gate(a, [{"ts": 0, "questions": [f"测试 {a}"], "answers": {"t": "改"}}])
+
+
+def test_gate_corrupt_only_fail_closed():
+    """T-compat②a:唯一记录半写损坏 → json 解析失败 continue → fail-closed 拒(无有效凭证)。
+    半写行含 aid 文本,但解析失败即跳过、不 substring 匹配损坏行——不 fail-open。"""
+    a = "203099999999900080"
+    assert "没有找到关于 case" in _seed_gate(a, ['{"ts":0,"folded_members":["' + a + '"'])
+
+
+def test_gate_corrupt_plus_valid_not_polluted():
+    """T-compat②b:损坏行 + 含该 aid 有效行共存 → 损坏跳过、有效行命中放行(损坏不污染有效匹配)。
+    锁死 continue 语义,防将来误改成'遇损坏行整体拒'(会因一条半写行误拒真被问过的 case)。"""
+    a = "203099999999900081"
+    assert "已落盘" in _seed_gate(a, ['{"broken json line no close',
+                                     {"ts": 1, "folded_members": [a], "answers": {"t": "改"}}])

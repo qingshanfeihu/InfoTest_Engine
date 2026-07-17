@@ -245,6 +245,11 @@ def ask_user(questions: list[dict[str, Any]]) -> str:
         _log.parent.mkdir(parents=True, exist_ok=True)
         _rec = {"ts": _time.time(),
                 "questions": [str(q.get("question", ""))[:500] for q in questions],
+                # F-Py-1(§6 变体A):折叠成员凭证——专用字段记全 aid(不经题文 [:500] 截断,599838
+                # 根因),门(verifiability_tool 先问后落)按集合成员判定放行折叠成员。批级并集(本批
+                # ≤4 题的 fold[rep] 全 aid),旧记录无此键时门退全 aid 子串兜底、兼容。
+                "folded_members": sorted({str(_a) for _q in questions
+                                          for _a in (_q.get("folded_members") or [])}),
                 "answers": {str(k)[:500]: (", ".join(map(str, v)) if isinstance(v, list) else str(v))[:500]
                             for k, v in answers.items()}}
         with _log.open("a", encoding="utf-8") as _f:

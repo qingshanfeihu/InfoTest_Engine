@@ -7,7 +7,7 @@ when_to_use: |
   Use when the user asks to verify on the device, run it on the device, execute over SSH,
   confirm a configuration took effect, deploy configuration, or run the commands for real —
   or when generated configuration commands need live verification.
-  Trigger phrases: 上机, SSH执行, 设备验证, 下发配置, 跑命令, 确认生效, 实测
+  Trigger keywords: 上机, SSH执行, 设备验证, 下发配置, 跑命令, 确认生效, 实测
   SKIP when: the device is unreachable and the user is unwilling to execute manually.
 allowed-tools:
   - fs_read
@@ -17,6 +17,7 @@ allowed-tools:
   - run_shell
   - dev_ssh
   - dev_rest
+  - kb_footprint
 effort: medium
 ---
 
@@ -41,7 +42,7 @@ SSH into a real APV / network device to execute CLI commands. Two scenarios: **r
 - On connection timeout/failure retry at most 3 times; beyond that, annotate 「设备不可达」 (device unreachable)
 - References (read directly, no indirection):
   - SSH execution template: `main/ist_core/skills/device-verify/reference/ssh_template.md`
-  - Reference implementation: `main/ist_core/skills/device-verify/scripts/apv_ssh_client.py` — wraps `connect()` / `execute_show_commands()` / `execute_config_commands()`; env vars: `APV_DEVICE_IP` (default 172.16.34.70), `APV_USERNAME`, `APV_PASSWORD`, `APV_SSH_PORT`
+  - Reference implementation: `main/ist_core/skills/device-verify/scripts/apv_ssh_client.py` — wraps `connect()` / `execute_show_commands()` / `execute_config_commands()`; env vars: `APV_DEVICE_IP`, `APV_USERNAME`, `APV_PASSWORD`, `APV_SSH_PORT` (defaults documented in the script)
 
 ## High-risk command blacklist
 
@@ -78,7 +79,7 @@ Device Verify progress:
 
 **Execution**: Direct
 
-Decide the scenario (read-only verification vs. configuration deployment). Determine the target device IP from `knowledge/data/auto_env/network_topology_rag.md` (APV0: 172.16.34.70 / APV1: 172.16.34.71 etc.). If credentials were not provided, ask_user.
+Decide the scenario (read-only verification vs. configuration deployment). Determine the target device IP from `knowledge/data/auto_env/network_topology_rag.md` (the single source of truth for device addresses — read it, do not recall addresses from memory). If credentials were not provided, ask_user.
 
 **Success criteria**: scenario decided + target device IP + credentials ready
 **Artifacts**: scenario, target_device_ip
@@ -99,21 +100,7 @@ Check every command to be deployed against the blacklist, one by one. Hits the b
 
 **⚠️ Mandatory step: every command (show and config alike) must be looked up in the CLI manual before execution.**
 
-First grep `knowledge/data/markdown/product/cli_*_Chapter*.md` + `cli_*_Appendix*.md` to confirm each command's **full name and parameters**. The table below lists verified correct commands — **use the exact commands from the table; never simplify them** (e.g. using `show slb group` instead of `show slb group method` loses key information):
-
-| Verification target | Correct command (full form required) |
-|---------|-------------------------|
-| Virtual services | `show slb virtual all` |
-| Server groups | `show slb group method` |
-| Real server status | `show slb real all` |
-| Health checks | `show slb health` |
-| SDNS listener | `show sdns listener` |
-| SDNS host | `show sdns host name` |
-| Segment config | `show segment config` |
-| HA status | `show ha status` |
-| Running config | `show running` |
-
-**Forbidden**: in the table, `show slb group method` is the complete correct command — do not write `show slb group` (missing method), `show slb virtual` (missing all), `show slb real` (missing all). If unsure about the full form of any row, grep the manual to confirm before executing.
+First grep `knowledge/data/markdown/product/cli_*_Chapter*.md` + `cli_*_Appendix*.md` to confirm each command's **full name and parameters** — copy the full form from the manual, never a shortened one. A truncated show command is often still accepted by the device but silently drops the very columns you came to verify (measured: omitting a trailing keyword returned a table without the method column), so a "working" short command can fail the verification without any error. `kb_footprint` carries device-verified command forms for the same purpose — check it before improvising, and when the manual and footprint disagree, prefer the footprint's on-device-verified form.
 
 **Configuration deployment**: first confirm each command's full syntax and parameter constraints in the CLI manual (same CLI verification flow as config-answer), then order the commands marked safe in Step 2 by dependency.
 
@@ -173,7 +160,7 @@ Output in the following structure (no tool calls once output starts):
 
 | # | 命令 | 执行状态 | 输出摘要 |
 |---|------|---------|---------|
-| 1 | `show slb virtual` | success | ✓ 包含 "v1" 172.16.34.100:80 |
+| 1 | `<命令原文>` | success | ✓ 包含 <关键字段/值> |
 | 2 | ... | error | ... |
 
 ### 详细分析

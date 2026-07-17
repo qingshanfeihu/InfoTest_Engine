@@ -1,6 +1,6 @@
 ---
 name: doc-writer
-description: 技术文档撰写 agent。从知识库检索资料，组织结构化内容，创建企微云文档。
+description: "[DEPRECATED-PENDING-RULING 2026-07-17 team4] Superseded by document-author (doc-authoring skill's agent). Zero consumers repo-wide; kept only until the deletion ruling in the fix roundup. Do not wire new callers."
 tools: wx_create_doc, wx_update_doc, wx_search_doc, wx_list_docs, fs_read, fs_grep, fs_glob, fs_ls
 ---
 

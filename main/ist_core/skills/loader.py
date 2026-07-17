@@ -617,6 +617,15 @@ def _evidence_log_path() -> str:
     p = os.environ.get("IST_EVIDENCE_LOG")
     if p:
         return p
+    # pytest 隔离(团队审计 4-3-②实证):stub 链路曾按同 pid 规则把 fixture 事件写进
+    # 生产日志池,与真编译日志同池同名规则难分(`ls -t compile_evidence.*.live.log`
+    # 运维约定会抓到 pytest 尸体并误导"编译已启动"判断)。PYTEST_CURRENT_TEST 是
+    # pytest 运行期自动注入的 env,命中即改写系统临时目录;显式 IST_EVIDENCE_LOG
+    # 优先于本判定(需要断言日志内容的测试可显式指路)。
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        import tempfile
+        return str(Path(tempfile.gettempdir())
+                   / f"ist_pytest_evidence.{os.getpid()}.live.log")
     # 默认按 pid 分文件:多个 infotest 实例并存时各写各的、互不串台/互不清空(显式给 IST_EVIDENCE_LOG 则共用该路径)。
     return str(Path(__file__).resolve().parents[3] / "runtime" / "logs" / f"compile_evidence.{os.getpid()}.live.log")
 
@@ -673,6 +682,33 @@ def _fork_emit(text: str) -> None:
             _EV_LOG_FH.flush()
     except Exception:
         pass
+
+
+def _fork_end_evidence(output: str, autoid: str, t0_wall: float) -> dict:
+    """fork_end 的白跑可判据采集(2026-07-17 team4 P1-10 实弹:035493/035570 fork
+    ok:true 但零产物零尾块,卡片打 ✓ 用户以为编完、实际引擎判 escalated——fork_end
+    现有字段与正常 fork 无差别,渲染层判不出)。
+
+    两枚**纯机械事实**、零语义判断,判据与引擎结算同款(nodes.py author:
+    _TAIL_RE / fresh=mtime>=t0-1):
+    - ``tail_status``:返回文本机读尾块 ``STATUS: <token>`` 的值(无则空串);
+    - ``artifact_fresh``:autoid 案卷 case.xlsx 存在且 mtime 晚于本 fork 开始
+      (墙钟,容差 1s;无 autoid 或 stat 失败则不带字段=渲染层视为不可判)。
+    语义合取(是否显示「无产出」)收在渲染层的 worker 分支——attributor 等产物
+    形态不同的 fork 不在此误伤。"""
+    import re as _re2
+    out: dict = {}
+    m = _re2.search(r"^STATUS:\s*(\w+)", output or "", _re2.MULTILINE)
+    out["tail_status"] = m.group(1) if m else ""
+    if autoid:
+        try:
+            xlsx = (Path(__file__).resolve().parents[3] / "workspace"
+                    / "outputs" / autoid / "case.xlsx")
+            out["artifact_fresh"] = bool(
+                xlsx.is_file() and xlsx.stat().st_mtime >= t0_wall - 1)
+        except Exception:  # noqa: BLE001
+            pass
+    return out
 
 
 def _fork_emit_event(rec: dict) -> None:
@@ -1126,19 +1162,22 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
     _tally = _ForkUsageTally()
     _eff_norm = (effort or "").strip().lower()
     _eff_norm = _eff_norm if _eff_norm in ("high", "max") else ""
+    _t0_wall = time.time()   # 产物新鲜度判据的墙钟基线(monotonic 比不了文件 mtime)
     _fork_emit_event({"event": "fork_start", "fork_id": _fork_id, "skill": skill_name,
                       "agent": agent_name, "tag": tag, "autoid": _autoid,
                       "brief_head": _bh, "effort": _eff_norm})
 
-    def _emit_fork_end(ok: bool, error: str, summary: dict) -> None:
+    def _emit_fork_end(ok: bool, error: str, summary: dict, output: str = "") -> None:
         tc = summary.get("tool_calls")
-        _fork_emit_event({"event": "fork_end", "fork_id": _fork_id, "ok": ok,
-                          "error": (error or "")[:200],
-                          "elapsed_s": round(time.monotonic() - _t0, 1),
-                          "calls": sum(tc.values()) if isinstance(tc, dict) else 0,
-                          "ai_rounds": int(summary.get("ai_rounds") or 0),
-                          "tokens_in": _tally.tokens[0], "tokens_out": _tally.tokens[1],
-                          "cache_hit": _tally.tokens[2]})
+        rec = {"event": "fork_end", "fork_id": _fork_id, "ok": ok,
+               "error": (error or "")[:200],
+               "elapsed_s": round(time.monotonic() - _t0, 1),
+               "calls": sum(tc.values()) if isinstance(tc, dict) else 0,
+               "ai_rounds": int(summary.get("ai_rounds") or 0),
+               "tokens_in": _tally.tokens[0], "tokens_out": _tally.tokens[1],
+               "cache_hit": _tally.tokens[2]}
+        rec.update(_fork_end_evidence(output, _autoid, _t0_wall))
+        _fork_emit_event(rec)
 
     try:
         result = _invoke_fork_streamed(runnable, rendered_body, _label,
@@ -1197,7 +1236,7 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
         _ok = not output.startswith("ERROR:")
         _record_fork_status(skill_name, agent_name, _elapsed, _summary,
                             ok=_ok, output=output)
-        _emit_fork_end(_ok, "" if _ok else output, _summary)
+        _emit_fork_end(_ok, "" if _ok else output, _summary, output=output)
         return output
 
     _record_fork_status(skill_name, agent_name, _elapsed, _summary, ok=False,

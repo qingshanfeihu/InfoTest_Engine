@@ -6,7 +6,7 @@ when_to_use: |
   Use when the user wants to review test cases (评审 / Test List / 用例评审).
   Examples: "评审 BUG-121100 的测试用例", "review test cases for cookie encryption",
   "看一下 121100 用例怎么样", "按之前评审要求", "xlsx 评审".
-  Trigger phrases: 评审, review, Test List, BUG-XXXXX, 测试用例评审.
+  Trigger keywords: 评审, review, Test List, BUG-XXXXX, 测试用例评审.
   SKIP when: the user only asks about CLI usage, product specifications, or defect details, or asks to generate new test cases.
 allowed-tools: [fs_read, fs_grep, fs_ls, run_python, run_shell, kb_bug_search, kb_footprint, invoke_skill]
 effort: high

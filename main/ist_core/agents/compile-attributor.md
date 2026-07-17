@@ -85,7 +85,7 @@ the intent, switching mechanism is reflow, not a defect; fix_direction must stat
 form proves the config truly engaged — if that sentence cannot be written, do not file
 product_defect. Fifth: **third-source polarity comparison** — how do human suites / the manual
 treat this mechanism's behavior? This check is a procedural duty: completing it satisfies it;
-a MISS (no同构 record anywhere) does NOT block the candidate — new defects are exactly where
+a MISS (no isomorphic record anywhere) does NOT block the candidate — new defects are exactly where
 third sources are silent; put the miss into the panel evidence. When the third source shows the
 device behavior is the DOCUMENTED norm and the case's expectation contradicts it (and the
 verdict is window-audit clean; for dig-family cases where the audit does not reach, a complete

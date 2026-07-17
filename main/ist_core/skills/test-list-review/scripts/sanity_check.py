@@ -1,5 +1,9 @@
 """Test Case Review — Sanity Check Script
 
+DEPRECATED(2026-07-17 team4 审计确认):qa_sanity_check 工具已废弃——verifier subagent
+自发 grep 探索字面问题,不再依赖本机械扫描(见 tools/skills/__init__.py 顶部 NOTE)。
+本文件保留仅作脚本模式参考(grade_extract_script.py docstring 引用),勿再接入新链路。
+
 仿 anthropics/skills xlsx/scripts/recalc.py 模式：
 - 顶层入口极简，无 argparse，sys.argv 直接用
 - stdout 输出 json.dumps(result, indent=2) 单一 JSON

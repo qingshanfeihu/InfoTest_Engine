@@ -26,6 +26,9 @@ LANGFUSE_TRACING_ENABLED=false
 # LANGFUSE_SECRET_KEY=sk-lf-...
 # LANGFUSE_PUBLIC_KEY=pk-lf-...
 # LANGFUSE_BASE_URL=https://jp.cloud.langfuse.com
+# 自托管慢后端(如 NAS)必设:SDK 默认 5s 超时是 cloud 假设,大 span batch 导出必撞
+# Read timeout 丢批(2026-07-17 批1实证:归因轮 2 批 span 丢失+TUI 黄字告警)。
+# LANGFUSE_TIMEOUT=30
 
 
 # =============================================================================

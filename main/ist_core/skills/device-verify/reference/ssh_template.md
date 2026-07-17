@@ -2,6 +2,8 @@
 
 ## Method 1: run_python + paramiko (recommended)
 
+paramiko ships with the project environment (`requirements.txt`) — no install step needed.
+
 ```python
 import paramiko, time, re, json
 

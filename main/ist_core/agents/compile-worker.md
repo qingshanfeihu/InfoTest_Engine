@@ -42,7 +42,7 @@ sentences**, and filling them IS the analysis the user needs:
   verbatim substring of this case's mindmap (a mechanical gate rejects retold/invented quotes).
 - `obstacle` — why this bed can't run it as-written, as a fact ("自动化环境无法重启:断连即无法继续").
 - `equivalent` — if you can derive a config-plane equivalent that keeps the SAME falsifying
-  observation, give `procedure` (the concrete替代 steps, one readable line) and `preserves` (why
+  observation, give `procedure` (the concrete substitute steps, one readable line) and `preserves` (why
   it keeps that observation — your self-check against the four criteria). Otherwise leave it empty
   and fill `no_equivalent_reason` honestly. The user rules before you land anything; you are not
   proving the equivalent correct, you are stating it clearly for the user to judge.

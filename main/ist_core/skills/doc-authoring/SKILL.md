@@ -1,108 +1,104 @@
 ---
 name: doc-authoring
-description: 基于知识库生成技术文档，保存为企业微信云文档
+description: Generates a technical document (configuration guide / operation manual / solution doc) for the APV load-balancer product grounded in the knowledge base, and saves it as a WeCom cloud document. Every CLI command and parameter must trace to a knowledge-base source — knowledge-driven authoring, not free-form writing.
 context: fork
 agent: document-author
 user-invocable: true
 when_to_use: |
   Use when 用户要求"写一个文档"、"创建文档"、"写配置指南"、"操作手册"、
   "输出方案文档"、"写一个xxx的文档"、"生成xxx文档"、"企微云文档"。
-  Trigger phrases: 写文档, 创建文档, 配置指南, 操作手册, 方案文档, 写一个, 企微文档, 云文档
+  Trigger keywords: 写文档, 创建文档, 配置指南, 操作手册, 方案文档, 写一个, 企微文档, 云文档
   SKIP when: 用户要求生成测试报告（用 report-gen）、只是普通问答、没有明确创建意图。
 effort: medium
 ---
 
 # Doc Authoring
 
-基于知识库生成技术文档并保存为企业微信云文档。本 skill 是「知识库驱动的文档生成」，不是自由内容创作。
+Generate a technical document grounded in the knowledge base and save it as a WeCom cloud
+document. This skill is **knowledge-driven authoring**, not free-form content creation.
 
-## Knowledge Source Policy（核心规则）
+## Knowledge Source Policy (core rule)
 
-生成技术文档前，**必须先执行知识检索**。文档中的技术内容必须有来源。
+Before generating any technical document, **run knowledge retrieval first**. Every piece of
+technical content must have a source.
 
-**知识来源优先级**：
-1. CLI 手册 / 官方技术文档（`knowledge/data/markdown/product/` 下的 cli_*.md / app_*.md）
-2. 项目知识库（`knowledge/data/markdown/` 全目录）
-3. 已验证配置案例（`knowledge/footprints/` / 历史先例）
-4. 历史企微文档（`wx_search_doc` 搜索已有文档）
+**Source priority**:
+1. CLI manual / official technical docs (`cli_*.md` / `app_*.md` under `knowledge/data/markdown/product/`)
+2. Project knowledge base (all of `knowledge/data/markdown/`)
+3. Verified configuration precedents (`knowledge/footprints/` / historical precedents)
+4. Existing WeCom documents (search via `wx_search_doc`)
 
-**禁止**：
-- 仅依靠 LLM 参数记忆生成设备配置
-- 根据经验猜测 CLI 命令
-- 补全不存在的设备参数
-- 编造未在知识库中出现的命令
+**Forbidden**:
+- Generating device configuration from LLM parameter memory alone
+- Guessing CLI commands from experience
+- Filling in device parameters that do not exist
+- Fabricating commands that never appear in the knowledge base
 
-## CLI Safety Rules（红线）
+## CLI Safety Rules (red line)
 
-如果文档涉及设备配置、CLI 命令、参数说明、show 命令、验证命令，**每条命令必须能追溯到知识库来源**。
+If the document involves device configuration, CLI commands, parameter descriptions, show
+commands, or verification commands, **every command must trace to a knowledge-base source**.
 
-**如果找到来源**：直接引用，标注「来源：{文件名}」。
+**Source found**: quote it directly and annotate 「来源：{文件名}」.
 
-**如果没有找到来源**：必须明确输出：
+**No source found**: output explicitly:
 
 > ⚠️ 该命令未在知识库中确认，请人工核对设备手册后补充。
 
-**禁止生成以下格式的虚构命令**：
-- 未经确认的 `xxx config` / `xxx enable` / `xxx set`
-- 猜测的参数名或参数值
-- 假设的 show 命令输出格式
+**Never emit fabricated commands in these shapes**:
+- Unconfirmed `xxx config` / `xxx enable` / `xxx set`
+- Guessed parameter names or values
+- Assumed show-command output formats
 
-## 执行流程
+## Workflow
 
-### Step 1: 理解文档主题
+### Step 1: Understand the document topic
 
-分析用户需求，确定文档覆盖的功能范围和目标设备。
+Analyze the request; determine the feature scope and target device the document covers.
 
-### Step 2: 知识检索（必须执行，不可跳过）
+### Step 2: Knowledge retrieval (mandatory, never skip)
 
-按主题关键词搜索知识库。例如用户要求「HTTP SLB 配置文档」：
+Search the knowledge base by topic keywords. For example, for an "HTTP SLB configuration
+guide" request, grep `knowledge/data/markdown/` for the feature's object words (virtual
+server / real server / health check / service group …) and read the matched files.
 
-```
-fs_grep("slb", path="knowledge/data/markdown/")
-fs_grep("virtual.server", path="knowledge/data/markdown/")
-fs_grep("real.server", path="knowledge/data/markdown/")
-fs_grep("health.check", path="knowledge/data/markdown/")
-fs_grep("service.group", path="knowledge/data/markdown/")
-fs_grep("load.balan", path="knowledge/data/markdown/")
-```
+Read the relevant sections of matched files with `fs_read`.
 
-用 `fs_read` 读取匹配文件的相关章节。
+If `wx_search_doc` is available, search existing WeCom documents for reference.
 
-如果 `wx_search_doc` 可用，搜索已有企微文档获取参考。
+**Record the source file path for every retrieval result.**
 
-**记录每个检索结果的来源文件路径**。
+### Step 3: Organize the retrieved material
 
-### Step 3: 整理检索结果
+Classify into:
+- **CLI commands**: full syntax and parameter description, source file annotated
+- **Configuration flow**: step order extracted from the manual
+- **Feature description**: concept text from the manual
+- **Verification method**: show commands and expected output from the manual
 
-分类整理：
-- **CLI 命令**：带完整语法和参数说明，标注来源文件
-- **配置流程**：从手册中提取的步骤顺序
-- **功能说明**：手册中的概念描述
-- **验证方法**：手册中的 show 命令和预期输出
+### Step 4: Generate the Markdown
 
-### Step 4: 生成 Markdown
+Organize content per the default template below. Annotate the source after every CLI command.
 
-按默认模板组织内容（见下方）。每条 CLI 命令后标注来源。
+### Step 5: Content self-check
 
-### Step 5: 内容检查
+After generating, verify:
+- [ ] Does every CLI command have a knowledge-base source?
+- [ ] Did every parameter name and value appear in the manual?
+- [ ] Is the configuration flow complete (from creation to verification)?
+- [ ] Any fabricated command or parameter?
 
-生成后自查：
-- [ ] 每条 CLI 命令是否有知识库来源？
-- [ ] 参数名和参数值是否在手册中出现过？
-- [ ] 配置流程是否完整（从创建到验证）？
-- [ ] 是否有虚构的命令或参数？
+Content that fails the check is replaced with a 「⚠️ 待确认」 note.
 
-未通过检查的内容，替换为「⚠️ 待确认」提示。
+### Step 6: Create the WeCom cloud document
 
-### Step 6: 创建企微云文档
+Call `wx_create_doc(title=<标题>, content=<完整Markdown>, topic=<主题标识>)`.
 
-调用 `wx_create_doc(title=标题, content=完整Markdown, topic=主题标识)`。
+topic format: `doc-{关键词}-{YYYY-MM-DD}`.
 
-topic 格式：`doc-{关键词}-{YYYY-MM-DD}`。
+Return the document link.
 
-返回文档链接。
-
-## 技术配置类文档默认模板
+## Default template for configuration documents (deliverable content — keep in Chinese)
 
 ```
 # {功能名称} 配置指南
@@ -135,16 +131,17 @@ topic 格式：`doc-{关键词}-{YYYY-MM-DD}`。
 {已知限制、风险提示、最佳实践}
 ```
 
-## 失败处理
+## Failure handling
 
-**知识不足时**：不要生成完整配置文档。明确告知用户：
+**Insufficient knowledge**: do not generate a full configuration document. Tell the user explicitly:
 
 > 当前知识库没有找到 {模块名} 的配置资料，无法生成可靠文档。请提供 CLI 手册或相关技术资料后再试。
 
-**部分知识不足时**：已确认的部分正常生成，未确认的部分标注「⚠️ 待确认：知识库中未找到相关资料，建议查阅设备手册」。
+**Partially insufficient**: generate the confirmed parts normally; annotate the unconfirmed
+parts with 「⚠️ 待确认：知识库中未找到相关资料，建议查阅设备手册」.
 
-## 通用规则
+## General rules
 
-- Markdown 总长度不超过 50000 字符
-- 一次性完成，不调用 invoke_skill
-- 创建成功后返回文档链接
+- Markdown total length ≤ 50000 characters
+- Complete in one pass; do not call invoke_skill
+- Return the document link after successful creation

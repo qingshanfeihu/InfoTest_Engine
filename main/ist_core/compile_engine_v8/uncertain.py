@@ -30,8 +30,8 @@ def _behavior_feature_head(cmd: str) -> list[str]:
 
     uncertain 入库与 PASS 晋升**必须同函数**取 head——两路 feature_path/fact_key 同源,
     同一观察的 uncertain→verified 升级(merger 按 fact_key 对齐)才遇得上。动词表来自
-    文法数据(domain_grammar verb_classes),不再各处手写((no,show,clear) 硬编码曾与
-    文法漂移,红线评审 2026-07-08 低危项)。参数值 token(数字/IP/含点)剥掉只留命令词。
+    文法数据(domain_grammar verb_classes,单一源防漂移);参数值 token(数字/IP/含点)
+    剥掉只留命令词。
     """
     from main.case_compiler import domain_grammar as _dg
     strip = set(_dg.verbs("mutating") + _dg.verbs("config_query_probes"))

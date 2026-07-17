@@ -27,8 +27,10 @@ def _env(tmp_path, monkeypatch):
     for a in (A1, A2):
         shutil.rmtree(_ROOT / "workspace" / "outputs" / a, ignore_errors=True)
     monkeypatch.setattr(adj, "adjudications_root", lambda: tmp_path / "adj")
-    # 「先问后落」凭证(compile_user_decision 的 A 层门)
-    qa = _ROOT / "runtime" / "ask_user_answers.jsonl"
+    # 「先问后落」凭证(compile_user_decision 的 A 层门)。取径经 runtime_path——
+    # pytest 下=tmp,与门读侧同径,不再污染生产台账
+    from main.common.runtime_paths import runtime_path
+    qa = runtime_path("ask_user_answers.jsonl")
     qa.parent.mkdir(parents=True, exist_ok=True)
     with qa.open("a", encoding="utf-8") as f:
         f.write(json.dumps({"ts": 0, "questions": [f"t {A1} {A2}"],

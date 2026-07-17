@@ -130,14 +130,12 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
 def batch_view(fs: list[dict], manifest: dict) -> dict:
     """全批视图:{aid: {status, rounds, contradictions, frozen}} + 计数汇总。
 
-    manifest 提供 aid 全集与各案当前卷面指纹(authored 事实回填);
-    volume 指纹取自最近 **delivery** merge 事实(无则空——尚未交付合并)。
-    **卷指纹隔离(回归#2 修 C,DESIGN_dongkl_finalization §⑥)**:deliverable 判定绑
-    「最近 delivery 卷」而非「最近任意
-    merge 卷」——否则别案的 broken/失败案子集复跑(subset merge)会 churn current_volume,
-    把已 pass@delivery 的案指纹失配、降级回 subset_verified,恒占 live 饿死 gather
-    (yzg 实证:17 pass 案被 2 broken 案的子集复跑反复降级)。子集复跑不改交付语境;
-    真交付组成变化(新 delivery merge)才让旧交付案重新终验(INV-8 组成锚不破)。
+    manifest 提供 aid 全集与各案当前卷面指纹(authored 事实回填);volume 指纹取自
+    最近 **delivery** merge 事实(无则空)。**卷指纹隔离**:deliverable 绑「最近
+    delivery 卷」而非「最近任意 merge 卷」——否则别案的子集复跑会 churn
+    current_volume,把已 pass@delivery 案降级回 subset_verified 恒占 live 饿死
+    gather;真交付组成变化才让旧交付案重新终验(INV-8 组成锚不破)。机理全文:
+    DESIGN_dongkl_finalization §⑥ 回归#2 修 C(主文档回指 DESIGN_v8 §16.5b)。
     """
     aids = [str(c.get("autoid")) for c in (manifest.get("cases") or [])]
     # 只**排除** subset 复跑卷(ctx=="subset");delivery 卷与无 ctx 的旧/最小事实照旧

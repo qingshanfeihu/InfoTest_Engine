@@ -51,8 +51,11 @@ def test_baseline_drift_never_reaches_restore_via_llm(monkeypatch):
     diff = {"interface_addresses": {
         "added": ['ip address "port2" 172.16.34.70 255.255.255.0'], "removed": []}}
     restorable, _ = B.restorable_diff(diff)
-    # 本批命令面确实碰过 port2(测试配置)——但 restorable 已空,own_writes 无输入
-    own, foreign = B.own_writes(restorable, 'slb config on port2 172.16.34.70')
+    # 本批命令面确实碰过 port2(测试配置)——但 restorable 已空,己方判定无输入
+    cmds = B.parse_config_commands(
+        "172.16.35.70 - sends command in config: slb config on port2 172.16.34.70")
+    own, foreign = B.own_writes_by_command(restorable, cmds,
+                                           {"slb config": {"no": "no slb config"}})
     assert own == {}                                 # 零己方漂移 → 零恢复命令
     called = {"n": 0}
 

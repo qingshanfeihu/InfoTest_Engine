@@ -1,6 +1,6 @@
 """compile_prep: 脑图(mind-map JSON)→ 批量编译 manifest(JSON 中间表示)。
 
-批量编译的第一步:把一个脑图文件解析成结构化 manifest,供 V6 编译引擎(compile_engine)prep 节点调用。
+批量编译的第一步:把一个脑图文件解析成结构化 manifest,供 V8 引擎(compile_engine_v8)prep 节点调用。
 
 **零硬编码红线(第一原则,见计划 linear-imagining-galaxy.md)**:
 本工具**只产"需求 + 分组 + 先例引用"**,绝不产任何设备命令/参数/断言。manifest 里

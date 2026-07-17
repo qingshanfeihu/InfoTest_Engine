@@ -115,14 +115,18 @@ def test_e2e_report_remedy_and_r5_booleans(rig):
         env = json.loads(brief.splitlines()[0])
         aid = str(env.get("autoid"))
         if skill == "compile-attributor":
+            # K1 并发纪律:假体读改写 last_run 必持真锁(裸写在并发池下有 write_text
+            # 截断窗口,同伴读到空文件 JSONDecodeError——test_diagnose 同批修复)
+            from main.ist_core.tools.device.fail_attribution import _LAST_RUN_LOCK
             lrp = rig["tmp"] / str(env.get("last_run_path"))
-            data = json.loads(lrp.read_text(encoding="utf-8"))
-            for r in data:
-                if str(r.get("autoid")) == aid:
-                    r["_attribution"] = {"layer": "V", "disposition": "rerun_isolated",
-                                         "h_position": "h_pi",
-                                         "evidence": f"echo for {aid} (fail)"}
-            lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            with _LAST_RUN_LOCK:
+                data = json.loads(lrp.read_text(encoding="utf-8"))
+                for r in data:
+                    if str(r.get("autoid")) == aid:
+                        r["_attribution"] = {"layer": "V", "disposition": "rerun_isolated",
+                                             "h_position": "h_pi",
+                                             "evidence": f"echo for {aid} (fail)"}
+                lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return "VERDICT"
         return orig_fork(skill, brief, tag=tag, effort=effort)
 

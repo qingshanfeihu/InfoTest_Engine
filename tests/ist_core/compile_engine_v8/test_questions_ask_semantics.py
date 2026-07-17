@@ -307,3 +307,55 @@ def test_claim_history_unknown_disposition_stays_chinese():
                            "disposition": "some_future_key", "claim": "观察一条。"}]})
     assert "some_future_key" not in q["question"]
     assert "其他判断" in q["question"]
+
+
+def test_triple_projection_free_labels_pass_validate():
+    """三元组题(§18.13 逐字投影)的自由 label(「采纳「…」」等)不被 validate 的
+    字面枚举误杀——`_token_by_label` 在场时按映射表校验(label 全在表 ∧ token ⊆
+    DECISIONS)。回归锚(审计 1-2):旧版 validate 只认 DECISIONS 字面,三元组题必
+    False,接回断言路径会整族误杀。"""
+    led = {A: {"claims": [{
+        "claim_kind": "verification_path_absent",
+        "test_point": "sdns listener 配置 port 53 执行 write file 存盘后重启,配置应丢失",
+        "obstacle": "自动化环境无法重启设备(会断连、无法继续测试)",
+        "equivalent": {"procedure": "查 show startup 中有没有 sdns listener port 53 的配置",
+                       "preserves": "write 家族错写启动面会被它抓住(对被测写步敏感)"},
+        "reason": "环境无法重启"}]}}
+    qs = build_questions(led)
+    assert len(qs) == 1 and qs[0].get("_token_by_label")
+    assert any(str(o["label"]).startswith("采纳「") for o in qs[0]["options"])
+    assert validate_questions(qs, led)   # 自由 label 经映射表过门,不误杀
+
+
+def test_defect_intent_conditional_clause_not_shortcut():
+    """条件句门(2026-07-17 实弹):带前置条件的缺陷处置指令不得短路成无条件 defect
+    ——「直查仍不返回才按缺陷候选结案」曾被归「确认产品缺陷」,用户的条件裁决被
+    简化执行。条件句掉 correct 兜底(原文完整落账下发)。"""
+    # 实弹原文与同型条件句 → 非 defect,cap 兜底 correct
+    for cond in ("直查仍不返回才按缺陷候选结案",
+                 "若复现再提单",
+                 "先隔离复跑,如果还挂就报缺陷",
+                 "等复现后再提单"):
+        assert answer_token("cap", cond) == "correct", cond
+    # 无条件缺陷意图照旧短路(517027 修复不回归)
+    for uncond in ("是缺陷", "确认产品缺陷,提单吧", "这是产品问题", "不认可,是缺陷"):
+        assert answer_token("cap", uncond) == "defect", uncond
+    # 否定门照旧(「不是缺陷」不算)
+    assert answer_token("cap", "不是缺陷,继续修") == "continue"
+    assert answer_token("cap", "先不提缺陷,按手册改预期") == "correct"
+
+
+def test_side_cn_and_ask_strip_control_chars_display_only():
+    """题面展示路径剥控制字符(TAB→空格/\\r 剥;双侧防御,渲染侧 dom.py 已同修)。
+    verbatim 契约边界:只动展示投影,落盘 jsonl 与 LLM 载荷不经此函数。"""
+    from main.ist_core.compile_engine_v8.questions import _side_cn
+    s = _side_cn({"source_ref": "device", "quote": "col1\tcol2\r\nWarning:\toccupied"})
+    assert "\t" not in s and "\r" not in s
+    assert "col1 col2" in s and "Warning: occupied" in s   # 语义保持,仅规格化
+    q = build_ask_question({
+        "autoid": A, "kind": "panel",
+        "panel": {"conflict_shape": "expected_vs_observed",
+                  "sides": [{"source_ref": "device", "quote": "a\tb"}],
+                  "retrieval_receipt": [], "hypothesis": "h",
+                  "ask": "该以\t哪一方为准?"}})
+    assert "\t" not in q["question"]

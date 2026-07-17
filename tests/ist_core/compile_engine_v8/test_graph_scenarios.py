@@ -114,12 +114,17 @@ def rig(tmp_path, monkeypatch):
     # merge 的工具与卷面读取假体
     import main.ist_core.tools.device as TD
     class _FakeMerged:
+        # 模拟真工具双接口:引擎走 .func 直调(P1-2 后),外部编排仍可 .invoke
+        @staticmethod
+        def func(autoids=None, out_name="", **_kw):
+            vol = outputs / str(out_name)
+            vol.mkdir(exist_ok=True)
+            (vol / "case.xlsx").write_text(",".join(autoids or []), encoding="utf-8")
+            return f"已合并 {len(autoids or [])} 个真 case + 1 哨兵 → {vol}/case.xlsx"
+
         @staticmethod
         def invoke(args):
-            vol = outputs / str(args["out_name"])
-            vol.mkdir(exist_ok=True)
-            (vol / "case.xlsx").write_text(",".join(args["autoids"]), encoding="utf-8")
-            return f"已合并 {len(args['autoids'])} 个真 case + 1 哨兵 → {vol}/case.xlsx"
+            return _FakeMerged.func(**args)
     monkeypatch.setattr(TD, "compile_emit_merged", _FakeMerged)
     monkeypatch.setattr(N, "_load_case_rows",
                         lambda aid: [{"E": "APV_0", "F": "cmds_config", "G": "sdns on"}])

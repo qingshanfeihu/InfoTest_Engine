@@ -258,9 +258,11 @@ def volume_fingerprint(pairs: list[tuple[str, str]]) -> str:
 
 
 def emit(text: str) -> None:
+    """引擎进度 → 默认 EventBus(TUI 'evidence_added' → '· …' 行)。失败一律静默
+    (进度不拖垮主流程)。原 compile_pipeline._emit_progress 归位于此(遗留壳随之删除)。"""
     try:
-        from main.ist_core.tools.device.compile_pipeline import _emit_progress
-        _emit_progress(f"[engine] {text}")
+        from main.ist_core.events import get_default_bus
+        get_default_bus().emit("evidence_added", payload={"text": f"[engine] {text}"})
     except Exception:  # noqa: BLE001
         logger.debug("engine 进度 emit 失败", exc_info=True)
 
@@ -312,12 +314,8 @@ def fork_executor(n_items: int):
 
 
 def env_flag(name: str, default: str = "1") -> bool:
-    """布尔环境开关(默认开;"0"/"false"/"no" 关)。
-
-    V6 同名函数 V8 迁移时漏带——uncertain._promote_behavior_candidates 首行
-    sh.env_flag 即 AttributeError,被 _writeback_one 的 debug-except 静默吞,
-    PASS 行为知识晋升自迁移起从未生效(2026-07-16 team3 实现轮抓获,补齐恢复)。
-    """
+    """布尔环境开关(默认开;"0"/"false"/"no" 关)。回归锚:test_promote_env_flag_regression
+    (曾缺失致 PASS 行为晋升被 debug-except 静默吞)。"""
     v = (os.environ.get(name) or default).strip().lower()
     return v not in ("0", "false", "no")
 

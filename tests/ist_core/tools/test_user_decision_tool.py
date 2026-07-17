@@ -29,8 +29,10 @@ def _ledger(claims):
     _OUT.mkdir(parents=True, exist_ok=True)
     (_OUT / "needs_decision.json").write_text(
         json.dumps({"autoid": _A, "claims": claims}, ensure_ascii=False), encoding="utf-8")
-    # 「先问后落」门:测试补一条含该 autoid 的问答记录(真实链路由 ask_user 工具自动落)
-    qa = _ROOT / "runtime" / "ask_user_answers.jsonl"
+    # 「先问后落」门:测试补一条含该 autoid 的问答记录(真实链路由 ask_user 工具自动落)。
+    # 取径经 runtime_path——pytest 下=tmp,与门读侧同径,不再污染生产台账(2426 条 ts=0 前科)
+    from main.common.runtime_paths import runtime_path
+    qa = runtime_path("ask_user_answers.jsonl")
     qa.parent.mkdir(parents=True, exist_ok=True)
     with qa.open("a", encoding="utf-8") as f:
         f.write(json.dumps({"ts": 0, "questions": [f"测试 {_A}"], "answers": {"t": "改"}},

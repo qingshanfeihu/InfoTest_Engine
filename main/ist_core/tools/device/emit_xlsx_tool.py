@@ -883,7 +883,9 @@ def _emit_stat(autoid: str, out: str, channel: str) -> None:
         if reason == "other":
             # 观测缺口修复(2026-07-06 诊断 P2):未分类打回带原文头,可追溯
             rec["error_head"] = str(out)[:80]
-        p = Path(__file__).resolve().parents[4] / "runtime" / "logs" / "emit_stats.jsonl"
+        # 取径经 runtime_path(pytest 隔离:测试触发的 emit 统计不再灌生产台账,+103 行/轮实证)
+        from main.common.runtime_paths import runtime_path as _rt
+        p = _rt("logs", "emit_stats.jsonl")
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

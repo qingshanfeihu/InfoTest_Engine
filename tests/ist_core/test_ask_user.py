@@ -438,3 +438,78 @@ def test_session_leave_warn_coexists_with_empty_other_guard(capture_submit):
     assert "已选未提交" not in _rendered(s)
     s.handle_key("return", "")          # Q2 = X → 全部已答直接提交
     assert capture_submit["ans"] == {"Q1?": "裁决X", "Q2?": "X"}
+
+
+def test_session_multi_enter_uncommitted_warns_once(capture_submit):
+    """multiSelect 的 enter 也是「离开当前题」(2026-07-17 team4 审计 P1-6)：动过高亮
+    未 space 勾选就 enter → 与切题/esc 同款守卫，告警一次；再次 enter 放行（按未选继续）。"""
+    s = _session(
+        [
+            {"question": "M1?", "multiSelect": True, "options": [
+                {"label": "A", "description": ""}, {"label": "B", "description": ""}]},
+            {"question": "M2?", "options": [
+                {"label": "X", "description": ""}, {"label": "Y", "description": ""}]},
+        ],
+        capture_submit,
+    )
+    s.handle_key("2", "2")              # 高亮 B，未 space（用户以为已选）
+    s.handle_key("return", "")          # 首次 enter → 拦下告警，不推进
+    out = _rendered(s)
+    assert "M1?" in out, "首次 enter 应被拦在当前题"
+    assert "未 space 勾选" in out, "应显示黄字告警"
+    s.handle_key("return", "")          # 再次 enter → 放行（按未选推进）
+    assert "M2?" in _rendered(s)
+    # space 勾选后 enter 不告警（正常路径）
+    s2 = _session(
+        [{"question": "M?", "multiSelect": True, "options": [
+            {"label": "A", "description": ""}, {"label": "B", "description": ""}]}],
+        capture_submit,
+    )
+    s2.handle_key("space", "")          # 勾 A
+    s2.handle_key("return", "")         # 有答案 → 直接提交无告警
+    assert capture_submit["ans"] == {"M?": "A"}
+
+
+def test_session_single_question_empty_submit_warns(capture_submit):
+    """单题空提交告警(2026-07-17 team4 审计 P1-6)：旧条件 len>1 使单题 multiSelect
+    空 enter 无任何告警直通空答案（空答案下游与取消语义模糊，532862 同族）。"""
+    s = _session(
+        [{"question": "M?", "multiSelect": True, "options": [
+            {"label": "A", "description": ""}, {"label": "B", "description": ""}]}],
+        capture_submit,
+    )
+    s.handle_key("return", "")          # 未动高亮未勾选，直接 enter（空提交）
+    assert "ans" not in capture_submit, "单题空提交首次应被拦下"
+    assert "空答案" in _rendered(s)
+    s.handle_key("return", "")          # 再次 enter → 确认提交空答案
+    assert capture_submit["ans"] == {"M?": ""}
+
+
+def test_session_hint_matches_actual_key_semantics(capture_submit):
+    """按键提示对齐实际行为(2026-07-17 team4 审计 P1-5)：数字/↑↓ 只移动高亮不落答
+    ——「数字直选」承诺了按数字即选定，正是 run15/17 两次 3 题丢 2 的心智模型根因。"""
+    # 单选：enter=选定
+    s = _session(
+        [{"question": "选?", "options": [
+            {"label": "A", "description": ""}, {"label": "B", "description": ""}]}],
+        capture_submit,
+    )
+    hint = _rendered(s)
+    assert "数字直选" not in hint, "误导文案必须移除"
+    assert "↑↓/数字 移动" in hint and "enter 选定" in hint
+    # multiSelect 非末题：space 勾选 · enter 下一题；末题：enter 提交
+    s2 = _session(
+        [
+            {"question": "M1?", "multiSelect": True, "options": [
+                {"label": "A", "description": ""}, {"label": "B", "description": ""}]},
+            {"question": "M2?", "multiSelect": True, "options": [
+                {"label": "X", "description": ""}, {"label": "Y", "description": ""}]},
+        ],
+        capture_submit,
+    )
+    h1 = _rendered(s2)
+    assert "space 勾选" in h1 and "enter 下一题" in h1
+    s2.handle_key("space", "")
+    s2.handle_key("return", "")         # 进末题
+    h2 = _rendered(s2)
+    assert "enter 提交" in h2

@@ -126,7 +126,7 @@ def annotate_maintenance(findings: list[dict], maint: set) -> None:
 
 def split_maintained(foreign: dict, maint: set) -> tuple[dict, dict]:
     """closing 批后收敛:foreign diff 里能被维护命令面解释的行分流为 maintained
-    (只报「维护写已解释」,不告警不动手)。判据与 own_writes 同型(行级全覆盖)。"""
+    (只报「维护写已解释」,不告警不动手)。判据=行级身份 token 全覆盖(⊆ 维护命令面)。"""
     if not maint:
         return foreign, {}
     left: dict = {}
@@ -212,16 +212,12 @@ def snapshot_only_channels() -> set:
 def restorable_diff(diff: dict) -> tuple[dict, dict]:
     """把快照 diff 拆成 (可自动恢复的, 只呈报不动手的)。
 
-    平台基线面(snapshot_only:接口地址等)的判据比普通残留面严一档——**只有 diff 含
-    `removed`(批前快照见证了地址消失,证明快照完整、漂移是真替换)才可自动恢复;纯
-    `added` 无 `removed` 一律只呈报**。理由(2026-07-13 run18 实弹):批前 `show ip
-    address` 探针被 SSH 读窗串位截断成 1 行(status:success 故未判 failed,
-    probe_resilient 救不了截断),批后完整 6 个基线地址 − 残缺的 1 个 = 5 个纯 `added`,
-    被误判成「本批漂移」→ own_writes 因案面配过 port2/port3 归己方 → restore_via_llm
-    生成 `no ip address port2 <管理IP>`(删基线)→ entity_gate 放行(实体确在错误的
-    diff 里)→ 执行(设备靠框架 IP 恢复契约侥幸存活)。纯 added 有两种成因,都不该删:
-    ①批前截断(基线本就在,删=断设备)②案纯新增地址(框架 IP 恢复契约下 case 开头自清)。
-    含 removed 的真替换(run9 vlan100:removed port2 + added vlan100)不受影响,照常恢复。"""
+    平台基线面(snapshot_only:接口地址等)判据严一档——**只有 diff 含 `removed`
+    (批前快照见证消失=快照完整可信,真替换)才可自动恢复;纯 `added` 无 `removed`
+    一律只呈报**:纯 added 两种成因都不该删——①批前探针被截断(基线本就在,删=断
+    设备,run18 险删管理 IP)②案纯新增地址(框架 IP 恢复契约下 case 开头自清)。
+    含 removed 的真替换(run9 vlan100 形态)照常恢复。机理全文:DESIGN §18.8.1
+    「平台基线面不自动删接口 IP」;测试锚 test_baseline_face_no_autorestore.py。"""
     so = snapshot_only_channels()
     restorable: dict = {}
     observe_only: dict = {}
@@ -263,26 +259,6 @@ def _identity_tokens(line: str) -> list[str]:
         elif any(ch.isdigit() for ch in t) and not t.replace(".", "").isdigit():
             toks.append(t)   # vlan100/port2/eth0.100 类带数字的名字
     return toks
-
-
-def own_writes(diff: dict, command_corpus: str) -> tuple[dict, dict]:
-    """己方交叉验证(R4-G4):diff 行的身份 token(接口名/IP)全部在本批执行命令面出现
-    → 认己方可逆放;对不上的归 foreign(共享床上他人并行动的,只报不动——INV-9)。"""
-    own: dict = {}
-    foreign: dict = {}
-    corpus = str(command_corpus or "")
-    for name, d in diff.items():
-        o = {"added": [], "removed": []}
-        f = {"added": [], "removed": []}
-        for side in ("added", "removed"):
-            for ln in d.get(side) or []:
-                toks = _identity_tokens(ln)
-                (o if toks and all(t in corpus for t in toks) else f)[side].append(ln)
-        if o["added"] or o["removed"]:
-            own[name] = o
-        if f["added"] or f["removed"]:
-            foreign[name] = f
-    return own, foreign
 
 
 def entity_gate(cmds: list[str], diff_own: dict) -> tuple[list[str], list[str]]:
@@ -327,12 +303,8 @@ def restore_via_llm(diff_own: dict, llm_fn: Callable[[str, str], str]) -> list[s
         return []
 
 
-# ── S4 兑现②:机械逆放先行(#76,run18 根因修复) ──────────────────────────────
-# 恢复命令从案面真发的 config 命令机械派生(config X → no X,inverse_forms 的 no 公理),
-# 而非 LLM 凭 diff 猜。根因修复 run18:own_writes 旧判据「diff 行 token 在 corpus 文本
-# 出现」把 dig 访问过的 172.16.34.70 误当成「案面创建了 port2」→ 删基线。机械逆放只逆
-# 案面真发过创建命令的 diff 行——port2 案面无 `ip address port2` 命令(只被 dig 访问),
-# 派生不出 `no ip address port2`,基线不碰。
+# ── S4 机械逆放先行(恢复命令从案面真发的 config 命令派生:config X → no X;
+#    详见 own_writes_by_command/restore_mechanical docstring 与 DESIGN §18.8.1) ──
 
 
 def _inverse_pairs() -> dict:

@@ -406,7 +406,9 @@ def compile_user_decision(autoid: str, decision: str, assertion_form: str = "",
     # 8 个欠定 case 自己调本工具拍板(含 drop_ordering=True)——prompt 红线拦不住,
     # 只有凭证是 A 层。校验 runtime/ask_user_answers.jsonl(ask_user 工具对每次
     # 真实问答自动落的台账)里存在**含该 case 指代**(autoid 全名或尾 6 位)的记录。
-    _qa_log = root / "runtime" / "ask_user_answers.jsonl"
+    # 取径经 runtime_path——与写侧(ask_user 工具)同函数,pytest 隔离下读写同径,门语义不变
+    from main.common.runtime_paths import runtime_path as _rt
+    _qa_log = _rt("ask_user_answers.jsonl")
     _asked = False
     try:
         if _qa_log.is_file():

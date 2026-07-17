@@ -62,7 +62,9 @@ def test_get_memory_sources_includes_agents_md():
 def test_get_default_root_under_repo():
     root = get_default_root()
     assert root.name == "memory"
-    assert root.exists() or True
+    # memory/AGENTS.md 入 git,目录在任何 checkout 必存在——真断言
+    # (原 `assert root.exists() or True` 恒真,审计 4-1 修正)
+    assert root.exists()
 
 
 def test_user_namespace_falls_back_to_default():

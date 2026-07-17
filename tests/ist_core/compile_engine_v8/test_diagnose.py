@@ -111,16 +111,20 @@ def test_diagnose_s0_blocks_pointless_rerun(rig):
         env = json.loads(brief.splitlines()[0])
         aid = str(env.get("autoid"))
         if skill == "compile-attributor":
-            # run11 实况复刻:单案视野给 rerun_isolated(误按 π 对策治 s₀ 病)
+            # run11 实况复刻:单案视野给 rerun_isolated(误按 π 对策治 s₀ 病)。
+            # K1 并发纪律:假体读改写 last_run 必持真锁(team3 契约;裸写在并发池下
+            # 有 write_text 截断窗口,同伴 read_text 读到空文件 → JSONDecodeError)
+            from main.ist_core.tools.device.fail_attribution import _LAST_RUN_LOCK
             lrp = rig["tmp"] / str(env.get("last_run_path"))
-            data = json.loads(lrp.read_text(encoding="utf-8"))
-            for r in data:
-                if str(r.get("autoid")) == aid:
-                    r["_attribution"] = {"layer": "V", "disposition": "rerun_isolated",
-                                         "h_position": "h_pi",
-                                         "fix_direction": "isolate and rerun",
-                                         "evidence": f"echo for {aid} (fail)"}
-            lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            with _LAST_RUN_LOCK:
+                data = json.loads(lrp.read_text(encoding="utf-8"))
+                for r in data:
+                    if str(r.get("autoid")) == aid:
+                        r["_attribution"] = {"layer": "V", "disposition": "rerun_isolated",
+                                             "h_position": "h_pi",
+                                             "fix_direction": "isolate and rerun",
+                                             "evidence": f"echo for {aid} (fail)"}
+                lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return "VERDICT: V/rerun_isolated"
         return orig_fork(skill, brief, tag=tag, effort=effort)
 
@@ -186,14 +190,16 @@ def test_attributor_s0_not_upgraded_when_mechanical_finds_no_polluter(rig):
         env = json.loads(brief.splitlines()[0])
         aid = str(env.get("autoid"))
         if skill == "compile-attributor":
+            from main.ist_core.tools.device.fail_attribution import _LAST_RUN_LOCK
             lrp = rig["tmp"] / str(env.get("last_run_path"))
-            data = json.loads(lrp.read_text(encoding="utf-8"))
-            for r in data:
-                if str(r.get("autoid")) == aid:
-                    r["_attribution"] = {"layer": "V", "disposition": "rerun_isolated",
-                                         "h_position": "h_s0",   # fork 判 s₀
-                                         "evidence": f"echo {aid}"}
-            lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            with _LAST_RUN_LOCK:   # K1 并发:假体持真锁,防截断窗口读空(同上)
+                data = json.loads(lrp.read_text(encoding="utf-8"))
+                for r in data:
+                    if str(r.get("autoid")) == aid:
+                        r["_attribution"] = {"layer": "V", "disposition": "rerun_isolated",
+                                             "h_position": "h_s0",   # fork 判 s₀
+                                             "evidence": f"echo {aid}"}
+                lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return "VERDICT"
         return orig_fork(skill, brief, tag=tag, effort=effort)
 
@@ -238,16 +244,18 @@ def test_transient_recovery_final_verify_not_gated(rig):
         env = json.loads(brief.splitlines()[0])
         aid = str(env.get("autoid"))
         if skill == "compile-attributor":
+            from main.ist_core.tools.device.fail_attribution import _LAST_RUN_LOCK
             lrp = rig["tmp"] / str(env.get("last_run_path"))
-            data = json.loads(lrp.read_text(encoding="utf-8"))
-            for r in data:
-                if str(r.get("autoid")) == aid:
-                    r["_attribution"] = {"layer": "transient",
-                                         "disposition": "rerun_isolated",
-                                         "h_position": "h_pi",
-                                         "fix_direction": "one-off timeout, rerun",
-                                         "evidence": f"echo for {aid} (fail)"}
-            lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            with _LAST_RUN_LOCK:   # K1 并发:假体持真锁,防截断窗口读空(同上)
+                data = json.loads(lrp.read_text(encoding="utf-8"))
+                for r in data:
+                    if str(r.get("autoid")) == aid:
+                        r["_attribution"] = {"layer": "transient",
+                                             "disposition": "rerun_isolated",
+                                             "h_position": "h_pi",
+                                             "fix_direction": "one-off timeout, rerun",
+                                             "evidence": f"echo for {aid} (fail)"}
+                lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return "VERDICT: transient/rerun_isolated"
         return orig_fork(skill, brief, tag=tag, effort=effort)
 
@@ -272,7 +280,15 @@ def test_transient_recovery_final_verify_not_gated(rig):
 
 
 def test_diagnose_common_cause_cluster(rig):
-    """两案同签名词干 → common_cause 事实(机械前筛 (24) 产物,片4 提案消费)。"""
+    """两案同签名词干 → common_cause 事实(机械前筛 (24) 产物,片4 提案消费)。
+
+    flaky 根因定案(2026-07-17,三次撞车后现场取证):K1 归因并发化后本文件 4 个
+    fork 假体裸读改写 last_run.json 零锁——两 fail 案并发进池,线程 A write_text
+    的截断窗口内线程 B read_text 读到空文件 → JSONDecodeError(traceback 铁证:
+    nodes.py attribute ex.map → json.loads 空串)。「全量挂/单跑绿」「单跑挂/文件
+    绿」两种历史形态都是线程调度随机性,与并行真编译/共享生产态无关(早前
+    adjudication_store 防御桩系方向误判,已撤)。修=假体持 _LAST_RUN_LOCK 真锁
+    (team3 契约,test_graph_scenarios/test_claim_stickiness 假体同款)。"""
     from main.ist_core.compile_engine_v8 import nodes as N
 
     orig_fork = N._FORK_OVERRIDE
@@ -281,13 +297,15 @@ def test_diagnose_common_cause_cluster(rig):
         env = json.loads(brief.splitlines()[0])
         aid = str(env.get("autoid"))
         if skill == "compile-attributor":
+            from main.ist_core.tools.device.fail_attribution import _LAST_RUN_LOCK
             lrp = rig["tmp"] / str(env.get("last_run_path"))
-            data = json.loads(lrp.read_text(encoding="utf-8"))
-            for r in data:
-                if str(r.get("autoid")) == aid:
-                    r["_attribution"] = {"layer": "E", "disposition": "env_blocked",
-                                         "evidence": f"echo for {aid} (fail)"}
-            lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            with _LAST_RUN_LOCK:   # K1 并发:假体持真锁,防截断窗口读空(docstring)
+                data = json.loads(lrp.read_text(encoding="utf-8"))
+                for r in data:
+                    if str(r.get("autoid")) == aid:
+                        r["_attribution"] = {"layer": "E", "disposition": "env_blocked",
+                                             "evidence": f"echo for {aid} (fail)"}
+                lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return "VERDICT: E/env_blocked"
         return orig_fork(skill, brief, tag=tag, effort=effort)
 

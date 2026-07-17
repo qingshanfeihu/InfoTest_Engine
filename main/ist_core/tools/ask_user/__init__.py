@@ -239,8 +239,9 @@ def ask_user(questions: list[dict[str, Any]]) -> str:
     try:
         import json as _json
         import time as _time
-        from pathlib import Path as _Path
-        _log = _Path(__file__).resolve().parents[4] / "runtime" / "ask_user_answers.jsonl"
+        # 取径经 runtime_path(pytest 隔离;凭证门读侧 verifiability_tool 同函数取径)
+        from main.common.runtime_paths import runtime_path as _rt
+        _log = _rt("ask_user_answers.jsonl")
         _log.parent.mkdir(parents=True, exist_ok=True)
         _rec = {"ts": _time.time(),
                 "questions": [str(q.get("question", ""))[:500] for q in questions],

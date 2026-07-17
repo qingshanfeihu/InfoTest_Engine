@@ -171,9 +171,8 @@ def _bridge(payload: dict) -> dict:
     return {"_non_interactive": True}
 
 
-# 题面组装已收编至 questions.py(ask 面板语义单一事实源,2026-07-16 P0-新②:
-# cap/env 缺陷臂、claim 历史呈现、s0 分歧语境、句读摘要留痕全在彼处;此处一行
-# 委托保持 `ET._contradiction_question` 既有调用与测试路径不变)
+# 题面组装在 questions.py(ask 面板语义单一事实源);一行委托保持
+# `ET._contradiction_question` 既有调用与测试路径不变
 from main.ist_core.compile_engine_v8.questions import (  # noqa: E402
     build_ask_question as _contradiction_question)
 

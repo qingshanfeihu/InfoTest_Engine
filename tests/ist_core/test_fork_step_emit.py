@@ -197,3 +197,38 @@ def test_short_fork_args_picks_representative_scalar():
     assert loader._short_fork_args({"weird": "val"}) == "(val)"
     # 超长截断
     assert loader._short_fork_args({"command": "x" * 100}) == "(" + "x" * 48 + ")"
+
+
+def test_fork_end_evidence_collects_tail_and_freshness(tmp_path, monkeypatch):
+    """P1-10 白跑判据采集(2026-07-17 实弹:035493/035570 ok:true 零产物零尾块,卡片
+    假 ✓):tail_status=STATUS 尾块值(引擎 _TAIL_RE 同款语义);artifact_fresh=案卷
+    mtime>=fork 开始-1s(引擎 fresh 判据同款)。纯机械采集,语义合取在渲染层。"""
+    import time
+    from main.ist_core.skills import loader
+
+    # 把 outputs 根重定向到 tmp(loader 按 parents[3] 定位仓根,monkeypatch Path 不可行
+    # ——直接在真实仓根的 workspace/outputs 下用超长测试 autoid,测完清理)
+    aid = "209999999999990077"
+    root = loader.Path(loader.__file__).resolve().parents[3]
+    case_dir = root / "workspace" / "outputs" / aid
+    case_dir.mkdir(parents=True, exist_ok=True)
+    xlsx = case_dir / "case.xlsx"
+    try:
+        # ① 有尾块 + 新产物
+        t0 = time.time() - 5
+        xlsx.write_bytes(b"x")   # mtime=now > t0
+        ev = loader._fork_end_evidence("...\nSTATUS: produced\n", aid, t0)
+        assert ev["tail_status"] == "produced"
+        assert ev["artifact_fresh"] is True
+        # ② 零尾块 + 陈旧产物(mtime 早于 fork 开始)= 白跑形态
+        ev2 = loader._fork_end_evidence("我觉得写完了(散文,无机读尾块)", aid,
+                                        time.time() + 60)
+        assert ev2["tail_status"] == ""
+        assert ev2["artifact_fresh"] is False
+        # ③ 无 autoid → 不带 artifact_fresh(渲染层不可判,不触发 ⚠)
+        ev3 = loader._fork_end_evidence("STATUS: needs_user_decision", "", 0.0)
+        assert ev3["tail_status"] == "needs_user_decision"
+        assert "artifact_fresh" not in ev3
+    finally:
+        import shutil
+        shutil.rmtree(case_dir, ignore_errors=True)

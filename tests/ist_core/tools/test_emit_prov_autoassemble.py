@@ -68,7 +68,9 @@ def test_switch_restores_mandatory_gate(monkeypatch):
 
 
 def test_emit_stats_ledger(monkeypatch):
-    stats = _ROOT / "runtime" / "logs" / "emit_stats.jsonl"
+    # 取径经 runtime_path——与 _emit_stat 写侧同径(pytest 下=tmp,+103 行/轮污染前科)
+    from main.common.runtime_paths import runtime_path
+    stats = runtime_path("logs", "emit_stats.jsonl")
     before = stats.read_text(encoding="utf-8").count("\n") if stats.is_file() else 0
     compile_emit.func(_A, blocks=_BLOCKS)
     lines = stats.read_text(encoding="utf-8").splitlines()

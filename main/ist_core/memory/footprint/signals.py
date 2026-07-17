@@ -43,7 +43,18 @@ SIGNALS = frozenset({
     "verdict_unconsumed",
 })
 
+# 生产默认路径;测试可 monkeypatch 本变量把信号定向到自定义位置断言(既有用法)。
 _LOG = Path(__file__).resolve().parents[4] / "runtime" / "logs" / "k_signals.jsonl"
+_LOG_DEFAULT = _LOG
+
+
+def _log_path() -> Path:
+    """信号流水取径:_LOG 被测试显式改过=尊重之;否则经 runtime_path
+    (pytest 隔离——引擎链路测试间接触发的 emit_signal 曾 +19 行/轮灌生产台账)。"""
+    if _LOG is not _LOG_DEFAULT:
+        return _LOG
+    from main.common.runtime_paths import runtime_path
+    return runtime_path("logs", "k_signals.jsonl")
 
 
 def emit_signal(signal: str, subject: str, *, batch: str = "",
@@ -64,8 +75,9 @@ def emit_signal(signal: str, subject: str, *, batch: str = "",
             # payload 按值截断,防单条信号膨胀(证据用 ref 不内联,与载荷通道纪律一致)
             rec["payload"] = {k: (v if not isinstance(v, str) else v[:400])
                               for k, v in payload.items()}
-        _LOG.parent.mkdir(parents=True, exist_ok=True)
-        with open(_LOG, "a", encoding="utf-8") as fh:
+        _p = _log_path()
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        with open(_p, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:  # noqa: BLE001 — 观测设施永不阻断主流程
         pass

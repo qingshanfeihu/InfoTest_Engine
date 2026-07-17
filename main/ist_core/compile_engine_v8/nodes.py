@@ -22,8 +22,8 @@ from main.ist_core.compile_engine_v8 import briefs as BR
 from main.ist_core.compile_engine_v8 import facts as F
 from main.ist_core.compile_engine_v8 import persistence as P
 from main.ist_core.compile_engine_v8 import views as V
-# Other 意图归类收编至 questions.py(ask 面板语义单一事实源,2026-07-16 接线包 2a;
-# import-as 绑定模块属性,test_ask_panel/test_tau 直调 `N._answer_token` 路径不断)
+# ask 面板语义单一事实源在 questions.py;import-as 绑定模块属性,
+# test_ask_panel/test_tau 直调 `N._answer_token` 路径依赖此别名
 from main.ist_core.compile_engine_v8.questions import answer_token as _answer_token
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,12 @@ def _bed_llm_fn(system_prompt: str, user_prompt: str) -> str:
     param = thinking_param_for_model(ist_core_flash_model(), False)
     kw = {"extra_body": {"thinking": param}} if param is not None else {}
     m = build_explore_model(**kw)
-    out = m.invoke([("system", system_prompt), ("human", user_prompt)])
+    # lc_agent_name 打标(P1-2):本调用经 contextvar 继承主 run 的 callbacks——不打标会
+    # 被 _MainAgentProgressHandler 判成主 agent 事件(reasoning 驱动主相位「思考中」、
+    # usage 灌主 token 计数、文本冒充主 agent 发言)。打标后走 parent_subagent 通道
+    # (graph._subagent_tags):不进主 transcript、usage 不发 usage_only;Langfuse 观测保留。
+    out = m.invoke([("system", system_prompt), ("human", user_prompt)],
+                   config={"metadata": {"lc_agent_name": "engine-bed"}})
     return str(getattr(out, "content", out) or "")
 
 
@@ -111,8 +116,10 @@ def prep(state: dict) -> dict:
     manifest = mdir / "manifest.json"
     if not manifest.is_file():
         from main.ist_core.tools.device.compile_prep import compile_prep
-        res = compile_prep.invoke({"mindmap_path": str(state.get("mindmap_path")),
-                                   "out_name": out_name})
+        # .func 直调(引擎直调工具纪律;P1-2:.invoke 走 LangChain 通道,callbacks 经
+        # contextvar 传播会把本调用以「主 agent 工具行」形态刷进 TUI 主 transcript)
+        res = compile_prep.func(mindmap_path=str(state.get("mindmap_path")),
+                                out_name=out_name)
         if not manifest.is_file():
             return {"phase_status": "error", "out_name": out_name,
                     "error": f"prep produced no manifest: {str(res)[:200]}"}
@@ -426,6 +433,9 @@ def author(state: dict) -> dict:
             results[aid] = ("escalated", f"no output from fork (tail={tailv or 'none'}); "
                                          f"fork may have hit the wallclock watchdog — a late "
                                          f"artifact, if any, is reclaimed at merge")
+        # P1-1(TUI 实弹:fanout 11min+ footer 停「准备」零进度):每 fork 结算发一次
+        # tick——相位/时间戳随结算刷新(counts 仍是 fanout 前快照,收账后节点尾 tick 归真)
+        sh.emit_tick(state, "author", fs)
 
     import concurrent.futures as cf
     with cf.ThreadPoolExecutor(max_workers=_fanout_pool_size(len(todo))) as ex:
@@ -705,16 +715,11 @@ def _reclaim_late_artifacts(state: dict, fs: list[dict]) -> list[dict]:
 
 def _delivery_verify_skippable(vw: dict, comp: list[str], volume: str,
                                fs: list[dict]) -> bool:
-    """终验幂等闸(V8.5 片3;纯判定,抽出可测):同卷组成指纹的 delivery 裁决已在
-    事实流 → 重跑零信息,跳过。两个**不可吸收**例外(重跑有信息):
-    - 待升格案(subset_verified):子集过待终验确认(瞬态复跑恢复案卷面/组成都没变
-      但必须重跑拿 delivery-pass,redline 实证回归);
-    - broken 三态案(2026-07-16 zhaiyq 续跑实证,K5 窄化子集):同卷裁决存在但组成
-      内仍有 broken/broken_errored/broken_blocked=那次终验是**断批快照**(设备
-      中途断,17 过后 27 not_run),重跑不是零信息——否则真通过案被断批 marker
-      钉死在 broken 直到 delivery_incomplete 收口。
-    没有此闸,s₀ 停车案保持 failed 会驱动 reconcile→attribute→merge 循环把兄弟
-    案无限重复终验(实测 livelock);闸只吸收「组成/卷面/无待升格/无断批」四稳态。"""
+    """终验幂等闸(纯判定,DESIGN §16.4 片3-④):同卷组成指纹的 delivery 裁决已在
+    事实流=零信息重跑,跳过(无此闸 s₀ 停车案会驱动兄弟案无限重复终验,实测 livelock)。
+    两个不可吸收例外(重跑有信息):待升格案(subset_verified 须拿 delivery-pass)/
+    组成内有 broken 三态案(那次终验是断批快照,重跑非零信息——否则真通过案被断批
+    marker 钉死到 delivery_incomplete,zhaiyq 实证,详见设计锚)。"""
     st = {a: vw["cases"][a]["status"] for a in comp}
     if any(s == V.S_SUBSET_VERIFIED for s in st.values()):
         return False
@@ -856,15 +861,14 @@ def merge(state: dict) -> dict:
     out_name = str(state.get("out_name"))
     vol_name = out_name if is_delivery else f"{out_name}__sub{seq}"
     from main.ist_core.tools.device import compile_emit_merged
-    res = compile_emit_merged.invoke({"autoids": comp_ordered, "out_name": vol_name})
+    # .func 直调(同 prep 处 P1-2:防 LangChain 通道把合并冒充成主 agent 工具行)
+    res = compile_emit_merged.func(autoids=comp_ordered, out_name=vol_name)
     if str(res).startswith("error"):
         return {"phase_status": "error", "error": str(res)[:300],
                 **sh.counts_update(state, fs)}
     merged = sh.outputs_root() / vol_name / "case.xlsx"
-    # run_id 带 seq(V8.5 片3 实测地雷):同 volume 的 merged 事实曾按内容键被跨轮
-    # 去重——「子集复跑后重合并同一 delivery 组成」的新 merged 被丢弃,run/reconcile
-    # 读 mf[-1] 拿到子集组成,delivery 裁决落错 volume → deliverable 永不成立、
-    # 无限终验循环。seq 来自 state(崩溃重放同 seq 仍去重,真新合并不误并)。
+    # run_id 带 seq:同 volume 重合并防内容幂等键跨轮误去重(DESIGN §16.4 片3-⑤;
+    # seq 来自 state——崩溃重放同 seq 仍去重,真新合并不误并)。
     sh.append(state, [{"ev": "merged", "aid": "", "volume": volume,
                        "ctx": F.CTX_DELIVERY if is_delivery else F.CTX_SUBSET,
                        "composition": comp_ordered, "moved_tail": moved,
@@ -939,17 +943,17 @@ def run(state: dict) -> dict:
     fs = sh.load_facts(state)
     mf = [f for f in fs if f.get("ev") == "merged"]
     comp = list(mf[-1].get("composition") or []) if mf else []
-    sh.emit(f"上机[{state.get('run_ctx')}]:{len(comp)} 案 @ {state.get('bed_host')}")
+    # P1-7:语境词用户面翻译,对齐 merge 侧「合并[整卷/子集]」(run_ctx 原值是英文枚举)
+    _ctx_cn = "整卷" if str(state.get("run_ctx")) == F.CTX_DELIVERY else "子集"
+    sh.emit(f"上机[{_ctx_cn}]:{len(comp)} 案 @ {state.get('bed_host')}")
     out = _digest_fn(str(merged), comp)
     if isinstance(out, str) and ("device_busy" in out or "run_in_progress" in out
                                  or "stale_run_on_device" in out):
-        # stale_run_on_device 同属"床被占"语义(被打断批的 pytest 残留)——
-        # 2026-07-16 zhaiyq 三跑实证:此前掉进 error 路,digest 原话被丢弃
+        # stale 残留=「床被占」非「引擎错」,归 busy 走上机互斥处置(DESIGN §4 run 失败语义②)
         return {"phase_status": "device_busy", **sh.counts_update(state, fs)}
     lr = merged.parent / "last_run.json"
     if not lr.is_file():
-        # digest 原话必须留声(2026-07-16 zhaiyq 续跑实证:两轮秒回收口,error 只有
-        # "no last_run" 七个字,deliver 失败/探测拒绝的真实原因全被吞——盲修两轮)
+        # 失败必须带 digest 原话(DESIGN §4 run 失败语义①:诊断依赖一手证据,不带=盲修)
         head = str(out)[:300] if out is not None else "(digest returned None)"
         sh.emit(f"⚠ 上机未产出结果——digest 返回:{head}")
         return {"phase_status": "error",
@@ -1019,14 +1023,11 @@ def reconcile(state: dict) -> dict:
     r = F.reconcile(fs, verdicts)
     sh.append(state, r["append"])
     fs2 = sh.load_facts(state)
-    # broken 连击护栏:同 **case** 连续≥2 轮没跑成(broken/not_run,pass/fail 重置)——
-    # 复跑救不了(每轮同因),升级人工;单次 not_run 照常入复跑集(级联崩溃的受害者
-    # 复跑常能过)。**per-case 非 per-artifact**(回归#2 修 C,DESIGN_dongkl_finalization
-    # §⑥ / A
-    # 理论 (44) 终止性):reflow 每轮换 artifact,per-artifact 计数被重置成 1、非收敛
-    # broken 恒占 live 饿死 gather(yzg 实证:2 案 not_run→reflow→not_run streak 恒 1);
-    # 改按 aid 累计跨 artifact 的连续未跑成——这**是一次降秩**(复跑预算耗尽→未决类数
-    # −1),让 (44) broken 纳入 (40) §2.12.1 的有限步到终态。
+    # broken 连击护栏:同 case 连续≥2 轮没跑成(broken/not_run,pass/fail 重置)=复跑
+    # 救不了,升级人工;单次 not_run 照常入复跑集(级联受害者复跑常能过)。计数
+    # **per-case 非 per-artifact**——reflow 每轮换 artifact 会把计数重置成 1,非收敛
+    # broken 恒占 live 饿死 gather(DESIGN_dongkl_finalization §⑥ 回归#2 修 C,
+    # 主文档回指 DESIGN_v8 §16.5b)。
     esc_facts = []
     for v in verdicts:
         if v["result"] not in ("broken", "not_run"):
@@ -1152,8 +1153,10 @@ def reconcile(state: dict) -> dict:
     fs3 = sh.load_facts(state)
     vw = sh.view(state, fs3)
     npass = sum(1 for v in verdicts if v["result"] == "pass")
-    sh.emit(f"对账:{len(verdicts)} 裁决入流(pass {npass}) → "
-            f"{json.dumps(vw['counts'], ensure_ascii=False)}")
+    # P1-8(实弹:counts 裸 JSON+英文枚举拍进用户面):evidence 行留人话简句,分状态
+    # 明细走 debug 日志与同点 emit_tick(footer 九态计数是其用户面载体)
+    logger.debug("reconcile counts %s", json.dumps(vw["counts"], ensure_ascii=False))
+    sh.emit(f"对账:{len(verdicts)} 条裁决入流,通过 {npass} 条")
     sh.emit_tick(state, "reconcile", fs3)
     return {"phase_status": "ok", **sh.counts_update(state, fs3)}
 

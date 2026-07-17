@@ -4733,5 +4733,13 @@
    }
   },
   "rules": []
+ },
+ "negative_case_form": {
+  "_provenance": "2026-07-17 044538 实弹(负面用例形态缺口):脑图预期「设备拒绝重复优先级」,编译产物用 cmd_config 直发必拒命令、把设备拒绝回显当 execution-failure→broken 两轮——按「框架能力优先于限制」纪律查 mirror 源码后钉死为知识缺口非框架限制。出处三条:①lib/apv/apv_ssh.py:125-152——cmd_config 发送→read_until(提示符)→回显**原样返回**,无成功断言、无异常抛出(设备拒绝命令时框架照常收回显继续下一步;:146-150 掉回 enable 态还会自动 config ter force 重发,框架对异常态是自愈不是报错);cmds_config(:167-170)逐行同容忍。②lib/test_xlsx.py:330-336——任意 F 列方法的返回值都存 result(result = func(*parameters)),含 cmd_config,故发送步的拒绝回显可被紧随的 check_point 直接断言。③「Failed to execute」在 mirror 全库 grep 零命中——它是**设备回显文本**,不是框架异常;把它判成执行失败的是引擎采集面(exec_failure_markers/anomaly 扫描),对预期内拒绝的潜在误伤已登记待 044538 正确形态上机实测(修复池)。边界:拒绝话术的具体 pattern 是领域数据,须溯源(手册/dev_probe 实探/同意图先例),禁 observe-then-assert、禁抄本条目示例——本条目只载机制。",
+  "form": {
+   "send": "issue the must-fail command with cmd_config as a normal step — the executor tolerates device rejection (no success assertion; the echo, rejection wording included, is returned as-is)",
+   "assert": "the send step's return value IS the result window — follow with a check_point `found` asserting the device rejection wording pattern, i.e. assert that the device DID refuse",
+   "expectation_source": "ground the rejection wording pattern via manual / read-only probe / same-intent precedent before encoding it; never copy the live echo into the assertion (observe-then-assert red line)"
+  }
  }
 }

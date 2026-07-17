@@ -37,37 +37,46 @@ def test_diff_skips_failed_probe_channels():
     assert B.bed_diff(BEFORE, bad_after) == {}
 
 
-def test_own_writes_cross_validation():
-    """R4-G4:diff 实体在本批命令面出现→己方;人肉并行动的→foreign 只报不动。"""
+_PAIRS = {"ip address": {"no": "no ip address"}}   # inverse_forms 最小假体(head→no 逆元)
+
+# LLM 后备/entity_gate 的输入形态(own_writes_by_command 产出的己方 diff 子集)
+_OWN_DIFF = {"interface_addresses": {
+    "added": ['ip address "vlan100" 172.16.34.70 255.255.255.0'],
+    "removed": ['ip address "port2" 172.16.34.70 255.255.255.0']}}
+
+
+def test_own_writes_by_command_cross_validation():
+    """S4 兑现②(旧 own_writes 判据已删):diff 行「己方」iff 案面 config 命令创建过
+    该对象;removed 基线行案面无创建命令(只主动 no 过)→ foreign 不猜重建;
+    命令面空(别人批的漂移)→ 全 foreign 只报不动。"""
     d = B.bed_diff(BEFORE, AFTER_POLLUTED)
-    own, foreign = B.own_writes(d, CORPUS)
-    assert "interface_addresses" in own and not foreign
-    own2, foreign2 = B.own_writes(d, "unrelated command corpus")
+    cmds = B.parse_config_commands(CORPUS)
+    own, foreign = B.own_writes_by_command(d, cmds, _PAIRS)
+    assert own["interface_addresses"]["added"] == [
+        'ip address "vlan100" 172.16.34.70 255.255.255.0']   # 案面创建过 → 己方
+    assert foreign["interface_addresses"]["removed"] == [
+        'ip address "port2" 172.16.34.70 255.255.255.0']     # 案面只 no 过 → 不重建基线
+    own2, foreign2 = B.own_writes_by_command(d, [], _PAIRS)
     assert not own2 and "interface_addresses" in foreign2
 
 
 def test_restore_via_llm_generation_open_gates_closed():
     """行动论 (22) 实现形态:恢复命令生成归 LLM(零模板零场景枚举——vlan/路由/ACL
     同一条路);机械双门=实体越界门+执行验证。"""
-    d = B.bed_diff(BEFORE, AFTER_POLLUTED)
-    own, _ = B.own_writes(d, CORPUS)
-
     def fake_llm(sys_p, user_p):
         assert "vlan100" in user_p                    # diff 原文喂给 LLM
         return '["no ip address vlan100 4", "ip address port2 172.16.34.70 24"]'
 
-    cmds = B.restore_via_llm(own, fake_llm)
-    ok, rejected = B.entity_gate(cmds, own)
+    cmds = B.restore_via_llm(_OWN_DIFF, fake_llm)
+    ok, rejected = B.entity_gate(cmds, _OWN_DIFF)
     assert ok == ["no ip address vlan100 4", "ip address port2 172.16.34.70 24"]
     assert rejected == []
 
 
 def test_entity_gate_blocks_out_of_scope_commands():
     """越界门:LLM 命令只许碰 diff 内实体——碰别的接口/IP 一律拒(INV-9 的机械面)。"""
-    d = B.bed_diff(BEFORE, AFTER_POLLUTED)
-    own, _ = B.own_writes(d, CORPUS)
     ok, rejected = B.entity_gate(
-        ["no ip address vlan100 4", "no ip address port3 4", "clear slb all"], own)
+        ["no ip address vlan100 4", "no ip address port3 4", "clear slb all"], _OWN_DIFF)
     assert ok == ["no ip address vlan100 4"]
     assert "no ip address port3 4" in rejected        # port3 不在 diff 实体集
     assert "clear slb all" in rejected                 # R-7:无实体的全局命令一律拒

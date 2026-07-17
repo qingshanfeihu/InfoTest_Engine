@@ -35,6 +35,9 @@ def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
     """流式调用 IST-Core，通过 ``stream_and_collect`` + EventBus sink。"""
     import os as _os
     _os.environ["IST_WECOM_BOT"] = "1"
+    # 用户身份传递给文件工具层，用于 workspace/inputs/ 和 workspace/outputs/ 目录隔离
+    _os.environ["IST_CURRENT_USER"] = _resolve_user_display(user_id)
+    _os.environ["IST_OUTPUT_SUBDIR"] = _resolve_user_display(user_id)
 
     from main.ist_core.runner import _ensure_env
     _ensure_env()

@@ -390,7 +390,23 @@ def _leak_pattern() -> "re.Pattern":
               "report_mismatch", "delivery_incomplete"}
     words -= {"pending", "failed", "other"}
     pat = "|".join(sorted((re.escape(w) for w in words if w), key=len, reverse=True))
-    return re.compile(r"\b(" + pat + r")\b|\b[0-9a-f]{16}\b")
+    # F-Py-3(token 类级兜底,Design P·双层 net):denylist(已知枚举,上)之外再兜 **token-shape** 内部
+    # 标识——兜任何残留内部 marker/token,不只已登记枚举(LLM-Eng 源头清具体中文黑话词/我兜 ASCII
+    # token 类,正交)。三类 shape,均带下划线结构锚(非无特征强字典,故低假阳):
+    #   ① UPPER_SNAKE 带下划线(NEEDS_USER_DECISION/S_FAILED)——要求下划线→排除缩略语(DNS/HTTP/IP 无下划线不匹配);
+    #   ② leading-underscore(_attribution/_round/_fail_signatures)——首字符下划线的内部字段名;
+    #   ③ internal-underscore snake(needs_decision/ask_panel/last_run)——**文件名引用豁免**:后接
+    #      已知交付物扩展名集(.md/.json/...)时不算泄漏(delivery_report.md 是合法引用、bare
+    #      delivery_report 仍抓;扩展名集限定=不放行 needs_decision.internalfoo 类钻空子,Design 精化)。
+    # 中文人话(状态/语境词、6 黑话词、3 label token 改过程/改预期/改描述)是非-ASCII、天然不匹配 shape。
+    # 文件名.ext / 路径段引用豁免:snake 后接已知交付物扩展名(delivery_report.md)或 `/`(路径段
+    # automatic_case/)、或前接 `/`——都是文件/路径**引用**非 bare token 泄漏。扩展名限定已知集
+    # (Design 精化:不放行任意 .xxx,needs_decision.internalfoo 仍抓)。
+    _EXT = r"(?!\.(?:md|json|jsonl|xlsx|xls|txt|log|csv|py|xml|yaml|yml)\b|/)"
+    _tok = (r"[A-Z][A-Z0-9]*_[A-Z0-9_]+"                 # ① UPPER_SNAKE 带下划线
+            r"|_[a-z][a-z0-9_]*"                          # ② leading-underscore
+            r"|(?<!/)[a-z][a-z0-9]*_[a-z0-9_]+" + _EXT)   # ③ internal-underscore(文件名/路径段豁免)
+    return re.compile(r"\b(" + pat + r")\b|\b[0-9a-f]{16}\b|\b(?:" + _tok + r")\b")
 
 
 _LEAK = _leak_pattern()

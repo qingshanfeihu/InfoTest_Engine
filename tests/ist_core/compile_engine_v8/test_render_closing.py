@@ -18,6 +18,40 @@ FIX = Path(__file__).parent / "fixtures"
 A = "203600000000000001"
 
 
+# ── F-Py-3:leak_scan token 类级兜底 —— 正例(内部 token 抓)+ 反例(合法内容不抓·假阳守门) ──
+# Design 强调:broaden 的风险全在假阳,反例是唯一守门,反例越充分 broaden 越安全。
+def test_leak_scan_catches_internal_token_shapes():
+    """正例:denylist 之外的 token-shape 内部标识被兜底抓(UPPER_SNAKE/leading-_/internal-snake/16hex)。"""
+    for s in ["状态 NEEDS_USER_DECISION 未决", "落到 S_FAILED 终态",
+              "见 needs_decision 台账", "读 ask_panel 面板", "last_run 记录里",
+              "字段 _attribution 层", "指纹 _fail_signatures 复现",
+              "needs_decision.internalfoo 钻空子",   # Design 精化:未知扩展名不豁免、仍抓
+              "哈希 deadbeefcafe1234 对齐"]:
+        assert RD.leak_scan(s), f"内部 token 应被抓却漏: {s!r}"
+
+
+def test_leak_scan_exempts_legit_content_no_false_positive():
+    """反例(假阳守门):合法内容不被抓——文件名.ext / 路径段 / 缩略语 / 中文人话(含 6 黑话+3 label)。"""
+    for s in [
+        "见完整报告 delivery_report.md",                 # 文件名·已知扩展名豁免
+        "产出 engine_report.json 与 facts.jsonl",         # 同上
+        "未通过卷 unsuccessful_cases.xlsx",               # 同上
+        "落盘 needs_decision.json",                       # 内部名但作文件引用(.json)豁免
+        "/Users/x/workspace/inputs/automatic_case/yzg.txt",  # 路径段(前后 /)豁免
+        "用 DNS 解析", "走 HTTP/2 协议", "配置 IP 地址",    # 缩略语无下划线不匹配
+        "改过程 / 改预期 / 改描述",                        # 3 label token(中文,不匹配 ASCII shape)
+        "按相反顺序用 no 命令撤配置", "本轮先不做(挂起)",   # 6 黑话词(LLM-Eng 源头清,我不兜中文)
+        "验证通过", "等待你的决定", "单独验证通过(待整卷复验)",  # 状态人话
+    ]:
+        assert RD.leak_scan(s) == [], f"合法内容误报(假阳): {s!r} → {RD.leak_scan(s)}"
+
+
+def test_leak_scan_code_fence_exempts_device_echo():
+    """code fence 内设备回显豁免不变(内部 token 在 ``` 内不算泄漏)。"""
+    fenced = "结果:\n```\nNEEDS_USER_DECISION last_run _attribution\n```\n完成"
+    assert RD.leak_scan(fenced) == []
+
+
 def _v(result, ctx, rid="r1", art="a1", vol="v"):
     return {"ev": "verdict", "aid": A, "run_id": rid, "ctx": ctx, "result": result,
             "artifact": art, "volume": vol, "signatures": []}

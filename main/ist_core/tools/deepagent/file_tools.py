@@ -264,19 +264,15 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
                 )
 
     # ── 用户目录隔离（读路径）─────────────────────────────────────────────
-    # workspace/inputs/{user}/ 和 workspace/outputs/{user}/ 只允许访问自己的目录
+    # workspace/inputs/{user}/ 只允许读自己的目录
+    # workspace/outputs/ 读不限制（编译引擎等写到共享目录，agent 需要读取结果）
     current_user = os.environ.get("IST_CURRENT_USER", "").strip()
     if current_user and rel_to_project is not None:
         rp = rel_to_project.parts
-        if len(rp) >= 2 and rp[0] == "workspace":
-            if rp[1] == "inputs" and len(rp) >= 3 and rp[2] != current_user:
-                raise PermissionError(
-                    f"无权访问其他用户的文件目录: workspace/inputs/{rp[2]}/"
-                )
-            if rp[1] == "outputs" and len(rp) >= 3 and rp[2] != current_user:
-                raise PermissionError(
-                    f"无权访问其他用户的输出目录: workspace/outputs/{rp[2]}/"
-                )
+        if len(rp) >= 3 and rp[0] == "workspace" and rp[1] == "inputs" and rp[2] != current_user:
+            raise PermissionError(
+                f"无权访问其他用户的文件目录: workspace/inputs/{rp[2]}/"
+            )
 
     for root in _agent_roots():
         try:

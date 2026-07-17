@@ -573,10 +573,36 @@ def ask_decision(state: dict) -> dict:
     # 不用 B 片的回显子串条件——键精确匹配即采信变体。
     fm_meta = {aid: _fm_meta(aid) for aid in aids}
     adopted: set[str] = set()
-    adopt_stalled: dict[str, int] = {}   # 采纳止损案→已采纳圈次(题面附"多轮未解决"语境)
+    adopt_stalled: dict[str, dict] = {}   # 采纳止损案→{n,ruling,reason}(题面附"多轮未解决"语境)
     for aid in aids:
         m = fm_meta.get(aid)
         if not m:
+            continue
+        # 采纳止损闸(与轮次封顶 :381 同级同构):本案历史判例采纳裁决已 ≥2 条 → 本轮一律不
+        # 采纳、转 gather 问人。**前置于 find_adjudications** 且 **按 aid 计数(不绑当轮 slug)**
+        # ——实证根因(668000 实弹未拦):活锁中 worker 把 equivalent 由 yes 翻 no,本轮 sig 由
+        # …|eq 变 …|noeq → find_adjudications 0 hits → 旧位置(嵌采纳块内、按当轮 hits[0].slug
+        # 精确匹配)整个跳过 → 止损永不触发(3 次 eq 采纳后翻 noeq,0 hits;fastlog 免问/止损
+        # emit 双零即此)。计数读事实流 decision 事实 provenance=adopted:*(qid 逐轮递增→不
+        # 去重、重放稳定,与 nd_seq 同款锚,(48) 幂等键完备);不数 adopted 事实(round:0 恒同、
+        # 内容键去重恒=1,数不出圈次)。封的活锁:采纳→worker 再证不可行再欠定→再采纳……
+        # rounds_used 恒 0 不触轮闸、矛盾计数不覆盖(批3 668 族 7 圈、auth=0 verd=0 空烧 fork)。
+        n_adopt = sum(1 for f in fs if f.get("ev") == "decision"
+                      and str(f.get("aid")) == aid
+                      and str(f.get("provenance") or "").startswith("adopted:"))
+        if n_adopt >= 2:
+            # ②-1/2 完整语境(Design 令:被要求给可行改法却看不到脉络=盲裁):判例主张取历史
+            # adopted 事实的 ruling(与当轮 find 解耦——noeq 翻转 0 hits 时仍有);worker 最新
+            # 论证取 needs_decision claims 的 reason(同 build_questions 取法)。
+            _adf = [f for f in fs if f.get("ev") == "adopted" and str(f.get("aid")) == aid]
+            _nd = ledgers.get(aid) or {}
+            _claims = [c for c in (_nd.get("claims") or []) if isinstance(c, dict)]
+            adopt_stalled[aid] = {
+                "n": n_adopt,
+                "ruling": str((_adf[-1].get("ruling") if _adf else "") or "")[:100],
+                "reason": "；".join(_first_clause(str(c.get("reason") or ""))
+                                    for c in _claims[:3] if c.get("reason"))[:200]}
+            sh.emit(f"…{aid[-6:]} 判例方向已 {n_adopt} 次采纳未解决,止损转人工裁决")
             continue
         try:
             from main.ist_core.tools.knowledge.adjudication_store import find_adjudications
@@ -589,29 +615,6 @@ def ask_decision(state: dict) -> dict:
         if len(toks) == 1 and next(iter(toks)) in ("改过程", "改预期", "改描述"):
             tok = next(iter(toks))
             slug = str(hits[0].get("slug") or "")
-            # 采纳止损闸(与轮次封顶 :381 同级同构):同 aid 同 slug 的判例采纳裁决已 ≥2 条
-            # → 本次不采纳,留案进 gather 问人。封的活锁:判例采纳「改过程」→ worker 再证
-            # 不可行再欠定 → 下轮再采纳……rounds_used 恒 0 不触轮闸、矛盾计数不覆盖(批3
-            # 668 族实测 7 圈、auth=0 verd=0 空烧 fork)。计数读**事实流的 decision 事实**
-            # (采纳裁决携 provenance=adopted:slug,qid 逐轮递增→不去重、重放稳定,与 nd_seq
-            # 同款锚,(48) 幂等键完备);不数 adopted 事实——其 round:0 恒同、内容键去重恒=1,
-            # 数不出圈次((48) 反例)。
-            n_adopt = sum(1 for f in fs if f.get("ev") == "decision"
-                          and str(f.get("aid")) == aid
-                          and str(f.get("provenance") or "") == f"adopted:{slug}")
-            if n_adopt >= 2:
-                # ②-1/2 完整语境(Design 令:被要求给可行改法却看不到脉络=盲裁):捞判例主张
-                # (hits[0].ruling,同 :605 取法)+ worker 最新论证(needs_decision claims 的
-                # reason,同 build_questions 取法),题面下发让用户在全信息下裁决。
-                _nd = ledgers.get(aid) or {}
-                _claims = [c for c in (_nd.get("claims") or []) if isinstance(c, dict)]
-                adopt_stalled[aid] = {
-                    "n": n_adopt,
-                    "ruling": str(hits[0].get("ruling") or hits[0].get("body") or "")[:100],
-                    "reason": "；".join(_first_clause(str(c.get("reason") or ""))
-                                        for c in _claims[:3] if c.get("reason"))[:200]}
-                sh.emit(f"…{aid[-6:]} 同键判例已 {n_adopt} 次采纳未解决,止损转人工裁决")
-                continue
             ruling = str(hits[0].get("ruling") or hits[0].get("body") or "")[:500]
             if _land(aid, tok, ruling or tok, provenance=f"adopted:{slug}"):
                 new_facts.append({"ev": "adopted", "aid": aid, "round": 0,

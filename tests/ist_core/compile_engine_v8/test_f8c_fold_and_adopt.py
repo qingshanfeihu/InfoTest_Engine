@@ -226,6 +226,12 @@ def _adopt_dec(aid, slug, n):
             "answer": "改过程", "provenance": f"adopted:{slug}"}
 
 
+def _adopted_fact(aid, slug, ruling="改过程:采纳 clear 等价"):
+    """历史 adopted 事实(带 ruling,止损题面的判例主张源;round:0→内容键去重恒=1)。"""
+    return {"ev": "adopted", "aid": aid, "round": 0, "slug": slug,
+            "token": "改过程", "ruling": ruling}
+
+
 def _seed_adj():
     adj.write_adjudication(
         key={"intent_signature": "配置保存|reboot".lower(),
@@ -240,7 +246,8 @@ def test_adoption_stoploss_third_hit_asks_user(monkeypatch):
     案留 pending 进 gather 问人,题面附止损语境。封 668 族「采纳→再欠定→再采纳」活锁。"""
     _mk_case(A1)
     slug = _seed_adj()
-    facts = [_pend(A1, 3), _adopt_dec(A1, slug, 1), _adopt_dec(A1, slug, 2)]
+    facts = [_pend(A1, 3), _adopt_dec(A1, slug, 1), _adopt_dec(A1, slug, 2),
+             _adopted_fact(A1, slug)]
     appended, asked = _drive(monkeypatch, facts, {A1: "用受控维护窗重启一次"})
     # 不再采纳:无新 adopted 事实
     assert not any(f.get("ev") == "adopted" for f in appended)
@@ -298,3 +305,23 @@ def test_adoption_stoploss_livelock_exits_at_round3(monkeypatch):
     n2 = re.search(r"已 (\d+) 次采纳", ask3b[0][0]["question"]).group(1)
     assert n1 == n2 == "2"                                       # n_adopt 不虚涨(重放稳定)
     assert ask3b[0][0]["question"].count("此判例方向已多轮") == 1   # 语境单份,不重复叠加
+
+
+def test_adoption_stoploss_survives_zero_hits_this_round(monkeypatch):
+    """根因回归(668000 实弹未拦):活锁中 worker 把 equivalent 由 yes 翻 no→本轮 sig 由
+    …|eq 变 …|noeq→find_adjudications 本轮 0 hits。止损必须仍触发——计数按 aid(不绑当轮
+    slug)、前置于 find_adjudications。旧位置(嵌采纳块内、需 hits 命中才进)会整个跳过→止损
+    永不触发(fastlog 免问/止损 emit 双零即此)。此处判例店留空模拟本轮 0 hits。"""
+    _mk_case(A1)   # forbidden_mechanism 三元组,_fm_meta 非空;不 _seed_adj → 判例店空 → 本轮 0 hits
+    hist = "eq--forbidden-mechanism--10-5"   # 历史 eq 判例(与本轮 sig 已不匹配)
+    facts = [_pend(A1, 4),
+             _adopt_dec(A1, hist, 1), _adopt_dec(A1, hist, 2), _adopt_dec(A1, hist, 3),
+             _adopted_fact(A1, hist, ruling="改过程:采纳 clear 运行面等价")]
+    appended, asked = _drive(monkeypatch, facts, {A1: "维护窗重启"})
+    # 尽管本轮 find 0 hits,止损仍触发:无新 adopted、interrupt 被调、题面止损语境
+    assert not any(f.get("ev") == "adopted" for f in appended)
+    assert sum(len(b) for b in asked) == 1
+    _q = asked[0][0]["question"]
+    assert "止损" in _q and "多轮尝试未解决" in _q and "3 次采纳" in _q
+    # 判例主张取历史 adopted 事实 ruling(与当轮 find 解耦→noeq 0 hits 时仍有)
+    assert "判例主张" in _q and "clear" in _q

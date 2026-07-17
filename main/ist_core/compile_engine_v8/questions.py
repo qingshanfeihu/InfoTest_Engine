@@ -34,6 +34,57 @@ def _first_clause(s: str, cap: int = 150) -> str:
     return s if len(s) <= cap else s[:cap].rstrip() + "…"
 
 
+# ── F-Py-2:叙述字段英文泄漏 detector(中文占比判据,Design 路A·per-field 注入前验) ─────────────
+# 叙述字段(reason/fix_direction 等,契约该中文)若中文占比过低=英文原文直灌题面泄漏(D1:英文归因句
+# 灌用户题面)。判据=中文字符占比 < 阈值,**剔『』内命令/引文**(合法领域内容,不计英文分母,Design ②
+# 剔——命令是用户能懂的领域内容、不该拉低占比)+ 剔 {占位符}(render 时填中文值)。detector 报 leak
+# 逼源头(A-LLM 产中文),渲染不翻译(零 LLM)。**原文引用字段豁免**(device_quote/doc_quote/quote:
+# 设备回显/手册原文,英文合法,同 code-fence 豁免,Design 命门补)——原文引用≠叙述,绝不验占比。
+_NARRATIVE_FIELDS = (
+    "reason", "fix_direction", "no_equivalent_reason", "hypothesis",
+    "proposed_equivalent", "suggested_fix", "statement_cn", "obstacle_cn",
+    "procedure_cn", "preserves_falsification_cn", "user_note", "ruling")
+_QUOTE_FIELDS = ("device_quote", "doc_quote", "quote")   # 原文引用,英文合法,豁免不验
+_ENGLISH_LEAK_RATIO = 0.30
+
+
+def chinese_ratio(s: str) -> float:
+    """中文字符占比 = CJK /(CJK + ASCII 字母)。剔『』内容(命令/引文)+ {占位符}(render 填值)——
+    合法领域内容不计入英文分母。纯符号/数字(无 CJK 无 ASCII 字母)→ 1.0(不算英文泄漏)。"""
+    s = re.sub(r"\{[^}]*\}", "", str(s or ""))     # 剔占位符(render 时填中文值)
+    s = re.sub(r"『[^』]*』", "", s)                 # 剔『』内命令/引文(合法领域内容)
+    cjk = len(re.findall(r"[一-鿿]", s))
+    ascii_letters = len(re.findall(r"[A-Za-z]", s))
+    total = cjk + ascii_letters
+    return 1.0 if total == 0 else cjk / total
+
+
+def english_leak_fields(obj, threshold: float = _ENGLISH_LEAK_RATIO) -> list:
+    """扫**叙述字段**(该中文)中文占比 < threshold = 英文泄漏(应为空);**原文引用字段豁免**不验。
+    返回 [(field, value_head), ...]。detector:closing/测试断言其空、逼源头 A-LLM 产中文。
+
+    **作用域=题面注入的 claims/panel 叙述字段**——**只传 claims(灌题面的)、勿传含 fact 顶层的对象**:
+    fact 顶层 reason 是机读码(contradicted_at_delivery 等)、不灌用户题面、非叙述,验它=假阳。"""
+    out: list = []
+
+    def _walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k in _QUOTE_FIELDS:
+                    continue                       # 原文引用:英文合法,不验不递归
+                if k in _NARRATIVE_FIELDS and isinstance(v, str):
+                    if len(v.strip()) >= 8 and chinese_ratio(v) < threshold:
+                        out.append((k, v[:80]))
+                    continue                       # 叙述字段(字符串)验完不递归
+                _walk(v)
+        elif isinstance(o, list):
+            for x in o:
+                _walk(x)
+
+    _walk(obj)
+    return out
+
+
 def clip_text(s: str, cap: int = 160) -> str:
     """超长题面素材的句读摘要(P0-新② 题面硬化;zhaiyq 实弹:题面曾被裸 [:N] 词中
     断成「调整断言为not_found方)」且无省略标记,读者不知道被截)。整句累加到 cap,
@@ -294,6 +345,12 @@ def validate_questions(questions: list[dict], ledgers: dict[str, dict]) -> bool:
                     and set(tok_map.values()) <= set(DECISIONS)):
                 return False
         elif not set(labels) <= set(DECISIONS):
+            return False
+    # F-Py-2:题面「自然语言可懂」不变量——注入题面的 claims 叙述字段(reason/fix_direction 等)须中文,
+    # 英文原文直灌=泄漏(D1:英文归因句灌用户题面)。**只验 claims 叙述字段**(fact 顶层 reason 是机读码、
+    # 不灌题面、不验);原文引用字段(device_quote/quote)豁免。detector 逼源头 A-LLM 产中文,渲染不翻译。
+    for led in ledgers.values():
+        if english_leak_fields((led or {}).get("claims") or []):
             return False
     return True
 

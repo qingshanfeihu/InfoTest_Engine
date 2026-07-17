@@ -52,8 +52,9 @@ def submit_behavior_fact(autoid: str, observe_cmd: str, content: str, note: str 
     if not cmd or not body:
         return "error: observe_cmd and content are required"
 
-    root = Path(__file__).resolve().parents[4]
-    xlsx = root / "workspace" / "outputs" / aid / "case.xlsx"
+    # F-Py-9b-1b(写侧补口):读 case.xlsx 走 _sh.outputs_root() 单一根隔离(生产==parents[4]、字节等价)。
+    from main.ist_core.compile_engine_v8 import _shared as _sh
+    xlsx = _sh.outputs_root() / aid / "case.xlsx"
     if not xlsx.is_file():
         return f"error: this case has no sheet ({xlsx.name} missing), nothing to anchor the behavior to"
     try:

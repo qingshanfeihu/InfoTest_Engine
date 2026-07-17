@@ -906,7 +906,9 @@ class IstInkApp:
 
     @staticmethod
     def _outputs_dir() -> Path:
-        return Path(__file__).resolve().parents[4] / "workspace" / "outputs"
+        # F-Py-9b-1b:走 _sh.outputs_root() 单一根(生产==parents[4]、字节等价;pytest 可隔离)。
+        from main.ist_core.compile_engine_v8 import _shared as _sh
+        return _sh.outputs_root()
 
     def _snapshot_outputs(self) -> set[str]:
         """快照 workspace/outputs/ 当前文件集合（用于 run 前后 diff 出新产物）。"""

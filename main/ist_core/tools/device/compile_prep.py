@@ -210,7 +210,10 @@ def compile_prep(mindmap_path: str, out_name: str = "") -> str:
         manifest["env_capabilities"] = cap
     except Exception:  # noqa: BLE001
         logger.debug("env_capabilities.json 不可用(manifest 不带该节)", exc_info=True)
-    out = root / "workspace" / "outputs" / sub / "manifest.json"
+    # F-Py-9b-1b(写侧补口):manifest 写走 _sh.outputs_root() 单一根隔离(生产==parents[4]);
+    # 上面 root(parents[4])保留给 knowledge 读(env_capabilities.json,:208)不隔离。
+    from main.ist_core.compile_engine_v8 import _shared as _sh
+    out = _sh.outputs_root() / sub / "manifest.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 

@@ -594,7 +594,11 @@ def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "",
     import json as _json
     import re as _re
     aid = (autoid or "").strip()
-    root = Path(__file__).resolve().parents[4]
+    # F-Py-9b-1b(写侧补口):outputs 读(src_dir 602)+ workspace 沙箱(_ws 607)+ last_run 解析(608)
+    # 走 _sh.project_root() 单一根——生产 == parents[4](字节等价),pytest monkeypatch 后同步落 tmp,
+    # 保 602/607/608 同源(_ws relative_to 校验一致,同 batch_tools 委托)。
+    from main.ist_core.compile_engine_v8 import _shared as _sh
+    root = _sh.project_root()
     # 安全:autoid 白名单(路径分量净化)——它拼进写 mirror 的文件名与读 outputs 的目录。
     # 未净化时 aid="../.." 可写穿沙箱(安全评审高危项:工具进程内直写不经 file_tools 四闸)。
     if not _re.fullmatch(r"[A-Za-z0-9_.\-]+", aid) or ".." in aid:

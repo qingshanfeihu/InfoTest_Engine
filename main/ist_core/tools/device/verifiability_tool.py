@@ -17,6 +17,12 @@ import os
 
 from langchain_core.tools import tool
 
+# F-Py-9b-1b(写侧补口,F-Py-9b-1 漏):本文件三处 outputs 路径(check_verifiability 读 50、先问后落门
+# 写 143/439)原用 parents[4],改走 _sh.project_root() 单一根——生产 == parents[4](字节等价),pytest
+# monkeypatch _sh.project_root 后随之落 tmp。**门语义零变化**:改的只是 root 解析,needs_decision/
+# user_decision 的读写逻辑与先问后落判据完全不动(仅路径根从硬编码→可隔离)。
+from main.ist_core.compile_engine_v8 import _shared as _sh
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,7 +52,7 @@ def _case_mindmap_slice(autoid: str) -> str | None:
     找不到返回 None(门 fail-open 留声,manifest 缺席是环境问题非 worker 造假)。"""
     try:
         from pathlib import Path
-        root = Path(__file__).resolve().parents[4]
+        root = _sh.project_root()
         outs = root / "workspace" / "outputs"
         aid = str(autoid or "").strip()
         for mf in outs.glob("*/manifest.json"):
@@ -139,7 +145,7 @@ def _land_needs_decision(autoid: str, claim_kind: str, entry: dict) -> bool:
     593516 有序语义在 main 并组三题时蒸发的实证)。返回落盘是否成功。"""
     try:
         from pathlib import Path
-        root = Path(__file__).resolve().parents[4]
+        root = _sh.project_root()
         outd = root / "workspace" / "outputs" / (autoid or "").strip()
         outd.mkdir(parents=True, exist_ok=True)
         nd_path = outd / "needs_decision.json"
@@ -400,7 +406,7 @@ def compile_user_decision(autoid: str, decision: str, assertion_form: str = "",
     if dec not in ("改过程", "改预期", "改描述"):
         return f"error: decision 三选一(改过程/改预期/改描述),收到 {decision!r}"
 
-    root = Path(__file__).resolve().parents[4]
+    root = _sh.project_root()
 
     # 「先问后落」机械门(2026-07-05 事故驱动):orchestrator 曾在 ask_user 之前对
     # 8 个欠定 case 自己调本工具拍板(含 drop_ordering=True)——prompt 红线拦不住,

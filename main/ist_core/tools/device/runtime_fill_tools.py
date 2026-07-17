@@ -111,7 +111,12 @@ def compile_runtime_fill(xlsx_path: str, fills_json: list | str = "", run_meta: 
 
     try:
         from main.case_compiler.runtime_fill import apply_fills, list_runtime_slots
-        root = Path(__file__).resolve().parents[4]
+        # F-Py-9b-1b(redline 全量扫补漏):apply_fills→_sync_provenance **写** provenance 到
+        # project_root/workspace/outputs/<autoid>/case.provenance.json(runtime_fill.py:185,同
+        # emit_xlsx:1866 的 1866 型隐藏写)——走 _sh.project_root() 单一根(生产==parents[4]、字节等价),
+        # pytest 下 provenance 同步随隔离(否则查生产 no-op)。_resolve():33 的 root 是 knowledge 读、另留。
+        from main.ist_core.compile_engine_v8 import _shared as _sh
+        root = _sh.project_root()
         _slots_before = {s.slot_id: s for s in list_runtime_slots(p)}
         res = apply_fills(p, fills, project_root=root, run_meta=run_meta)
     except Exception as e:  # noqa: BLE001

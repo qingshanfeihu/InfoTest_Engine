@@ -1212,7 +1212,10 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     # 文本止损指引曾被实证绕过(直接 ad-hoc 重编),此门把「是否换法」变成必答题;
     # 声明后记入冻结历史并放行(换法自由保留)。
     try:
-        _fz_path = Path(__file__).resolve().parents[4] / "workspace" / "outputs" / autoid / ".frozen.json"
+        from main.ist_core.compile_engine_v8 import _shared as _sh
+        # F-Py-9(A1):frozen 读走 sh.outputs_root()——与写侧(batch_tools)/引擎 case.xlsx 同一解析器,
+        # 恒共址、pytest 可隔离(不硬编码 parents[4]/workspace/outputs)。
+        _fz_path = _sh.outputs_root() / autoid / ".frozen.json"
         if _fz_path.is_file():
             _ov = (override_frozen_reason or "").strip()
             if not _ov:

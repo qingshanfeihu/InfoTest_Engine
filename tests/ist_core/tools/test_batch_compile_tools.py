@@ -288,6 +288,10 @@ def _digest_setup_sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(ft, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(ft, "_AGENT_ROOT", tmp_path / "knowledge" / "data")
     monkeypatch.setattr(ft, "_WORKSPACE_ROOT", ws)
+    # F-Py-9(A1):frozen 写走 sh.outputs_root()=sh.project_root()/workspace/outputs——patch
+    # project_root 到 tmp,frozen 与 case.xlsx 共址 tmp、不写生产 outputs/(治 R_sig 污染)。
+    from main.ist_core.compile_engine_v8 import _shared as _sh
+    monkeypatch.setattr(_sh, "project_root", lambda: tmp_path)
     monkeypatch.delenv("IST_SESSION_DIR", raising=False)
     monkeypatch.delenv("IST_USER_DIR", raising=False)
     return outd

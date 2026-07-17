@@ -1275,8 +1275,11 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
                     # 升为工具闸门;LLM 换法的自由保留,只是"是否换法"必须显式声明。
                     try:
                         import time as _t0
-                        _root = Path(__file__).resolve().parents[4]
-                        _cd = _root / "workspace" / "outputs" / str(rec.get("autoid"))
+                        from main.ist_core.compile_engine_v8 import _shared as _sh
+                        # F-Py-9(A1):frozen 写走 sh.outputs_root()——与引擎写 case.xlsx 同一解析器,
+                        # 保证 frozen↔case 恒共址;pytest 下 monkeypatch sh.project_root 隔离,不再硬编码
+                        # parents[4]/workspace/outputs(测试传非 autoid 键"R_sig"曾写进生产 outputs/)。
+                        _cd = _sh.outputs_root() / str(rec.get("autoid"))
                         _cd.mkdir(parents=True, exist_ok=True)
                         _fz_file = _cd / ".frozen.json"
                         # 重写保留 overrides 历史(emit 门记的换法声明)——曾整文件覆盖,

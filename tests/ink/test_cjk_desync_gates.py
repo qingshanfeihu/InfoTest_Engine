@@ -60,3 +60,18 @@ def test_output_and_layout_width_tables_agree():
     # 单一事实源:写格(_char_width)与布局(string_width.char_width)对同一字符判宽必须一致。
     for ch in ("汉", "〇", "ｱ", "Ａ", "·", "…", "✶", "A", "1", "─", "│"):
         assert _char_width(ch) == char_width(ch), ch
+
+
+def test_textnode_sanitizes_tab_and_cr():
+    """控制字符规格化(2026-07-17 team4 实弹:ask 题干携带设备回显的 \t——char_width
+    按 1 列布局、终端跳 8 列制表位且不清跳过区,屏显前帧字符碎片叠影)。\t→单空格、
+    \r 剥除、\n 保留(wrapped_rows 原生支持)。__init__ 与 set_value 两入口同门。"""
+    from main.ist_core.ink.dom import create_text
+
+    t = create_text("a\t\tb\rc")
+    assert t.value == "a  bc"
+    t.set_value("x\ty\nz\r")
+    assert t.value == "x y\nz"
+    # 无控制字符:值原样(快速路径)
+    t.set_value("干净文本 clean")
+    assert t.value == "干净文本 clean"

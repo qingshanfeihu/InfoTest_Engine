@@ -620,6 +620,10 @@ class MessageReducer:
                     "calls": rec.get("calls"), "ai_rounds": rec.get("ai_rounds"),
                     "tokens_in": rec.get("tokens_in"), "tokens_out": rec.get("tokens_out"),
                     "cache_hit": rec.get("cache_hit"), "last_event_ts": rec.get("ts"),
+                    # 白跑判据透传(2026-07-17 team4 P1-10):loader 采集的机械事实——
+                    # 尾块 STATUS 值 + 案卷新鲜度;旧事件无字段=None,卡片不判(向后兼容)
+                    "tail_status": rec.get("tail_status") or "",
+                    "artifact_fresh": rec.get("artifact_fresh"),
                     "current_tool": "", "current_arg": "",
                 })
             elif ev == "run_meta":
@@ -640,7 +644,10 @@ class MessageReducer:
                     "last_event_ts": rec.get("ts"),
                 })
             elif ev == "engine_summary":
-                # 收口卡(§11.2):交付结果一屏讲完(人话字段由引擎渲染层产,前端只显示)
+                # 收口卡(§11.2):交付结果一屏讲完(人话字段由引擎渲染层产,前端只显示)。
+                # decisions/report_mismatch(2026-07-17 team4 审计 P0-1):G4 用户裁决
+                # 「引擎理解为」echo(坑#21)与报告对账失配标——engine_summary 是它们唯一
+                # 出口,此前不收=发射半程功能全灭(用户永远看不到 echo)。
                 changed |= self._upsert_card(f"engine_summary:{rec.get('run')}", {
                     "kind": "engine_summary", "run": rec.get("run") or "",
                     "outcome": rec.get("outcome") or "",
@@ -649,6 +656,8 @@ class MessageReducer:
                     "report": rec.get("report") or "",
                     "files": list(rec.get("files") or []),
                     "missing": list(rec.get("missing") or []),
+                    "decisions": list(rec.get("decisions") or []),
+                    "report_mismatch": bool(rec.get("report_mismatch")),
                     "status": "done", "last_event_ts": rec.get("ts"),
                 })
             elif ev == "progress":

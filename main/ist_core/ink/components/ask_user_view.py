@@ -128,12 +128,18 @@ class AskUserSession:
                 # 防呆提示(空文本提交被拦):黄字,仅在 Other 空提交后驻留,补内容/esc 后清
                 lines.append("       \x1b[33m⚠ 自定义输入不能为空——请输入内容,或按 esc 取消\x1b[0m")
 
-        hint = "↑↓ 选择 · 数字直选 · "
+        # 提示文案对齐实际按键语义(2026-07-17 team4 审计 P1-5):数字/↑↓ 只移动高亮
+        # 不落答——旧文案「数字直选」承诺了"按数字即选定",正是 run15/17 两次 3 题丢 2
+        # 的用户心智模型根因;落答动作(enter/space)必须在文案里说清。
+        last_q = self._q_idx == total - 1
+        hint = "↑↓/数字 移动 · "
         if multi:
-            hint += "space 勾选 · "
+            hint += "space 勾选 · " + ("enter 提交 · " if last_q else "enter 下一题 · ")
+        else:
+            hint += "enter 选定 · "
         if total > 1:
             hint += "←→/Tab 切题 · "
-        hint += "enter 确认 · o 自定义 · esc 取消"
+        hint += "o 自定义 · esc 取消"
         lines.append(f"   {D}{hint}{X}")
         if self._leave_warn:
             # 防呆黄字(已选未提交切题/esc、带未答整体提交):告警一次,再次同类操作放行
@@ -287,6 +293,14 @@ class AskUserSession:
         if not q.get("multiSelect"):
             # 单选：enter 选中当前高亮项
             self._selected[self._q_idx] = {self._options()[self._highlight].get("label", "")}
+        elif self._has_uncommitted_selection():
+            # multiSelect 的 enter 也是一种「离开当前题」(2026-07-17 team4 审计 P1-6):
+            # 动过高亮未 space 勾选就 enter=静默空答案推进——与切题/esc 同款守卫,
+            # 告警一次,再次 enter 放行(按未选继续)。
+            if not self._warn_once(
+                    "advance", "当前题动过高亮但未 space 勾选——space 落答后 enter;"
+                               "再次 enter 将按未选继续"):
+                return
         self._advance_or_submit()
 
     def submit_other_text(self, text: str) -> None:
@@ -322,11 +336,16 @@ class AskUserSession:
             self._clear_warn()
             self._render()
         else:
-            # 多题面板整体提交防呆：存在未答题时告警一次（未答题下游按挂起处理，
-            # 静默提交=516576 同型丢答）。再次 enter 在 handle_key 顶部直接放行提交。
+            # 整体提交防呆：存在未答题时告警一次（未答题下游按挂起处理，静默提交=
+            # 516576 同型丢答）。再次 enter 在 handle_key 顶部直接放行提交。
+            # 单题空提交同样告警(2026-07-17 team4 审计 P1-6):旧条件 len>1 使单题
+            # multiSelect 空提交无任何告警直通——空答案下游与取消语义模糊。
             n = self._unanswered_count()
-            if n and len(self._questions) > 1 and not self._warn_once(
-                "submit", f"还有 {n} 题未答,未答题将按挂起处理——再次 enter 确认提交",
+            if n and not self._warn_once(
+                "submit",
+                (f"还有 {n} 题未答,未答题将按挂起处理——再次 enter 确认提交"
+                 if len(self._questions) > 1
+                 else "本题未选任何项,提交将视为空答案(按挂起处理)——再次 enter 确认"),
             ):
                 return
             self._submit()

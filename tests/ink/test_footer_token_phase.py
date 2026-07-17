@@ -184,6 +184,64 @@ def test_footer_no_phase_no_worker_wait_when_fork_fresh_or_absent():
     assert "◌ worker" not in (next((t for t in reversed(captured2) if t), ""))
 
 
+def test_footer_stale_phase_falls_back_to_waiting():
+    """相位心跳过期(2026-07-17 team4 P1-3):签名(相位,token计数)冻结超 90s → busy 行
+    回落等待形态,不再显示「深度思考中」假状态(实弹:泄漏调用的相位卡死 8m→23m,
+    (+75) 纹丝不动,main 实际阻塞在引擎工具并不在思考)。"""
+    import time as _t
+    captured: list = []
+    f = FooterPane(thinking_text_cb=lambda t: captured.append(t))
+    f.update(status="busy", model="m", llm_phase="thinking", output_token_count=75)
+    f._phase_beat = _t.time() - 120     # 心跳拨回 120s 前(> _PHASE_STALE_S)
+    f._refresh()
+    f._stop_timer()
+    line = next((t for t in reversed(captured) if t), "")
+    assert "深度思考中" not in line, "过期相位不得再显示思考状态"
+    assert "↑" in line and "↓" in line, "回落等待形态(本轮增量 token 仍可见)"
+
+
+def test_footer_fresh_phase_not_expired():
+    """新鲜心跳(update 刚刷)不受过期逻辑影响——真思考的持续 reasoning 增量不被误杀。"""
+    busy, _ = _busy_footer(llm_phase="thinking", output_token_count=10)
+    assert "深度思考中" in busy
+
+
+def test_footer_max_thinking_visible_without_phase():
+    """max 状态摆脱主相位依赖(2026-07-17 team4 P1-4,与 P1-3 成对修):编译期 main
+    阻塞在引擎工具(无相位)而 fork 在 max 思考——「最大深度思考中」必须在等待形态
+    尾挂可见,否则该功能在其唯一场景(重编轮 effort=max)永不显示。"""
+    captured: list = []
+    f = FooterPane(thinking_text_cb=lambda t: captured.append(t))
+    f.set_max_thinking(True)
+    f.update(status="busy", model="m", llm_phase="")   # 无相位=main 等 fork
+    f._stop_timer()
+    line = next((t for t in reversed(captured) if t), "")
+    assert "最大深度思考中" in line
+    # 关闭后消失
+    captured.clear()
+    f.set_max_thinking(False)
+    f.update(status="busy")
+    f._stop_timer()
+    line2 = next((t for t in reversed(captured) if t), "")
+    assert "最大深度思考中" not in line2
+
+
+def test_footer_max_thinking_survives_stale_phase():
+    """成对修耦合场景:相位过期回落等待形态时,max 状态仍经尾挂可见——
+    只修 P1-3 不修 P1-4 的回退态(max 退回永不显示)不得出现。"""
+    import time as _t
+    captured: list = []
+    f = FooterPane(thinking_text_cb=lambda t: captured.append(t))
+    f.set_max_thinking(True)
+    f.update(status="busy", model="m", llm_phase="thinking", output_token_count=75)
+    f._phase_beat = _t.time() - 120
+    f._refresh()
+    f._stop_timer()
+    line = next((t for t in reversed(captured) if t), "")
+    assert "深度思考中" not in line.replace("最大深度思考中", "")  # 假相位词已回落
+    assert "最大深度思考中" in line                                # max 事实仍可见
+
+
 def test_sticky_error_shows_and_clears():
     # 粘性错误条(2026-07-05 遗留#5):error 驻留状态行(单行截断),下一轮 busy 自动清
     f = FooterPane()

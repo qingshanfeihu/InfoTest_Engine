@@ -514,6 +514,29 @@ def test_fork_cards_interleaved_with_normal_messages_keep_index():
     assert len(r.snapshot().messages) == n, "原地更新不增消息"
 
 
+def test_engine_summary_passes_decisions_and_report_mismatch():
+    """engine_summary 的 decisions(G4「引擎理解为」echo,坑#21)与 report_mismatch
+    必须透传进卡 payload(2026-07-17 team4 审计 P0-1:此前不收=G4 echo 无任何用户
+    可见出口,发射半程功能全灭)。"""
+    r = MessageReducer()
+    r.dispatch(_cards_evt(1, {
+        "event": "engine_summary", "run": "dongkl", "ts": 1.0,
+        "outcome": "report_mismatch", "ok": 7, "total": 13,
+        "labels": [], "report": "workspace/outputs/dongkl/delivery_report.md",
+        "files": ["case.xlsx"], "missing": [],
+        "decisions": [{"autoid": "203031754291994838",
+                       "answer": "停止:这案不用修了", "understood": "停止该案"}],
+        "report_mismatch": True,
+    }))
+    snap = r.snapshot()
+    idx = snap.fork_card_indices["engine_summary:dongkl"]
+    p = snap.messages[idx].content[0].payload
+    assert p["decisions"] == [{"autoid": "203031754291994838",
+                               "answer": "停止:这案不用修了", "understood": "停止该案"}]
+    assert p["report_mismatch"] is True
+    assert p["outcome"] == "report_mismatch"
+
+
 # ── ask_user 生命周期回边(TODO_tui:答后残留根因) ──────────────────────────
 
 def test_ask_user_answered_marks_block_answered():
@@ -547,3 +570,26 @@ def test_ask_user_answered_unknown_qid_is_noop():
     r.dispatch(_evt("ask_user_answered", 2, payload={"question_id": "NOPE", "answers": {}}))
     blocks = [b for m in snaps[-1].messages for b in m.content if b.type == BLOCK_ASK_USER]
     assert len(blocks) == 1 and not blocks[0].payload.get("answered")
+
+
+def test_fork_end_passes_silent_run_evidence():
+    """P1-10:fork_end 的 tail_status/artifact_fresh 必须透传进卡 payload(白跑 ⚠
+    判定的数据源);旧事件缺字段 → tail_status 空串/artifact_fresh None(卡片不判)。"""
+    r = MessageReducer()
+    r.dispatch(_cards_evt(1, {"event": "fork_start", "fork_id": "f9", "ts": 1.0,
+                              "skill": "compile-worker", "autoid": "204651759025035493",
+                              "brief_head": "第1次"}))
+    r.dispatch(_cards_evt(2, {"event": "fork_end", "fork_id": "f9", "ok": True,
+                              "ts": 2.0, "elapsed_s": 218.8, "calls": 13,
+                              "tail_status": "", "artifact_fresh": False}))
+    snap = r.snapshot()
+    p = snap.messages[snap.fork_card_indices["fork:f9"]].content[0].payload
+    assert p["tail_status"] == "" and p["artifact_fresh"] is False
+    # 旧事件形态(无新字段)
+    r.dispatch(_cards_evt(3, {"event": "fork_start", "fork_id": "f10", "ts": 3.0,
+                              "skill": "compile-worker", "brief_head": "b"}))
+    r.dispatch(_cards_evt(4, {"event": "fork_end", "fork_id": "f10", "ok": True,
+                              "ts": 4.0}))
+    snap2 = r.snapshot()
+    p2 = snap2.messages[snap2.fork_card_indices["fork:f10"]].content[0].payload
+    assert p2["tail_status"] == "" and p2["artifact_fresh"] is None

@@ -206,6 +206,52 @@ def test_render_engine_bottom_line_residual_bucket():
     assert "其他" not in ok
 
 
+def test_engine_summary_card_renders_g4_decisions():
+    """收口卡渲染 G4 echo(2026-07-17 team4 审计 P0-1):每条用户裁决「answer → 引擎
+    理解为」并排可核对(run12 实录:「停止:…」截断被兜底成 retry,echo 上明显相悖
+    即可人眼抓获)。engine_summary 是 decisions 的唯一出口,不渲染=功能全灭。"""
+    now = time.time()
+    card = _render_fork_card({
+        "kind": "engine_summary", "run": "dongkl", "outcome": "delivered_with_labels",
+        "ok": 7, "total": 13, "labels": [], "report": "workspace/outputs/dongkl/delivery_report.md",
+        "decisions": [
+            {"autoid": "203031754291994838", "answer": "停止:这案不用修了", "understood": "停止该案"},
+            {"autoid": "203031754291994839", "answer": "继续", "understood": "授权继续 2 轮"},
+        ]}, now=now)
+    assert "你的裁决" in card and "引擎理解为" in card
+    assert "…994838" in card and "停止:这案不用修了" in card and "停止该案" in card
+    assert "…994839" in card and "授权继续 2 轮" in card
+    # 超 4 条折叠
+    many = [{"autoid": f"20303175429199484{i}", "answer": f"a{i}", "understood": f"u{i}"}
+            for i in range(6)]
+    card2 = _render_fork_card({"kind": "engine_summary", "run": "d", "ok": 1, "total": 1,
+                               "decisions": many}, now=now)
+    assert "另有 2 条裁决" in card2
+    # 无 decisions 不渲染该段
+    card3 = _render_fork_card({"kind": "engine_summary", "run": "d", "ok": 1, "total": 1},
+                              now=now)
+    assert "你的裁决" not in card3
+
+
+def test_engine_summary_card_outcome_visual_distinction():
+    """outcome 视觉区分(P0-1 伴生):delivery_incomplete/report_mismatch 时头部不得
+    谎报「✓ 交付完成」——降级结论必须在收口卡可见。"""
+    now = time.time()
+    mism = _render_fork_card({"kind": "engine_summary", "run": "d", "ok": 7, "total": 13,
+                              "outcome": "report_mismatch", "report_mismatch": True},
+                             now=now)
+    assert "对账失配" in mism and "⚠" in mism
+    assert "✓" not in mism.split("\n")[0]
+    incomp = _render_fork_card({"kind": "engine_summary", "run": "d", "ok": 12, "total": 13,
+                                "outcome": "delivery_incomplete",
+                                "missing": ["delivery_report.md"]}, now=now)
+    assert "交付不完整" in incomp and "delivery_report.md" in incomp
+    # 正常 outcome 头部形态不变
+    normal = _render_fork_card({"kind": "engine_summary", "run": "d", "ok": 13, "total": 13,
+                                "outcome": "delivered_all_pass"}, now=now)
+    assert "交付完成" in normal and "全部通过整卷复验" in normal
+
+
 def test_engine_phase_cn_covers_all_v8_nodes():
     # V8 图 11 节点(compile_engine_v8/state.py NODE_TYPES)在底行都须有中文名,无一掉裸英文
     # (user-facing 全中文纪律)。diagnose 是 2026-07-16 审计补的最后一个缺口。
@@ -335,3 +381,33 @@ def test_middle_ellipsis_edges():
     long_flat = "x" * 100
     out2 = _middle_ellipsis(long_flat, 30)
     assert len(out2) <= 30 and "…" in out2
+
+
+def test_fork_card_silent_run_shows_warning_not_checkmark():
+    """P1-10 白跑假完成(2026-07-17 实弹:035493/035570 fork ok:true 但零产物零尾块,
+    ✓ 绿标让用户以为编完、实际引擎判 escalated):worker 卡合取判——artifact_fresh
+    恰为 False ∧ 无尾块 → ⚠「完成·无产出」;其余完成形态保持 ✓。"""
+    now = time.time()
+    base = {"kind": "fork", "skill": "compile-worker", "autoid": "204651759025035493",
+            "status": "ok", "calls": 13, "elapsed_s": 218.8,
+            "tokens_in": 197268, "tokens_out": 12172}
+    # 白跑:零尾块 ∧ 卷面不新鲜
+    silent = _render_fork_card({**base, "tail_status": "", "artifact_fresh": False},
+                               now=now)
+    assert "⚠" in silent and "完成·无产出" in silent
+    assert "✓" not in silent
+    # 正常产出:fresh=True → ✓
+    ok1 = _render_fork_card({**base, "tail_status": "produced", "artifact_fresh": True},
+                            now=now)
+    assert "✓" in ok1 and "无产出" not in ok1
+    # 欠定上报:有尾块=有交代,即使卷面不新鲜也不算白跑
+    ok2 = _render_fork_card({**base, "tail_status": "needs_user_decision",
+                             "artifact_fresh": False}, now=now)
+    assert "✓" in ok2 and "无产出" not in ok2
+    # attributor(产物形态不同)不误伤
+    ok3 = _render_fork_card({**base, "skill": "compile-attributor",
+                             "tail_status": "", "artifact_fresh": False}, now=now)
+    assert "✓" in ok3 and "无产出" not in ok3
+    # 旧事件(无新字段,artifact_fresh=None)→ 不可判,保持 ✓(向后兼容)
+    ok4 = _render_fork_card(dict(base), now=now)
+    assert "✓" in ok4 and "无产出" not in ok4

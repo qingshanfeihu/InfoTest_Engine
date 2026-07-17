@@ -132,15 +132,29 @@ class DOMElement(DOMNode):
         self.mark_dirty()
 
 
+def _sanitize_text_value(value: str) -> str:
+    """TextNode 值的控制字符规格化(2026-07-17 team4 实弹:ask 面板题干携带设备回显
+    原文里的 ``\\t``——char_width 按 1 列布局、真实终端却跳 8 列制表位且不清跳过区,
+    屏上出现前帧字符碎片叠影「www.local.co0.md」「域名命中回…册与」)。
+
+    ``\\t``→单空格(确定性 1 列,布局与终端一致);``\\r`` 剥除(回车会把光标拉回行首
+    覆盖已渲染内容,是同族破坏者)。``\\n`` 保留(wrapped_rows 原生支持)。快速路径:
+    无控制字符时零拷贝零开销(set_value 每帧高频)。"""
+    if "\t" in value or "\r" in value:
+        return value.replace("\t", " ").replace("\r", "")
+    return value
+
+
 class TextNode(DOMNode):
     """Text node — leaf node containing a string value."""
 
     def __init__(self, value: str = "") -> None:
         super().__init__("#text")
-        self.value = value
+        self.value = _sanitize_text_value(value)
         self._rows_cache: tuple[int, int] | None = None  # (width, 行数):软换行行数缓存
 
     def set_value(self, value: str) -> None:
+        value = _sanitize_text_value(value)
         if self.value != value:
             self.value = value
             self._rows_cache = None

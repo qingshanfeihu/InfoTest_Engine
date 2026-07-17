@@ -204,7 +204,9 @@ def _tool_display_arg(name: str, args: dict) -> str:
         ver = str(args.get("version") or _extract_from_raw(args, "version") or "")
         mm = str(args.get("mindmap_path") or args.get("mindmap")
                  or _extract_from_raw(args, "mindmap_path") or _extract_from_raw(args, "mindmap") or "")
-        label = ver or _arg_stem(mm)
+        # 批名优先(2026-07-17 team4 审计 P2-3):实弹显示 EngineRun(10.5)——版本号
+        # 批批相同零辨识度;文档契约形态是 EngineRun(dongkl),脑图 stem 才是身份标。
+        label = _arg_stem(mm) or ver
         if label:
             return label[:40]
     if name == "compile_fanout":
@@ -301,12 +303,10 @@ def _render_engine_bottom_line(p: dict) -> str:
     max 思考深度状态不在此行——移到 thinking 焦点行(footer._state「最大深度思考中」,
     2026-07-15 用户裁决:该显在视线焦点的 thinking 行,不藏引擎进度行尾)。
 
-    「其他N」兜底(2026-07-16 审计):engine_tick 的 counts 是事件侧 emit_tick 把 V8 内部
-    13 态翻译回 V6 九键的投影,broken/broken_errored/broken_blocked 三态未进任何键(事件侧
-    缺陷,已另记报告)。有 broken 案时上述 5 桶之和 < total,案会在进度行凭空消失(zhaiyq
-    活体 round1 实测漏计 2)。这里补一个残差桶:凡 total 减 5 桶之和 >0,显「其他N」,保证
-    可见计数恒等于 total——渲染层不因事件侧投影不全而静默丢案。事件侧补全后残差自然归 0、
-    该桶消失,不冲突。"""
+    「其他N」防御性残差桶(2026-07-16 审计发现,broken 三态漏投已于同日事件侧修复——
+    `_shared.py::_footer_bucket_counts` 现折进 failed_active,正常轮残差恒 0、本桶隐藏):
+    凡 total 减 5 桶之和 >0 显「其他N」,保证可见计数恒等于 total——防将来事件侧新增
+    状态漏投影时案在进度行静默消失(zhaiyq 活体 round1 曾漏计 2 的同型防线)。"""
     p = dict(p or {})
     counts = dict(p.get("counts") or {})
     total = int(p.get("total") or 0)
@@ -378,12 +378,22 @@ def _render_fork_card(payload: dict, *, now: float,
     B, C, D, X, G, R, Y = _B, _C2, _D2, _X2, _G2, _R2, _Y2
 
     if kind == "engine_summary":
-        # 收口卡(§11.2):交付结果一屏讲完;labels 已是引擎渲染层的人话
+        # 收口卡(§11.2):交付结果一屏讲完;labels 已是引擎渲染层的人话。
+        # outcome 视觉区分(2026-07-17 team4 审计 P0-1):delivery_incomplete/
+        # report_mismatch 时头部不再谎报「交付完成」——降级结论必须在收口卡可见。
         ok, total = int(p.get("ok") or 0), int(p.get("total") or 0)
-        head = (f"   {G}✓{X} {B}交付完成{X} {G}{ok}{X}{D}/{total} 全部通过整卷复验{X}"
-                if ok == total else
-                f"   {G}✓{X} {B}交付完成{X} {G}{ok}{X}{D}/{total} 通过,"
-                f"{total - ok} 项需你关注:{X}")
+        outcome = str(p.get("outcome") or "")
+        if outcome == "report_mismatch" or p.get("report_mismatch"):
+            head = (f"   {Y}⚠{X} {B}交付完成(对账失配){X} {G}{ok}{X}{D}/{total} 通过"
+                    f"——报告数字与台账对账不一致,以机读报告为准{X}")
+        elif outcome == "delivery_incomplete":
+            head = (f"   {Y}⚠{X} {B}交付不完整{X} {G}{ok}{X}{D}/{total} 通过"
+                    f"——交付物清单与磁盘不一致(缺项见下){X}")
+        elif ok == total:
+            head = f"   {G}✓{X} {B}交付完成{X} {G}{ok}{X}{D}/{total} 全部通过整卷复验{X}"
+        else:
+            head = (f"   {G}✓{X} {B}交付完成{X} {G}{ok}{X}{D}/{total} 通过,"
+                    f"{total - ok} 项需你关注:{X}")
         lines = [head]
         for it in (p.get("labels") or [])[:6]:
             aid = str(it.get("autoid") or "")
@@ -391,6 +401,18 @@ def _render_fork_card(payload: dict, *, now: float,
         rest = len(p.get("labels") or []) - 6
         if rest > 0:
             lines.append(f"     {D}…另有 {rest} 项,见报告{X}")
+        # G4 echo(坑#21/(41)③,2026-07-17 team4 审计 P0-1):每条用户裁决带「引擎理解为」
+        # 复述——截断/兜底误判(run12:「停止:…」被兜底成 retry)在收口卡上并排可核对。
+        decs = list(p.get("decisions") or [])
+        if decs:
+            lines.append(f"     {D}你的裁决(引擎理解为):{X}")
+            for d in decs[:4]:
+                aid = str(d.get("autoid") or "")
+                ans = str(d.get("answer") or "")[:40]
+                und = str(d.get("understood") or "")
+                lines.append(f"       {D}…{aid[-6:]} 「{ans}」 → {und}{X}")
+            if len(decs) > 4:
+                lines.append(f"       {D}…另有 {len(decs) - 4} 条裁决,见报告{X}")
         if p.get("missing"):
             lines.append(f"     {R}⚠ 交付物与磁盘不一致:缺 {', '.join(str(x) for x in p['missing'])}{X}")
         if p.get("report"):
@@ -426,8 +448,21 @@ def _render_fork_card(payload: dict, *, now: float,
         if p.get("tokens_in") or p.get("tokens_out"):
             toks = (f" · ↑{_format_token_count(int(p.get('tokens_in') or 0))}"
                     f" ↓{_format_token_count(int(p.get('tokens_out') or 0))}")
-        card = (f"   {G}✓{X} {D}{name} — 完成 · {p.get('calls', 0)} calls · "
-                f"{_fmt_secs(p.get('elapsed_s'))}{toks}{X}")
+        # 白跑假完成(2026-07-17 team4 P1-10 实弹:035493/035570 fork ok:true 但零产物
+        # 零尾块,✓ 绿标让用户以为编完、实际引擎判 escalated):worker 类 fork 合取判
+        # ——卷面不新鲜(artifact_fresh is False,None=旧事件/无判据不触发) ∧ 无机读
+        # 尾块 → 黄 ⚠「完成·无产出」。判据与引擎结算同款(nodes author:fresh/_TAIL_RE);
+        # 有尾块(needs_user_decision 欠定上报等)=有交代,不算白跑仍 ✓。
+        silent_run = (str(p.get("skill") or "") == "compile-worker"
+                      and p.get("artifact_fresh") is False
+                      and not p.get("tail_status"))
+        if silent_run:
+            card = (f"   {Y}⚠{X} {name} — {Y}完成·无产出{X}{D}(引擎按无产出处理)"
+                    f" · {p.get('calls', 0)} calls · "
+                    f"{_fmt_secs(p.get('elapsed_s'))}{toks}{X}")
+        else:
+            card = (f"   {G}✓{X} {D}{name} — 完成 · {p.get('calls', 0)} calls · "
+                    f"{_fmt_secs(p.get('elapsed_s'))}{toks}{X}")
     elif status == "error":
         err = str(p.get("error") or "").split("\n")[0][:80]
         card = (f"   {R}✗{X} {name} — 失败{(' · ' + D + err + X) if err else ''}"
@@ -2097,17 +2132,39 @@ class IstInkApp:
 
         宽度感知截断到**一行**:footer 把最新 fork 步骤接在状态行尾,若超宽换行,
         height=1 的 box 会溢出留残影。这里按可视宽度(CJK 双宽)截断,保证恰好一行。
+
+        ANSI 感知(2026-07-17 team4 审计 P2-9):busy 行带样式序列(如「最大深度思考中」
+        粗体),旧的逐字符截断会砍在 ESC 序列中间泄漏坏序列/粗体不复位;且截断无省略
+        标记(实弹:右括号凭空消失)。现整体透传 ANSI 序列(零宽),截断补「…」+复位。
         """
         if text:
             from ..string_width import string_width
             maxw = max(20, (getattr(self._app, "width", 0) or 120) - 2)
-            w, acc = 0, []
-            for ch in text:
+            w, acc, i, n = 0, [], 0, len(text)
+            truncated = False
+            while i < n:
+                ch = text[i]
+                if ch == "\x1b":
+                    # CSI 序列整体收(零显示宽),绝不从中间截断
+                    j = i + 1
+                    if j < n and text[j] == "[":
+                        j += 1
+                        while j < n and not ("@" <= text[j] <= "~"):
+                            j += 1
+                        j = min(j + 1, n)
+                    acc.append(text[i:j])
+                    i = j
+                    continue
                 cw = string_width(ch)
                 if w + cw > maxw:
+                    truncated = True
                     break
                 acc.append(ch)
                 w += cw
+                i += 1
+            if truncated:
+                # maxw 预留了 2 列(width-2),补 1 列省略号仍 < 终端宽,不会折行
+                acc.append("…\x1b[0m")
             self._thinking_line.style.height = 1
             self._thinking_text.set_value(" " + "".join(acc))
         else:

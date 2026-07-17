@@ -29,6 +29,11 @@ _PHASE_STATE_TEXT = {
     "input": "接收/处理中",
 }
 
+# 相位心跳过期秒数(P1-3):相位签名(相位,token计数)无变化超过此时长,busy 行回落
+# 等待形态——不再显示「深度思考中/生成回答中」假状态。90s < 用户困惑窗口,且真思考
+# 的 reasoning delta 会持续刷新签名不被误杀;误杀代价=回落等待行(仍显 elapsed+token),无害。
+_PHASE_STALE_S = 90.0
+
 
 def _format_elapsed(seconds: float) -> str:
     if seconds < 60:
@@ -84,6 +89,13 @@ class FooterPane:
         self._cache_hit_tokens: int = 0
         self._llm_phase: str = ""
         self._output_token_count: int = 0
+        # 相位心跳(2026-07-17 team4 审计 P1-3):(相位,token计数) 签名最近变化时刻。
+        # 泄漏进主相位的引擎内部 LLM 调用若 end 只以 usage_only 形态到达,相位会卡死
+        # (实弹:「深度思考中(+75)」四帧 8m→23m 冻结,main 实际阻塞在引擎工具并不在
+        # 思考)。显示层自治过期:签名超 _PHASE_STALE_S 无变化即回落等待形态——真思考
+        # 有持续 reasoning 增量不会误杀,token 一来立即恢复。
+        self._phase_sig: tuple[str, int] = ("", 0)
+        self._phase_beat: float = 0.0
         # 本轮 run 开始时的累计快照，用于算本轮增量
         self._run_start_input: int = 0
         # 最近一条 fork/evidence 事件时间（ist_app 的 evidence tailer 更新）——
@@ -155,6 +167,11 @@ class FooterPane:
             self._output_token_count = output_token_count
         if cache_hit_tokens is not None:
             self._cache_hit_tokens = cache_hit_tokens
+        # 相位心跳(P1-3):相位或 token 计数任一变化=活跃信号,刷新 beat
+        sig = (self._llm_phase, self._output_token_count)
+        if sig != self._phase_sig:
+            self._phase_sig = sig
+            self._phase_beat = time.time()
         self._refresh()
 
     def set_engine_line(self, text: str) -> None:
@@ -299,6 +316,11 @@ class FooterPane:
             _run_out = max(0, self.output_tokens + self.fork_output - self._run_start_output)
             # 尾字段 = mimo 当前真实状态（由实际流式相位驱动，零假计时）；前面随机词不动。
             _state = _PHASE_STATE_TEXT.get(self._llm_phase)   # 无相位 → None
+            # 相位心跳过期(P1-3):签名冻结超时=相位陈旧(泄漏调用的 end 未清相位/漏标),
+            # 回落等待形态——「深度思考中」只在有活跃增量时显示,不撒谎。
+            if _state and self._phase_beat and (
+                    time.time() - self._phase_beat > _PHASE_STALE_S):
+                _state = None
             # 有 fork 在 max 思考深度时,thinking 相位的「深度思考中」升格为「最大深度
             # 思考中」(焦点行反映全局 max 状态;§footer max_thinking)。
             if _state and self._max_thinking and self._llm_phase == "thinking":
@@ -338,7 +360,12 @@ class FooterPane:
                     _idle = time.time() - self.fork_last_event_ts
                     if _idle >= 15:
                         _fork_wait = f" · ◌ worker {int(_idle)}s 无新事件"
-                thinking_text = f"✶ {self._verb}… ({elapsed_str}{_tok}{_fork_wait})"
+                # max 状态摆脱主相位依赖(P1-4,与 P1-3 成对修):fork 在 max 思考是独立
+                # 于主相位的事实——编译期 main 阻塞在引擎工具(无相位/相位过期)时,
+                # 「最大深度思考中」在此等待形态尾挂,否则该功能在其唯一场景永不可见
+                # (此前实弹里它靠 P1-3 的卡死假相位才偶然显示)。
+                _max_tag = " · \x1b[1m最大深度思考中\x1b[0m" if self._max_thinking else ""
+                thinking_text = f"✶ {self._verb}… ({elapsed_str}{_tok}{_fork_wait}{_max_tag})"
             if self._thinking_cb:
                 self._thinking_cb(thinking_text)
         else:

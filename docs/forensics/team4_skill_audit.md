@@ -242,7 +242,27 @@ agents/*.md 补充:9/9 过骨架门与 metadata 门;`explore.md` 名字小写已
 
 ## 8-bis. 修复执行记录(任务 #19,2026-07-17,LLM-Eng)
 
-按 main 分配执行,**未 commit**;影响面门测试 120 passed(tests/ist_core/{skills,agents} + middleware/test_tool_gating.py,含 skill 标准包门/prompt 结构门)。**未跑全量 pytest**:Test-Eng 实跑进行中,全量会把测试信号直写生产 k_signals/emit_stats 流水(yzg 问题#5 实证,#18 正在修隔离)——skill 域改动为纯 md + 一删一注释,影响面已被上述 120 例覆盖,全量回归归 #15 统一跑。
+**合入状态(机读账核实,2026-07-17)**:本批 skill 域改动**已合入 HEAD = commit `69f8f133`**("fix(skills): team4 skill 域——config-automation…/device-verify…/语言分层…/doc-writer DEPRECATED/LANGFUSE_TIMEOUT")——批2→3 窗口合入,批3 重启已加载生效(firsthand `git log -1 -- agents/compile-worker.md`=69f8f133、`git status skills/`干净、`merge-base --is-ancestor 69f8f133 HEAD`=真)。environment 的 `LANGFUSE_TIMEOUT=30` 属 gitignored 本地文件(key 不入库,by design);environment.example 模板行随 69f8f133 入库。**先前"未 commit(归#15)"系记忆滞后**——机读账优先于记忆(全队纪律实例:我 grep 到落盘却漏查 commit 状态,leader 机读账纠正)。**批3 可观测验证边界(如实)**:compile-worker/attributor agent md(单词修复 substitute/isomorphic)由批3 每个编译 fork 加载运行(结构确证=它们即 fork agent),但单词级修复无独立行为可观测签名;device-verify/config-automation 系用户直调 inline skill、**不在编译批次链路**,批3 零实弹 touch——其正确性靠评审非实跑背书。影响面门测试 120 passed(过 skill 标准包门/prompt 结构门);全量 pytest 归 #15 统一跑(避 k_signals 生产流水污染)。
+
+**收口批批量补审清单(leader 裁定 2026-07-17:双评审强制流程对新改动前向生效、不溯及既往;类2 已合入 69f8f133,收口批由 Theory+Design 一次性过审,非单独轮。全部 in commit 69f8f133)**:
+
+| # | 文件 | 改动点 | 理由 | 现有背书 | 补审重点 |
+|---|---|---|---|---|---|
+| 1 | `skills/config-automation/SKILL.md` | 删 config_text/Pipeline JSON 错误示例,执行模型改 LLM 直接 fs_*(读拓扑→映射→替换→落盘) | 文档与 invoke_skill 实签名对齐(P1-2) | redline(未单独走)+leader 验收 | **是——批3 零实弹 touch,不在编译链** |
+| 2 | `skills/device-verify/SKILL.md` | 9条 show 命令表撤除→机制句;补 kb_footprint 白名单;IP 按引用;报告示例中性化 | 零写死领域命令红线整改(P1-3) | redline 整改 clean+leader 验收 | **是——批3 零实弹 touch,不在编译链** |
+| 3 | `agents/compile-worker.md` | "concrete替代 steps"→"substitute" | 语言分层单词修复(P2-1) | leader 明确豁免+**批3 全量 fork 加载实弹** | 否 |
+| 4 | `agents/compile-attributor.md` | "no同构 record"→"isomorphic" | 同上(P2-1) | 同上(批3 fork 加载) | 否 |
+| 5 | `skills/doc-authoring/SKILL.md` | 指令区英文化+description 补 APV 域词 | 语言分层(P2-1) | leader 验收 | 否(非编译链,WeCom 文档 skill) |
+| 6 | `skills/report-gen/SKILL.md` | 指令区英文化 | P2-1 | leader 验收 | 否(非编译链) |
+| 7 | `agents/report-generator.md` | 英文化 | P2-1 | leader 验收 | 否(非编译链) |
+| 8 | `agents/doc-writer.md` | frontmatter description 加 `[DEPRECATED-PENDING-RULING]` 标注(**删除动作=类1冻结/#15**) | 死资产标记(P2-2) | leader 验收 | 否 |
+| 9 | `skills/test-list-review/scripts/sanity_check.py` | docstring 头 DEPRECATED 标注 | P2-2 | leader 验收 | 否 |
+| 10 | 5×`SKILL.md`(test-list-review/config-automation/device-verify/doc-authoring/report-gen) | `Trigger phrases:`→`Trigger keywords:` | 措辞统一(P2-4) | leader 验收+标准包门 | 否 |
+| 11 | `docs/skill_authoring_standard.md` | allowed-tools/when_to_use/context/effort 如实化+reference 单数+黑框警示 | 标准文档漂移修正(P2-5) | leader 验收 | 否(纯文档) |
+| 12 | `skills/device-verify/reference/ssh_template.md` | paramiko 可用性声明 | P3-3 | leader 验收+核 requirements.txt | 否(纯文档) |
+| 13 | `environment.example` | LANGFUSE_TIMEOUT 注释模板行(environment 本地 gitignored) | 自托管慢后端适配 | leader 批准+**批3 实弹验证生效** | 否 |
+
+重点两项(#1/#2)：批3 编译批次不调 device-verify/config-automation(用户直调类 inline skill),故其整改正确性目前**仅靠 redline+leader 验收背书、无实弹**——收口批 Theory/Design 需着重核这两项语义/红线一致性。其余 11 项或有批3 fork 实弹(#3/#4)、或非编译链纯文档(#5-12)、或已实弹验证(#13)。
 
 | 项 | 处置 |
 |---|---|

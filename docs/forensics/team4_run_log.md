@@ -294,6 +294,40 @@ engine_report.json（16:46 写入，非臆想）：34 案 = **deliverable 29 / f
 
 **我今日操作失误合并记录（UI 可用性证据，转 TUI-Eng/#24）**：①hang 误判（漏 read-screen 第一判据）；②选1+enter 空提交（选项1"附文"语义但 enter 直接提交空 freeform，无拦截）；③send-key o vs send o 混淆（'o' 交互假设错，非 send 文本路径错）；④message-box 注入活锁下失效。②③④均指向"选项附文/自定义输入流程对 cmux 驱动不友好+无空提交拦截"——UI 可用性缺口。
 
+## 2.13 批3 最后 2 案对照法补完（对话态注入成功）
+
+leader 批准续跑补完 668000/668044，通道=**回答 main agent 主动提问**（自然对话态，非注入踩坑场景）——我回复对照法指引（引 plan_668_persistence.md）。main agent 完整领会并执行：
+
+**668000（write memory 负向）：对照法真 PASS**（走正规 oracle，非绕闸）：
+- verified_runs.jsonl：verdict fail(v1)→**pass(v2)**，dev_run_batch 真上机。main agent 迭代：v1 断言 not_found IP 太宽 fail → v2 改 not_found 完整 "sdns listener ...53" 行 pass（保断言敏感性）。
+- 对照法落地：found "sdns listener 172.16.34.70"（阳性 listener 已配）+ write memory + not_found（负向：write memory 后 startup 中 listener 缺席）——**我的 show startup-config 负向对照法成功验证 write memory 不持久化 sdns listener**。「无中生不出有」逻辑经真机确证。
+- ⚠ 未合并进主交付卷（在 per-autoid 目录，engine_report 仍 23/26 pending）——需 compile_emit_merged 正式集成，已请示 leader。
+
+**668044（write net）：honest 挂起**（write net 被 dev_probe/dev_rest/dev_ssh 三通道安全白名单全拒绝，测试床真障碍，附恢复路径）——**可行性前置有效**（我要求 worker 先 probe 可达性，不硬造）。
+
+**通道有效性总结（今日干预通道全景）**：①面板 in-band 答（欠定/矛盾/round-cap/resume 均可，防空提交=send 文本入底部框+enter，read-screen 验全文+facts 核 freeform）②对话态回答 main agent 提问（最顺，无注入坑）——**这两条是有效的；message-box 盲注入（无面板/活锁下）不可靠**。
+
+## 2.14 批3 yzg 终版交付（2026-07-17）
+
+**终数**：26 案=**deliverable 24 / suspended 2 / pending 0 / escalated 0**（异常字段清零）。轨迹：首跑 21/26（4 pending 链断缺陷 B）→ Ctrl-C 止血 → 带止损闸续跑（668015/668030 救回=23）→ 对话态注入对照法（668000 对照法真机 PASS=24）→ 668044/655233 honest 挂起。
+- 668000（write memory 负向）：show startup-config 负向对照法真机 PASS，四门把关无绕闸（lint 凭证/真 dev_run_batch/断言对被测敏感非恒真/compile_emit_merged 凭证复扫）。
+- 668044（write net）：安全白名单三重拦截（dev_probe/rest/ssh 全拒）→ honest 挂起（可行性前置有效，不硬造）。
+- 655233（VLAN）：床未建模 VLAN 拓扑 → honest 挂起。
+
+**终检三铁律**：①主卷 24 autoid 与 deliverable 对齐、无占位符/令牌；②执行链对账全批零链断（2 suspended=终局指令 auth=0 预期，非链断）；③交付目录齐全、delivery_report↔engine_report 一致、668044 注记保留。
+
+**⚠ 清洁遗留（窗口处理）**：手工 compile_emit_merged 路径跳过引擎 _cleanup，顶层残留 24 个 per-autoid 目录未归档进 delivered/（交付卷正确，仅目录清洁度）。
+
+**批 3 全景（含活锁危机）**：本批是全程最曲折——止损闸缺陷 B（活锁 7 圈 ¥14.7）→ Ctrl-C（撤令乱序）→ 止损闸修复 → 对照法端到端救回。我今日失误（hang 误判/面板输入连环错/注入失效/_pid 误读/重启插曲）均如实上报，leader 定性自纠为正面纪律。方法论固化：停滞判定第一判据=read-screen；_pid 过滤新增/存量；有效干预通道=面板 in-band+对话态回答 main agent。
+
+## 2.15 批3→4 合入窗口·台账清理（§11.9 交付契约，task#3 归档）
+
+按 DESIGN_v8 §11.9 补上手工路径跳过的 _cleanup（全走 backup 可逆）：
+- 668000 对照法版 → yzg/delivered/（delivered/=24=deliverable ✓）；668000 旧挂起副本+4 重复顶层副本（667986/668015/668030/668059）+中间件 → runtime/backups/batch3_cleanup_20260717/。
+- **§11.9 对账全过**：delivered/=24=deliverable、unfinished/=[655233,668044]=suspended、顶层残留 0、交付物齐全在盘。
+- **pytest 污染隔离（良好）**：ask_user_answers.jsonl ts=0 测试记录=0（批1 的 2426 条已被 Py-Eng #18 修复清除）、verified_runs 无 pytest autoid 污染、pytest 产物 prefix 隔离保留给 Py-Eng。
+- **⚠ 交付契约缺口**：yzg/unsuccessful_cases.xlsx 缺失（手工路径只产 .md）——§11.9 要求未通过卷 xlsx，已报 leader 请示补产 vs 接受 md-only（挂起案机读需求弱）。非我职权修。
+
 ## 3. ask 面板前端交付质量发现清单（P0/P1/P2）
 
 - **P1-1（TUI 渲染·数据完好显示丢段）**：ask 面板双侧引用拼行渲染丢中段——「www.local.co」直接接「0.md:」，实机回显尾『m.』+手册文件名『cli_10.5_Chapter2』不可见；数据源 ask_panel.json 完好；疑与含 \t 制表符文本 wrap 相关。影响：用户无法核证引文出处。（035413 面板实证，已转 TUI-Eng）

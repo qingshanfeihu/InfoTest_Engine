@@ -39,6 +39,35 @@ def _count_newlines(text: str) -> int:
     return len(re.findall(r"\r\n|\r|\n", text))
 
 
+def _horizontal_window(value: str, cursor_pos: int, width: int) -> tuple[str, int]:
+    """长单行输入水平滚动(D10/F-TUI:治长文本输入溢出污染 footer——PromptInput height=1
+    却全渲染超宽 value,换行溢出到下方 footer,token 计数拼接错乱)。
+
+    value 显示宽超 width 时返回「使光标可见的子串窗口 + 光标在窗口内的列偏移」;短文本
+    (显示宽 ≤ width)原样返回(行为不变,不影响正常输入)。**CJK 宽字符感知**——按显示宽
+    计算不按字符数切片(否则半个宽字符/错位)。窗口策略:以光标为锚,先向左纳入到 width-1
+    (留光标位),再向右补到 width。"""
+    from ..string_width import string_width
+    if width <= 0 or string_width(value) <= width:
+        return value, string_width(value[:cursor_pos])
+    cursor_pos = max(0, min(cursor_pos, len(value)))
+    start, acc = cursor_pos, 0
+    while start > 0:
+        cw = string_width(value[start - 1])
+        if acc + cw > width - 1:
+            break
+        acc += cw
+        start -= 1
+    end = cursor_pos
+    while end < len(value):
+        cw = string_width(value[end])
+        if acc + cw > width:
+            break
+        acc += cw
+        end += 1
+    return value[start:end], string_width(value[start:cursor_pos])
+
+
 class PromptInput:
     """Single-line input with real terminal cursor for IME support."""
 
@@ -248,14 +277,18 @@ class PromptInput:
         
 
     def _refresh(self) -> None:
-        """Update the text node and cursor declaration."""
-        from ..string_width import string_width
+        """Update the text node and cursor declaration.
 
+        D10:长 value 水平滚动到可视宽度(只显光标附近窗口),防超宽换行溢出 height=1 输入框
+        污染下方 footer。短文本行为不变。"""
         if not self._value and self._placeholder:
             self._text_node.set_value(f"> {self._placeholder}")
-        else:
-            self._text_node.set_value(f"> {self._value}")
-        
-        text_before_cursor = self._value[:self._cursor_pos]
-        cursor_x = 2 + string_width(text_before_cursor)
-        self._cursor_mgr.declare(self._node, x=cursor_x, y=0)
+            self._cursor_mgr.declare(self._node, x=2, y=0)
+            return
+        # 可视宽 = 节点实际宽(布局算,上一帧稳定;首帧未算兜底 80) 减 "> " 2 列
+        rect = getattr(self._node, "rect", None)
+        node_w = rect.width if (rect and getattr(rect, "width", 0)) else 80
+        avail = max(10, node_w - 2)
+        disp, cur_col = _horizontal_window(self._value, self._cursor_pos, avail)
+        self._text_node.set_value(f"> {disp}")
+        self._cursor_mgr.declare(self._node, x=2 + cur_col, y=0)

@@ -326,9 +326,19 @@ def _render_engine_bottom_line(p: dict) -> str:
         phase = "已收尾"
     D, X = _D2, _X2
     other_seg = f" 其他{other}" if other > 0 else ""
+    # B1 编写期提示(F-TUI-8,治 P2-11 展示面:编写期 counts 冻在初始态 produced=0、其余全 0,
+    # 显示"产出0 欠定0 通过0 失败0"一串 0 会被误读成"没产出/白干"——实为 authored 事实在
+    # 合并时批量结算(账实分离,数据源不动、不碰 INV-7)。编写相位且尚无结算时,计数段替换为
+    # 编写进度+结算说明,不再冗余显示全 0)。判据与 P2-11 同:produced==passed==0 ∧ spin>0。
+    _authoring = (str(p.get("phase") or "") in ("author", "worker_fanout")
+                  and produced == 0 and passed == 0 and spin > 0)
+    if _authoring:
+        counts_seg = f"编写中{spin} · 产出将在合并时结算"
+    else:
+        counts_seg = (f"产出{produced} 编写中{spin} "
+                      f"欠定{pend} 通过{passed} 失败{bad}{other_seg}")
     return (f" 编译 {p.get('run', '')} · 轮次{p.get('round', 0)} {phase} "
-            f"{bar} {done}/{total}{D} · 产出{produced} 编写中{spin} "
-            f"欠定{pend} 通过{passed} 失败{bad}{other_seg}{X}")
+            f"{bar} {done}/{total}{D} · {counts_seg}{X}")
 
 
 def _payloads_have_max_thinking(payloads) -> bool:
@@ -367,6 +377,37 @@ def _fmt_secs(v) -> str:
         return _format_elapsed(float(v or 0))
     except Exception:  # noqa: BLE001
         return "0s"
+
+
+# F-TUI-10 失败卡英文黑话→中文人话+去向(2026-07-18 修复轮;配 F-Doc-1 条款)。fork_end 的
+# error 字段(loader.py/nodes.py 产)是英文技术串,直透卡片违语言分层(失败原因给用户看必须中文)。
+# 子串匹配映射到人话+去向;未知错误保留原文截断(不隐藏)。与白跑卡(P1-10,ok=true 无产物)区分:
+# 这里是 fork ok=false(✗ 失败)的 error 文本。
+_FORK_ERR_CN: list[tuple[str, str]] = [
+    ("no text output", "未产出结果——引擎按无产出处理"),
+    ("returned no text", "未产出结果——引擎按无产出处理"),
+    ("no output from fork", "未产出结果——已安排重写/复跑"),
+    ("recursion-limit", "思考递归超限——已升级人工"),
+    ("recursionerror", "思考递归超限——已升级人工"),
+    ("declared underdetermined", "报欠定但未落台账——已升级人工"),
+    ("execution failed", "执行失败——已安排重试"),
+]
+
+
+def _humanize_fork_error(err: str) -> str:
+    """fork 失败原因英文黑话→中文人话+去向(F-TUI-10)。
+
+    未知兜底加中文框+原文诊断(Design 2026-07-18 必改:旧版裸 return 英文原文=Test-Eng
+    D1 英文泄漏 P0 的未根治漏口——未知黑话直透用户面)。中文框让用户知道这是「编写失败
+    原因」而非乱码,括号内保留原文供诊断,不违语言分层。空 err 返空(不显失败原因)。"""
+    s = str(err or "").strip()
+    if not s:
+        return ""
+    low = s.lower()
+    for pat, cn in _FORK_ERR_CN:
+        if pat in low:
+            return cn
+    return f"编写未成功·未识别原因（{s[:60]}）"
 
 
 def _render_fork_card(payload: dict, *, now: float,
@@ -464,7 +505,8 @@ def _render_fork_card(payload: dict, *, now: float,
             card = (f"   {G}✓{X} {D}{name} — 完成 · {p.get('calls', 0)} calls · "
                     f"{_fmt_secs(p.get('elapsed_s'))}{toks}{X}")
     elif status == "error":
-        err = str(p.get("error") or "").split("\n")[0][:80]
+        # F-TUI-10:英文黑话→中文人话+去向(未知保留原文)
+        err = _humanize_fork_error(str(p.get("error") or "").split("\n")[0])[:80]
         card = (f"   {R}✗{X} {name} — 失败{(' · ' + D + err + X) if err else ''}"
                 f"{D} · {p.get('calls', 0)} calls · {_fmt_secs(p.get('elapsed_s'))}{X}")
     else:
@@ -1994,6 +2036,12 @@ class IstInkApp:
         """进入 ask_user 交互式问答模式（渲染到固定面板，不入 transcript）。"""
         if not question_id or not questions:
             return
+        # F-TUI-1 串框隔离(P0,(41)④;User 23:54/00:03 实证:面板挂出前漏进全局输入框的
+        # 残留文本,会在 Other 输入/提交时串入答案)。面板 begin 时把全局框内容**暂存并
+        # 清空**——ask 期间全局框归零(Other 文本从空起),问答结束 _finish 恢复用户草稿。
+        # ask 是引擎 interrupt 强制交互,期间全局框的草稿本就发不出去,清空零损失。
+        self._ask_saved_prompt = self._prompt.value
+        self._prompt.clear()
         from main.ist_core.ink.components.ask_user_view import AskUserSession
         self._ask_user = AskUserSession(
             question_id,
@@ -2017,6 +2065,11 @@ class IstInkApp:
         session = self._ask_user
         self._ask_user = None
         self._ask_user_panel.clear()
+        # F-TUI-1 串框隔离:恢复 begin 时暂存的全局框草稿(ask 前用户没发出去的输入)。
+        _saved = getattr(self, "_ask_saved_prompt", "")
+        if _saved:
+            self._prompt.set_value(_saved)
+        self._ask_saved_prompt = ""
         # A3：留完成提示，让用户/对话历史看到选择结果
         try:
             if session is not None:

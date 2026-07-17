@@ -411,3 +411,54 @@ def test_fork_card_silent_run_shows_warning_not_checkmark():
     # 旧事件(无新字段,artifact_fresh=None)→ 不可判,保持 ✓(向后兼容)
     ok4 = _render_fork_card(dict(base), now=now)
     assert "✓" in ok4 and "无产出" not in ok4
+
+
+def test_ftui10_failure_card_humanizes_english_error():
+    """F-TUI-10 失败卡英文黑话→中文人话+去向(2026-07-18;fork_end error 直透违语言分层)。
+    子串映射到人话;未知错误保留原文(不隐藏)。"""
+    now = time.time()
+    from main.ist_core.ink.components.ist_app import _humanize_fork_error
+    # 各英文黑话→中文
+    assert _humanize_fork_error("fork returned no text output") == "未产出结果——引擎按无产出处理"
+    assert _humanize_fork_error("no output from fork (tail=none)") == "未产出结果——已安排重写/复跑"
+    assert _humanize_fork_error("[recursion-limit] GraphRecursionError") == "思考递归超限——已升级人工"
+    assert "升级人工" in _humanize_fork_error("worker declared underdetermined but no ledger")
+    assert _humanize_fork_error("fork skill execution failed: X") == "执行失败——已安排重试"
+    # 未知错误:中文框+原文诊断(Design 必改,治 D1 裸英文泄漏漏口——中文语境+保留原文)
+    _unknown = _humanize_fork_error("SomeUnexpectedError: boom")
+    assert _unknown.startswith("编写未成功·未识别原因（") and "SomeUnexpectedError" in _unknown
+    assert _humanize_fork_error("") == "" and _humanize_fork_error(None) == ""
+    # 渲染进失败卡:卡片显中文,不显英文黑话
+    card = _render_fork_card({"kind": "fork", "skill": "compile-worker", "autoid": "x" * 12,
+                              "status": "error", "error": "fork returned no text output",
+                              "calls": 5, "elapsed_s": 44}, now=now)
+    assert "✗" in card and "未产出结果" in card
+    assert "no text output" not in card, "英文黑话不得直透失败卡"
+
+
+def test_ftui8_b1_authoring_phase_shows_settle_hint():
+    """F-TUI-8 B1 编写期提示(治 P2-11 展示面:编写期 counts 冻初始态 produced=0,一串 0
+    误读成"白干";实为合并时批量结算)。编写相位且无结算 → 计数段替换为"编写中N·产出将在
+    合并时结算",不冗余显示全 0。数据源不动(纯展示)。"""
+    # 编写期:produced=0 passed=0 spin>0
+    authoring = _render_engine_bottom_line({
+        "kind": "engine", "run": "yzg", "phase": "author", "round": 0,
+        "status": "running", "total": 53,
+        "counts": {"pending": 53}})
+    assert "产出将在合并时结算" in authoring
+    assert "编写中53" in authoring
+    assert "产出0" not in authoring and "通过0 失败0" not in authoring, "编写期不冗余显示全 0"
+    # 非编写期(归因/收敛):正常显示全计数,不显结算提示
+    reconcile = _render_engine_bottom_line({
+        "kind": "engine", "run": "yzg", "phase": "reconcile", "round": 1,
+        "status": "running", "total": 53,
+        "counts": {"produced": 3, "passed": 37, "failed_terminal": 9,
+                   "pending": 2, "pending_decision": 2}})
+    assert "产出将在合并时结算" not in reconcile
+    assert "产出3" in reconcile and "通过37" in reconcile and "失败9" in reconcile
+    # 编写期但已有产出(barrier 后):正常显示,不再是编写期提示
+    post_barrier = _render_engine_bottom_line({
+        "kind": "engine", "run": "yzg", "phase": "author", "round": 0,
+        "status": "running", "total": 53,
+        "counts": {"produced": 21, "pending": 32}})
+    assert "产出将在合并时结算" not in post_barrier and "产出21" in post_barrier

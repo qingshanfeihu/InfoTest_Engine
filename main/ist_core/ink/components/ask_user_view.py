@@ -89,6 +89,13 @@ class AskUserSession:
             "\x1b[1m", "\x1b[2m", "\x1b[36m", "\x1b[32m", "\x1b[0m",
         )
         lines: list[str] = []
+        # A1 o 输入态可见提示(F-TUI-5,Design 裁;Test-Eng 卡壳实证:进了文本输入态却不
+        # 自知、文本打进全局框)。other 态时面板顶部醒目提示,明确"在输入自定义文本+如何
+        # 提交/取消",消除"以为在选项态"的误操作。
+        if self._other_input:
+            lines.append(
+                f" {C}✎{X} {B}正在输入自定义文本{X}{D}——在下方输入框打字,"
+                f"enter 提交 · esc 取消{X}")
         header = q.get("header", "")
         total = len(self._questions)
         nav = f" ({self._q_idx + 1}/{total})" if total > 1 else ""
@@ -139,7 +146,7 @@ class AskUserSession:
             hint += "enter 选定 · "
         if total > 1:
             hint += "←→/Tab 切题 · "
-        hint += "o 自定义 · esc 取消"
+        hint += "o 输入自定义文本 · esc 取消"   # A1(F-TUI-5):「自定义」→说清是文本输入
         lines.append(f"   {D}{hint}{X}")
         if self._leave_warn:
             # 防呆黄字(已选未提交切题/esc、带未答整体提交):告警一次,再次同类操作放行
@@ -171,10 +178,32 @@ class AskUserSession:
         if key and key.isdigit():
             n = int(key)
             if 1 <= n <= rows_count:
+                # F-TUI-1 补点(Design 2026-07-18 必带):末题数字直选提交走数字键(非 enter),
+                # 未答挡板 armed 后再次数字=确认提交(对齐 enter 二次放行)。治死锁——数字分支
+                # 下方 _clear_warn 会清 submit armed,若不在此先放行,末题数字直选提交遇未答
+                # 会永远卡在挡板首次告警(无法二次确认)。Design 担心的"末题数字直选过挡板",
+                # 实测是死锁(挡板触发了但放行不了)而非后门,此处根治。
+                if self._warned_op == "submit":
+                    self._clear_warn()
+                    self._submit()
+                    return True
                 self._clear_warn()
                 self._touched[self._q_idx] = True
                 self._highlight = n - 1
-                self._render()
+                # F-TUI-1 数字直选(Design 裁,治 run15/17 两次实弹丢答:数字只高亮违用户
+                # 直觉——按 3 以为选了 3、实际没落答)。单选=直选落答+前进;多选=勾选/取消
+                # (数字直选在多选有歧义,保 toggle 语义);Other 行=进文本输入(不能直选空 Other)。
+                if self._is_other_highlighted():
+                    self._other_input = True
+                    self._render()
+                    return True
+                if self._cur_question().get("multiSelect"):
+                    self._toggle_current()
+                    self._render()
+                else:
+                    self._selected[self._q_idx] = {
+                        self._options()[self._highlight].get("label", "")}
+                    self._advance_or_submit()
                 return True
         if key == "space":
             self._clear_warn()
@@ -256,15 +285,21 @@ class AskUserSession:
         )
 
     def _guard_cancel(self) -> bool:
-        """esc 守卫：先拦当前题已选未提交，再拦多题带未答关闭；均为告警一次再放行。"""
+        """esc 分级守卫(F-TUI-5/7,A2 Design 2026-07-18 裁):**用"有无已答内容"分流**——
+        - 当前题已选未提交:拦一次(既有,enter 落答);
+        - **有已答内容**(≥1 题已落答):esc 首次二次确认「已答 N 题,确认放弃全部?」,
+          再次 esc 才真 cancel——大面板误触全丢是真损失(用户答了半天);
+        - **空面板**(无任何已答):esc 秒退(正常逃生口,防呆保留)。
+        均告警一次再放行(§14-R4 不死挡)。与 (41)④ 提交保真门互补(一防误提交、一防误放弃)。"""
         if self._has_uncommitted_selection():
             return self._warn_once(
                 "cancel", "当前题已选未提交——enter 落答;再次 esc 确认取消整个问答",
             )
-        n = self._unanswered_count()
-        if n and len(self._questions) > 1:
+        n_answered = sum(1 for sel in self._selected if sel)
+        if n_answered > 0:
             return self._warn_once(
-                "cancel", f"还有 {n} 题未答,未答题将按挂起处理——再次 esc 确认取消",
+                "cancel",
+                f"已答 {n_answered} 题,确认放弃全部?(再按 esc 确认 / 任意键返回)",
             )
         return True
 

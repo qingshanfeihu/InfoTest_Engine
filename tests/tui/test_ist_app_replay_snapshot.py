@@ -46,6 +46,23 @@ class _StubApp:
         pass
 
 
+class _StubPrompt:
+    """最小 PromptInput —— value/clear/set_value，供 F-TUI-1 串框隔离断言。"""
+
+    def __init__(self, value: str = "") -> None:
+        self._value = value
+
+    @property
+    def value(self) -> str:
+        return self._value
+
+    def clear(self) -> None:
+        self._value = ""
+
+    def set_value(self, text: str, *, cursor=None) -> None:
+        self._value = text
+
+
 class _StubAskPanel:
     """最小 ask_user 固定面板 —— 记 update/clear 内容，供断言面板是否复活。"""
 
@@ -68,6 +85,7 @@ def _bare_app() -> IstInkApp:
     app._app = _StubApp()
     app._ask_user = None
     app._ask_user_panel = _StubAskPanel()
+    app._prompt = _StubPrompt()   # F-TUI-1 串框隔离依赖(_begin/_finish 暂存/恢复全局框)
     app._GREEN = app._RED = app._CYAN = app._BOLD = app._DIM = app._RESET = ""
     app._ai_stream_idx = -1
     app._stream_commit_idx = -1
@@ -254,3 +272,29 @@ def test_replay_unanswered_ask_user_still_shows_panel() -> None:
 
     assert app._ask_user is not None                   # 未答 → 面板重建
     assert app._ask_user_panel.lines                   # 面板有内容(渲染了问题)
+
+
+def test_ftui1_ask_isolates_global_prompt_box():
+    """F-TUI-1 串框隔离(P0,(41)④;User 23:54/00:03 串框):ask 面板 begin 时暂存并清空
+    全局输入框(防漏进的残留文本串入答案),_finish 恢复用户草稿。"""
+    app = _bare_app()
+    app._prompt.set_value("用户没发出去的草稿")   # ask 前全局框有内容
+    # begin ask 面板 → 应暂存并清空全局框
+    app._begin_ask_user("q1", [{"question": "选?", "options": [
+        {"label": "A", "description": ""}, {"label": "B", "description": ""}]}])
+    assert app._prompt.value == "", "ask begin 必须清空全局框(防串入答案)"
+    assert app._ask_saved_prompt == "用户没发出去的草稿", "草稿必须被暂存"
+    # finish → 恢复草稿
+    app._finish_ask_user()
+    assert app._prompt.value == "用户没发出去的草稿", "ask 结束必须恢复用户草稿"
+    assert app._ask_saved_prompt == "", "恢复后清暂存位"
+
+
+def test_ftui1_ask_empty_global_box_no_restore_noise():
+    """ask 前全局框为空:begin 清空(no-op)、finish 不恢复噪声(空串不 set)。"""
+    app = _bare_app()
+    app._begin_ask_user("q1", [{"question": "选?", "options": [
+        {"label": "A", "description": ""}, {"label": "B", "description": ""}]}])
+    assert app._prompt.value == ""
+    app._finish_ask_user()
+    assert app._prompt.value == ""

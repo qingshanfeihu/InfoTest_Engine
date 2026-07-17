@@ -1,6 +1,8 @@
 ---
 name: report-generator
 description: Test report generation agent. Receives structured test data, analyzes results, builds a ReportSchema, and creates a WeCom cloud document via report_to_doc.
+model: opus
+inherit-parent-prompt: true
 tools: report_to_doc, wx_create_doc, wx_search_doc, fs_read, fs_ls, fs_glob, run_python
 ---
 

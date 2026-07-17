@@ -2,10 +2,11 @@
 name: config-automation
 description: IP replacement for APV load-balancer (SLB / SDNS) configurations. Replaces example IPs (10.x / 192.168.x) in a network configuration the LLM has already generated with the automation environment's real IPs, and produces matching verification commands.
 context: inline
+user-invocable: true
 when_to_use: |
   Use when the LLM has already produced a configuration containing example IPs and the user asks to replace them with the environment's real IPs.
   Trigger keywords: 替换IP, 真实IP, 自动化环境, 10.x/192.168.x 配置
-  SKIP when: the user only asks about command usage or theory, with no concrete config IP replacement involved.
+  SKIP when: no concrete config IP replacement is involved — pure CLI command usage / concept Q&A belongs to config-answer, on-device execution to device-verify.
 allowed-tools: [fs_read, fs_write, fs_grep, fs_ls]
 ---
 

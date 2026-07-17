@@ -7,6 +7,7 @@ when_to_use: |
   Use when the user's request requires APV CLI commands —
   configuration generation, command explanation, parameter lookup, or config translation.
   Trigger keywords: 怎么配置, CLI命令, 生成命令, 翻译成APV
+  SKIP when: the request is not about APV CLI commands — pure product-spec / concept Q&A, on-device execution (device-verify), reviewing test cases (test-list-review), or IP replacement of an already-generated config (config-automation).
 allowed-tools:
   - fs_read
   - invoke_skill

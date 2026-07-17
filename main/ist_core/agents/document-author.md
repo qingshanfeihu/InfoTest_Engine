@@ -2,6 +2,7 @@
 name: document-author
 description: 基于知识库生成技术文档的 agent。先检索知识库，再组织内容，最后创建企微云文档。
 model: opus
+inherit-parent-prompt: true
 tools: wx_create_doc, wx_update_doc, wx_search_doc, wx_list_docs, wx_read_doc, fs_read, fs_grep, fs_glob, fs_ls
 ---
 

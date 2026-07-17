@@ -130,7 +130,7 @@ main/ist_core/tools/
 | `compile-attributor` | fork | V8 归因孔:上机 fail 读原文判层(+h 位置候选/ask panel),submit_attribution 落盘 |
 | `ist-verify` | user-invocable | 成品 excel 上机验证 + 归因(reflow 派 compile-worker) |
 | `device-verify` | user-invocable | 设备 SSH 只读/配置验证 |
-| `config-automation` | inline | 示例 IP → 环境真实 IP 替换 |
+| `config-automation` | user-invocable | 示例 IP → 环境真实 IP 替换 |
 | `config-answer` | inline | 配置问答 |
 | `config-answer-draft` / `config-answer-verifier` | fork | 配置问答的起草/复核孔 |
 | `review-verifier` | fork | 评审验证子流程（独立对抗复核评审草稿） |

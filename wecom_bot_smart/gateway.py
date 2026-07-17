@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import json
 import logging
 import os
 import queue
@@ -373,6 +374,60 @@ def _format_markdown(query: str, answer: str, elapsed_min: int,
             f"> **问题：**{query[:100]}\n---\n{body}\n---\n\n---\n{footer}")
 
 
+# 用户 ID → 显示名映射（本地持久化，首次遇到未知 ID 时自动记录）
+_USER_MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_map.json")
+_user_map: dict[str, str] = {}
+_user_map_lock = threading.Lock()
+
+
+def _load_user_map() -> dict[str, str]:
+    global _user_map
+    if _user_map:
+        return _user_map
+    with _user_map_lock:
+        if _user_map:
+            return _user_map
+        try:
+            with open(_USER_MAP_PATH, "r", encoding="utf-8") as f:
+                _user_map = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            _user_map = {}
+    return _user_map
+
+
+def _save_user_map() -> None:
+    try:
+        os.makedirs(os.path.dirname(_USER_MAP_PATH), exist_ok=True)
+        with open(_USER_MAP_PATH, "w", encoding="utf-8") as f:
+            json.dump(_user_map, f, ensure_ascii=False, indent=2)
+    except Exception:
+        logger.debug("保存 user_map 失败", exc_info=True)
+
+
+def _resolve_user_display(user_id: str, user_name: str = "") -> str:
+    """获取用户显示名用于目录命名。
+
+    优先级：
+    1. 消息帧 from.name（企微有时提供）
+    2. 本地 user_map.json 映射
+    3. _resolve_user_dir（API 查询或降级为原始 ID）
+    """
+    if user_name:
+        return _safe_user_dir(user_name)
+
+    umap = _load_user_map()
+    if user_id in umap:
+        return _safe_user_dir(umap[user_id])
+
+    # 企微内部 ID（如 WangDaHai）直接用
+    if user_id and not user_id.startswith(("wm", "wo", "wp")):
+        return _safe_user_dir(user_id)
+
+    # 外部 ID 无法解析，记录并降级
+    logger.info("未知企微用户 ID: %s（可在 %s 中配置映射）", user_id, _USER_MAP_PATH)
+    return _safe_user_dir(user_id)
+
+
 # 用户目录缓存
 _user_display_cache: dict[str, str] = {}
 _access_token: str = ""
@@ -726,8 +781,8 @@ class SmartBotGateway:
         self._reply_stream(frame, stream_id, f"正在接收{msgtype}文件...")
         try:
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            # 优先用企微返回的用户名，降级为 user_id
-            dir_name = _safe_user_dir(user_name) if user_name else _resolve_user_dir(user_id)
+            # 用消息帧信息解析用户名，降级为原始 ID
+            dir_name = _resolve_user_display(user_id, user_name)
             save_dir = os.path.join(project_root, "workspace", "inputs", dir_name)
             save_path = download_qywx_file(file_url, aeskey, save_dir)
             size_kb = os.path.getsize(save_path) / 1024

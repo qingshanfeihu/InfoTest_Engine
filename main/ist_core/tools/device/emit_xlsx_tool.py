@@ -22,6 +22,11 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
+# F-Py-9b:workspace/outputs 写路径统一走 _sh.outputs_root()(= _sh.project_root()/workspace/outputs),
+# 单一根供 pytest monkeypatch sh.project_root 隔离;knowledge/data 读仍用本地 root=parents[4](真数据不隔离)。
+# _shared 顶层不 import tools.device(其 tools.device import 全函数内局部),故顶层 import 无循环。
+from main.ist_core.compile_engine_v8 import _shared as _sh
+
 logger = logging.getLogger(__name__)
 
 # 框架执行契约(死知识):test_xlsx.py 是**延迟执行模型**——最后一个 case 走 `if last_case`
@@ -329,11 +334,10 @@ def _gate_forbidden_mechanism(autoid: str) -> str | None:
     采用×四案×两代引擎)。误报(如「重启计数」字面命中)经同一面板一答放行,门只认
     盘上裁决凭据。无盖章(非引擎路径/存量)→ 门不触发,零回归。"""
     try:
-        root = Path(__file__).resolve().parents[4]
-        it = json.loads((root / "workspace" / "outputs" / autoid / "intent.json")
+        it = json.loads((_sh.outputs_root() / autoid / "intent.json")
                         .read_text(encoding="utf-8"))
         fm = it.get("forbidden_mechanism")
-        if fm and not (root / "workspace" / "outputs" / autoid / "user_decision.json").is_file():
+        if fm and not (_sh.outputs_root() / autoid / "user_decision.json").is_file():
             toks = ", ".join(sorted({str(h.get("matched")) for h in fm if isinstance(h, dict)}))
             return (f"error: case {autoid} intent names a bed-forbidden mechanism "
                     f"({toks}). Landing is blocked until the user's ruling is on disk: "
@@ -358,8 +362,7 @@ def _intent_save_variant(autoid: str) -> str:
     交付假覆盖并把 write-memory 内容以 write-all 标题写回成投毒先例。盖章文件缺失或意图
     无保存族词 → 返回 ""(回退 no-op:非引擎路径/非持久化用例零回归)。"""
     try:
-        root = Path(__file__).resolve().parents[4]
-        p = root / "workspace" / "outputs" / (autoid or "").strip() / "intent.json"
+        p = _sh.outputs_root() / (autoid or "").strip() / "intent.json"
         if not p.is_file():
             return ""
         d = json.loads(p.read_text(encoding="utf-8"))
@@ -692,8 +695,7 @@ def _gate_command_existence(autoid: str, steps: list, init: str = "",
             # 剔除此前同命令落下的 stale claims——证据已坐实,别让过期题面
             # 在该案后续因他因进问询流时被带出(redline 评审建议②)
             try:
-                root = Path(__file__).resolve().parents[4]
-                ndp = root / "workspace" / "outputs" / (autoid or "").strip() / "needs_decision.json"
+                ndp = _sh.outputs_root() / (autoid or "").strip() / "needs_decision.json"
                 if ndp.is_file():
                     _nd = json.loads(ndp.read_text(encoding="utf-8"))
                     _cl = [c for c in (_nd.get("claims") or [])
@@ -713,8 +715,7 @@ def _gate_command_existence(autoid: str, steps: list, init: str = "",
                 f"unmatched: {[c for c, _ in misses]}.")
     # 逃生②:该案已有用户裁决(同键不复问,(20) 收敛律)
     try:
-        root = Path(__file__).resolve().parents[4]
-        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        outd = _sh.outputs_root() / (autoid or "").strip()
         udp, ndp = outd / "user_decision.json", outd / "needs_decision.json"
         if udp.is_file() and ndp.is_file():
             _ud = json.loads(udp.read_text(encoding="utf-8"))
@@ -727,8 +728,7 @@ def _gate_command_existence(autoid: str, steps: list, init: str = "",
         logger.debug("command_existence 用户裁决检查失败(按未裁决)", exc_info=True)
     # 呈报:写 needs_decision 台账(问询节点按 questions.py 组题)+信号,拒落卷
     try:
-        root = Path(__file__).resolve().parents[4]
-        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        outd = _sh.outputs_root() / (autoid or "").strip()
         outd.mkdir(parents=True, exist_ok=True)
         ndp = outd / "needs_decision.json"
         data: dict = {"autoid": (autoid or "").strip(), "claims": []}
@@ -800,8 +800,7 @@ def _gate_tau_coverage(autoid: str, steps: list, init: str = "") -> str | None:
         return None
     # 逃生②:该案已有用户裁决(missing_teardown claim 已答)
     try:
-        root = Path(__file__).resolve().parents[4]
-        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        outd = _sh.outputs_root() / (autoid or "").strip()
         udp, ndp = outd / "user_decision.json", outd / "needs_decision.json"
         if udp.is_file() and ndp.is_file():
             _ud = json.loads(udp.read_text(encoding="utf-8"))
@@ -814,8 +813,7 @@ def _gate_tau_coverage(autoid: str, steps: list, init: str = "") -> str | None:
         logger.debug("missing_teardown 用户裁决检查失败(按未裁决)", exc_info=True)
     # 呈报:needs_decision 台账+信号
     try:
-        root = Path(__file__).resolve().parents[4]
-        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        outd = _sh.outputs_root() / (autoid or "").strip()
         outd.mkdir(parents=True, exist_ok=True)
         ndp = outd / "needs_decision.json"
         data: dict = {"autoid": (autoid or "").strip(), "claims": []}
@@ -1212,9 +1210,8 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     # 文本止损指引曾被实证绕过(直接 ad-hoc 重编),此门把「是否换法」变成必答题;
     # 声明后记入冻结历史并放行(换法自由保留)。
     try:
-        from main.ist_core.compile_engine_v8 import _shared as _sh
-        # F-Py-9(A1):frozen 读走 sh.outputs_root()——与写侧(batch_tools)/引擎 case.xlsx 同一解析器,
-        # 恒共址、pytest 可隔离(不硬编码 parents[4]/workspace/outputs)。
+        # F-Py-9(A1):frozen 读走 sh.outputs_root()(F-Py-9b 起 _sh 顶层 import)——与写侧
+        # (batch_tools)/引擎 case.xlsx 同一解析器,恒共址、pytest 可隔离(不硬编码 parents[4]/workspace/outputs)。
         _fz_path = _sh.outputs_root() / autoid / ".frozen.json"
         if _fz_path.is_file():
             _ov = (override_frozen_reason or "").strip()
@@ -1256,7 +1253,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     # 降级成参与统计,用户从未批准)。orchestrator 带决策重派前把 user_decision.json 写进
     # outputs/<autoid>/,此处对产物机械核对;文件不存在=无决策约束,零行为变化。
     try:
-        _ud_path = Path(__file__).resolve().parents[4] / "workspace" / "outputs" / autoid / "user_decision.json"
+        _ud_path = _sh.outputs_root() / autoid / "user_decision.json"
         if _ud_path.is_file():
             _ud = json.loads(_ud_path.read_text(encoding="utf-8"))
             _form = str(_ud.get("expected_assertion_form") or "").strip()
@@ -1475,8 +1472,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     sub = (out_name or autoid).strip().replace("/", "_")
     fir = FileIR(feature=sub, author="IST-Core-agent", init_rows=init_rows,
                  cases=[case, _build_sentinel()], module="ist_smoke")
-    root = Path(__file__).resolve().parents[4]
-    out = root / "workspace" / "outputs" / sub / "case.xlsx"
+    out = _sh.outputs_root() / sub / "case.xlsx"
 
     # 单调门(A 层,理论 §2.4 守恒律的可判定投影):重编不得静默删观测维度。
     # 实证:035644/644 在 frozen override 压力下删掉会 fail 的 AAAA 断言——意图「A 或 AAAA」
@@ -1628,8 +1624,7 @@ def precheck_merge_case(aid: str) -> str | None:
     (run13 实证:一案凭证过期曾致 merge error→closing,26 案零上机收口)。
     工具本体的全拒行为不变(手动编排的最后防线)。
     """
-    root = Path(__file__).resolve().parents[4]
-    xp = root / "workspace" / "outputs" / str(aid).strip() / "case.xlsx"
+    xp = _sh.outputs_root() / str(aid).strip() / "case.xlsx"
     if not xp.is_file():
         return "case.xlsx 不在盘(编写未产出或已被挪走)"
     sj = xp.parent / ".grade_credential.json"
@@ -1711,13 +1706,12 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         return autoids_err
     if aid_list is not None:
         from main.ist_core.tools.device.precedent_tools import _load_case_rows
-        root = Path(__file__).resolve().parents[4]
         cases = []
         no_grade: list[str] = []
         stale_grade: list[str] = []
         for aid in aid_list:
             aid = str(aid).strip()
-            xp = root / "workspace" / "outputs" / aid / "case.xlsx"
+            xp = _sh.outputs_root() / aid / "case.xlsx"
             if not xp.is_file():
                 return (f"error: case.xlsx for autoid {aid} does not exist ({xp}); the case may "
                         "not have compiled successfully — compile it first / re-dispatch the worker")
@@ -1761,7 +1755,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         from main.ist_core.tools.device.structural_gate import lint_xlsx_case
         lint_bad: list[str] = []
         for aid in aid_list:
-            xp = root / "workspace" / "outputs" / str(aid).strip() / "case.xlsx"
+            xp = _sh.outputs_root() / str(aid).strip() / "case.xlsx"
             lr = lint_xlsx_case(xp)
             if not lr.ok:
                 lint_bad.append(f"{aid}: " + "; ".join(f"[{it.code}]" for it in lr.violations))
@@ -1869,8 +1863,12 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
     sub = (out_name or case_irs[0].autoid).strip().replace("/", "_")
     fir = FileIR(feature=sub, author="IST-Core-agent", init_rows=init_rows,
                  cases=[*case_irs, _build_sentinel()], module="ist_smoke")
-    root = Path(__file__).resolve().parents[4]
-    out = root / "workspace" / "outputs" / sub / "case.xlsx"
+    # F-Py-9b(redline 命中):此 root 传给 apply_fills(project_root=root),而 apply_fills→
+    # _sync_provenance **写** project_root/workspace/outputs/<autoid>/case.provenance.json
+    # (runtime_fill.py:185)——是 outputs 写路径、非 knowledge 读。故走 _sh.project_root() 与 out
+    # 同根,pytest monkeypatch 下 provenance 同步一并隔离(否则 out→tmp 而 provenance→生产=裂脑污染)。
+    root = _sh.project_root()
+    out = _sh.outputs_root() / sub / "case.xlsx"
     try:
         stats = emit_xlsx(fir, out)
     except Exception as e:  # noqa: BLE001

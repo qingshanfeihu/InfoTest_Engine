@@ -31,8 +31,12 @@ logger = logging.getLogger(__name__)
 
 
 def _project_root() -> Path:
-    """项目根(workspace 的父)。独立成函数供测试替换沙箱根。"""
-    return Path(__file__).resolve().parents[4]
+    """项目根(workspace 的父)。独立成函数供测试替换沙箱根。
+    F-Py-9b:委托 _sh.project_root() 单一根——pytest monkeypatch sh.project_root 即全域隔离本文件
+    全部 workspace/outputs 写(fanout offload 206/208、produced 探 435、frozen 1278);生产 ==
+    parents[4]、字节等价。局部 import 避 tools.device↔compile_engine_v8 顶层循环。"""
+    from main.ist_core.compile_engine_v8 import _shared as _sh
+    return _sh.project_root()
 
 # fan-out 并发上限。draft/grade 是 LLM 调用，并发度受端点限流约束而非 CPU；
 # 默认 auto（按待编译数自适应），夹紧到 _MAX_FANOUT 防失控（端点 429 / 把自己打挂）。
@@ -202,6 +206,11 @@ def _offload_large_outputs(items: list[dict], skill: str) -> None:
         safe = _re.sub(r"[^A-Za-z0-9_.\-]", "_", key)[:60] or "item"
         tail = out[-_FANOUT_INLINE_MAX:]
         try:
+            # F-Py-9b 护栏(Design 条件):此处 210/212 及 435 produced 探用**字面**
+            # `root / "workspace" / "outputs"`(非 _sh.outputs_root())——因 215 `f.relative_to(root)`
+            # 要求 f 与 root 同源(root=_project_root() 委托 _sh.project_root(),pytest 下随 tmp,
+            # f=root/workspace/outputs 同步随之)。改成 outputs_root() 则 f 与 root 走两次独立解析、
+            # relative_to 契约脆化。**outputs 目录若改名,须同步这几处字面**(210/212/435)。
             if _re.fullmatch(r"\d{15,}", safe):
                 f = root / "workspace" / "outputs" / safe / f"fanout_{slug}.md"
             else:

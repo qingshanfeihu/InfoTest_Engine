@@ -251,8 +251,8 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
         # S_FAILED+空队列+无 ask 目标(活锁)。裁决折叠回既有终态(确认缺陷→
         # defect_candidate/修订期望→correct+reflow/挂起→suspended),不新增 @99 终态
         # ((40) 第七类,K §2.12.1;views/report_gate 双路冗余勿协同改)。
-        _pp = (Path(__file__).resolve().parents[4] / "workspace" / "outputs"
-               / (autoid or "").strip() / "ask_panel.json")
+        from main.ist_core.compile_engine_v8 import _shared as _sh  # F-Py-9b:走单一根供 pytest 隔离
+        _pp = (_sh.outputs_root() / (autoid or "").strip() / "ask_panel.json")
         if not _pp.is_file():
             return ("error: disposition=expectation_suspect requires a same-round "
                     "submit_ask_panel filed first (the panel IS its only exit — without "

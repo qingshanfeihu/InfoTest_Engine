@@ -453,3 +453,49 @@ barrier 次轮 footer「轮次6 对账 37/53 · 欠定9 通过37 失败7」，§
 - **P2-9（我的过程教训·非引擎问题）**：批 2 收尾误读滚动历史臆想"交付完成"——只据当屏实时 engine_report.json 时间戳汇报，绝不凭一屏推断交付状态。
 - **P2-10（引擎·rr/wrr 跨案时序污染）**：整卷连跑时前序 rr/wrr 案改变设备共享轮转计数器，后续同类案（778012/778041/593573）单卷 pass、整卷 contradicted——设备侧共享态，非编译缺陷；引擎有 contradiction 上限自动降级保护（非无限重编）。建议：同类案考虑整卷内加 clear/隔离前置，或归为"整卷时序依赖"已知限制。
 - **良性确认（非缺陷，正面记录）**：①欠定数学门（分布恒真检测、最小可验请求数推导）正向工作，防 577976/593516 历史坑回归；②contradiction/round-cap 自动降级保护存在；③断网 checkpoint 续跑幂等；④欠定案"从未问到"如实入账不静默；⑤自愈环 uncertain 观察入库；⑥G4 echo 对 freeform 答案回显解析结果请用户核对（对照批1 035413 静默误归是改进）。
+
+## 6. yzg 最终收口 + build 研判 + D17 来源 + zhaiyq 起批准备（HEAD=a0ff331f #37 resume fix）
+
+**§5 补账（首跑 19/26 → 最终 25/26）**：§5 记的是 D18 阻断前**首跑**（19/26 deliverable + 7 suspended）；#37 resume 重开欠定修复（a0ff331f）后 **#36 双层重跑最终收口 25/26**。engine_report 实证 `totals={cases:26, deliverable:25, suspended:1}` + `ask={answered:21, effective:21, freeform:0}`（**零 effective=false**）；delivered/25 + unfinished/1（655248 HA fip 挂起、编写 0 次、床限制类）。
+
+- **D18 验成**（resume effective=false 走向②）：7 案**真 author**（vs 首跑 0）+ 重开欠定 3 轮 + **21/21 ask effective**（vs 首跑 14 条 effective=false）。resume→S_PENDING 后有 author 出口，旧改描述 decision 不再原封路由 closing。
+- **D12 验成**（折叠-eq panel 落盘失败）：668 折叠-eq 家族（668000/015/030/044）采纳 gather 面板正常出→decision 改过程（**FM 判例抢占 0**，无 adopted:eq--forbidden-mechanism 误采信）→对照法卷→整卷 25/25 PASS→全 delivered。shape-aware 采信（claim_kind 匹配不跨 kind）生效。
+- **§11.9 收口 clean**：顶层残留 0 / 无中间件（manifest/last_run/子集卷）/ 交付对账 25==25==25（delivered==deliverable==case_rows）/ backup 封存（runtime/backups/yzg_rerun2_delivered_20260718/）。
+- **三铁律全过**：裁决执行链对账（decision→authored→verdict→终局，7 案链完整）、引擎自认异常字段零放过（effective=false 清零）、该交付没交付比交付更查（1 挂起案 655248 机读卷齐）。
+
+**build 568/585 研判（D21，转 Py-Eng 池）**：engine_report 两轮记 device_build=585，但跳板机 103 的 138 个 report 目录**全 568**（自 06-11 零 585）→ 判**引擎床体检 build 解析错位**（非设备重刷），version_family=10.5 家族吸收 build 差、**zhaiyq 可信度不受影响**、build 侧放行。D21 缺陷单登记，修法归 Py-Eng 池（床体检 build 字段解析核对）。
+
+**D17 来源定位（LLM 转述层，归 LLM-Eng）**：收官叙述「26 个用例中 19 通过…7 未完成：4 listener+4 持久化」（4+4=8≠7 矛盾）——events.jsonl 引擎 emit **零命中**该文案 + delivery_report 判定式渲染**正确**（25+1、不数错）→ 坐实是 **main agent LLM 总结发言**误归类，非 engine emit/render。修法=skill 层约束（LLM 数字照抄 engine_report 禁自行归类），非 render 层。
+
+**zhaiyq 起批前准备（不起批，待放行令）**：
+- **清点**：脑图 zhaiyq.txt 在位（94990 字节、53 案 2052* 族）；批4残留**全清**（2052*顶层 0/zhaiyq/ 0/zhaiyq__sub* 0，batch34_cleanup 已清入 backup）；checkpoint 只 `v8:yzg` thread（**无 zhaiyq thread**）；封存完好（batch34_cleanup + batch4_zhaiyq_stopped，批4 中止态 41/53 可逆）。
+- **环境预检**：跳板机 103 只读探针——无残留 pytest、床稳定 568、report 目录正常。
+- **起批形态**（待 leader 裁）：**推荐清态全新起**——状态天然干净、批4 中止 41/53 是修复前旧码（带 FM 判例污染旧裁决、续跑重踩 D12/D18）、修复后干净码全新起判据可信、批4 中止态已封存可对照。
+
+**双层验收判据模板（yzg 经验固化，zhaiyq 沿用）**：
+1. **Tab 回扫硬动作**：多题面板每题核落答（数字只高亮、每题必 enter、Tab 不落答案）——防丢答已两犯（655248 采纳漏答 / run15 / run17 三题丢两）。答完 Tab 逐题回扫确认。
+2. **四标准快评 + 缺陷单**（答题前先评，不合格先记 D 号再答）：①题面可读性（**含号码形态/截断细查**，D16 教训：短号/截断/号码形态我快评曾漏，User 观察补捕）②选项质量（label 完整不截断，D4）③黑话/英文（内部术语/英文泄漏，D1/D5/P2-7）④用户可判断性（普通用户能读懂后果，非"我能读懂"，D2）。
+3. **机读判据**（三铁律）：裁决执行链对账（decision→authored→verdict→终局，链断三分判据）+ 引擎自认异常字段零放过（effective=false/broken）+ 该交付没交付比交付更查。
+4. **deadline 双保险**：预估窗口 ×1.5 到点未触发即 read-screen（re-ask 不 re-emit ask_shown=监测盲区，yzg 立功实证）。
+5. **_pid 过滤**：机读账（ask_shown/facts/events）按当前 TUI PID 过滤，避免跨批混算。
+
+**起批等放行令**（Py-Eng 第一段清扫四关合入 + 重启后，今晚或明晨）。准备就绪，待 leader 裁起批形态 + 放行。
+
+### 6.1 zhaiyq 路径踩点 tracker（冒烟策略·批中对照标记，源 `team4_interaction_path_completeness.md` 22 路径）
+
+leader 冒烟策略：①zhaiyq 53 案大批**批中标记自然踩到的路径**（大批天然覆盖广）②批后清点残余未踩→**只对残余造场景补踩**③双层验收+清单对照合并做（面板出现顺手标路径号）。**面板出现时动作**：标 path 号 + 四标准快评 + 答题 + 同步填本 tracker。
+
+**已实弹 9 条**（前批 ✅，zhaiyq 顺带再确认）：P1-a 床态继续 / P2-a 改过程 / P2-c 改描述挂起 / P2-d 采纳等价 / P2-h cap stop / P2-i env 确认 / P2-l 挂起 suspend / P2-n resume 恢复 / P2-p 折叠广播。
+
+**待踩·富集预告**（bug-to-case 会话保持大概率自然出，"见到就是赚到"）：
+- ☐ **P2-o** defect 确认→缺陷候选单（zhaiyq=需求 83112 会话保持 bug-to-case，产品缺陷概率高）
+- ☐ **P3-a** contra reorder / ☐ **P3-b** contra downgrade / ☐ **P3-c** contra confirm-correct（会话保持时序敏感，contra 全族几乎未实弹）
+- ☐ **P2-g** cap continue 加轮（难案触顶）
+- ☐ 判例**沿用④**/**止损**（批内 writeback 积累→后案免问沿用/同案连采≥2 止损）
+
+**待踩·其他**（残余批后造场景补）：
+- ☐ P2-b 改预期(emit form 门) / ☐ P2-e Other 自给方案(brief 注入) / ☐ P2-f 采纳题挂起 / ☐ P2-j env retry 隔离复跑 / ☐ P2-k bed 批内治理 / ☐ P2-m keep 不重开(边界①) / ☐ P2-q Other 自由输入兜底
+- ☐ **auto:{panel/cap/contra} resume 重开**（白名单 nodes.py:406-408 已实现、守门锁绿，批中/跨批实弹待踩）
+- ☐ **批序自指 45c**（批中早案 writeback 新鲜判例→后案免问跳面板，理论预测未实弹）
+
+**注**：判例 §5 quarantine（11 条误标 FM→vpa）修法归 Py-Eng（find_adjudications 跳 quarantine≠∅），668000 受影响案待引用清算（follow-up 非阻塞）。zhaiyq 批中若见判例免问路径，核 shape 匹配对否（D12 shape-fix 回归观察点）。

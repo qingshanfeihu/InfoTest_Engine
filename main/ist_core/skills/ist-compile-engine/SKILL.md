@@ -50,3 +50,12 @@ Keep the user-facing summary **short**: the engine already wrote the full report
 `delivery_report.md` (path in its return). One or two sentences plus the report path is
 enough; never replay the report inline. When restating device behavior, quote only from the
 engine return, `engine_report.json`, or the referenced run files — never from memory.
+
+Report only the **status counts** (pass / fail / unfinished / broken / deliverable) from
+`engine_report.json`'s `totals` block — read them there (e.g. `report["totals"]`) and copy
+them. **Do NOT break the cases down by theme or topic** (e.g. "4 listener + 4 persistence"):
+`engine_report` has no per-theme field, so any theme grouping is your own arithmetic — which is
+exactly what miscounts (a hand re-tally reported "7 unfinished" but grouped it as 4 listener +
+4 persistence = 8). Never re-tally or re-group the cases yourself. Friendly plain-language
+phrasing stays free (the engine's status counts are the data, your wording is the control
+plane), but every number in it is copied from those `totals` fields.

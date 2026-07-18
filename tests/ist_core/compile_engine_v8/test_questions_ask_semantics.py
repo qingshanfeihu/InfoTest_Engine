@@ -187,9 +187,10 @@ def test_env_question_shows_claim_history_when_present():
 
 
 def test_cap_without_history_keeps_evidence_line():
-    """无 claim_history(旧调用方/接线前)→ 保持既有「最近的修法方向」形态。"""
-    q = build_ask_question({"autoid": A, "kind": "cap", "rounds": 3, "evidence": "修法方向x"})
-    assert "最近的修法方向" in q["question"] and "修法方向x" in q["question"]
+    """无 claim_history(旧调用方/接线前)→ 保留「引擎判断」证据行(D28:源改 user_note 中文叙述,
+    label 由「最近的修法方向」改「引擎判断」——evidence 现承载中文 fail 原因非英文 fix_direction)。"""
+    q = build_ask_question({"autoid": A, "kind": "cap", "rounds": 3, "evidence": "本轮与上轮同因未过x"})
+    assert "引擎判断" in q["question"] and "本轮与上轮同因未过x" in q["question"]
 
 
 # ── ④ E10a:cross_client_landing 专用题面,不掉 generic 采样模板 ────────────────
@@ -241,7 +242,8 @@ def test_pure_sampling_claim_keeps_legacy_wording():
     qs = build_questions(led)
     proc = next(o for o in qs[0]["options"] if o["label"] == "改过程")["description"]
     assert proc.startswith("加请求/观测次数到可验水平(≥24 次)")
-    assert "断言形态按 dist" in proc
+    # q4:form 机读 token 人话化(_FORM_CN 闭集),不再露裸 "dist"
+    assert "断言改成「分组分布/比例区间」的写法" in proc and "dist" not in proc
 
 
 # ── F-Py-5②(scheme 通道拒空):等价方案类 option 结构标记 _needs_scheme_labels ──────────

@@ -330,8 +330,8 @@ def test_session_bidirectional_nav_keeps_state(capture_submit):
     assert capture_submit["ans"] == {"Q1?": "B", "Q2?": "X"}
 
 
-# ── 516576 防呆：已选未提交切题/esc 告警一次 + 带未答整体提交提示 ─────
-# 实弹背景:zhaiyq 7 题丢 2 答——数字/↑↓ 只动高亮,enter 才落答;用户高亮后
+# ── 516576 防呆：动过高亮未落答切题/esc 告警一次 + 带未答整体提交提示 ─────
+# 实弹背景:zhaiyq 7 题丢 2 答——B 语义下 ↑↓ 只动高亮,数字/enter 才落答;用户高亮后
 # 直接 Tab/←→ 切题或收尾,答案静默丢。防呆=黄字告警一次,再次同类操作放行。
 
 
@@ -355,11 +355,11 @@ def test_session_switch_with_unsubmitted_selection_warns_once(capture_submit):
     s.handle_key("right", "")           # 第一次切题 → 拦下告警
     out = _rendered(s)
     assert "Q1?" in out, "首次切题应被拦在当前题"
-    assert "已选未提交" in out, "应显示黄字告警"
+    assert "动过高亮未落答" in out, "应显示黄字告警"
     s.handle_key("right", "")           # 再次同类操作 → 放行
     out = _rendered(s)
     assert "Q2?" in out, "再次切题应放行"
-    assert "已选未提交" not in out, "放行后告警清除"
+    assert "动过高亮未落答" not in out, "放行后告警清除"
     # 放行=按原语义切题不落答：提交后 Q1 仍为空
     s.handle_key("return", "")          # Q2 = X，进入提交（Q1 未答 → 提交防呆拦一次）
     s.handle_key("return", "")          # 再次 enter 确认提交
@@ -371,10 +371,10 @@ def test_session_switch_committed_no_warn(capture_submit):
     s = _session(_two_questions(), capture_submit)
     s.handle_key("return", "")          # Q1 = A（落答，自动进 Q2）
     s.handle_key("left", "")            # Q2 未动过 → 自由切回 Q1
-    assert "已选未提交" not in _rendered(s)
+    assert "动过高亮未落答" not in _rendered(s)
     assert "Q1?" in _rendered(s)
     s.handle_key("right", "")           # Q1 已落答 → 自由切到 Q2
-    assert "已选未提交" not in _rendered(s)
+    assert "动过高亮未落答" not in _rendered(s)
     assert "Q2?" in _rendered(s)
 
 
@@ -384,15 +384,15 @@ def test_session_switch_warn_rearms_after_other_key(capture_submit):
     s.handle_key("down", "")            # ↓移高亮，未落答（数字直选后用 ↑↓ 造未提交态）
     s.handle_key("right", "")           # 告警一次
     s.handle_key("up", "")              # 其他键 → 清提示重新计
-    assert "已选未提交" not in _rendered(s)
+    assert "动过高亮未落答" not in _rendered(s)
     s.handle_key("right", "")           # 仍未提交 → 重新告警，不切题
-    assert "Q1?" in _rendered(s) and "已选未提交" in _rendered(s)
+    assert "Q1?" in _rendered(s) and "动过高亮未落答" in _rendered(s)
     s.handle_key("right", "")           # 再次 → 放行
     assert "Q2?" in _rendered(s)
 
 
 def test_session_esc_with_unsubmitted_selection_warns_then_cancels(capture_submit):
-    """单题已选未提交按 esc：第一次告警不取消，再次 esc 确认取消。"""
+    """单题动过高亮未落答按 esc：第一次告警不取消，再次 esc 确认取消。"""
     s = _session(
         [{"question": "选?", "options": [
             {"label": "A", "description": ""}, {"label": "B", "description": ""}]}],
@@ -401,7 +401,7 @@ def test_session_esc_with_unsubmitted_selection_warns_then_cancels(capture_submi
     s.handle_key("down", "")            # ↓移高亮 B 未 enter（数字直选后用 ↑↓ 造未提交态）
     s.handle_key("escape", "")
     assert "ans" not in capture_submit, "首次 esc 应被拦下"
-    assert "已选未提交" in _rendered(s)
+    assert "动过高亮未落答" in _rendered(s)
     s.handle_key("escape", "")          # 再次 esc → 确认取消
     assert capture_submit["ans"] == {}
 
@@ -481,21 +481,21 @@ def test_session_leave_warn_coexists_with_empty_other_guard(capture_submit):
     s = _session(_two_questions(), capture_submit)
     s.handle_key("down", "")            # Q1 ↓移高亮未提交（数字直选后用 ↑↓ 造未提交态）
     s.handle_key("right", "")           # 切题告警
-    assert "已选未提交" in _rendered(s)
+    assert "动过高亮未落答" in _rendered(s)
     s.handle_key("o", "o")              # 进 Other 输入（切题告警清除）
     s.submit_other_text("")             # 空文本 → 532862 防呆拦下
     assert s.in_other_input
     assert any("不能为空" in ln for ln in s.render_lines())
     s.submit_other_text("裁决X")         # 补内容 → Q1 落答，前进 Q2
     assert "不能为空" not in _rendered(s)
-    assert "已选未提交" not in _rendered(s)
+    assert "动过高亮未落答" not in _rendered(s)
     s.handle_key("return", "")          # Q2 = X → 全部已答直接提交
     assert capture_submit["ans"] == {"Q1?": "裁决X", "Q2?": "X"}
 
 
 def test_session_multi_enter_uncommitted_warns_once(capture_submit):
     """multiSelect 的 enter 也是「离开当前题」(2026-07-17 team4 审计 P1-6)：动过高亮
-    未 space 勾选就 enter → 与切题/esc 同款守卫，告警一次；再次 enter 放行（按未选继续）。"""
+    未 space/数字 勾选就 enter → 与切题/esc 同款守卫，告警一次；再次 enter 放行（按未选继续）。"""
     s = _session(
         [
             {"question": "M1?", "multiSelect": True, "options": [
@@ -509,7 +509,7 @@ def test_session_multi_enter_uncommitted_warns_once(capture_submit):
     s.handle_key("return", "")          # 首次 enter → 拦下告警，不推进
     out = _rendered(s)
     assert "M1?" in out, "首次 enter 应被拦在当前题"
-    assert "未 space 勾选" in out, "应显示黄字告警"
+    assert "未 space/数字 勾选" in out, "应显示黄字告警(B 下数字也 toggle 落答)"
     s.handle_key("return", "")          # 再次 enter → 放行（按未选推进）
     assert "M2?" in _rendered(s)
     # space 勾选后 enter 不告警（正常路径）
@@ -539,18 +539,26 @@ def test_session_single_question_empty_submit_warns(capture_submit):
 
 
 def test_session_hint_matches_actual_key_semantics(capture_submit):
-    """按键提示对齐实际行为(2026-07-17 team4 审计 P1-5)：数字/↑↓ 只移动高亮不落答
-    ——「数字直选」承诺了按数字即选定，正是 run15/17 两次 3 题丢 2 的心智模型根因。"""
-    # 单选：enter=选定
+    """按键提示对齐实际行为 B(2026-07-18 team4 D23):单选数字/enter 都落答+前进、
+    多选数字/space 都勾选——纯移动只剩 ↑↓。旧「数字 移动」是 A 旧叙事、与 B 代码相反
+    (用户看"移动"实际按数字即落答跳题),run15/17 丢答心智模型根因;D23 补文案闭环。"""
+    # 单选单题(=末题):数字/enter 选定并提交,数字移出"移动"
     s = _session(
         [{"question": "选?", "options": [
             {"label": "A", "description": ""}, {"label": "B", "description": ""}]}],
         capture_submit,
     )
     hint = _rendered(s)
-    assert "数字直选" not in hint, "误导文案必须移除"
-    assert "↑↓/数字 移动" in hint and "enter 选定" in hint
-    # multiSelect 非末题：space 勾选 · enter 下一题；末题：enter 提交
+    assert "数字直选" not in hint, "旧 A 误导文案必须移除"
+    assert "↑↓/数字 移动" not in hint, "数字不再属'移动'(B 下数字即落答)"
+    assert "↑↓ 移动" in hint, "纯移动只剩 ↑↓"
+    assert "数字/enter 选定并提交" in hint, "单题=末题:数字/enter 并列,选定并提交"
+    # 单选多题非末题:数字/enter 选定并进下题(非'提交')
+    sq = _session(_two_questions(), capture_submit)
+    hq = _rendered(sq)
+    assert "数字/enter 选定并进下题" in hq, "非末题:选定并进下题"
+    assert "选定并提交" not in hq, "非末题不说'提交'"
+    # multiSelect 非末题:数字/space 勾选 · enter 下一题；末题:enter 提交(保留 enter)
     s2 = _session(
         [
             {"question": "M1?", "multiSelect": True, "options": [
@@ -561,7 +569,7 @@ def test_session_hint_matches_actual_key_semantics(capture_submit):
         capture_submit,
     )
     h1 = _rendered(s2)
-    assert "space 勾选" in h1 and "enter 下一题" in h1
+    assert "数字/space 勾选" in h1 and "enter 下一题" in h1, "多选:数字/space 勾选,保留 enter"
     s2.handle_key("space", "")
     s2.handle_key("return", "")         # 进末题
     h2 = _rendered(s2)
@@ -654,3 +662,76 @@ def test_ftui1_cross_path_armed_digit_then_enter(capture_submit):
     assert "ans" not in capture_submit, "数字提交遇未答应告警"
     s.handle_key("return", "")  # enter 二次确认(跨路径:数字告警→enter 放行)
     assert capture_submit["ans"] == {"Q1?": "", "Q2?": "X"}
+
+
+# ── D24 回扫游标显已选(2026-07-18 team4 收口批,治回退已答题 ❯ 停默认行误判"答案没了") ──
+
+
+def test_session_d24_backtrack_shows_selected_highlight(capture_submit):
+    """D24:回扫到已答题时 ❯ 光标落已选项(非无条件 0)——旧 _goto_question 置 0 致回退
+    已答题 ❯ 停默认行、已选项虽绿标却无光标,用户误判"答案没了"(选择其实在 _selected)。
+    与 D23 保留前进硬绑定:前进(强反馈治丢答)配回扫(可复核治不可退回)方闭环。"""
+    s = _session(_two_questions(), capture_submit)
+    s.handle_key("down", "")            # Q1 高亮 B(index 1)
+    s.handle_key("return", "")          # Q1=B 落答,前进 Q2(新题从头 highlight=0)
+    assert s._highlight == 0, "前进到新题 Q2 高亮从头(0),与回退区分"
+    s.handle_key("left", "")            # 回退 Q1(已答=B)
+    assert s._highlight == 1, "回退已答题 ❯ 落已选项 B(index 1),非默认 0"
+    b_line = [ln for ln in s.render_lines() if "B" in ln and "❯" in ln]
+    assert b_line, "❯ 光标应渲染在已选项 B 行"
+
+
+def test_session_d24_backtrack_unanswered_stays_zero(capture_submit):
+    """D24:回退到未答题→高亮保持 0(无已选项可显,不无脑显;对比已答题落已选)。"""
+    s = _session(
+        [
+            {"question": "Q1?", "options": [
+                {"label": "A", "description": ""}, {"label": "B", "description": ""}]},
+            {"question": "Q2?", "options": [
+                {"label": "X", "description": ""}, {"label": "Y", "description": ""}]},
+            {"question": "Q3?", "options": [
+                {"label": "M", "description": ""}, {"label": "N", "description": ""}]},
+        ],
+        capture_submit,
+    )
+    s.handle_key("return", "")          # Q1=A,前进 Q2
+    s.handle_key("right", "")           # Q2 未答,自由跳 Q3
+    s.handle_key("left", "")            # 回退 Q2(未答)
+    assert s._highlight == 0, "回退未答题 Q2 高亮保持 0(无已选可显)"
+
+
+def test_session_d24_highlight_for_branches(capture_submit):
+    """D24 _highlight_for 各分支:未答→0 / 单选已选→其 index / 仅 Other 已选→Other 行。"""
+    from main.ist_core.ink.components.ask_user_view import _OTHER_VALUE
+    s = _session(
+        [{"question": "Q?", "options": [
+            {"label": "A", "description": ""}, {"label": "B", "description": ""},
+            {"label": "C", "description": ""}]}],
+        capture_submit,
+    )
+    assert s._highlight_for(0) == 0, "未答→0"
+    s._selected[0] = {"C"}
+    assert s._highlight_for(0) == 2, "选 C→index 2"
+    s._selected[0] = {_OTHER_VALUE}
+    assert s._highlight_for(0) == 3, "仅 Other 已选→Other 行 index=len(options)=3"
+
+
+def test_session_d24_multi_select_backtrack_first_selected(capture_submit):
+    """D24 多选:回退已答多选题→❯ 落首个已选项(多选 [x] 标全部,光标锚首个已选)。"""
+    s = _session(
+        [
+            {"question": "M1?", "multiSelect": True, "options": [
+                {"label": "A", "description": ""}, {"label": "B", "description": ""},
+                {"label": "C", "description": ""}]},
+            {"question": "Q2?", "options": [
+                {"label": "X", "description": ""}, {"label": "Y", "description": ""}]},
+        ],
+        capture_submit,
+    )
+    s.handle_key("down", "")            # 高亮 B
+    s.handle_key("space", "")           # 勾 B(index 1)
+    s.handle_key("down", "")            # 高亮 C
+    s.handle_key("space", "")           # 勾 C(index 2)
+    s.handle_key("return", "")          # M1 提交(B,C)→前进 Q2
+    s.handle_key("left", "")            # 回退 M1(已答 B,C)
+    assert s._highlight == 1, "回退多选题 ❯ 落首个已选项 B(index 1)"

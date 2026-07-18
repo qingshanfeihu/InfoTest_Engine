@@ -177,6 +177,7 @@ def compile_attribute(verdict_detail: str, failing_assertion_layer: str = "",
 def submit_attribution(xlsx_path: str, autoid: str, layer: str,
                        disposition: str, evidence: str,
                        fix_direction: str = "",
+                       user_note: str = "",
                        defect_candidate: dict | str | None = None,
                        h_position: str = "") -> str:
     """Land your attribution **conclusion** for one failed case into last_run.json (the judgement itself is still yours, made from the raw evidence).
@@ -215,6 +216,11 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
             (a standalone ^ line was measurably lost in retelling, causing misattribution).
         fix_direction: fix direction (free text; for reflow/frozen state clearly what should
             change — next round's "same approach?" check relies on it).
+        user_note: a short Chinese user-facing line — why this case failed this round and how
+            it relates to the previous round (its trend) — shown on the cap/env ask panel to the
+            user. Keep fix_direction as the English technical record; user_note is the Chinese
+            user-facing line. Do NOT paste device echo here (the panel shows raw device lines
+            verbatim separately); write your judgement narrative only.
         defect_candidate: structured candidate form when disposition=defect_candidate, with
             repro (reproduction steps), expected_with_source (expectation + manual source),
             actual (actual + device evidence), version, optionally ticket_id. Pass a JSON
@@ -281,11 +287,11 @@ def submit_attribution(xlsx_path: str, autoid: str, layer: str,
     # 锁外读锁内写会把并发同伴刚落的 _attribution 覆盖回旧快照)
     with _LAST_RUN_LOCK:
         return _submit_attribution_locked(lr, autoid, layer, disposition, evidence,
-                                          fix_direction, defect_candidate, h_position)
+                                          fix_direction, user_note, defect_candidate, h_position)
 
 
 def _submit_attribution_locked(lr, autoid: str, layer: str, disposition: str,
-                               evidence: str, fix_direction: str,
+                               evidence: str, fix_direction: str, user_note: str,
                                defect_candidate, h_position: str) -> str:
     """submit_attribution 的读改写主体(_LAST_RUN_LOCK 持有中;拆函数只为锁边界清晰)。"""
     try:
@@ -332,6 +338,7 @@ def _submit_attribution_locked(lr, autoid: str, layer: str, disposition: str,
         "disposition": disposition,
         "evidence": ev[:2000],
         "fix_direction": (fix_direction or "").strip(),
+        "user_note": (user_note or "").strip(),
         "ts": _time.time(),
         "round": rec.get("_round"),
     }

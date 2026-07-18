@@ -229,3 +229,69 @@ def test_recount_g5_all_answered_still_deliverable():
         {"ev": "decision", "aid": A, "question_id": q2, "answer": "y"},
     ]
     assert RG.recount_deliverable(fs, MANIFEST)["deliverable"] == {A}
+
+
+# ── D31:escalated 解除感知(recount 与 case_status 同口径;zhaiyq 516389/533097 实弹) ──────
+
+
+def test_recount_escalated_then_authored_is_deliverable_D31():
+    """D31 红绿(zhaiyq 516389/533097):escalated 在 authored **之前**(fork 墙钟超时→迟到回收卷
+    /reflow 重编 supersede)→ 交付有事实支撑。修前无条件 `any(escalated)` 丢=set()(红,与
+    case_status 的 run18 解除漂移致 G5 自我误告警);修后 `last_esc<last_auth` 解除→{A}(绿)。"""
+    fs = [{"ev": "escalated", "aid": A, "reason": "no output from fork"}] + _delivered_facts()
+    assert RG.recount_deliverable(fs, MANIFEST)["deliverable"] == {A}
+
+
+def test_recount_escalated_after_authored_still_withdrawn_D31():
+    """对照(防过修):escalated 在 authored **之后**(未被后续 authored 解除)→ 仍是终态、丢。
+    保证 D31 修法只救「被 supersede 的 escalated」,不放行真·升级案。"""
+    fs = _delivered_facts() + [{"ev": "escalated", "aid": A, "reason": "genuine escalation"}]
+    assert RG.recount_deliverable(fs, MANIFEST)["deliverable"] == set()
+
+
+def test_recount_matches_case_status_all_lifecycle_branches_D31():
+    """★宪法级同口径守门(D31 定谳:同族二犯根因=双路独立实现无机器等价校验,一路修 bug、
+    另一路必漂;门内注释「独立重算两条路径必须同口径,否则 G5 报告门自我误告警」早已预言)。
+    合成事实流穷举 leader/Theory/Design 点名排除态转换全枝(escalated 解除/终态、suspended
+    解除/终态、二次欠定 qid 配对、终局裁决 round99、未答呈报、clean),**双重断言**:recount 与
+    case_status(S_DELIVERABLE) 逐案一致(两路等价)∧ 各自命中 ground-truth(防两路同错都绿)。
+
+    **覆盖纪律(给未来编辑者)**:任一路(recount_deliverable / views.case_status)新增排除
+    状态,**必须同 commit** 在此加对应等价 fixture case,否则守门形同虚设——G5→D31 二犯真因
+    正是 fixture 没盖 escalated 解除枝(机制在、fixture 缺,pytest 照绿),漂移无人拦。"""
+    from main.ist_core.compile_engine_v8 import views as V
+
+    CLEAN, ESC_R, ESC_T = "203600000000000010", "203600000000000011", "203600000000000012"
+    SUS_T, TERM, AWAIT = "203600000000000013", "203600000000000014", "203600000000000015"
+    SUS_R, REDEC = "203600000000000016", "203600000000000017"
+
+    def base(aid):   # authored + delivery pass(卷/指纹一致 v1)
+        return [{"ev": "authored", "aid": aid, "round": 1, "artifact": aid + ":a"},
+                {"ev": "verdict", "aid": aid, "run_id": "r", "ctx": "delivery",
+                 "result": "pass", "artifact": aid + ":a", "volume": "v1", "signatures": []}]
+
+    fs = []
+    fs += base(CLEAN)                                                            # clean → deliverable
+    fs += [{"ev": "escalated", "aid": ESC_R, "reason": "no output"}] + base(ESC_R)  # escalated 解除(esc<auth)
+    fs += base(ESC_T) + [{"ev": "escalated", "aid": ESC_T, "reason": "x"}]       # escalated 终态(esc>auth)
+    fs += base(SUS_R) + [{"ev": "suspended", "aid": SUS_R, "reason": "q"},
+                         {"ev": "resumed", "aid": SUS_R, "of": "x"}]             # suspended 解除(resume>susp)→deliverable
+    fs += base(SUS_T) + [{"ev": "suspended", "aid": SUS_T, "reason": "q"}]       # suspended 终态
+    fs += base(TERM) + [{"ev": "attribution", "aid": TERM, "round": 99,
+                         "disposition": "defect_candidate"}]                     # 终局裁决(round99 三处置之一)
+    fs += base(AWAIT) + [{"ev": "needs_decision", "aid": AWAIT,
+                          "question_id": "nd:x:1:k"}]                             # 单次未答呈报
+    fs += base(REDEC) + [                                                        # 二次欠定 qid 配对(G5 首犯分叉点)
+        {"ev": "needs_decision", "aid": REDEC, "question_id": "nd:d:1:k"},
+        {"ev": "decision", "aid": REDEC, "question_id": "nd:d:1:k", "answer": "改过程"},
+        {"ev": "needs_decision", "aid": REDEC, "question_id": "nd:d:2:v"}]       # r1 已答+r2 未答→NOT
+    all_aids = [CLEAN, ESC_R, ESC_T, SUS_R, SUS_T, TERM, AWAIT, REDEC]
+    fs += [{"ev": "merged", "aid": "", "volume": "v1", "ctx": "delivery", "members": all_aids}]
+    manifest = {"source": "t.txt", "cases": [{"autoid": a} for a in all_aids]}
+
+    rc = RG.recount_deliverable(fs, manifest)["deliverable"]
+    bv = V.batch_view(fs, manifest)
+    cs = {aid for aid, c in bv["cases"].items() if c["status"] == V.S_DELIVERABLE}
+    assert rc == cs, f"两路漂移(G5 自我误告警根因):recount={sorted(rc)} case_status={sorted(cs)}"
+    # 双重断言:除两路等价,再钉 ground-truth——防两路同错都绿(解除态 escalated/suspended + clean 可交付)
+    assert rc == {CLEAN, ESC_R, SUS_R}, f"ground-truth 不符:期望 clean+两类解除,实得 {sorted(rc)}"

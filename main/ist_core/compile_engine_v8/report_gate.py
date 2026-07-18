@@ -29,7 +29,16 @@ def recount_deliverable(fs: list[dict], manifest: dict) -> dict:
     supported: set[str] = set()
     for aid in aids:
         mine = [f for f in fs if str(f.get("aid")) == aid]
-        if any(f.get("ev") == "escalated" for f in mine):
+        # escalated 解除感知(D31/run18 语义,inline 镜像 views._is_escalated——本门故意不 import
+        # 派生函数,但「最后 escalated 之后有 authored 即解除」是事实级真相、非 views 私有派生,
+        # 两路都须 honor;此前用无条件 any(escalated) 丢,与 case_status 漂移致 G5 自我误告警
+        # (zhaiyq 516389/533097 迟到回收+整卷pass 案被误判不支撑,门内注释早已预言此失败模式)。
+        # 与下方 suspended/resumed 解除同型:最后 escalated 后有 authored → 已解除、非终态。
+        last_esc = max((i for i, f in enumerate(mine) if f.get("ev") == "escalated"),
+                       default=-1)
+        last_auth = max((i for i, f in enumerate(mine) if f.get("ev") == "authored"),
+                        default=-1)
+        if last_esc >= 0 and last_auth < last_esc:
             continue
         last_susp = max((i for i, f in enumerate(mine) if f.get("ev") == "suspended"),
                         default=-1)

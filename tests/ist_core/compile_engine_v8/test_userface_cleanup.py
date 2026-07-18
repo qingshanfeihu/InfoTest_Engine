@@ -8,10 +8,81 @@
 """
 from __future__ import annotations
 
-from main.ist_core.compile_engine_v8.questions import build_questions, clip_text
+import pathlib
+
+from main.ist_core.compile_engine_v8 import nodes as N
+from main.ist_core.compile_engine_v8.questions import (
+    build_questions, clip_text, build_ask_question,
+    _source_label_cn, _strip_md, _annotate_autoids, recompile_times,
+)
 from main.ist_core.compile_engine_v8.render import _ellip
 
 A = "203601753067668000"
+
+
+# ── ①族收口批守门:D22 源标签白名单 / Z7 md / D26 autoid / D29 重编次数 / D25 黑话 ──────────
+
+
+def test_d22_source_label_whitelist_only():
+    """D22:源标签只给结构锚白名单命中;内部产物(attr_evidence/manifest)→None 脱敏——**不从
+    文件名推 quote 语义**(强字典/C1 红线)。"""
+    assert _source_label_cn("device_context") == "实机回显"
+    assert _source_label_cn("workspace/outputs/x/last_run.json") == "实机回显"
+    assert _source_label_cn(
+        "knowledge/data/markdown/product/manual_10.5/cli_10.5_Chapter20.md") == "CLI 手册 10.5 第20章"
+    assert _source_label_cn("workspace/outputs/205/attr_evidence.json") is None   # 内部产物→脱敏
+    assert _source_label_cn("workspace/outputs/zhaiyq/manifest.json") is None
+
+
+def test_d22_strip_md_protects_identifier_underscore():
+    """D22-Z7:_strip_md 剥 md 强调,但 `host_name` 内下划线(CommonMark intraword)不剥断。"""
+    assert _strip_md("**show sdns** _[host_name]_").strip() == "show sdns [host_name]"
+    assert "host_name" in _strip_md("_[host_name]_")       # 标识符完整、未被斜体剥断
+    assert "**" not in _strip_md("**粗体**") and "粗体" in _strip_md("**粗体**")
+
+
+def test_d22_sides_desensitize_to_ordinals():
+    """D22:两个内部产物源→「记载甲/乙」(相异、无 .json 文件名泄漏)。"""
+    c = {"autoid": A, "kind": "panel", "cap_reached": False,
+         "panel": {"conflict_shape": "other", "hypothesis": "h", "ask": "?",
+                   "sides": [{"source_ref": "workspace/outputs/x/attr_evidence.json", "quote": "dig a"},
+                             {"source_ref": "workspace/outputs/y/manifest.json", "quote": "step b"}]}}
+    q = build_ask_question(c)["question"]
+    assert "记载甲" in q and "记载乙" in q
+    assert "attr_evidence" not in q and ".json" not in q and "manifest" not in q
+
+
+def test_d26_annotate_autoids_bare_sibling():
+    """D26:题面自由文本裸 18 位 autoid 追尾号;已带尾号不双标;幂等。"""
+    assert _annotate_autoids("同批 205271757988589432 已裁") == "同批 205271757988589432(尾号 589432) 已裁"
+    once = _annotate_autoids("案 205271757988589432 x")
+    assert _annotate_autoids(once) == once            # 幂等
+    who = "用例 205271757988589432(尾号 589432)"
+    assert _annotate_autoids(who) == who              # B 模式首引不双标
+
+
+def test_d29_recompile_times_single_source_and_cap():
+    """D29:重编次数=rounds-1 单一源;cap 题面显「重编 2 次」(3 轮 authored=1 初编+2 重编)。"""
+    assert recompile_times(3) == 2 and recompile_times(1) == 0 and recompile_times(0) == 0
+    q = build_ask_question({"autoid": A, "kind": "cap", "rounds": 3})["question"]
+    assert "重编 2 次" in q and "重编 3" not in q
+
+
+def test_z7_no_literal_bold_markers_in_source():
+    """Z7:code 模板手写 md 加粗(TUI 不渲染 md=字面泄)已从用户面字符串删净。"""
+    src = pathlib.Path(N.__file__).parent.joinpath("questions.py").read_text(encoding="utf-8")
+    for bolded in ["顺序语义**保留**", "顺序语义将**放弃**", "**无案尾恢复步**",
+                   "**疑似测试床状态污染**", "**必要条件推断", "**本案自身的命令写法**"]:
+        assert bolded not in src, f"Z7 字面加粗残留:{bolded}"
+
+
+def test_d25_no_s0_jargon_in_status_emit_source():
+    """D25:状态行 emit 的 s₀ 黑话堆叠已人话化(emit 在引擎逻辑内,源级守门;用完整 emit 短语,
+    不误伤含「保留深归因」的 dev-facing 注释)。"""
+    src = pathlib.Path(N.__file__).read_text(encoding="utf-8")
+    for emit_phrase in ["s₀ 假设被反驳,保留深归因", "s₀ 配对命中但日志含独立异常行",
+                        "s₀ 配对命中但回显含自身执行失败", "fork 判 s₀ 但机械配对判无污染者"]:
+        assert emit_phrase not in src, f"D25 状态行 emit 黑话残留:{emit_phrase}"
 
 
 def _q(led):

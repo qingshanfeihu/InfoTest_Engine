@@ -89,9 +89,10 @@ def tried_actions(fs: list[dict], aid: str) -> list[str]:
     user-facing 中文——直接进面板题面。"""
     mine = _facts_for_aid(fs, aid)
     out: list[str] = []
+    from main.ist_core.compile_engine_v8.questions import recompile_times
     rounds = F.rounds_used(mine, aid)
     if rounds > 1:
-        out.append(f"重编 {rounds - 1} 次")
+        out.append(f"重编 {recompile_times(rounds)} 次")   # D29:单一源,与 cap 题面同口径
     n_rerun = sum(1 for f in mine if f.get("ev") == "attribution"
                   and str(f.get("disposition")) in ("rerun_isolated", "transient"))
     n_subset = sum(1 for f in mine if f.get("ev") == "verdict"

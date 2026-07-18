@@ -162,6 +162,10 @@ FORM_BY_KIND = {
     "cross_client_landing": "captured_relation",
 }
 
+# q4:form 内部 token → 人话(欠定三选「改过程」选项里断言形态提示,不露机读 token)。闭集机械 map、
+# 同 _DISP_CN precedent 非强字典;form 提示有决策价值(用户知断言往哪形态改)故人话化保留而非删。
+_FORM_CN = {"dist": "分组分布/比例区间", "member": "成员位次比对", "captured_relation": "捕获后比较的关系"}
+
 # 「加请求/观测次数」这类采样建议只对计数/位次类主张成立(run22 病理:generic 采样
 # 模板套在非采样类欠定上=误导选项);关系类/落点类不靠加样本解决,不入此集。
 _SAMPLING_KINDS = frozenset({
@@ -329,7 +333,7 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             opt_process = {"label": "改过程",
                            "description": ("改成能验证的形态:同一个客户端连发多次请求、断言它们之间的关系"
                                            "(两次应答相同/不同),或按客户端分组看命中分布区间;"
-                                           f"请求次数同步加到能稳定验证的水平。断言形态按 {form}。对你的用例:换成可稳定复现的验证方式。")}
+                                           f"请求次数同步加到能稳定验证的水平。断言改成「{_FORM_CN.get(form, form)}」的写法。对你的用例:换成可稳定复现的验证方式。")}
             opt_expect = {"label": "改预期",
                           "description": ("你确认这里是固定映射(比如按 IPv4/IPv6 地址族分流、或固定绑定)"
                                           "——在下面自定义输入给出手册/判例依据,保留原预期"
@@ -372,12 +376,12 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
         opt_process = {
             "label": "改过程",
             "description": ("；".join(dict.fromkeys(proc_parts))
-                            + (";顺序语义**保留**(产物须能证明顺序)" if ordering else "")
-                            + f"。断言形态按 {form}。对你的用例:把每条主张改成能稳定验证的写法。")}
+                            + (";顺序语义保留(产物须能证明顺序)" if ordering else "")
+                            + f"。断言改成「{_FORM_CN.get(form, form)}」的写法。对你的用例:把每条主张改成能稳定验证的写法。")}
         opt_expect = {
             "label": "改预期",
             "description": ("把没法证伪的『绝对预期』改成能稳定验证的形态(改成验关系/验归属)"
-                            + (";⚠ 顺序语义将**放弃**——选这项即显式批准放弃「按序命中」的覆盖"
+                            + (";⚠ 顺序语义将放弃——选这项即显式批准放弃「按序命中」的覆盖"
                                if ordering else "") + "。对你的用例:期望值改成跑几次都一致的判断。")}
         opt_desc = {"label": "改描述", "description": "用例描述本身有歧义/与设备行为矛盾,待人工厘清(本轮不做)。对你的用例:描述要测啥不清楚、留着等你厘清。"}
         questions.append({
@@ -444,6 +448,29 @@ def _display_clean(s: str) -> str:
     """题面**展示路径**的控制字符规格化(\\t→空格、\\r 及其余控制符剥除)。
     只用于用户题面拼装——落盘 jsonl 与 LLM 载荷保持 verbatim 契约,一字不动。"""
     return _CTRL_RE.sub(" ", str(s or "").replace("\r", ""))
+
+
+def _echo_quote(ev: str) -> str:
+    """D28:设备回显**原文引用**(剥控制符 + _QUOTE_CLIP 截断留痕)。原文引用≠叙述,是 raw
+    设备事实、F-Py-2 占比门豁免(见 :42);题面标「设备回显原文:『…』」verbatim,不译不转述。"""
+    s = _display_clean(str(ev or ""))
+    return s[:_QUOTE_CLIP] + ("…" if len(s) > _QUOTE_CLIP else "")
+
+
+def recompile_times(rounds) -> int:
+    """D29:重编次数 = authored 总轮数 - 1(初编不算「重编」)。**单一源**——cap 题面与
+    remedies.tried_actions 同口径,防两处手写 `rounds-1` 表达式日后漂移(同面板数字必同源)。"""
+    return max(0, int(rounds or 0) - 1)
+
+
+_AID_RE = re.compile(r"(?<!\d)(\d{18})(?!\d)(?!\(尾号)(?!（尾号)")
+
+
+def _annotate_autoids(text: str) -> str:
+    """D26:LLM 撰写的题面自由文本(hypothesis/sides/evidence)交叉引用别案用裸 18 位 autoid,
+    用户认不出那是自己刚裁过的案。机械兜底——每个裸 autoid 追尾号;已紧邻「(尾号」/「（尾号」的
+    跳过(幂等,不碰 B 模式首引 who)。覆盖 self+sibling+未来任何 authored autoid。"""
+    return _AID_RE.sub(lambda m: f"{m.group(1)}(尾号 {m.group(1)[-6:]})", str(text or ""))
 
 _SHAPE_CN = {"manual_vs_device": "手册与实机不符",
              "expected_vs_observed": "预期结果与上机行为不符",
@@ -556,18 +583,49 @@ def answer_token(kind: str, a: str) -> str:
     return "correct"
 
 
-def _side_cn(s: dict) -> str:
+def _source_label_cn(src: str):
+    """D22(Design 裁):源标签只给 source_ref **结构锚白名单**命中——**不从文件名推 quote 语义**
+    (attr_evidence.json 混装实机+用例引文,贴任一语义都误标,同强字典/C1 红线)。命中返人话标签;
+    未命中返 None → 调用方脱敏走「记载甲/乙」序号(不露内部文件名、不猜语义)。白名单两类:
+    ①设备枚举→实机回显 ②知识源(knowledge/data 前缀:cli 手册章节→章节人话 / 其余 .md 去后缀)。"""
+    if src in ("device", "device_context", "causality", "detail_tail",
+               "framework_traceback") or src.rsplit("/", 1)[-1].startswith("last_run"):
+        return "实机回显"
+    base = src.rsplit("/", 1)[-1]
+    if src.startswith("knowledge/data/"):
+        m = re.match(r"cli_([\d.]+)_[Cc]hapter(\d+)(?:\.md)?", base)
+        if m:
+            tail = re.search(r"[Ll](\d+)\b", base)     # 手册行号尾挂(技术定位有用,保留)
+            return f"CLI 手册 {m.group(1)} 第{m.group(2)}章" + (f" L{tail.group(1)}" if tail else "")
+        if base.endswith(".md"):
+            return base[:-3]
+    return None
+
+
+def _strip_md(s: str) -> str:
+    """D22-Z7:手册引文原样嵌 markdown 标记(**粗体**/_斜体_/`code`/# 标题)泄进用户题面。机械剥
+    标记(零 LLM);`_斜体_` 镜像 CommonMark intraword 规则(词内 `_` 非强调)——护 `host_name` 类
+    标识符内下划线不被剥断。设备回显不经此(非 md)。"""
+    s = str(s or "")
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)                          # **粗体**
+    s = re.sub(r"(?<![\w*])_(?=\S)(.+?)(?<=\S)_(?![\w*])", r"\1", s)  # _斜体_(边界侧,护 host_name)
+    s = re.sub(r"`([^`]+)`", r"\1", s)                             # `代码`
+    s = re.sub(r"^\s{0,3}#{1,6}\s+", "", s, flags=re.MULTILINE)     # # 标题
+    return s
+
+
+def _side_cn(s: dict, ordinal: str = "") -> str:
+    """D22:白名单命中→人话标签;未命中→「记载{甲/乙}」脱敏序号(ordinal 由调用方按脱敏侧序给)。
+    知识源引文剥 md 标记(Z7)。引文 verbatim 窗口与 briefs 同宽,超窗「…」留痕;控制符只本展示投影剥。"""
     src = str(s.get("source_ref") or "")
-    label = "实机回显" if (src in ("device", "device_context", "causality", "detail_tail",
-                                   "framework_traceback") or "last_run" in src) \
-        else src.rsplit("/", 1)[-1]
-    # 引文是 verbatim 契约:窗口宽度与 briefs 注入同宽不改,超窗加「…」留痕;
-    # 控制符只在本展示投影剥(落盘 ask_panel.json 与 LLM 载荷仍逐字)
+    label = _source_label_cn(src) or (f"记载{ordinal}" if ordinal else "记载")
     q = _display_clean(str(s.get("quote") or ""))
+    if src.startswith("knowledge/data/"):
+        q = _strip_md(q)
     return f"{label}:『{q[:_QUOTE_CLIP]}{'…' if len(q) > _QUOTE_CLIP else ''}』"
 
 
-def _claim_history_line(c: dict, cap_each: int = 90, last_n: int = 4) -> str:
+def _claim_history_line(c: dict, cap_each: int = 150, last_n: int = 4) -> str:
     """claim 历史摘要(P0-新②d;接缝键 `claim_history`=[{round,layer,disposition,
     claim,evidence}],甲队 N1 粘性数据组装):逐轮呈现「轮次×判断×主张」,归因 churn
     不吞早轮假设——517027 实弹:r2「Timeout=0」缺陷假设在 r3 reflow 叙事的题面里
@@ -578,8 +636,10 @@ def _claim_history_line(c: dict, cap_each: int = 90, last_n: int = 4) -> str:
     lines = []
     for h in hist[-last_n:]:
         disp = _DISP_CN.get(str(h.get("disposition") or ""), "其他判断")
-        claim = clip_text(str(h.get("claim") or h.get("fix_direction") or ""), cap_each)
-        lines.append(f"第{int(h.get('round') or 0)}轮:{disp}——「{claim}」")
+        # D28:claim 源=user_note(中文,:2329 已优先);空(旧记录/某轮未产)则只显归因类目、
+        # 省去空引号——不退英文 fix_direction(那是 LLM-facing,直灌用户面=泄漏)。
+        claim = clip_text(str(h.get("claim") or ""), cap_each)
+        lines.append(f"第{int(h.get('round') or 0)}轮:{disp}" + (f"——「{claim}」" if claim else ""))
     more = len(hist) - last_n
     return "；".join(lines) + (f"(更早 {more} 轮略)" if more > 0 else "")
 
@@ -637,7 +697,13 @@ def build_ask_question(c: dict) -> dict:
         who += f"[引擎已试:{ '、'.join(tried[:3]) }]"
     if kind == "panel":
         p = c.get("panel") or {}
-        sides = _rstrip_stop("；".join(_side_cn(s) for s in (p.get("sides") or [])[:3]))
+        _sd, _k = [], 0
+        for _s in (p.get("sides") or [])[:3]:
+            if _source_label_cn(str(_s.get("source_ref") or "")) is None:   # 脱敏侧→记载甲/乙
+                _sd.append(_side_cn(_s, "甲乙丙"[_k] if _k < 3 else "")); _k += 1
+            else:
+                _sd.append(_side_cn(_s))
+        sides = _rstrip_stop("；".join(_sd))
         rc = [str(r.get("outcome") or "") for r in (p.get("retrieval_receipt") or [])]
         searched = _rstrip_stop("、".join(sorted({_RECEIPT_CN.get(x, x) for x in rc if x})))
         shape_cn = _SHAPE_CN.get(str(p.get("conflict_shape") or ""), _SHAPE_CN["other"])
@@ -650,6 +716,7 @@ def build_ask_question(c: dict) -> dict:
              + _display_clean(str(p.get("ask") or "该以哪一方为准?"))
              + ("(该用例重编轮次已用尽,你的答案同时决定是否继续)" if c.get("cap_reached") else "")
              + " 若都不对,选 Other 直接写出正确的意图/预期。")
+        q = _annotate_autoids(q)   # D26:hypothesis/sides 里 LLM 撰写的裸别案 autoid 追尾号(幂等,不碰 who)
         # token=correct(非 confirm):中性化后 hypothesis 不再提方向,"confirm=按呈报理解 Z 编"
         # 失去所指;用户选的那一侧 label 即裁决方向,走 correct("ruling 覆盖 Z、意图最高权威",
         # briefs.py)——同时与 answer_token 的 panel 兜底(非缺陷/非确认→correct)一致,
@@ -664,9 +731,9 @@ def build_ask_question(c: dict) -> dict:
         hist = _claim_history_line(c)
         dc_rounds = _standing_defect_rounds(c)
         note = _s0_dispute_note(c)
-        q = (f"{who} 已重编 {c.get('rounds')} 轮仍未通过,引擎多轮未收敛"
+        q = (f"{who} 已重编 {recompile_times(c.get('rounds'))} 次仍未通过,引擎多轮未收敛"
              + (f"。各轮判断:{hist}" if hist else
-                (f"(最近的修法方向:{clip_text(str(c.get('evidence') or ''), 160)})"
+                (f"(引擎判断:{clip_text(str(c.get('evidence') or ''), 160)})"
                  if c.get("evidence") else ""))
              + (f"。{note}" if note else "")
              + "。如何处理?")
@@ -686,7 +753,9 @@ def build_ask_question(c: dict) -> dict:
     if kind == "env":
         hist = _claim_history_line(c)
         q = (f"{who} 的失败被判为环境阻塞"
-             + (f"(依据:{clip_text(str(c.get('evidence') or ''), 160)})" if c.get("evidence") else "")
+             # D28:evidence 是 raw 设备回显(原文子串)——标「设备回显原文」verbatim(_echo_quote,
+             # F-Py-2 原文引用豁免),不再裸「依据:{英文}」直灌。
+             + (f"(设备回显原文:『{_echo_quote(c.get('evidence'))}』)" if c.get("evidence") else "")
              + (f"。各轮判断:{hist}" if hist else "")
              + "。确认是环境问题吗?")
         return {"question": q, "header": f"环境{aid[-4:]}",
@@ -703,9 +772,10 @@ def build_ask_question(c: dict) -> dict:
             # G2((40) 分类学):自污染者——卷面自身含无恢复步的网络层写,复跑=
             # 再污染(run12 六次拆床实证),「复跑」出口对此类是毒药,不提供
             tau = "；".join(str(t) for t in (c.get("suggested_tau") or [])[:3])
-            q = (f"{who} 的卷面自身含网络层配置写而**无案尾恢复步**"
-                 + (f"(缺恢复:{('、'.join(str(x) for x in c.get('missing_tau') or [])[:60])})"
-                    if c.get("missing_tau") else "")
+            _mt = "、".join(str(x) for x in c.get("missing_tau") or [])
+            _mt = _mt[:60] + ("…" if len(_mt) > 60 else "")     # 省略点:硬截加「…」留痕(不无痕截断)
+            q = (f"{who} 的卷面自身含网络层配置写而无案尾恢复步"
+                 + (f"(缺恢复:{_mt})" if c.get("missing_tau") else "")
                  + "——每次执行都会重新污染共享床(复跑只会再拆一次,不是出路)。如何处置?")
             return {"question": q, "header": f"缺清理{aid[-4:]}",
                     "options": [
@@ -731,12 +801,13 @@ def build_ask_question(c: dict) -> dict:
             _strength = ("此判定=交换子配对必要条件 + 受害者回显含占用/已存在形态直接佐证。"
                          "若属实:整卷复跑洗不掉,须清理床上残留(床权在你)。")
         else:
-            _strength = ("注意:此判定仅为交换子配对的**必要条件推断(非确证,假阳约 1/4)**——"
-                         "受害者回显里**未见**占用/已存在形态佐证。同样的症状也可能来自"
-                         "**本案自身的命令写法**(如撞交互确认、加载全配置冲突)或设备/环境异常;"
+            _strength = ("注意:此判定仅为交换子配对的必要条件推断(非确证,假阳约 1/4)——"
+                         "受害者回显里未见占用/已存在形态佐证。同样的症状也可能来自"
+                         "本案自身的命令写法(如撞交互确认、加载全配置冲突)或设备/环境异常;"
                          "下结论前建议看该案完整设备回显确认失败机理。")
-        q = (f"{who} 被批级配对判为**疑似测试床状态污染**"
-             + (f"(依据:{clip_text(str(c.get('evidence') or ''), 200)})" if c.get("evidence") else "")
+        q = (f"{who} 被批级配对判为疑似测试床状态污染"
+             # D28:bed evidence=受害者设备回显原文,标「设备回显原文」verbatim(_echo_quote,原文引用豁免)。
+             + (f"(设备回显原文:『{_echo_quote(c.get('evidence'))}』)" if c.get("evidence") else "")
              + "。" + _strength + _grp_note + "如何处置?")
         return {"question": q, "header": f"床态{aid[-4:]}",
                 "options": [

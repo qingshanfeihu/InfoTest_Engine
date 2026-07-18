@@ -1625,13 +1625,13 @@ def attribute(state: dict) -> dict:
             if h_pos != "h_s0":
                 continue
             if _cross_bed_refuted(mine, last):
-                sh.emit(f"…{aid[-6:]} 同签名 fail 跨床复现——s₀ 假设被反驳,保留深归因")
+                sh.emit(f"…{aid[-6:]} 换设备床仍复现,排除前序用例影响——继续深入分析")
                 continue
             # 多因保护(§18.6,坑#9 双故障遮蔽——668030 实证:s₀ 命中之外还有 TFTP
             # 独立故障被叙事淹没):日志有独立执行失败行(anomaly_lines)时不免派,
             # 深归因照常(diagnosis 照落,fork 能看到 s₀ 判定+异常行两份证据)
             if (recs_pre.get(aid) or {}).get("anomaly_lines"):
-                sh.emit(f"…{aid[-6:]} s₀ 配对命中但日志含独立异常行——保留深归因(多因)")
+                sh.emit(f"…{aid[-6:]} 疑似前序用例影响,但另有独立异常——继续深入分析(多重原因)")
                 continue
             todo.remove(aid)
             prescreened.append(aid)
@@ -1845,12 +1845,15 @@ def _case_story(mine: list[dict]) -> str:
 
 
 def _case_diag(mine: list[dict]) -> str:
+    from main.ist_core.compile_engine_v8.questions import _DISP_CN
     atts = [f for f in mine if f.get("ev") == "attribution"]
     if not atts:
         return ""
     a = atts[-1]
     note = str(a.get("user_note") or "").strip()
-    return note or str(a.get("fix_direction") or "")[:160]
+    # D28 fallback(Design 基准#4):user_note 空(旧记录/某轮未产)时退**中文归因类目**(_DISP_CN),
+    # 不退英文 fix_direction——归因散文是 LLM-facing 英文,直灌用户面=D1/D9 泄漏复现。
+    return note or _DISP_CN.get(str(a.get("disposition") or ""), "其他判断")
 
 
 def _latest_panel(mine: list[dict], aid: str) -> tuple[dict, int]:
@@ -2221,7 +2224,7 @@ def diagnose(state: dict) -> dict:
         # 1052 的 anomaly 保护一致):失败机理在受害者自己的序列,不是床污染。此前
         # diagnose 主体只有跨床反驳、缺此门,是 G6 未覆盖案的 s₀ 误判缺口
         if h_pos == "h_s0" and (_recs.get(aid) or {}).get("anomaly_lines"):
-            sh.emit(f"…{aid[-6:]} s₀ 配对命中但回显含自身执行失败——不判 s₀,保留深归因")
+            sh.emit(f"…{aid[-6:]} 疑似前序用例影响,但本案自身执行也失败——继续深入分析")
             h_pos, polluters, basis = "", [], ""
         if not h_pos:
             att = [f for f in mine if f.get("ev") == "attribution"]
@@ -2232,7 +2235,7 @@ def diagnose(state: dict) -> dict:
             # 污染者(D8 分工:批级裁决为准、fork 只降不判死)。仅机械**失明**(触碰画像
             # 提取失败,配对不可得)时才采信 fork 的 s₀;非 s₀ 候选(h_pi 等)照常回退。
             if cand_h.startswith("h_s0") and aid not in _profile_failures:
-                sh.emit(f"…{aid[-6:]} fork 判 s₀ 但机械配对判无污染者——不升格,保留深归因")
+                sh.emit(f"…{aid[-6:]} 疑似受前序用例影响但未证实(未定位到具体来源)——继续深入分析")
                 # N2′ 分歧记账(2026-07-16):不升格判定本身是「fork 假设 vs 机械配对」
                 # 的分歧事实——落账供 contra/cap 题面呈语境(用户不再盲判),不改判定
                 # (test_attributor_s0_not_upgraded… 锁住的语义不动);幂等键=run_id
@@ -2326,7 +2329,7 @@ def ask_contradiction(state: dict) -> dict:
             item["claim_history"] = [
                 {"round": int(f.get("round") or 0), "layer": str(f.get("layer") or ""),
                  "disposition": str(f.get("disposition") or ""),
-                 "claim": str(f.get("user_note") or f.get("fix_direction") or "")[:400],
+                 "claim": str(f.get("user_note") or "")[:400],
                  "evidence": str(f.get("evidence") or "")[:200]}
                 for f in mine if f.get("ev") == "attribution"
                 and int(f.get("round") or 0) != 99]
@@ -2346,7 +2349,9 @@ def ask_contradiction(state: dict) -> dict:
             qids[aid] = f"panel:{aid}:{prnd}"
         elif kind == "cap":
             atts = [f for f in mine if f.get("ev") == "attribution"]
-            item["evidence"] = str((atts[-1] if atts else {}).get("fix_direction") or "")[:300]
+            # D28:cap 证据行(无 hist 时)源改 user_note(中文 fail 叙述+趋势),不用 fix_direction
+            # (英文 LLM-facing,直灌用户面=D1/D9 泄漏);user_note 空→空串→题面证据行自然省略。
+            item["evidence"] = str((atts[-1] if atts else {}).get("user_note") or "")[:300]
             qids[aid] = f"cap:{aid}:{vw['cases'][aid]['rounds']}"
         elif kind == "env":
             atts = [f for f in mine if f.get("ev") == "attribution"]

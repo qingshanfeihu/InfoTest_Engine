@@ -463,7 +463,14 @@ barrier 次轮 footer「轮次6 对账 37/53 · 欠定9 通过37 失败7」，§
 - **§11.9 收口 clean**：顶层残留 0 / 无中间件（manifest/last_run/子集卷）/ 交付对账 25==25==25（delivered==deliverable==case_rows）/ backup 封存（runtime/backups/yzg_rerun2_delivered_20260718/）。
 - **三铁律全过**：裁决执行链对账（decision→authored→verdict→终局，7 案链完整）、引擎自认异常字段零放过（effective=false 清零）、该交付没交付比交付更查（1 挂起案 655248 机读卷齐）。
 
-**build 568/585 研判（D21，转 Py-Eng 池）**：engine_report 两轮记 device_build=585，但跳板机 103 的 138 个 report 目录**全 568**（自 06-11 零 585）→ 判**引擎床体检 build 解析错位**（非设备重刷），version_family=10.5 家族吸收 build 差、**zhaiyq 可信度不受影响**、build 侧放行。D21 缺陷单登记，修法归 Py-Eng 池（床体检 build 字段解析核对）。
+**build 568/585 研判（D21，转 Py-Eng 池）**：engine_report 两轮记 device_build=585，但跳板机 103 的 138 个 report 目录**全 568**（自 06-11 零 585）。~~初判解析错位~~ **【2026-07-18 zhaiyq 起批时代码追踪+bed_checked 实证锁定真相，更正"解析错位"研判】**：
+- **bed_checked 铁证**（facts.jsonl）：`{"device":"...10.5.0.585", "config":"...10_5_0_568", "status":"match", "device_family":[10,5], "config_family":[10,5]}`——**两个不同字段，非同一字段解析错位**。
+- **585** = 实机 banner（`show version` "Software Version:" 行）→ bed_check probe **正确抓取** → nodes.py:254 `rep.anchor.device`。
+- **568** = `cfg.build` = **config.py:83 硬编码默认** `build:str="InfosecOS_Beta_APV_HG_K_10_5_0_568"`（下划线形态）→ nodes.py:175 `cfg_build=str(cfg.build)`；实测 get_config().build=568，无 compiler_config/IST_DEVICE_BUILD 覆盖。**568 不在设备 show version 输出里**（是配置默认值，leader「Image 行」假设不成立）。
+- **D21 本质=配置陈旧非 regex bug**：设备升 585、config.py:83 默认仍 568。anchor_verdict（bed.py:39）**正确处理**——585 vs 568 同族 10.5 → match 放行（docstring"568 先例 vs 585 设备=同族放行记锚不拦"）。engine_report device_build=585 是实机真值（正确）。zhaiyq 可信度不受影响。
+- **修法【leader 终裁 2026-07-18，①+③ 组合收口批】**：①config.py:83 默认更 585（陈旧配置对齐现役设备）；③bed_checked 摘要/engine_report **同显 device+config 两值**（防未来再混淆——这次混淆根源就是两值只显一个）；②「family-match 设计正确」**维持不动**。修法归 Py-Eng 池（收口批）。
+- **裁定更正记留痕**：此前 D21 及旧研判中「权威=568/report 目录锚」裁定**作废**——report 目录名反映框架配置（用 cfg.build=568）非设备实况，这层间接性当时没看穿；机读追到底后确认 engine_report device_build=585 正确。
+- **raw show version 降级**：568 已定源（config.py:83）无需 raw 证伪 Image 行假设，抓仅为完备性——收尾清静窗口可选（活跃编写期不触床，leader 同意判断）。
 
 **D17 来源定位（LLM 转述层，归 LLM-Eng）**：收官叙述「26 个用例中 19 通过…7 未完成：4 listener+4 持久化」（4+4=8≠7 矛盾）——events.jsonl 引擎 emit **零命中**该文案 + delivery_report 判定式渲染**正确**（25+1、不数错）→ 坐实是 **main agent LLM 总结发言**误归类，非 engine emit/render。修法=skill 层约束（LLM 数字照抄 engine_report 禁自行归类），非 render 层。
 
@@ -499,3 +506,10 @@ leader 冒烟策略：①zhaiyq 53 案大批**批中标记自然踩到的路径*
 - ☐ **批序自指 45c**（批中早案 writeback 新鲜判例→后案免问跳面板，理论预测未实弹）
 
 **注**：判例 §5 quarantine（11 条误标 FM→vpa）修法归 Py-Eng（find_adjudications 跳 quarantine≠∅），668000 受影响案待引用清算（follow-up 非阻塞）。zhaiyq 批中若见判例免问路径，核 shape 匹配对否（D12 shape-fix 回归观察点）。
+
+**⚡ D20 二分（上机窗口时敏任务，leader 令）**：zhaiyq **整卷上机进行时**（phase=run）同刻做三步——①`grep -c '"event":"progress"' runtime/logs/compile_evidence.86305.events.jsonl` ②read-screen 抓 TUI footer/卡片有无 `Ns/900s` 子进度行 ③二分：**有 progress 记录+TUI 没显子进度行=渲染/卡片 layout 侧（TUI-Eng）** / **无 progress 记录=发射/路由侧（EVIDENCE_LOG 路径/progress_cb，Py-Eng）**。两面对照才完整（记录当时子进度行显示与否）。监测器 stall/deadline 会在上机窗口内唤我（整卷上机 ~40min）。
+
+### 6.2 zhaiyq 批中观察（守批实时）
+
+- **#27 footer 进度行冻结·确认复现**（15min 自查，机读取证，PID 86305）：engine_tick 22 个全恒 `counts={pending:53,dispatched:0,produced:0}`（prep 快照），phase 更新（prep→author）但 counts 从不更新→footer "编写 0/53" 全程冻结，实际盘上 18 卷已产（21/22 fork ok、抽验 86 行有效）。**根因架构性**：barrier-collect——author 单图节点内部 fanout，LangGraph 图 state 只在 author 返回（barrier）时更新，engine_tick 读 state→author 期恒见 prep 快照。修法方向（Py-Eng 判断）：author 节点内 emit 中间进度，或接受 barrier 语义。**observer 非全盲**（fork 卡片有逐 worker 进度）。已报 leader。
+- **escalated 观察**（三铁律②）：1 fork ok:false `"fork returned no text output"`（385s/12calls/10rounds，非 wallclock 超时）。1/22 非系统性，监测器加 fork_bad 计数持续盯——yzg 首跑曾 6 escalated（疑 deepseek 并发压力误杀），增多即报。

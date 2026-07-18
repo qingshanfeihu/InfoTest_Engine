@@ -1038,6 +1038,13 @@ ask 前置(§2.6.3) ∧ ask 定理(19) ∧ 中心论断(§4，L4 达成度=K 域
 **不进守门族**（混入=grade 之死：把度量当质量门）。IETF human-in-the-loop 术语(draft-cui-nmrg-llm-nm)
 可对齐 ask 面板/裁决链文档，纯术语规范化。
 
+**footprint 字段抽取条目（field_extractors，外部借鉴 #4：Genie parser 思路微型化）**：判例层新条目类型
+「命令→字段抽取正则 R」，是 **S §5 π 投影核的判例层渐进落地**——对高频命令沉淀 raw→结构化字段、断言打
+抽出字段值而非 raw 无 MULTILINE 窗口，渐进消解 §18.14 恒真断言窗口脆弱；零代码走既有 footprint 封闭环
+（device_verified 入库/footprint_lookup 检索/emit 消费），validity 二态迁移同 §5.1。层归属=判例层（R 随
+build 的设备观察，非 mirror 可推导的文法层）。**类型 schema + 接线点 + 理论依据规范见 `DESIGN_v8_engine.md §20`**
+（条目 JSON 数据形态归 DESIGN、K 留理论定位指针，互为投影零双写）。
+
 **方法论收获**：本次对标兑现 AUDIT_design_theory_gaps §6 第 4 条「抄作业」纪律——不是发明，是确认理论方向正确 + 找到 oracle
 原语落后的收口模板。所有收口方向都是「闭合已有理论的实现 gap」、不加新理论，落 DESIGN §18.15。
 

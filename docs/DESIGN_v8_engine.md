@@ -1927,3 +1927,36 @@ emit `override_frozen_reason` 门强制显式声明;终态=frozen∧轮次封顶
 | briefs_path 批量载荷通道 | ⚠ 引擎主路不再需要 | V8 逐案构建 brief 单发 fork(author 节点);批量通道保留给 `compile_fanout(skill="dyn-*")` 动态子 agent 场景 |
 | fresh-PASS grade 短路 | ❌ 已废 | 语义随 grade 闸删除而消失(942 配对实证 LLM 审 LLM 判别力 3pp);机械等价物=lint 凭证 mtime 新鲜性+pass 卷面锁 |
 | 预检索块(IST_FOOTPRINT_PREFETCH) | ❌ 已废 | 知识路由反转为 worker 自拉(§19.2),防框定效应 |
+
+## 20. footprint 字段抽取条目类型规范（field_extractors · 外部借鉴 #4 落地，2026-07-18）
+
+> 外部借鉴（`team4_leader_nettest_survey.md` #4：NeTestLLM 用的 Genie parser 结构化思路微型化）→ 判例层新条目类型。**设计半（Design）+ 理论半（Theory）联合节，互为投影同 (18b)**；K 自愈判例层节留一句指针「见本节」，不双写。
+
+**动机**：§18.14 恒真断言族根在「断言打在 raw 子串窗口」（found/not_found `re.DOTALL` 无 MULTILINE、窗口=命令回显+数据+提示符——脆弱面：`^$` 锚恒假、pattern 命中命令原文恒真）。对**高频命令**沉淀「raw→抽出结构化字段」的微型 parser，让断言从 raw 窗口移到**抽出字段值**，渐进消解窗口脆弱。
+
+**条目 schema（设计半）**：footprint 扁平 `nodes/<fid>.json` 内新增 `field_extractors: [...]`（同既有 footprint 结构、不另立文件）：
+```json
+{
+  "field_extractors": [
+    {
+      "command": "show sdns pool statistics",
+      "regex": "Hit:\\s*(?P<hit_count>\\d+).*Pool:\\s*(?P<pool_name>\\S+)",
+      "field_names": ["hit_count", "pool_name"],
+      "provenance": "设备观察(非 mirror 推导)",
+      "device_verified": {"build": "…", "ts": "…", "device": "…"},
+      "validity": "verified"
+    }
+  ]
+}
+```
+字段：`command`（命令签名）/`regex`（抽取正则 R，命名组）/`field_names`（抽出字段名）/`provenance`（层归属锚：跟设备走）/`device_verified`（build+ts+device 观察验证锚，同既有 footprint 观察门）/`validity`（uncertain→verified，同 footprint 效度状态机）。
+
+**接线点（零代码消费，走既有环）**：① worker 编写时 `footprint_lookup` 检索命令的 `field_extractors`（"此命令有无字段抽取正则"）；② emit `check_point` 断言打**抽出字段值**（引用 `field_names`、非 raw 正则窗口）——消解 §18.14 窗口脆弱；③ **零新代码**：schema=数据、检索走既有 footprint_lookup、消费走既有 check_point——判例层「唯一无限增长层」性质不破。
+
+**层归属边界（防混层）**：R 是**设备输出格式观察（随 build 变）=判例层**（经验性，`device_verified`/`provenance` 锚跟设备走）；**非 mirror 源码可推导**（那归**文法层**，闭合于版本）——字段正则跟设备走、非跟 mirror 走，`provenance` 标「设备观察」防与文法层混。
+
+**理论依据（Theory，来源 `THEORY`）**：
+- **理论定位 = S §5 π 投影核的判例层渐进落地**：S §5 已裁断言应打在结构化对象的 key-path、raw 子串是 π 的**不忠实近似**（§18.14 恒真断言族/窗口失真的共同根）。`field_extractors` 对高频命令沉淀「raw→抽出字段」的微型 parser，是 π 结构化方向的**渐进落地**（先高频、判例层沉淀），非全面 Genie parser 切换（sdns/APV 无现成 parser 库、数千条不现实）。
+- **判例层封闭性论证**：新条目走既有判例层封闭环——正则 R 对命令 C 的抽取正确性经 `device_verified` **入库**（同既有 footprint 观察的验证门）、`footprint_lookup` **检索**、emit **check_point 打抽出字段零代码消费**。不新增代码层、不破判例层「唯一无限增长层」性质。`validity`（uncertain→verified）迁移同既有 footprint 观察（K §5.1 状态机：uncertain=观察级未实证 / verified=device 实证带 build 锚）。
+- **层归属边界**：R 是设备输出格式的观察（随 build 变）=判例层（经验性）；**不是** mirror 源码可推导物（那归文法层，闭合于版本）。`provenance` 标「设备观察」非「mirror 推导」——层归属在字段体现，防与文法层混。
+- **收益**：渐进消解 §18.14 恒真断言族的窗口脆弱面（断言从 raw 无 MULTILINE 窗口移到抽出字段值），零代码数据层扩展。

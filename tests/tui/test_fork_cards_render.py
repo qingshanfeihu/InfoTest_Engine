@@ -462,3 +462,64 @@ def test_ftui8_b1_authoring_phase_shows_settle_hint():
         "status": "running", "total": 53,
         "counts": {"produced": 21, "pending": 32}})
     assert "产出将在合并时结算" not in post_barrier and "产出21" in post_barrier
+
+
+# ── #27 编写期进度条 fork 卡驱动(收口批第⑦项,治「6 卡完成 vs bar 0/53」冻结) ──────────
+
+
+def test_count_fork_cards_by_status():
+    """#27:数 fork 卡 (running_n, done_n)——running=在跑, done=ok/error 跑完;
+    非 fork(engine/progress)不计。照 _payloads_have_max_thinking 样板。"""
+    from main.ist_core.ink.components.ist_app import _count_fork_cards_by_status
+    payloads = [
+        {"kind": "fork", "status": "running"},
+        {"kind": "fork", "status": "ok"},
+        {"kind": "fork", "status": "error"},      # done_n 含 error(编写孔跑完数不管成败)
+        {"kind": "fork", "status": "running"},
+        {"kind": "engine", "status": "running"},   # engine 不计
+        {"kind": "progress", "status": "running"},  # progress 不计
+    ]
+    running_n, done_n = _count_fork_cards_by_status(payloads)
+    assert running_n == 2, "2 张 running fork"
+    assert done_n == 2, "ok+error 各 1 = 2 张跑完(含 error)"
+
+
+def test_27_authoring_bar_driven_by_fork_done():
+    """#27(zhaiyq 实弹「6 卡完成 vs bar 0/53」冻结):编写期 produced/passed 未结算(barrier
+    后入账),bar 冻 0/53 与 fork 卡完成硬矛盾。修:编写期 bar/done 改用 fork 卡跑完数驱动。"""
+    # 编写期 counts 全 0(未结算),但 6 张 fork 卡跑完 + 2 在跑
+    eng = _render_engine_bottom_line(
+        {"kind": "engine", "run": "zhaiyq", "phase": "author", "round": 0,
+         "status": "running", "total": 53, "counts": {"pending": 8}},
+        fork_running=2, fork_done=6)
+    assert "6/53" in eng, "编写期进度条用 fork 卡完成数(6),不再冻 0/53"
+    assert "█" in eng, "bar 非全空(fork_done=6 驱动填充)"
+    assert "编写中2" in eng, "编写中=fork 在跑数(running_n=2),非 spin"
+    assert "产出将在合并时结算" in eng
+    # 对比:无 fork 计数(默认 0)退化——bar 0(同旧 F-TUI-8),编写中回落 spin
+    eng0 = _render_engine_bottom_line(
+        {"kind": "engine", "run": "zhaiyq", "phase": "author", "round": 0,
+         "status": "running", "total": 53, "counts": {"pending": 8}})
+    assert "0/53" in eng0 and "编写中8" in eng0, "无 fork 计数退化旧行为(bar 0,编写中 spin)"
+
+
+def test_27_authoring_fork_activity_triggers_without_spin():
+    """#27 组合判据扩:barrier-collect 下 spin 可能尚未投影(authored 全 fork 跑完才 append),
+    靠 fork 卡在跑/跑完也进编写期显示(spin=0 但 fork_running/done>0)。"""
+    eng = _render_engine_bottom_line(
+        {"kind": "engine", "run": "zhaiyq", "phase": "worker_fanout", "round": 0,
+         "status": "running", "total": 53, "counts": {}},        # spin=0(counts 空)
+        fork_running=5, fork_done=3)
+    assert "产出将在合并时结算" in eng, "spin=0 但 fork 在跑 → 仍编写期(组合判据 fork 项)"
+    assert "3/53" in eng and "编写中5" in eng
+
+
+def test_27_non_authoring_fork_counts_ignored():
+    """#27:非编写期(有产出/已结算)fork 计数不参与——bar 仍用 produced+passed,不被覆盖。"""
+    eng = _render_engine_bottom_line(
+        {"kind": "engine", "run": "zhaiyq", "phase": "author", "round": 0,
+         "status": "running", "total": 53, "counts": {"produced": 21, "pending": 32}},
+        fork_running=2, fork_done=6)
+    assert "21/53" in eng, "已结算(produced=21)→bar 用 produced,不被 fork_done(6)覆盖"
+    assert "产出将在合并时结算" not in eng
+    assert "产出21" in eng

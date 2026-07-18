@@ -294,7 +294,7 @@ _B, _C2, _D2, _X2 = "\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m"
 _G2, _R2, _Y2 = "\x1b[32m", "\x1b[31m", "\x1b[33m"
 
 
-def _render_engine_bottom_line(p: dict) -> str:
+def _render_engine_bottom_line(p: dict, fork_running: int = 0, fork_done: int = 0) -> str:
     """引擎聚合 → footer 底部常驻行(2026-07-06 用户定稿):进度条+文字计数,不用符号标签。
 
     形如 `` 编译 dongkl · 轮次1 编写 ██████████░░░░░░░░░░ 26/34 · 产出26 编写中1 欠定7 通过0 失败0``。
@@ -329,11 +329,21 @@ def _render_engine_bottom_line(p: dict) -> str:
     # B1 编写期提示(F-TUI-8,治 P2-11 展示面:编写期 counts 冻在初始态 produced=0、其余全 0,
     # 显示"产出0 欠定0 通过0 失败0"一串 0 会被误读成"没产出/白干"——实为 authored 事实在
     # 合并时批量结算(账实分离,数据源不动、不碰 INV-7)。编写相位且尚无结算时,计数段替换为
-    # 编写进度+结算说明,不再冗余显示全 0)。判据与 P2-11 同:produced==passed==0 ∧ spin>0。
+    # 编写进度+结算说明,不再冗余显示全 0)。判据(#27 扩:P2-11 的 spin>0 之外,补 fork 卡在跑/
+    # 跑完——barrier-collect 下 authored 事实全 fork 跑完才 append,编写期 spin 可能尚未投影,
+    # 靠 fork 卡活动也能进编写期显示):produced==passed==0 ∧ (spin>0 ∨ fork 在跑 ∨ fork 跑完)。
     _authoring = (str(p.get("phase") or "") in ("author", "worker_fanout")
-                  and produced == 0 and passed == 0 and spin > 0)
+                  and produced == 0 and passed == 0
+                  and (spin > 0 or fork_running > 0 or fork_done > 0))
     if _authoring:
-        counts_seg = f"编写中{spin} · 产出将在合并时结算"
+        # #27(zhaiyq 实弹「6 卡完成 vs bar 0/53」冻结):编写期 produced/passed 未结算(barrier
+        # 后批量入账),bar/done 改用 fork 卡跑完数(done_n)驱动、编写中用 fork 在跑数(running_n)
+        # ——消解"卡片完成但进度条冻 0"。total 借 prep 静态总数(不变)。fork 计数为 0 时(旧调用/
+        # 无快照)退化:done=0 同旧 F-TUI-8、编写中回落 spin。
+        done = fork_done
+        filled = round(barw * done / total) if total else 0
+        bar = "█" * filled + "░" * (barw - filled)
+        counts_seg = f"编写中{fork_running or spin} · 产出将在合并时结算"
     else:
         counts_seg = (f"产出{produced} 编写中{spin} "
                       f"欠定{pend} 通过{passed} 失败{bad}{other_seg}")
@@ -352,6 +362,27 @@ def _payloads_have_max_thinking(payloads) -> bool:
                 and str(pl.get("effort") or "") == "max"):
             return True
     return False
+
+
+def _count_fork_cards_by_status(payloads) -> tuple[int, int]:
+    """数 fork 卡的 (running_n, done_n):running_n=在跑, done_n=已结束(ok/error)。
+
+    照 `_payloads_have_max_thinking` 同样板(纯函数,入参=fork 卡 payload 可迭代,快照派生,
+    replay 一致)。用途:编写期 footer 进度条数据源——produced/passed 要 barrier 合并才结算
+    (账实分离,数据源不动/不碰 INV-7),但 fork 卡 status 实时反映编写孔进度(fork_start→
+    running / fork_end→ok/error)。编写期改用 done_n 填 bar,消解"6 卡完成 vs bar 0/53 冻结"
+    (#27,zhaiyq 实弹)。done_n 含 error(编写孔跑完数,不管成败;bar 反映编写进度而非最终产出,
+    与"产出将在合并时结算"文案一致,且避免全 error 时 bar 恒 0 的另一种冻结)。"""
+    running_n = done_n = 0
+    for pl in payloads:
+        if (pl.get("kind") or "fork") != "fork":
+            continue
+        st = pl.get("status")
+        if st == "running":
+            running_n += 1
+        elif st in ("ok", "error"):
+            done_n += 1
+    return running_n, done_n
 
 
 def _skill_short(skill: str) -> str:
@@ -1754,11 +1785,13 @@ class IstInkApp:
         """fork_board_rev 变更:已登记卡行原地重渲;引擎卡刷 footer 底部行(无则清)。"""
         indices = getattr(snapshot, "fork_card_indices", None) or {}
         rows = getattr(self, "_fork_card_rows", {})
-        # 预扫快照(顺序无关):任一 running fork 处于 max 深度 → 引擎底部条挂标。
-        max_thinking = _payloads_have_max_thinking(
+        # 预扫快照(顺序无关,materialize 成 list 复用):max 深度标 + fork 卡计数(#27 编写期进度)。
+        fork_payloads = [
             (snapshot.messages[mi].content[0].payload or {})
             for mi in indices.values()
-            if 0 <= mi < len(snapshot.messages) and snapshot.messages[mi].content)
+            if 0 <= mi < len(snapshot.messages) and snapshot.messages[mi].content]
+        max_thinking = _payloads_have_max_thinking(fork_payloads)
+        fork_running, fork_done = _count_fork_cards_by_status(fork_payloads)
         # §18.14 后 TUI(用户裁决):max 状态显在 thinking 焦点行,不塞引擎行尾。
         self._footer.set_max_thinking(max_thinking)
         saw_engine = False
@@ -1772,7 +1805,8 @@ class IstInkApp:
             if (payload.get("kind") or "") == "engine":
                 saw_engine = True
                 self._fork_card_payloads[uuid_] = payload
-                self._footer.set_engine_line(_render_engine_bottom_line(payload))
+                self._footer.set_engine_line(
+                    _render_engine_bottom_line(payload, fork_running, fork_done))
                 continue
             row = rows.get(uuid_)
             if row is None:
@@ -2001,7 +2035,9 @@ class IstInkApp:
                 self._fork_card_payloads[msg.uuid] = payload
                 self._footer.set_max_thinking(_payloads_have_max_thinking(
                     self._fork_card_payloads.values()))
-                self._footer.set_engine_line(_render_engine_bottom_line(payload))
+                fr, fd = _count_fork_cards_by_status(self._fork_card_payloads.values())
+                self._footer.set_engine_line(
+                    _render_engine_bottom_line(payload, fr, fd))
                 return
             idx = self._transcript.message_count()
             self._transcript.append_message(self._card_line(msg.uuid, payload))

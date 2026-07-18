@@ -22,9 +22,9 @@ ist_app 只在 _handle_key 顶部拦截、把按键委托给本模块。
 
 防呆（2026-07-16 zhaiyq 实弹 7 题丢 2 答；只加黄字提示，不改任何按键语义）：
 - 空 Other 提交（532862）：留在输入态 + 「不能为空」提示，绝不落空答案。
-- 已选未提交切题/esc（516576）：数字/↑↓ 只动高亮，enter(单选)/space(多选) 才落
-  ``_selected``——动过高亮但未落答就 ←→/Tab 切题或 esc，黄字告警一次；紧接着再次
-  同类按键放行（不锁死用户），其他按键则清提示重新计。
+- 动过高亮未落答切题/esc（516576）：B 语义下 ↑↓ 只动高亮，数字/enter(单选)/space(多选)
+  才落 ``_selected``（数字已落答,D23）——动过高亮但未落答就 ←→/Tab 切题或 esc，黄字告警
+  一次；紧接着再次同类按键放行（不锁死用户），其他按键则清提示重新计。
 - 多题带未答整体提交/关闭：末题 enter 提交或 esc 取消时仍有未答题 → 提示
   「还有 N 题未答，未答题将按挂起处理」，再次同类操作放行。
 """
@@ -61,7 +61,7 @@ class AskUserSession:
         self._other_text: dict[int, str] = {}  # q_idx -> Other 自由文本
         self._other_input = False      # 是否处于 Other 文本输入态
         self._other_empty_hint = False  # 空文本提交被拦→面板显「不能为空」提示(防呆)
-        # 516576 防呆状态:数字/↑↓ 只动高亮不落答,动过高亮即视为「已选」意图
+        # 516576 防呆状态:B 语义下 ↑↓ 只动高亮不落答(数字已落答,D23),动过高亮即视为「已选」意图
         self._touched: list[bool] = [False] * len(questions)  # 每题是否动过高亮
         self._leave_warn: str | None = None  # 黄字告警文案(切题/esc/整体提交防呆),None=不显示
         self._warned_op: str | None = None   # 已告警的操作类别(switch/cancel/submit)→同类再次操作放行
@@ -135,21 +135,23 @@ class AskUserSession:
                 # 防呆提示(空文本提交被拦):黄字,仅在 Other 空提交后驻留,补内容/esc 后清
                 lines.append("       \x1b[33m⚠ 自定义输入不能为空——请输入内容,或按 esc 取消\x1b[0m")
 
-        # 提示文案对齐实际按键语义(2026-07-17 team4 审计 P1-5):数字/↑↓ 只移动高亮
-        # 不落答——旧文案「数字直选」承诺了"按数字即选定",正是 run15/17 两次 3 题丢 2
-        # 的用户心智模型根因;落答动作(enter/space)必须在文案里说清。
+        # 提示文案对齐实际按键语义(2026-07-18 team4 D23,对齐 B=数字直选):单选数字/enter
+        # 都落答+前进(:206/:339 同走 _advance_or_submit)、多选数字/space 都勾选(:201)——纯
+        # 移动只剩 ↑↓。旧文案「数字 移动」是 A 旧叙事、与 B 代码方向相反(用户看"移动"实际按
+        # 数字即落答跳题,惊讶感),正是 F-TUI-1 改行为时 hint 未同步的遗留;落答/前进动作必须
+        # 在文案里说清。末题 last_q(单题 total==1 也满足)说"提交"、非末题说"进下题/下一题"。
         last_q = self._q_idx == total - 1
-        hint = "↑↓/数字 移动 · "
+        hint = "↑↓ 移动 · "
         if multi:
-            hint += "space 勾选 · " + ("enter 提交 · " if last_q else "enter 下一题 · ")
+            hint += "数字/space 勾选 · " + ("enter 提交 · " if last_q else "enter 下一题 · ")
         else:
-            hint += "enter 选定 · "
+            hint += ("数字/enter 选定并提交 · " if last_q else "数字/enter 选定并进下题 · ")
         if total > 1:
             hint += "←→/Tab 切题 · "
         hint += "o 输入自定义文本 · esc 取消"   # A1(F-TUI-5):「自定义」→说清是文本输入
         lines.append(f"   {D}{hint}{X}")
         if self._leave_warn:
-            # 防呆黄字(已选未提交切题/esc、带未答整体提交):告警一次,再次同类操作放行
+            # 防呆黄字(动过高亮未落答切题/esc、带未答整体提交):告警一次,再次同类操作放行
             lines.append(f"   \x1b[33m⚠ {self._leave_warn}\x1b[0m")
         return lines
 
@@ -245,14 +247,14 @@ class AskUserSession:
     def _is_other_highlighted(self) -> bool:
         return self._highlight == len(self._options())
 
-    # ── 防呆守卫（516576：已选未提交切题/esc 静默丢答）────────────────
+    # ── 防呆守卫（516576：动过高亮未落答切题/esc 静默丢答）────────────────
 
     def _has_uncommitted_selection(self) -> bool:
-        """当前题「已选未提交」判据：动过高亮(数字/↑↓)但 _selected 仍空。
+        """当前题「动过高亮未落答」判据：动过高亮(↑↓)但 _selected 仍空。
 
-        数字/↑↓ 只动高亮，enter(单选)/space(多选) 才落答——用户动过高亮
-        大概率以为已作答（run15/17 两次 3 题丢 2 的实弹形态），此时切走/取消
-        值得拦一次提示。"""
+        B 语义下(D23) ↑↓ 只动高亮，数字/enter(单选)/space(多选) 才落答——数字已落答
+        (:204/:206)故只有 ↑↓ 纯移动未落答会触发本判据;用户动过高亮大概率以为已作答
+        （run15/17 两次 3 题丢 2 的实弹形态），此时切走/取消值得拦一次提示。"""
         return self._touched[self._q_idx] and not self._selected[self._q_idx]
 
     def _unanswered_count(self) -> int:
@@ -281,19 +283,19 @@ class AskUserSession:
         if not self._has_uncommitted_selection():
             return True
         return self._warn_once(
-            "switch", "当前题已选未提交——enter 落答后再切(再次切题将不落答直接切换)",
+            "switch", "当前题动过高亮未落答——数字/enter 落答后再切(再次切题将不落答直接切换)",
         )
 
     def _guard_cancel(self) -> bool:
         """esc 分级守卫(F-TUI-5/7,A2 Design 2026-07-18 裁):**用"有无已答内容"分流**——
-        - 当前题已选未提交:拦一次(既有,enter 落答);
+        - 当前题动过高亮未落答:拦一次(既有,数字/enter 落答);
         - **有已答内容**(≥1 题已落答):esc 首次二次确认「已答 N 题,确认放弃全部?」,
           再次 esc 才真 cancel——大面板误触全丢是真损失(用户答了半天);
         - **空面板**(无任何已答):esc 秒退(正常逃生口,防呆保留)。
         均告警一次再放行(§14-R4 不死挡)。与 (41)④ 提交保真门互补(一防误提交、一防误放弃)。"""
         if self._has_uncommitted_selection():
             return self._warn_once(
-                "cancel", "当前题已选未提交——enter 落答;再次 esc 确认取消整个问答",
+                "cancel", "当前题动过高亮未落答——数字/enter 落答;再次 esc 确认取消整个问答",
             )
         n_answered = sum(1 for sel in self._selected if sel)
         if n_answered > 0:
@@ -330,10 +332,10 @@ class AskUserSession:
             self._selected[self._q_idx] = {self._options()[self._highlight].get("label", "")}
         elif self._has_uncommitted_selection():
             # multiSelect 的 enter 也是一种「离开当前题」(2026-07-17 team4 审计 P1-6):
-            # 动过高亮未 space 勾选就 enter=静默空答案推进——与切题/esc 同款守卫,
-            # 告警一次,再次 enter 放行(按未选继续)。
+            # 动过高亮未 space/数字 勾选就 enter=静默空答案推进(B 下数字也 toggle 落答,D23)
+            # ——与切题/esc 同款守卫,告警一次,再次 enter 放行(按未选继续)。
             if not self._warn_once(
-                    "advance", "当前题动过高亮但未 space 勾选——space 落答后 enter;"
+                    "advance", "当前题动过高亮但未 space/数字 勾选——space/数字 落答后 enter;"
                                "再次 enter 将按未选继续"):
                 return
         self._advance_or_submit()
@@ -385,11 +387,30 @@ class AskUserSession:
                 return
             self._submit()
 
+    def _highlight_for(self, idx: int) -> int:
+        """D24：切到第 idx 题时 ❯ 光标应落的 option 行索引。
+
+        已答题(_selected 非空)→落已选项行(回扫可复核"我选的在这")、多选落首个已选项、
+        仅 Other 已选→Other 行(len(options));未答题→0(新题从头,无已选项可显)。
+        修 D24 回扫游标重置——旧 _goto_question 无条件置 0,致回退已答题 ❯ 停默认行、
+        已选项虽绿标却无光标,用户误判"答案没了"(选择其实在 _selected)。"""
+        sel = self._selected[idx]
+        if not sel:
+            return 0
+        for i, opt in enumerate(self._options_at(idx)):
+            if opt.get("label", "") in sel:
+                return i
+        if _OTHER_VALUE in sel:
+            return len(self._options_at(idx))  # 仅 Other 已选→Other 行
+        return 0
+
     def _goto_question(self, idx: int) -> None:
-        """A4：切到第 idx 题（双向，越界忽略）。已选状态按题保留。"""
+        """A4：切到第 idx 题（双向，越界忽略）。已选状态按题保留。
+        D24：回退已答题时 ❯ 光标落已选项(非无条件 0),显示层与 _selected 一致——
+        前进到新题仍 0(见 _advance_or_submit:370 新题从头),仅切题回退需显已选。"""
         if 0 <= idx < len(self._questions):
             self._q_idx = idx
-            self._highlight = 0
+            self._highlight = self._highlight_for(idx)
             self._clear_warn()
             self._render()
 

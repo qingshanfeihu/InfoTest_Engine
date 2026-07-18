@@ -87,7 +87,13 @@ def test_tab_bearing_sides_quote_renders_complete_and_tab_free() -> None:
     texts = [ch.value for ch in panel.node.children if hasattr(ch, "value")]
     joined = "\n".join(texts)
     assert "\t" not in joined, "TextNode 值必须零 TAB(dom 层规格化,否则终端跳列叠影/丢显)"
-    # 引文两侧关键子串全部可见(丢显面:实机回显尾 + 手册文件名此前整段不可见)
+    # 引文两侧关键子串全部可见(丢显面:实机回显尾 + 手册章节标签)。D22 语义化(2026-07-19
+    # 收口批):手册 source_ref 渲染为人话章节标签、原始 .md 文件名脱敏隐去;引文正文/设备回显
+    # 仍 verbatim 全可见,可见性断言的手册侧改断语义标签(以 _source_label_cn 输出为准)。
     for frag in ("www.a.com.", "60", "IN", "CNAME", "www.local.com.",
-                 "cli_10.5_Chapter20.md", "SDNS回退池"):
+                 "CLI 手册 10.5 第20章", "SDNS回退池"):
         assert frag in joined, f"证据子串「{frag}」必须完整可见(用户凭它裁决)"
+    # 反向锁(D22 脱敏守门):原始手册文件名/`.md` 原名形态不得泄进用户面(语义化后隐去,
+    # 别只让测试重新变绿——把脱敏锁进守门)
+    assert "cli_10.5_Chapter20.md" not in joined and ".md" not in joined, \
+        "D22:手册原始文件名/`.md` 原名不得出现在用户面渲染(源标签语义化脱敏)"

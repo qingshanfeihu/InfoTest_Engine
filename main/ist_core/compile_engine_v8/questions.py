@@ -574,8 +574,8 @@ def build_ask_question(c: dict) -> dict:
         # 裸串/token 两路殊途同归,不生歧义(成对机制补齐,§18.15-B/(46))。
         return {"question": q, "header": f"裁决{aid[-4:]}",
                 "options": [
-                    {"label": "预期以实机为准", "description": "以实机实际行为为准,修订该用例的预期断言并重编"},
-                    {"label": "确认产品缺陷", "description": "实机行为是产品问题——记入缺陷候选单,该用例以缺陷结案"}],
+                    {"label": "预期以实机为准", "description": "以实机实际行为为准,改这个用例的预期断言后重编。对你的用例:承认实机对、改用例期望。"},
+                    {"label": "确认产品缺陷", "description": "实机行为是产品的问题——记进缺陷候选清单,这个用例按缺陷结案。对你的用例:判定是产品问题、不改用例。"}],
                 "_tokens": {"预期以实机为准": "correct", "确认产品缺陷": "defect"},
                 "_key": aid}
     if kind == "cap":
@@ -609,10 +609,10 @@ def build_ask_question(c: dict) -> dict:
              + "。确认是环境问题吗?")
         return {"question": q, "header": f"环境{aid[-4:]}",
                 "options": [
-                    {"label": "确认环境问题,停止该案", "description": "以环境阻塞如实报告该用例"},
-                    {"label": "不认可,隔离复跑", "description": "单独再跑一次验证这个判断"},
+                    {"label": "确认环境问题,停止该案", "description": "按环境阻塞如实报告这个用例。对你的用例:确认是环境挡的、就此如实记。"},
+                    {"label": "不认可,隔离复跑", "description": "单独再跑一次验证这个判断。对你的用例:不信是环境问题、再单跑验证一次。"},
                     {"label": "确认产品缺陷", "description":
-                        "不是环境问题,是产品问题——记入缺陷候选单,该用例以缺陷结案"}],
+                        "不是环境问题,是产品的问题——记进缺陷候选清单,这个用例按缺陷结案。对你的用例:判定是产品问题。"}],
                 "_tokens": {"确认环境问题,停止该案": "stop", "不认可,隔离复跑": "retry",
                             "确认产品缺陷": "defect"},
                 "_key": aid}
@@ -628,9 +628,9 @@ def build_ask_question(c: dict) -> dict:
             return {"question": q, "header": f"缺清理{aid[-4:]}",
                     "options": [
                         {"label": "重编补自清", "description":
-                            f"重新编写并在断言后追加恢复步(建议:{tau or '逆序 no 回放'})——推荐"},
-                        {"label": "挂起到下批", "description": "本批不动它,下批处理"},
-                        {"label": "如实降级", "description": "该案不入交付卷,以未通过如实报告"}],
+                            f"重新编写、在断言后加一步把配置改回去(建议:{tau or '按相反顺序用 no 命令撤配置'})——推荐。对你的用例:让它跑完自己收拾干净。"},
+                        {"label": "挂起到下批", "description": "本批不动它,下批处理。对你的用例:这批先跳过、下批再弄。"},
+                        {"label": "如实降级", "description": "这个用例不放进交付卷,按未通过如实报告。对你的用例:不硬塞、如实记没过。"}],
                     "_tokens": {"重编补自清": "reflow_tau", "挂起到下批": "suspend",
                                 "如实降级": "downgrade"},
                     "_key": aid}
@@ -658,9 +658,9 @@ def build_ask_question(c: dict) -> dict:
              + "。" + _strength + _grp_note + "如何处置?")
         return {"question": q, "header": f"床态{aid[-4:]}",
                 "options": [
-                    {"label": "挂起到下批", "description": "床治理后下批续跑该案(重跑同参数时会询问恢复)"},
-                    {"label": "床已处理,复跑验证", "description": "你已清理残留——引擎复跑一次验证"},
-                    {"label": "如实降级", "description": "该案不入交付卷,以未通过如实报告"}],
+                    {"label": "挂起到下批", "description": "把测试床整理好后下批再续跑这个用例(重跑同参数会问你要不要恢复)。对你的用例:等床清理好、下批再跑。"},
+                    {"label": "床已处理,复跑验证", "description": "你已清掉残留——引擎复跑一次验证。对你的用例:床清好了、再跑一次确认。"},
+                    {"label": "如实降级", "description": "这个用例不放进交付卷,按未通过如实报告。对你的用例:不硬塞、如实记没过。"}],
                 "_tokens": {"挂起到下批": "suspend", "床已处理,复跑验证": "retry",
                             "如实降级": "downgrade"},
                 "_key": aid}
@@ -672,8 +672,8 @@ def build_ask_question(c: dict) -> dict:
              + "本批如何处理?")
         return {"question": q, "header": f"挂起{aid[-4:]}",
                 "options": [
-                    {"label": "恢复处理", "description": "回到正常流程继续修"},
-                    {"label": "保持挂起", "description": "本批继续不动它"}],
+                    {"label": "恢复处理", "description": "回到正常流程继续修。对你的用例:接着修这个用例。"},
+                    {"label": "保持挂起", "description": "本批继续不动它。对你的用例:这批先一直放着。"}],
                 "_tokens": {"恢复处理": "resume", "保持挂起": "keep"},
                 "_key": aid}
     note = _s0_dispute_note(c)

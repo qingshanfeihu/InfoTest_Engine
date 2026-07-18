@@ -175,7 +175,7 @@ def test_triple_projection_zero_template_verbatim():
     blob = q["question"] + " ".join(o["description"] for o in q["options"])
     assert "加请求" not in blob and "观测次数" not in blob      # 模板文案退场
     assert "write file 后 clear" in q["question"]              # procedure 逐字投影
-    assert q["options"][0]["label"].startswith("采纳「")       # 采纳选项=具体方案
+    assert q["options"][0]["label"] == "采纳该等价方案(方法见题面)"   # F-TUI-2 固定短语(旧动态截断)
     assert q["_token_by_label"][q["options"][0]["label"]] == "改过程"   # P3 label→token
 
 

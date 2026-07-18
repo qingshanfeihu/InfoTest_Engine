@@ -445,7 +445,9 @@ def test_triple_projection_free_labels_pass_validate():
         "reason": "环境无法重启"}]}}
     qs = build_questions(led)
     assert len(qs) == 1 and qs[0].get("_token_by_label")
-    assert any(str(o["label"]).startswith("采纳「") for o in qs[0]["options"])
+    # F-TUI-2:采纳 label 由动态 `采纳「{proc}」` 改固定短语(仍是非 DECISIONS 字面的自由 label,
+    # 测点=映射表过门不被字面枚举误杀,不变)
+    assert any(o["label"] == "采纳该等价方案(方法见题面)" for o in qs[0]["options"])
     assert validate_questions(qs, led)   # 自由 label 经映射表过门,不误杀
 
 

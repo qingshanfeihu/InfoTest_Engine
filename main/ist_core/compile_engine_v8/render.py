@@ -75,6 +75,31 @@ def clean_device_echo(text: str, limit: int = 0) -> str:
     return out[:limit] if limit > 0 else out
 
 
+_REVISION_HDR = re.compile(r"^#+\s*Revision\b.*$", re.MULTILINE)
+_RULING_HDR = re.compile(r"^#+\s*裁决\s*$", re.MULTILINE)
+
+
+def _ruling_summary(ruling: str, limit: int = 120) -> str:
+    """裁决要点摘要(D14):判例 ruling 是「`# 裁决` 头 + 若干 `## Revision @时间戳` 累积段」的
+    markdown 文本(存储侧 [:500] 截断)。取**最新一段**操作性内容做要点,去 md 头/Revision 时间戳/
+    换行折叠/半句尾——旧 `str(ruling)[:160]` 直出把整块含 `## Revision @2026-...` 时间戳的原文
+    喂用户看(668000 去向行实证:一行糊满 md 头+时间戳+半截句子)。取最新段=沿用的是当前操作裁决。"""
+    s = str(ruling or "").strip()
+    if not s:
+        return ""
+    body = ""
+    for seg in reversed(_REVISION_HDR.split(s)):   # 末段=最近 Revision 的操作性内容
+        seg = _RULING_HDR.sub("", seg)
+        # MULTILINE:剥**每一行**行首 md 头,含段内 `## 双方记载` 类头(redline 边角:无 MULTILINE
+        # 只剥段首一个头、段内头会以带 ## 的纯文字入摘要)
+        seg = re.sub(r"^#+\s*", "", seg.strip(), flags=re.MULTILINE).strip()
+        if seg:
+            body = seg
+            break
+    body = re.sub(r"\s+", " ", body or _RULING_HDR.sub("", s)).strip()   # 折叠换行/多空格
+    return (body[:limit].rstrip() + "…") if len(body) > limit else body
+
+
 # ── 时间线:事实 → 人话(机械翻译,零判断) ─────────────────────────────────────
 
 
@@ -97,6 +122,11 @@ def case_timeline(mine: list[dict]) -> list[str]:
         elif ev == "adopted":
             out.append("同一问题你此前已有裁决,直接沿用(免问)")
         elif ev == "decision" and f.get("answer"):
+            # D15(provenance 分流):adopt 免问派生的 decision 事实(provenance=adopted:*)不是本批
+            # 亲答——同案已有 adopted 事实走上面「直接沿用(免问)」行,此处跳过防「你的裁决:X」
+            # 误示为本批亲裁(668000 时间线实证:免问案连出两行、后一行读着像用户答过)。
+            if str(f.get("provenance") or "").startswith("adopted:"):
+                continue
             out.append(f"你的裁决:{f.get('answer')}")
         elif ev == "suspended":
             # F-Py-5①:decision 类未作答挂起显「未作答」;bed 床治理/resume 恢复/欠定/改描述→「挂起」
@@ -186,7 +216,13 @@ def remedy_text(queue: list[dict], mine: list[dict], panel: dict | None = None) 
         return ("**结论**:疑似产品缺陷,已列入缺陷候选单(`defect_candidates.md`);"
                 "坐实需换一种配置形态复现。")
     if (disp in ("env_blocked", "user_stop")) and int(att.get("round") or 0) == 99:
-        who = f"(依据你的裁决「{decs[-1].get('answer')}」)" if decs else ""
+        # D15(provenance 分流):最后一条 decision 若为 adopt 免问派生(provenance=adopted:*),
+        # 措辞不能说「你的裁决」(用户本批没被问)——改「此前批判例」如实归因。
+        _ld = decs[-1] if decs else None
+        if _ld and str(_ld.get("provenance") or "").startswith("adopted:"):
+            who = f"(依据此前批的同键判例「{_ld.get('answer')}」)"
+        else:
+            who = f"(依据你的裁决「{_ld.get('answer')}」)" if _ld else ""
         # N1a:user_stop=用户止损记账(非 env 题面的停止/降级),不是环境结论——
         # 措辞不说"环境";历史达过缺陷候选的,指到缺陷候选单(N1 floor 报告面)。
         # env_blocked@99=env 题面停止(用户确认环境)或在途批旧事实,旧文案保持。
@@ -201,8 +237,9 @@ def remedy_text(queue: list[dict], mine: list[dict], panel: dict | None = None) 
         return f"**结论**:按环境/取舍收尾{who},该用例记入未通过卷,下批可继续。"
     adopted = [f for f in mine if f.get("ev") == "adopted"]
     if adopted:
+        _rs = _ruling_summary(adopted[-1].get("ruling") or "")   # D14:去 md 头/时间戳/半句
         return ("**去向**:同一差异你此前已有裁决,本批直接沿用并按其重编"
-                f"(裁决要点:{str(adopted[-1].get('ruling') or '')[:160]})。")
+                + (f"(裁决要点:{_rs})。" if _rs else "。"))
     pf = [f for f in mine if f.get("ev") == "ask_panel"]
     if pf:
         prnd = int(pf[-1].get("round") or 0)

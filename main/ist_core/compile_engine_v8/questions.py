@@ -219,14 +219,23 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             proc = str((equiv or {}).get("procedure") or "") if equiv else ""
             preserves = str((equiv or {}).get("preserves") or "") if equiv else ""
             no_eq = str(c0.get("no_equivalent_reason") or "")
-            q_text = (f"用例 {aid[-6:]} 要验证:{tp}。\n问题:{obs}。"
+            # B(先问后落门回退凭证,防御纵深):题面带全 aid(同 missing_teardown/forbidden 面板,
+            # :197)——门无 folded_members 键的老记录回退按「全 aid in line」判,短号题面致全 aid
+            # 不在 line→回退失败。全 aid 入题面=回退凭证对任何记录代都稳。(独立健壮性改进,非 D12
+            # 真因——真因是跨 shape 采信碰撞。)
+            q_text = (f"用例 {aid}(尾号 {aid[-6:]}) 要验证:{tp}。\n问题:{obs}。"
                       + (f"\n等价方法:{proc}" + (f"({preserves})" if preserves else "") + "。"
                          if proc else ""))
             opts, tok = [], {}
             if proc:
-                lbl = f"采纳「{proc[:60]}」"
+                # F-TUI-2(采纳 label 截断→固定短语,防御纵深):旧 `采纳「{proc[:60]}」` ①mid-word
+                # 截断(655262 实证「采纳「…作为sdns liste」」)②被 TUI 截断加 … 时消费点 W3 `lbl in a`
+                # 子串匹配可能断→decision 空→采纳不落。固定短语=稳定匹配 + 无截断;完整方法已在
+                # q_text `等价方法:{proc}`、label 不需预览。(注:D12 668000 的真因是跨 shape 采信
+                # 碰撞、非本项——该案面板压根没展示、W3 本就命中;本项作独立健壮性改进保留。)
+                lbl = "采纳该等价方案(方法见题面)"
                 opts.append({"label": lbl,
-                             "description": "采纳这个等价验证方法来重编(引擎按它编写;和原方法的差异会在交付报告声明)。对你的用例:用能在这个床上跑的等价办法验证同样的行为。"})
+                             "description": "采纳题面给的等价验证方法来重编(引擎按它编写;和原方法的差异会在交付报告声明)。对你的用例:用能在这个床上跑的等价办法验证同样的行为。"})
                 tok[lbl] = "改过程"
             lbl_other = "我给别的等价方案"
             opts.append({"label": lbl_other,

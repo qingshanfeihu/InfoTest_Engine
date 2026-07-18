@@ -523,16 +523,25 @@ def ask_decision(state: dict) -> dict:
         is_fm = all(str(c.get("claim_kind")) == "forbidden_mechanism" for c in claims)
         if not (is_triple or is_fm):
             return None
+        # shape-aware 采信(Design(b)/Theory(21c) 采信同型律):案的**真实 conflict_shape**=其
+        # claim_kind(与上面 is_fm 判定同源、claims 为唯一来源)。判例的采信(读:615 查询 + 写回
+        # :757)按此 shape 分名空间——防跨 claim_kind 碰撞(D12 真因:verification_path_absent 三元组
+        # sig=`配置保存|eq` 撞 forbidden_mechanism 判例同 sig→旧硬写 FM 致三元组被 FM 判例的 改描述
+        # 抢占)。sig 不动(intent 签名不背 kind 维,Design 令);shape 单独承载 claim_kind 维。
+        _kinds = {str(c.get("claim_kind") or "") for c in claims}
+        shape = (_kinds.pop() if len(_kinds) == 1
+                 else ("forbidden_mechanism" if is_fm else "verification_path_absent"))
         it = sh.read_json(sh.outputs_root() / aid / "intent.json", {}) or {}
         gp = tuple(str(x) for x in (it.get("group_path") or []))
         leaf = gp[-1] if gp else str(it.get("title") or aid)[:40]
         if is_triple:
             has_eq = all(c.get("equivalent") for c in claims)
-            return {"group": gp or (aid,),
+            return {"group": gp or (aid,), "shape": shape,
                     "sig": (leaf + "|" + ("eq" if has_eq else "noeq")).lower()}
         fams = sorted({str(h.get("family") or "")
                        for h in (it.get("forbidden_mechanism") or []) if isinstance(h, dict)})
-        return {"group": gp or (aid,), "sig": (leaf + "|" + "+".join(fams)).lower()}
+        return {"group": gp or (aid,), "shape": shape,
+                "sig": (leaf + "|" + "+".join(fams)).lower()}
 
     def _land(aid: str, decision: str, answer_text: str, provenance: str = "",
               form: str = "") -> bool:
@@ -548,10 +557,16 @@ def ask_decision(state: dict) -> dict:
                                              assertion_form=form)
             if str(out).startswith("error"):
                 raise RuntimeError(str(out)[:200])
-        except Exception:  # noqa: BLE001
-            logger.warning("user_decision 落盘失败 %s——decision 不落账,下轮重问",
-                           aid, exc_info=True)
-            sh.emit(f"⚠ …{aid[-6:]} 裁决落盘失败,本轮不生效(下轮会重新询问)")
+        except Exception as _e:  # noqa: BLE001
+            # D13(可观测性·排障黑洞修):_land 拒因带 compile_user_decision **确切 error 原文**落
+            # logger + evidence——旧只 logger.warning(无 error 文本)+sh.emit(TUI 短语),compile
+            # debugging 看不到「先问后落门拒/form门拒/别的」确切因。D12 照因实证:_land 拒因不落盘,
+            # 定位真根因只能手工 instrument;有此项后拒因直接可见。error 原文入 evidence(fastlog
+            # 消费 evidence_added)+decision 值。
+            _err = str(_e)[:300]
+            logger.warning("_land 失败 %s decision=%s: %s——不落账下轮重问",
+                           aid, decision, _err, exc_info=True)
+            sh.emit(f"⚠ …{aid[-6:]} 裁决落盘失败(decision={decision}): {_err}——下轮重问")
             return False
         rec = {"ev": "decision", "aid": aid, "question_id": _qid_by_aid.get(aid),
                "answer": decision}
@@ -607,10 +622,13 @@ def ask_decision(state: dict) -> dict:
         try:
             from main.ist_core.tools.knowledge.adjudication_store import find_adjudications
             hits = find_adjudications(intent_signature=m["sig"],
-                                      conflict_shape="forbidden_mechanism",
+                                      conflict_shape=m["shape"],   # shape-aware:按案真实 kind 查询
                                       version_family=version)
         except Exception:  # noqa: BLE001
             hits = []
+        # 采信闸双保险(Theory 21c 验收③):命中后仍校 shape(判例)==shape(案)才采信,防查询过滤有漏
+        # ——(21c) 采信同型律 `shape(案)≠shape(判例)⇒禁采信` 的第二道兑现(查询是第一道)。
+        hits = [h for h in hits if str(h.get("conflict_shape") or "") == m["shape"]]
         toks = {str(h.get("token") or "") for h in hits}
         if len(toks) == 1 and next(iter(toks)) in ("改过程", "改预期", "改描述"):
             tok = next(iter(toks))
@@ -735,22 +753,30 @@ def ask_decision(state: dict) -> dict:
             # 语义即「按此改过程」,原文随 note 直达 worker。其他类维持保守(重问)。
             decision = "改过程"
         if not decision:
+            # D13(可观测性):W3 匹配 + DECISIONS 子串 + Other 兜底全落空 → 本轮不落、下轮重问。
+            # 落日志防「panel 采纳失败零记录」黑洞(动态 label 被 TUI 截断加 … 时 W3 子串匹配可能断,
+            # F-TUI-2 固定 label 后更稳,留观测防复发。注:668000 上 W3 本就命中、非该案主因)。
+            sh.emit(f"…{rep[-6:]} 答案「{a[:20]}」未匹配任何选项标签→本轮不落、下轮重问")
+            logger.warning("ask_decision decision 空 %s answer=%r 候选标签=%s",
+                           rep, a[:80], list(tbl))
             continue
         landed_members = [aid for aid in fold[rep]
                           if _land(aid, decision, a, form=_form_by_rep.get(rep, ""))]
         if m and landed_members and version:
-            # 判例写回(同键采信的供给侧;anchor=应然锚 A2,lineage=用户代理)
+            # 判例写回(同键采信的供给侧;anchor=应然锚 A2,lineage=用户代理)。shape-aware:
+            # conflict_shape 写案**真实 shape**(不再硬写 forbidden_mechanism)——读写共因,只修读侧
+            # 不够(Theory 21c 验收②);三元组写回落 verification_path_absent 名空间、不再污染 FM。
             try:
                 from main.ist_core.tools.knowledge.adjudication_store import write_adjudication
                 write_adjudication(
                     key={"intent_signature": m["sig"],
-                         "conflict_shape": "forbidden_mechanism",
+                         "conflict_shape": m["shape"],
                          "version_family": version},
                     ruling=a, anchor={"version": version, "lineage": "user_proxy"},
                     meta={"autoid": rep, "token": decision,
                           "batch": str(state.get("out_name") or "")})
             except Exception:  # noqa: BLE001
-                logger.debug("禁令机制判例写回失败(不拦裁决生效)", exc_info=True)
+                logger.debug("判例写回失败(不拦裁决生效)", exc_info=True)
     sh.append(state, new_facts)
     fs2 = sh.load_facts(state)
     return {"phase_status": "ok", **sh.counts_update(state, fs2)}

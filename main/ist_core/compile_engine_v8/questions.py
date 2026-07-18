@@ -295,11 +295,14 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
         if all(k == "command_existence" for k in kinds):
             # S6 存在性呈报(§18.14 S3:题面人话对象——用干净 cmds,机读检索证明
             # (签名数/覆盖率/检索路径)留台账 _evidence 不进用户面)。
-            # D+1 族性清扫:①决策依据完整——命令名短,**列全不省略**(redline:旧「完整见交付报告」
-            # 虚指,交付报告 _case_section 不渲染 claims、facts 不带 claims、唯一落点是机读 JSON,
-            # 用户拿报告找不到第 4..N 条;命令名短列全即完整,无需另通道)②题面首引全 aid+尾号
-            # (B 模式,先问后落门老记录回退凭证;此面板此前尾号-only=漏网,同 #37 B)
-            cmds = "、".join(f"『{c.get('command', '')}』" for c in claims)
+            # D+1 族性清扫:①决策依据**自足**——命令 >3 时示例+计数「…(共 N 条,其余为同类命令)」。
+            # Design 时序案:旧「完整见交付报告」虚指**不可达**——答题在 ask_decision interrupt 当下、
+            # delivery_report 是 closing 才产(当下不存在),渲染兑现也解不了「答题时看不到」;示例+计数
+            # 够判决策(改过程/改预期/改描述),**不指向任何外部载体**。②题面首引全 aid+尾号(B 模式,
+            # 先问后落门老记录回退凭证;此面板此前尾号-only=漏网,同 #37 B)
+            cmds = "、".join(f"『{c.get('command', '')}』" for c in claims[:3])
+            if len(claims) > 3:
+                cmds += f"…(共 {len(claims)} 条,其余为同类命令)"
             q_text = (f"用例 {aid}(尾号 {aid[-6:]}) 用到的命令 {cmds} 在被测版本的 CLI 手册里"
                       f"查不到(可能这版没有此功能,或命令改了名)。")
             opt_process = {"label": "改过程",

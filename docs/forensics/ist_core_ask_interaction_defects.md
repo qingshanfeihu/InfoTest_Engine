@@ -83,6 +83,24 @@
 - **严重级**：P0（用户无正常中止通路=交互死角，尤其长批想中途停时）。
 - **修复建议**：interrupt 挂起态放行 Ctrl-C（归 F-TUI 面板族，leader 已入修复池）；或面板显式中止键 + footer 提示同步。
 
+## D17【P2·TUI 收官显示「4+4=8」vs 盘上 7 数目矛盾】（User observer 捕）
+- **复现**：yzg 续跑 mini 批收官，TUI 收官文案显示未完成案数「4+4=8」，但盘上一致=7（delivery_report「19+7」、unsuccessful_cases.md「共7个」、unfinished/=7）。疑收官显示分组渲染重复归类（哪案被算两次/655203 分类漂移）。
+- **严重级**：P2（显示矛盾、盘上正确、不影响交付）。
+- **修复建议**：Py-Eng 查收官显示分组计数逻辑（TUI 层非盘上）。押后。
+
+## D18【P0·resume 未清算旧裁决→恢复处理 effective=false→resumed 案回不到欠定】（#36 分诊坐实，走向②）
+- **复现**：yzg 续跑 mini 批，7 挂起案答「恢复处理」，facts decision answer=恢复处理 + resumed 事实落——但 **decision_outcome 全 14 条（7案×2）`effective: false`**。resumed 后 needs_decision=0/authored=0，采纳 gather 从未 setup；收官 668000 suspended 仍是旧的 `_pid:47666 user_decision:改描述`。
+- **根因**：resume 未作废旧 adopted:eq 改描述 decision，旧裁决 continue 管案命运（案读「改描述=本轮不产出」→编写0次→再挂），resume 决定被判 effective=false。
+- **严重级**：P0（resume 机制失效、跨批续跑挂起案回不来、阻断 D12 验证）。三铁律②「effective=false 零放过」命中。
+- **修复建议**：Py-Eng——①resume 作废/删旧 adopted decision；②resumed 案强制重生成 needs_decision；③修 emit_decision 门对 resume 类型的通道（同 D12 家族路径覆盖缺口）。修后 #36 重跑。
+
+## D16【P1·挂起处理面板渲染路径缺口（B/F-TUI-2 未覆盖）】（User observer 首捕，我快评漏）
+- **复现**：yzg 续跑恢复问询面板（「批如何处理?恢复处理/保持挂起」，另一渲染构建路径）三点：①题面旧**短号 `…655248`**（无全 18 位 aid，B 全 aid 修复未覆盖此路径）②括号描述**截断** `(1.添加一个sdns listener ip为h)`（D9 族，截半句）③题面/标签**号码形态不一致**（题面 6 位 vs header `[挂起5248]` 4 位）。
+- **预期**：全渲染路径号码形态统一（全 aid 或统一短号规则）、描述不截断——B（全 aid 显示）+F-TUI-2（label 短语）应覆盖此挂起处理面板路径。
+- **严重级**：P1（路径覆盖面缺口，同族缺陷漏一条渲染路径）。
+- **修复建议**：B/F-TUI-2 姊妹项——Py-Eng 定位恢复问询面板渲染构建点，套用同一全 aid/label 规范。押后窗口，不阻塞本批。
+- **我的快评 gap（认领）**：此面板我四标准快评标 D2/D1/D5✓，**漏了短号/截断/号码形态**（题面可读性维度失查）——User observer naive 视角补到。教训：四标准「题面可读性」须细查号码形态一致性+描述完整性，非只看选项人话（D2）。
+
 ## yzg 重跑·四标准快评实录（销项验收场，先于答题）
 
 **gather 面板（8 欠定，655/668 族床限制案）四标准快评**：

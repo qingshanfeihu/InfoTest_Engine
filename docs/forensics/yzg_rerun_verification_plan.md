@@ -69,5 +69,12 @@ leader 令：用 yzg `unfinished/` 跨批续跑输入起 mini 批（668000/66804
 **执行序**：①确认 HEAD=补修包 commit、TUI 重启新 PID ②起 mini 批（unfinished 续跑，如 `编译 yzg.txt` 同参数续跑 或 ist-compile-engine 续跑接口）③gather 面板：先四标准快评→**逐题直答采纳**（防丢答、o→文本若需）→enter ④核 ⓐⓑⓒ + _pid==新PID 过滤。
 **结果**：成功=D12 收案 + zhaiyq 前冒烟一石二鸟；失败=_land 拒因原文交 Py-Eng 对症。
 
+**#36 首跑结果（2026-07-18，未验成——发现上游 D18 阻断）**：yzg 续跑（PID 24737、HEAD b0af3ecb）弹恢复问询面板、7 案答恢复处理（resumed 事实×7），**但 decision_outcome 全 14 条 effective=false**——resumed 后 needs_decision=0/authored=0、采纳 gather 从未 setup、旧 adopted:eq 改描述 decision 短路管案→编写0次→收口再挂。**shape-aware ①③④未测非失败**（采纳 gather 被 D18 阻断没上演）。**根因 D18**（Py-Eng 照因：resume 只 append resumed 事实、不清算旧 adopted、`_after_ask_contradiction` 无 author 出口→路由 closing；effective=false=S_PENDING 未落 settled 集）。
+
+**#36 重跑判据（D18 resume 修法后·双层验收）**：
+- **第一层 D18 resume 修复**：resumed→案回 author/gather（不路由 closing）、facts 有本批 needs_decision 重生成+authored、decision_outcome **effective=true**。
+- **第二层 D12 shape-aware**：668 eq 案走到采纳 gather→答采纳→⓪面板应出不被 FM 判例抢占+ⓐpanel decision 非 FM adopt+ⓑ采纳落 brief+ⓒD13 拒因。
+- 一次重跑两 bug 一并验（D18 案回 gather → D12 采纳落）。
+
 ## 就绪状态
 方案就绪。修复轮收完 + leader 放行 = yzg 重跑即启，零间隙。重跑中按本表逐条销项，新面板即时四标准快评续记缺陷单。**下一棒 D12 mini 批验证待放行**。

@@ -145,6 +145,12 @@ def clip_text(s: str, cap: int = 160) -> str:
     return kept + "…"
 
 
+def _rstrip_stop(s: str) -> str:
+    """D+1 双句号族清扫:剥变量末尾句读,防题面模板 `f"…{var}。"` 拼成「。。」(源数据
+    tp/obs/reasons 等本身可能已带句号)。在变量**赋值处**剥=覆盖其全部题面引用点。"""
+    return str(s or "").rstrip("。.！？!?；;，,、 \n")
+
+
 # claim_kind → 建议断言形态(机械映射;最终形态以用户答案落盘为准)。
 # cross_client_landing(E10a,2026-07-16):键名与 verifiability 侧(丙队)冻结——
 # 跨客户端落点类主张的可验等价首选同客户端关系断言(relation),次选分组分布区间。
@@ -184,7 +190,7 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
         if not claims:
             continue
         ordering = any(c.get("ordering_sensitive") for c in claims)
-        reasons = "；".join(_first_clause(c.get("reason", "")) for c in claims[:3])
+        reasons = _rstrip_stop("；".join(_first_clause(c.get("reason", "")) for c in claims[:3]))
         mins = [int(c.get("min_requests") or 0) for c in claims]
         min_req = max(mins) if any(m > 0 for m in mins) else 0
         kinds = [str(c.get("claim_kind", "")) for c in claims]
@@ -213,8 +219,8 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             # 真实路径 claim_kind=verification_path_absent 但带三元组字段→走这里
             # (旧版掉进 generic「加请求/观测次数」模板=run22 病理)。
             c0 = claims[0]
-            tp = str(c0.get("test_point") or "")
-            obs = str(c0.get("obstacle") or "")
+            tp = _rstrip_stop(c0.get("test_point"))       # 双句号族:剥末尾句读,防 `{tp}。` 双句号
+            obs = _rstrip_stop(c0.get("obstacle"))
             equiv = c0.get("equivalent") or None
             proc = str((equiv or {}).get("procedure") or "") if equiv else ""
             preserves = str((equiv or {}).get("preserves") or "") if equiv else ""
@@ -262,7 +268,9 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             c0 = claims[0]
             # F-Py-4:prop 路由过 clip_text(旧 [:200] 硬截够不到清单感知)——proposed_equivalent
             # 若是设备能力/方法清单(600113 实证)由 _fold_enumeration 折叠,不整段灌题面。
-            prop = clip_text(str(c0.get("proposed_equivalent") or c0.get("suggested_fix") or ""), 200)
+            # 双句号族:clip_text 未截断时保留源末句号,题面 `{prop}。` 会双句号 → 剥(截断的 … 不受影响)
+            prop = _rstrip_stop(clip_text(str(c0.get("proposed_equivalent")
+                                              or c0.get("suggested_fix") or ""), 200))
             q_text = (f"用例 {aid}(尾号 {aid[-6:]})的意图要求测试床禁止的机制:{reasons}。"
                       + (f"worker 按配置面模型推导的等价实现:{prop}。" if prop else "")
                       + "等价性为模型条件(启动通道等差异已在报告声明),如何处置?")
@@ -287,8 +295,12 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
         if all(k == "command_existence" for k in kinds):
             # S6 存在性呈报(§18.14 S3:题面人话对象——用干净 cmds,机读检索证明
             # (签名数/覆盖率/检索路径)留台账 _evidence 不进用户面)。
-            cmds = "、".join(f"『{c.get('command', '')}』" for c in claims[:3])
-            q_text = (f"用例 {aid[-6:]} 用到的命令 {cmds} 在被测版本的 CLI 手册里"
+            # D+1 族性清扫:①决策依据完整——命令名短,**列全不省略**(redline:旧「完整见交付报告」
+            # 虚指,交付报告 _case_section 不渲染 claims、facts 不带 claims、唯一落点是机读 JSON,
+            # 用户拿报告找不到第 4..N 条;命令名短列全即完整,无需另通道)②题面首引全 aid+尾号
+            # (B 模式,先问后落门老记录回退凭证;此面板此前尾号-only=漏网,同 #37 B)
+            cmds = "、".join(f"『{c.get('command', '')}』" for c in claims)
+            q_text = (f"用例 {aid}(尾号 {aid[-6:]}) 用到的命令 {cmds} 在被测版本的 CLI 手册里"
                       f"查不到(可能这版没有此功能,或命令改了名)。")
             opt_process = {"label": "改过程",
                            "description": f"让引擎改用本版本确实有的等价命令/写法重写 {cmds},继续编。对你的用例:换成本版本支持的命令达到同样目的。"}
@@ -613,22 +625,25 @@ def build_ask_question(c: dict) -> dict:
     aid = str(c.get("autoid"))
     kind = str(c.get("kind") or "contra")
     title = str(c.get("title") or "")
-    who = f"用例 …{aid[-6:]}" + (f"({title[:24]})" if title else "")
+    # D+1 族性清扫(D16 挂起/床态/env/cap 面板路径):who 是全部 7 类 ask_contradiction 面板题面
+    # 首引——短号→全 aid+尾号(B 模式,面板标题一致 + 消歧,尾号跨案可撞);title 辅助超 24 明示省略。
+    _t = (f"({title[:24]}…)" if len(title) > 24 else f"({title})") if title else ""
+    who = f"用例 {aid}(尾号 {aid[-6:]}){_t}"
     tried = [str(x) for x in (c.get("tried") or []) if x]
     if tried and kind in ("cap", "env", "bed", "contra"):
         who += f"[引擎已试:{ '、'.join(tried[:3]) }]"
     if kind == "panel":
         p = c.get("panel") or {}
-        sides = "；".join(_side_cn(s) for s in (p.get("sides") or [])[:3])
+        sides = _rstrip_stop("；".join(_side_cn(s) for s in (p.get("sides") or [])[:3]))
         rc = [str(r.get("outcome") or "") for r in (p.get("retrieval_receipt") or [])]
-        searched = "、".join(sorted({_RECEIPT_CN.get(x, x) for x in rc if x}))
+        searched = _rstrip_stop("、".join(sorted({_RECEIPT_CN.get(x, x) for x in rc if x})))
         shape_cn = _SHAPE_CN.get(str(p.get("conflict_shape") or ""), _SHAPE_CN["other"])
         # 双源平摆、无预设首选项(§18.15-B/(45)/(46);与 ask_panel 中性契约成对):
         # 呈报差异本身+两侧记载,不渲"引擎的理解"、不给"确认按此"默认——两个选项各指
         # 一侧(实机为准 / 手册为准即缺陷),两读对称,余走 Other。
         q = (f"{who}:{shape_cn}。双方记载——{sides}。"
              + (f"已检索:{searched}。" if searched else "")
-             + f"情况梳理:{clip_text(str(p.get('hypothesis') or ''), 300)}。"
+             + f"情况梳理:{_rstrip_stop(clip_text(str(p.get('hypothesis') or ''), 300))}。"
              + _display_clean(str(p.get("ask") or "该以哪一方为准?"))
              + ("(该用例重编轮次已用尽,你的答案同时决定是否继续)" if c.get("cap_reached") else "")
              + " 若都不对,选 Other 直接写出正确的意图/预期。")

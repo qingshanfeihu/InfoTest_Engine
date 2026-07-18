@@ -411,14 +411,18 @@ def _resume_reopen_needs_decision(aid: str, mine: list[dict]) -> dict | None:
     nd_json = sh.read_json(sh.outputs_root() / aid / "needs_decision.json", {}) or {}
     if not any(isinstance(c, dict) for c in (nd_json.get("claims") or [])):
         return None   # 无欠定账本→无处可问,不重开
-    prev_dec = next((str(f.get("answer")) for f in reversed(mine)
-                     if f.get("ev") == "decision" and f.get("answer")), "")
+    # Theory ◇:前序 decision 的血统一并带上——adopted:* 是机生判例采信、非用户亲裁,题面措辞须
+    # 分锚(D15 血统同源),否则「你上次裁过」把判例误标用户裁决(D15 反向病)。
+    _prev_f = next((f for f in reversed(mine)
+                    if f.get("ev") == "decision" and f.get("answer")), {})
+    prev_dec = str(_prev_f.get("answer") or "")
+    prev_adopted = str(_prev_f.get("provenance") or "").startswith("adopted:")
     # Theory 审②暗礁核死:nd_seq=decision 计数(mine,pre-node)+1。旧 nd:1 建于 0 decision→seq=1;
     # 此刻 mine 含旧 改描述 decision(≥1)→新 seq≥2>1,新 qid 严格大于旧→(48) 幂等键(decision 引
     # question_id)不碰撞、不被静默吞。needs_decision 自身走内容键(全字段:qid+reopened 皆异)不去重。
     return {"ev": "needs_decision", "aid": aid,
             "question_id": _needs_decision_qid(aid, mine, nd_json),
-            "reopened": {"prev_decision": prev_dec}}   # ⓐ 重问题面上下文载荷
+            "reopened": {"prev_decision": prev_dec, "prev_adopted": prev_adopted}}   # ⓐ 题面上下文
 
 
 def author(state: dict) -> dict:
@@ -691,15 +695,33 @@ def ask_decision(state: dict) -> dict:
         fold.setdefault(rep, []).append(aid)
 
     qs = build_questions({aid: ledgers[aid] for aid in sorted(fold) if aid in ledgers})
-    # ⓐ #37(重开欠定题面上下文):resume 重开的欠定案题面前缀「你上次裁过 X」,防用户困惑「怎么又
-    # 问」(post-process 不侵入 build_questions;reopened 载荷在 needs_decision 事实 :2464 落)。
-    _reopened_prev = {str(f.get("aid")): str((f.get("reopened") or {}).get("prev_decision") or "")
-                      for f in fs if f.get("ev") == "needs_decision" and f.get("reopened")}
+    # ⓐ #37 + D19(重编/重开欠定题面上下文):欠定题面前缀「上次裁过 X」,防用户困惑「怎么又问」
+    # (post-process 不侵入 build_questions)。**分场景二分(Design 定稿,前缀不混)**:
+    #   ⑤ resume 恢复(needs_decision 带 reopened 载荷,:2464 落)→ 讲「上次裁决未落地、重新裁定」;
+    #   D19 round≥1 重编产生的**新**欠定(无 reopened,但案有前序 decision)→ 讲「按上次 X 重编后遇新情况」。
+    # prev_dec 两场景同款机制:动态取 facts 最近 decision(不写死)。
+    # **Theory ◇ 血统分锚(D15 同源)**:前序 decision 若 adopted:*(机生判例采信、非用户亲裁)→措辞
+    # 「上次沿用判例」;人源→「你上次裁过」——不把判例误标用户裁决(D15 反向病)。
+    _ro = {str(f.get("aid")): (f.get("reopened") or {})
+           for f in fs if f.get("ev") == "needs_decision" and f.get("reopened")}
+    _prev_dec = {}
+    for _a in aids:
+        _pf = next((g for g in reversed(fs) if str(g.get("aid")) == _a
+                    and g.get("ev") == "decision" and g.get("answer")), {})
+        if _pf.get("answer"):
+            _prev_dec[_a] = (str(_pf.get("answer")),
+                             str(_pf.get("provenance") or "").startswith("adopted:"))
     for _q in qs:
-        _rp = _reopened_prev.get(str(_q.get("_autoid")))
-        if _rp:
-            _q["question"] = (f"(你上次对此案裁过「{_rp}」,但那次裁决未能落地,这次请重新裁定)\n"
-                              + str(_q.get("question") or ""))
+        _aid = str(_q.get("_autoid"))
+        _base_q = str(_q.get("question") or "")
+        if _ro.get(_aid):                   # ⑤ resume 恢复场景(优先,带 reopened 载荷)
+            _rd = str(_ro[_aid].get("prev_decision") or "")
+            _rsrc = "上次沿用判例" if _ro[_aid].get("prev_adopted") else "你上次对此案裁过"
+            _q["question"] = (f"({_rsrc}「{_rd}」,但那次裁决未能落地,这次请重新裁定)\n" + _base_q)
+        elif _prev_dec.get(_aid):           # D19 重编后新欠定场景(round≥1,案有前序裁决)
+            _pd, _pa = _prev_dec[_aid]
+            _dsrc = "按上次沿用的判例" if _pa else "按你上次的"
+            _q["question"] = (f"(此案{_dsrc}『{_pd}』重编后,遇到新情况需你再定)\n" + _base_q)
     # P3:三元组题的 label→token 显式映射(长 label「采纳「…」」不含"改过程",
     # substring 兜底匹配不到——run22 会掉 Other 兜底致 re-ask)。
     _tok_by_rep = {str(q.get("_autoid")): (q.get("_token_by_label") or {}) for q in qs}

@@ -117,3 +117,66 @@ def test_predicate_auto_env_bed_not_reopened():
     assert N._resume_reopen_needs_decision(A, _base(f"auto:bed:{A}:1")) is None      # bed 不重开
     assert N._resume_reopen_needs_decision(A, _base(f"auto:contra:{A}:1")) is not None  # contra 重开
     assert N._resume_reopen_needs_decision(A, _base(f"auto:panel:{A}:1")) is not None   # panel 重开
+
+
+def _drive_ask_decision(monkeypatch, facts):
+    """驱动 ask_decision 捕获呈报题面(隔离判例店防采纳抢先;interrupt 返空不落)。"""
+    import tempfile, pathlib
+    from main.ist_core.tools.knowledge import adjudication_store as adj
+    monkeypatch.setattr(adj, "adjudications_root",
+                        lambda: pathlib.Path(tempfile.mkdtemp()) / "adj")
+    asked = []
+    monkeypatch.setattr(sh, "load_facts", lambda st: facts)
+    monkeypatch.setattr(sh, "append", lambda st, fx: None)
+    monkeypatch.setattr(sh, "signal", lambda *a, **k: None)
+    monkeypatch.setattr(sh, "emit", lambda t: None)
+    monkeypatch.setattr(sh, "counts_update", lambda st, f=None: {})
+    monkeypatch.setattr(N, "interrupt", lambda p: (asked.append(p.get("questions", [])) or {}))
+    N.ask_decision({"product_version": "10.5", "out_name": "t_d19"})
+    return asked[0][0]["question"] if asked and asked[0] else ""
+
+
+def test_d19_recompile_reask_prefix(monkeypatch):
+    """D19:round≥1 重编产生的新欠定(案有前序 decision、无 reopened)→题面前缀「按上次 X 重编后
+    遇新情况」;与 ⓐ resume 场景二分不混。"""
+    _mk_ledger()
+    facts = [
+        {"ev": "decision", "aid": A, "question_id": f"nd:{A}:1:verification_path_absent",
+         "answer": "改过程"},
+        {"ev": "needs_decision", "aid": A, "question_id": f"nd:{A}:2:verification_path_absent"},
+    ]
+    q = _drive_ask_decision(monkeypatch, facts)
+    assert "重编后" in q and "改过程" in q          # D19 前缀(动态取上次 decision)
+    assert "未能落地" not in q                       # 非 ⓐ 恢复前缀(二分不混)
+
+
+def test_a5_resume_reask_prefix_distinct_from_d19(monkeypatch):
+    """ⓐ resume:needs_decision 带 reopened 载荷 → 「上次裁决未能落地」前缀,不走 D19。"""
+    _mk_ledger()
+    facts = [
+        {"ev": "decision", "aid": A, "question_id": f"nd:{A}:1:verification_path_absent",
+         "answer": "改描述"},
+        {"ev": "needs_decision", "aid": A, "question_id": f"nd:{A}:2:verification_path_absent",
+         "reopened": {"prev_decision": "改描述"}},
+    ]
+    q = _drive_ask_decision(monkeypatch, facts)
+    assert "未能落地" in q and "改描述" in q         # ⓐ 前缀
+    assert "重编后" not in q                          # 非 D19(reopened 优先,二分不混)
+
+
+def test_theory_provenance_anchor_adopted_vs_human(monkeypatch):
+    """Theory ◇ 血统分锚(D15 同源):前序 decision 若 adopted:*(机生判例采信)→措辞「沿用判例」;
+    人源→「你上次裁过」。防判例被误标用户亲裁(D15 反向病)。"""
+    _mk_ledger()
+    # 前序=adopted(机生判例采信)→「上次沿用判例」,不出现「你上次」
+    q_adopt = _drive_ask_decision(monkeypatch, [
+        {"ev": "decision", "aid": A, "question_id": f"nd:{A}:1:verification_path_absent",
+         "answer": "改描述", "provenance": "adopted:eq--forbidden-mechanism--10-5"},
+        {"ev": "needs_decision", "aid": A, "question_id": f"nd:{A}:2:verification_path_absent"}])
+    assert "沿用" in q_adopt and "你上次" not in q_adopt and "按你上次的" not in q_adopt
+    # 对照:前序=人源(无 adopted provenance)→「你上次」,不出现「沿用」
+    q_human = _drive_ask_decision(monkeypatch, [
+        {"ev": "decision", "aid": A, "question_id": f"nd:{A}:1:verification_path_absent",
+         "answer": "改过程"},
+        {"ev": "needs_decision", "aid": A, "question_id": f"nd:{A}:2:verification_path_absent"}])
+    assert "你" in q_human and "沿用" not in q_human

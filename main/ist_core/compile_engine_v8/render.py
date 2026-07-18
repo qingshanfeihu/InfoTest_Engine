@@ -75,6 +75,13 @@ def clean_device_echo(text: str, limit: int = 0) -> str:
     return out[:limit] if limit > 0 else out
 
 
+def _ellip(s: str, n: int) -> str:
+    """D+1 族性清扫:用户可见辅助文本定长截断**带明示省略「…」**(截断永远留痕,不无痕硬截;
+    决策依据类不走此函数=不截,走此的是方向/证据摘要等辅助引用)。"""
+    s = str(s or "")
+    return s if len(s) <= n else s[:n].rstrip() + "…"
+
+
 _REVISION_HDR = re.compile(r"^#+\s*Revision\b.*$", re.MULTILINE)
 _RULING_HDR = re.compile(r"^#+\s*裁决\s*$", re.MULTILINE)
 
@@ -200,7 +207,7 @@ def remedy_text(queue: list[dict], mine: list[dict], panel: dict | None = None) 
         act = ACTION_CN.get(str(head.get("action")), str(head.get("action")))
         line = f"**修复方案**:{act}"
         if head.get("direction"):
-            line += f"。方向:{str(head['direction'])[:160]}"
+            line += f"。方向:{_ellip(head['direction'], 160)}"   # 辅助:超长明示省略
         rest = [ACTION_CN.get(str(q.get("action")), "") for q in queue[1:]]
         if any(rest):
             line += f"。若仍未通过,后续依次:{'、'.join(r for r in rest if r)}"
@@ -402,8 +409,9 @@ def render_defect_candidates_md(entries: list[dict], manifest: dict) -> str:
              f"共 {len(entries)} 案 · 候选非终判,确认权在人",
              ""]
     for e in entries:
-        lines.append(f"## {e.get('title') or ('用例 …' + str(e.get('autoid'))[-6:])}")
-        lines.append(f"- 编号 `{e.get('autoid')}` · 当前状态:"
+        _dc_aid = str(e.get("autoid") or "")
+        lines.append(f"## {e.get('title') or ('用例 …' + _dc_aid[-6:])}")
+        lines.append(f"- 编号 `{_dc_aid}`(尾号 {_dc_aid[-6:]}) · 当前状态:"   # 全号+尾号(与主报告一致)
                      f"{STATUS_CN.get(str(e.get('status')), e.get('status'))}"
                      + (" · **你已确认为产品缺陷**" if e.get("user_confirmed")
                         else " · 待人工确认"))

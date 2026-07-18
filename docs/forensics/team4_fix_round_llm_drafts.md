@@ -10,6 +10,8 @@
 
 **方法 C｜「亲核字段:规则说『X 从字段 Y 取』,必须亲核 Y 真含 X,不只是 Y 存在」**(方法#16,D17 per-theme 空指实证,Design 三连逮 fs_write→run_shell→per-theme)——写「数字从 engine_report 的 X 字段照抄」类规则时,只 grep「engine_report 有 totals 字段」不够,**必须亲核 totals 里真有你要的那类值**:D17 我核了 totals 存在、却没核它是否含 per-theme(listener/持久化)分类——实际 totals 全是 status 桶(n_pass/n_fail/n_broken…)、无 per-theme,规则指向不存在的 field 反而暗示 LLM「per-theme 可取」、数错根没堵。共同根(与 A/B 同族):**指向前先亲核指向物真存在/真完整**——Y 存在 ≠ Y 含 X。三连击(fs_write 漏通道/run_shell 又漏/per-theme 空指)是本条完整教学案:写规则时就亲核字段,别等评审逮。
 
+**窗口纪律｜co-merge 执行窗 mid-save race:先重跑再查、别烧排障轮**(leader 2026-07-18 沉淀,D28 co-merge 终核实证)——收口批 co-merge 是多人同窗写盘,兄弟项声明落盘中时你的 pytest 可能撞**瞬时不一致态**(兄弟项 code 已改文案、其 test 断言未存 → 假 fail)。判据:失败在**你链外**的兄弟项文件 + git diff 证该项 test 已在工作树更新(只是你跑时还没落)。处理序=**先重跑取当前盘面**(race 常已消)→ 仍 fail 才走 git diff 溯源排障。反面=一见 fail 就开排障轮/改代码(工作准则#4:先确认是不是本次/本链引入),烧 token 且可能误改兄弟项。D28 实证:首跑 1-fail(撞 q4 `_FORM_CN` test 落盘中途)→ 重跑 101 passed,零排障轮。与「机读账优先于记忆」同族:信当前盘面重跑数、不信一次快照。
+
 **Design 复审精炼(2026-07-18)**:①**措辞精炼**——方法#16 从「规则引用数据源核存在」精炼成「**指向前先亲核指向物真含**」,更通用:覆盖**枚举/引用/条款所有「指向」**动作(不止数据源引用);②**双子型同根**——run_shell=**枚举漏**(枚举通道没亲核通道全集)、per-theme=**引用空**(规则引用字段没亲核字段真含所指),两子型共同根=指向某目标前没亲核目标真存在+真含所指;③**★前移升级(关键)**——把亲核**前移到写时**(前置检查:写枚举/引用/条款时自问「指向物真含吗/通道穷尽吗」),别等评审逮:**写时亲核=第一道防线、审出=最后防线,前移到第一道减审出轮次**,同前置检查「枚举写完自问能否机读证明穷尽」同族;④**双面坐实**——per-theme 无字段经我核 `_shared.py:206-235`(totals 全 status 桶)+ Design 核 `engine_tool.py:232` 双面确认。**双向纪律**:审方亲核字段(延伸4,最后防线)∧ 写方写时亲核(前置,第一道)——两道都亲核指向物,规则才密。
 
 ## F-LLM-1 落盘台账（2026-07-18）
@@ -146,3 +148,51 @@
 ---
 
 **状态**:F-LLM-2 就绪(无开放项)、F-LLM-3 就绪(2 开放项待 Design)、F-LLM-1 待 Py-Eng。全部 draft-only,未动 live 源。等「清理完成+放行信号」→ 逐笔应用 + 四关。
+
+---
+
+## D28（收口批·我的半份，2026-07-18）：compile-attributor 产用户面板中文叙述
+
+**任务(leader,Design 裁 ⓑ 源头产中文)**:归因时除机读字段外产一句中文叙述,供 cap/env 用户面板(止损/授轮)展示——545249 实弹:用户止损判断依赖读懂各轮失败性质,英文技术散文灌面板=D28 缺陷。落笔英文(LLM-facing skill 指令)、低自由度窄桥(输出字段可精确约束)。架构依据=「源头产中文、渲染零翻译」(questions.py:38)+ F-Py-2 中文契约门同款。
+
+### 亲核发现(前移亲核,写 prompt 前先核指向物)+ 命名裁决落定
+
+写 prompt 前亲核代码,发现 **`user_note` 是预留休眠字段**(消费 nodes.py:1852/2329 已优先它退 fix_direction、契约 `_NARRATIVE_FIELDS`:46 已含、但 submit_attribution 从未写入),建议复用免造重复字段。**裁决结果(leader 裁 + Py-Eng 照因确认全对,2026-07-18)**:**复用 `user_note`**——引擎设计本就预留了这个位、面板早备好读它,复用=零新键+消费链零改+Py-Eng 半份缩 3 处;新增 user_summary=重复字段+死读点,劣。「前移写时亲核指向物」这次省了一个重复字段 + 两处重接(leader/Py-Eng 均确认)。Py-Eng 认了自己的 framework-capability-before-limitation 老坑(原提 user_summary 没查既有休眠布线,abs_found vs found 同型)。
+
+### Py-Eng 结构半份(Py-Eng 域,复用 user_note)
+
+1. `submit_attribution` 签名加 `user_note: str = ""`;2. landed `entry` 加 `entry["user_note"] = (user_note or "").strip()`(:334 附近);3. docstring Args 加 `user_note` 条。**契约门 `_NARRATIVE_FIELDS` 已含 user_note、无需改**(F-Py-2 自动保护中文);**`_claim_history_line` 无需改**(:2329 已优先读 user_note)。**evidence 设备回显归位**(env:689 + cap:669 fallback verbatim「设备回显原文:『…』」)= Py-Eng 单独做、与 user_note **正交**(user_note=中文判断叙述,evidence=raw 设备原文引用,两条独立泄漏,复用 user_note 不覆盖 evidence)。
+
+### prompt 定稿(compile-attributor.md `## Deliver` 段,英文 LLM-facing,**已定笔 live** 2026-07-18,门 22 passed)
+
+signature 行加 `user_note`,VERDICT 行前插一段(**含 Design 终审基准#2 趋势语义**):
+
+```
+`user_note` is a short Chinese line for the user, not the engine — what the stop-loss /
+round-grant panels replay across rounds so the user can tell healthy iteration from a stuck loop
+worth stopping. State this round's failure nature; once a previous round exists, also say how
+this round relates to it — not an isolated single-round cause but the trend: e.g. "本轮语法拒绝,
+与上轮框架异常不同因" or "断言主体已过,仅收尾段未达". Keep `fix_direction` as your English
+technical record (the next round's "same approach?" check reads it); `user_note` is the
+plain-language trend the user acts on (measured 545249: users read three rounds' detail to tell
+healthy iteration from a livelock, and isolated English prose in the panel left them unable to).
+Chinese, one or two sentences, clipped by the panel — lead with the gist; a mostly-English line
+trips the narrative-field gate, so produce the Chinese at the source. Do NOT paste the device
+echo into it — the panel already shows the raw device lines verbatim; `user_note` carries only
+your Chinese judgement, not quoted output.
+```
+
+**设计要点**:①**趋势语义(基准#2)**——本轮性质+相对前轮变化(不孤立单轮),attributor 已读 `_prev_attribution`/repeat signature(prompt :99-106 frozen 检查用)、有前轮上下文可写趋势;**round-1 容错**「once a previous round exists」(首轮无前轮,只写本轮性质);②形态例示两条(「本轮X与上轮Y不同因」/「主体已过仅收尾未达」)是**输出形态**示例(帮 LLM 看清趋势叙述长什么样,官方鼓励),非领域答案硬规则;③与 fix_direction 分工明说(英文机读 vs 中文用户面板);④不塞设备回显(Py-Eng evidence 归位正交)、中文契约+clip+gist-first、why=545249 趋势可读;⑤always 产——面板回放全轮,早轮缺则回退英文=缺口对早轮残留。
+
+**下一步**:Design 审措辞(基准五点)→ 与 Py-Eng ①族(写入 3 处 + evidence 归位)同窗四关合入窗口 → leader commit。
+
+---
+
+## 后批池(prompt 域·收口批后小笔一起,现只记档不动)
+
+leader 裁「现在只记档不动」,收口批后作一小笔合处理。同池主题=**源头产人话/不泄内部标识符**(与 D28 user_note「源头产中文」同款理念,都是"LLM 走控制面、给用户的字段用人话、机读码/内部算子不进用户面")。
+
+- **Z8 根治(2026-07-18,zhaiyq 实弹)**:`compile-worker` prompt 加一句——`equivalent.procedure`(给用户读的等价方法描述)**用人话,不贴框架内部算子/标识符名**。实弹:worker 写 procedure 时带 `CAPTURE_COMPARE(relation_same)`(blocks combinator + claim_kind token)泄进题面,mild 级;渲染层剥离被裁"脆"(内部名无稳定边界、剥不干净)→ **源头根治**(worker 写时就用人话)。落笔英文 LLM-facing、低自由度窄桥(输出字段形态可精确约束),形态示例给"人话长什么样"、不写死领域命令。
+- **attributor source_ref 语义改良**(leader 提及、同池):待收口批后细化落点(与 Z8 同一小笔)。
+
+**下一步**:收口批四关走完 → 后批池小笔(Z8 + source_ref)按 D28 同流程(草稿→Design 审措辞→四关)。

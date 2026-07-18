@@ -497,7 +497,7 @@ leader 冒烟策略：①zhaiyq 53 案大批**批中标记自然踩到的路径*
 **待踩·富集预告**（bug-to-case 会话保持大概率自然出，"见到就是赚到"）：
 - ☐ **P2-o** defect 确认→缺陷候选单（zhaiyq=需求 83112 会话保持 bug-to-case，产品缺陷概率高）
 - ☐ **P3-a** contra reorder / ☐ **P3-b** contra downgrade / ☐ **P3-c** contra confirm-correct（会话保持时序敏感，contra 全族几乎未实弹）
-- ☐ **P2-g** cap continue 加轮（难案触顶）
+- ✅ **P2-g** cap continue 加轮（**545249 实弹消账**：难案触顶→①继续再修2轮，leader 裁健康迭代；cap 面板 5 选项全掌控，User 给好设计评价入正面册）
 - ☐ 判例**沿用④**/**止损**（批内 writeback 积累→后案免问沿用/同案连采≥2 止损）
 
 **待踩·其他**（残余批后造场景补）：
@@ -512,4 +512,83 @@ leader 冒烟策略：①zhaiyq 53 案大批**批中标记自然踩到的路径*
 ### 6.2 zhaiyq 批中观察（守批实时）
 
 - **#27 footer 进度行冻结·确认复现**（15min 自查，机读取证，PID 86305）：engine_tick 22 个全恒 `counts={pending:53,dispatched:0,produced:0}`（prep 快照），phase 更新（prep→author）但 counts 从不更新→footer "编写 0/53" 全程冻结，实际盘上 18 卷已产（21/22 fork ok、抽验 86 行有效）。**根因架构性**：barrier-collect——author 单图节点内部 fanout，LangGraph 图 state 只在 author 返回（barrier）时更新，engine_tick 读 state→author 期恒见 prep 快照。修法方向（Py-Eng 判断）：author 节点内 emit 中间进度，或接受 barrier 语义。**observer 非全盲**（fork 卡片有逐 worker 进度）。已报 leader。
-- **escalated 观察**（三铁律②）：1 fork ok:false `"fork returned no text output"`（385s/12calls/10rounds，非 wallclock 超时）。1/22 非系统性，监测器加 fork_bad 计数持续盯——yzg 首跑曾 6 escalated（疑 deepseek 并发压力误杀），增多即报。
+- **escalated 观察**（三铁律②）：1 fork ok:false `"fork returned no text output"`（385s/12calls/10rounds，非 wallclock 超时）。1/22 非系统性，监测器加 fork_bad 计数持续盯——yzg 首跑曾 6 escalated（疑 deepseek 并发压力误杀），增多即报。**后续**：编写全程 fork_bad 恒 1（未增，非系统性坐实）；**516389（该 escalated 案）+533097 迟到产出回收**（"超时后 worker 仍产出合格卷,凭证有效,收回本卷"）——#3 终检 late-artifact 机制工作，escalated 未丢。
+- **⚡ D20 二分结果·上机窗口实证（leader 令完成，~55min 处上机窗口）**：整卷上机 ACTIVE（46 案@103、71s/2070s）当刻二分——**progress 发射=有记录**（events.jsonl 3 个 progress、elapsed 10→41→71s、结构完整 phase=上机/total_s=2070/n_cases=46/case_idx/detail=test_xlsx.py）→ Py-Eng 侧 OK；**TUI 子进度行=显示且更新**（`⠴ ▸ 上机 71s/2070s · 环境 103 · 46 case · test_xlsx.py`、10→41→71s 递增）→ TUI-Eng 侧 OK。**结论：D20 不复现/已解决**（两侧都工作，batch4 缺失在 re-run HEAD 644a0b26 不再现）。**【leader 裁定 2026-07-18】D20 降级「不复现观察项」**——zhaiyq 全批至收口若无复现即销案；**不做修复 commit 考古**（行为已正确、考古无行为收益，batch4 特定条件未重现记档存疑）；Py-Eng/TUI-Eng 收口批清单各减一项候选。守批中持续留意是否复现。
+- **merge 里程碑**（~55min）：编写 44/53 产出（+迟到回收 516389/533097）→ **merge 46 案 → zhaiyq/case.xlsx** → 整卷上机 46 案@103（2070s 超时窗）。footer merge 后更新 44/53·产出44（#27 barrier-collect 证实：produced 只在 merge 后更新）。**5 needs_decision 欠定**入 facts（批末 gather 收集，非活跃面板）——53-46=7 案未入整卷（5 欠定+2 余）。
+- **Round-1 整卷上机结果**（~1h10m、827s 完成）：engine_tick 权威 **passed 22 / failed_active 24 / pending_decision 5 / escalated 2 净**（22+24+5+2=53 ✓）。escalated 4 raw（517027/516389/533097/600113 "no output/wallclock"）中 2 迟到回收，净 2（517027/600113）——同 yzg 首跑 deepseek 并发压力形态但较轻（首跑 6）。
+- **24 fail 归因研判**（防甩床，按纪律先自查我方）：fail signatures **离散**（`dig @172.16.34.70 www.zyq.com A/MX/AAAA/CNAME +short` 多记录类型 + "Invalid input" 语法拒 + cname 记录——各案断言不同 DNS 记录，**非单一系统性签名**）；attribution 早期 3 个 E（环境）。会话保持 DNS 域首轮高 fail 正常，reflow 再编精修。**待 attribution 全 24 跑完看层分布**：若重 E（环境）→ 按「床问题先自查我方断言」查是否我方脑图/编译假设了床未配的 DNS 记录；若混合（E+编译+产品）→ 个案 reflow。关键盯 round-2 收敛率 vs livelock 打转。
+
+### 6.3 zhaiyq 首个面板·s0_dispute 3 题（产品语义判断级，~1h27m 归因期 round-1）
+
+矛盾裁决面板（选项均 ①预期以实机为准 ②确认产品缺陷 ③Other）。**四标准快评**：题面可读✓/选项人话✓（D2 生效）/可判断✓/**黑话瑕疵 `attr_evidence.json`+`cli_10.5_Chapter20.md` 内部文件名暴露给用户（记缺陷单 D5/P2-7 族）**。已 Tab 读全 3 题（Tab 不落答安全），报 leader 请 Q1/Q3 方向：
+
+- **Q1 [545097]** 会话保持 ALL 20s vs A 10s：设备 11s 后 A 仍绑同 pool（ALL 覆盖 A 的 10s）。手册 line 485 有 per-type timeout 但**无 ALL-vs-特定优先级条款**。「specific>general」+需求 83112 per-record → 倾向 **②确认产品缺陷**（inferential 非手册明文，需产品确认特定 timeout 独立性）。
+- **Q2 [589432]** ALL query_type 合法性：**手册 line 529 铁证** `no sdns session persistence` query_type「取值必须为 ALL/A/AAAA/CNAME/MX、默认 ALL」→ ALL 显式合法。用例前提「ALL 不支持/Invalid input」证伪、实机"not found"是运行时错非语法拒 → **①预期以实机为准（改用例、我确定）**。
+- **Q3 [600046]** 修改 service ip 后会话保持清除？手册**无条款**。设备保留至超时 vs 用例期望清除——设计歧义。倾向 **①预期以实机为准**（保留至超时=会话保持连续性标准），需产品确认。
+
+**答题结果**（leader 方向 Q1=②/Q2=①/Q3=①）：**✅ 全答完·G4 echo 逐题验证正确·零丢答**——545097「确认产品缺陷」→缺陷候选、589432/600046「预期以实机为准」→按纠正重编。**path 踩点**：s0_dispute 面板（预期以实机为准=改预期 / 确认产品缺陷=P2-o defect 族），归因期矛盾裁决 3 题。
+
+**⚠ 答题过程 TUI 缺陷发现（候选新 D，归 TUI-Eng，tui-multiquestion-panel-key-semantics 族）**：
+- **数字键多题面板语义错乱**：Q1 `send '2'` 切到了 Q2（非选中 option 2），与 hint「↑↓/数字 移动」矛盾——疑数字键被当切题/跳题。规避=改用箭头键（↓移 option/←→切题/enter=选定+前进）。
+- **回扫显示光标重置**：←→ 导航回退时 ❯ 重置到默认 option 1（非选择丢失，内部选择保留）——但视觉误导，无法直接目视核实已选。规避=从首题干净重做前向 pass，逐题 verify 高亮再 enter。
+- **正解交互模型**：enter=选定当前高亮 option **并自动前进下一题**；末题 enter=提交；箭头键可靠、数字键不可靠。
+
+**歧义 note 待入交付报告差异声明**（收尾核 delivery_report）：Q1 ALL-vs-特定优先级手册未载待产品确认；Q3 修改 service 清除手册无载、保留至超时=graceful。**黑话瑕疵 attr_evidence.json/文件名暴露=D22（leader 登记，Py-Eng 收口批①族内）**。
+
+**第2面板·采纳先例（单题，~1h46m 归因期）**：[裁决8990/588990]——与 Q2[589432] **完全相同 ALL 合法性争议**（用例前提"ALL 非法"、手册 L529 明载 ALL 合法+默认、设备静默接受）。引擎引我 Q2 先例「预期以实机为准」问是否采纳。**我自主答 ①采纳先例**（同争议同证据、Q2 已 leader 批的一致性延伸，非新判断未再上呈）。facts 确认 ask_panel+decision 落账。**采纳机制工作**：D12 shape-aware 修复后同 shape（ALL 合法性）先例正确匹配、引确认采纳（对照批3 668 跨 kind 误采信，这次同 kind 正确）。四标准同 D22 族黑话（L529/L534 手册文件名行号暴露）。**path 踩点=判例采纳（P2-d 族/adopt 环）**。
+
+**reflow round-2 启动**（~1h46m）：516942/545249/532781/545172 等第2次编写、footer「最大深度思考中」（首败升 max 思考符合预期）。当前 verd pass22/fail21/broken3。
+
+### 6.4 收敛轨迹 + §14-R4 收官核对锚（leader 收官留意）
+
+- **收敛轨迹**：round-1 pass22 → round-2 pass37（净救15）→ round-3 pass39 + 整卷上机 43 案确认轮。failed_active 24→23→7 单调降（非 livelock）。round-3 处理：1 案升级人工（cap 复跑无效）、1 案协议级 Errored reflow、知识晋升多条（自愈积累）。¥199/2h33m。
+- **⚡ §14-R4 收官核对锚（5 欠定批末 gather）**：**5 pending_decision 案=532618/532519/532349/532436/599838**（均未 ask_shown、pending 批末 gather）。leader 收官留意两分支：**ⓐ gather 弹出**=主戏答（数字键+G4 echo 核）；**ⓑ closing 无 gather 而 5 案静默挂起没问**=违 §14-R4 缺陷（batch3「裁决未执行即交付」近亲）→立即报+机读核这 5 案 ask_shown/gather/decision 事实。三铁律③（该交付没交付比交付更查）收官逐案对账 decision→authored→verdict→终局链。
+- **cap 面板 545249 闭环（round-4、P2-g 路径踩点）**：545249（全局+指定域名 A 类型会话保持）重编 3 轮不同签名（pyATS→语法→接近全过）未收敛→cap 面板 5 选项。**leader 裁 ①继续再修2轮**（三轮不同签名=健康迭代非 livelock、第3轮断言主体已过、质量>成本、V8 隔离不阻塞兄弟）。数字键 '1' 一键 select+submit 落账（facts cap_reached→ask_shown→decision，验证 D23 修正数字键可用）。**D28/D29**：cap 面板 fail 原因英文+截断（D1/D9 复现）+ 重编2次vs3轮数字不一致（D17族），Py-Eng ①族。**escalated 累计 4**（收官逐案核去向）。
+
+- **545249 dispute 面板（cap 再编后新争议，round-4）**：545249 cap①继续 re-author 后出 s0_dispute——会话保持**功能正常**（dig 连续两次 .225 证活跃持久化）但 `show sdns session persistence` 空表。**leader 裁 ②确认产品缺陷（候选）**（手册 L512 本职显当前会话状态+dig 双证活跃+表空=行为与职能矛盾；①无据洗白疑点，Q1 同 pattern）。数字键 '2' 落账（facts 545249 有 2 ask_shown+2 decision=cap+dispute 同案两面板全 intact）。**四标准全绿**（正面信号：面板质量随修复提升，入正面册）。
+- **⚡ 缺陷候选累计 3 案（收官核锚）**：**545097**（ALL vs 特定优先级）/ **545249**（show 表 vs dig 矛盾）/ **589284**（疑机械归因，收官核来源+去向）。**歧义 note 两条进复核链**：①ALL 与特定同配优先级手册未载 ②show session persistence 是否显 post-timeout 新持久化 L512 未细分。收尾核 delivery_report 差异声明含此两条。
+
+### 6.5 批末 gather 主戏完成（§14-R4 分支 ⓐ 闭环，round-7、~3h45m）
+
+5 欠定 4-per-chunk 分 2 块全答·**零丢答**·数字键前向 pass（每题验位置+前进确认）：
+- **532349=②挂起**（IPv6 无触发机真床限、兄弟 532436 覆盖 IPv4）
+- **532436=①改过程**（加请求≥2 保留顺序）
+- **532519=③挂起**（IPv6 前缀 runtime 本体、等价①IPv4 吞没本体，leader 判据正中）
+- **532618=①改过程**（加请求≥2）
+- **599838=①采纳等价**（我独立判：证伪观测完全一致、会话保持自定义超时机制本体保真、3600→120 是通道差异非本体——与 Q3 IPv6 吞没相反）
+- **path 踩点**：P2-a 改过程 / P2-l 挂起 / P2-d 采纳等价（欠定三选+采纳+挂起全族）
+
+**§14-R4 收官核对锚闭环**：5 欠定 decision **全落账**（各 decision×1），**599838 decision×1=ⓐ（gather 正常）无 §14-R4 违规**（分支 ⓐ 成立、batch3「裁决未执行即交付」近亲未复现）。裁决执行链确认：派发 3 编写（532436/532618/599838 改过程/采纳重编）、532349/532519 挂起不重编。**四标准瑕疵**：黑话「四准则」「captured_relation」「DEFECT不敏感」（DEFECT→缺陷 D28族、四准则→白话 leader 两 mild 入册 ①族）。
+
+### 6.6 517196 核账（三铁律②·引擎自曝取证归属可疑）+ livelock（round-10）
+
+**32 vs 34 核账定案**（leader 聚焦点）：**卷面=34.70 对**（100% 一致：sdns listener 172.16.34.70 + 3× dig @34.70 A 记录、无 MX、无 32.70；34.70 是 APV0 被测设备有效接口，topology 确认 APV0 同有 32.70/34.70/35.70）。**32.70 是外来**：attr_evidence 8× 32.70 全是 RouterA `dig @32.70 MX`——517196 卷面无 MX/无 32.70，是 sibling MX 证据混入 attr_evidence.json（或 RouterA 探查）、**非 517196 断言证据**。**517196 自身断言证据干净**（34.70 A "successed to find"）→ **verdict 采信**（isolated pass 可信）；32.70 混入单列 evidence-hygiene 缺陷候选（attr_evidence 聚合混入 sibling digs）。
+**⚠ livelock（round 8-10 不收敛）**：517196 **subset pass 但整卷 fail**（取证可疑→重归因→subset pass→整卷上机 42 案→整卷 fail→循环），引擎「fork 判 s₀ 但机械配对判无污染者——不升格,保留深归因」不封顶=**rr/wrr 跨案时序污染（P2-10）**：517196 卷面对/isolated pass，整卷共享设备态致 fail。¥224/4h20m/round-10。**报 leader 请裁 ⓐ止损封顶 vs ⓑ停批（倾向 ⓐ 不干预收敛尾段）**。
+
+**leader 裁 ⓐ+人工止损预备（2026-07-18）**：①不硬停批（52/53 定局下硬停不值+checkpoint/现场风险）；②**加界·下一个 517196 相关面板（cap 封顶或 dispute）弹出一律答「挂起该案」终结循环**——run13 判例「subset 过整卷挂=降级+缺陷候选」出口的人工执行，循环有界（最多再 1-2 轮）；若引擎 cap 自封顶弹面板同样答挂起。③**517196 verdict 采信收**（卷面 34.70 对+自身证据干净）。
+- **evidence-hygiene 缺陷候选**：32.70 sibling MX 混入 attr_evidence.json（attr_evidence 聚合卫生问题，收口批分析归属）。
+- **⚡ D30 止损盲区候选（engine 缺陷，非 ask 交互）**：「subset pass ∧ 整卷 fail」反复 round 8-10 **不触同签名冻结**——冻结判据（同签名连续 2 轮）没盖住这个形态（每轮签名可能微变，或需专属判据「subset-pass∧整卷-fail 两轮=判跨案污染直接挂起」）。收口批 Py-Eng 分析。**后续**：517196 未再弹面板=引擎止损自封顶（人工挂起没用上），最终整卷解到 pass、进 delivered/、verdict 采信（卷面 34.70 对）。
+
+### 6.7 zhaiyq 收官 §11.9 全项终检结论（round-11 closing、4h37m/¥224.85）
+
+**批 closing 到不动点**：532436/532618 改描述 defer 终结再欠定循环 → closing。delivered:42(render)/unfinished:11。
+- **⚠⚠ 核心·REPORT_MISMATCH（§11.9 对账断言自捕、三铁律③正面）**：报告头行「53/42」，**事实重算 53/40**——516389/533097（迟到产出回收案）在 delivered/、verdict 有(delivery,pass)，但对账判其 pass 不被最终整卷复验支撑（run-identity 严判 stale/迟到回收 pass）。**真 deliverable=40**。delivery_report+LLM closing summary+REPORT_MISMATCH.json **三处一致自曝**（都报 40+report_mismatch）、未静默出错。**待 leader 裁 ⓐ移 unfinished 定格40 / ⓑ重跑2案（倾向ⓐ）**。
+- **全账核清**：517196=delivered/passed 采信（livelock 解到 pass 非 terminal）；unfinished 11=2挂起(532349/532519)+2改描述(532436/532618)+2缺陷候选(545097/545249)+5escalated(517027/600113/588766/589503/589432)；缺陷候选 **2 confirmed**（545097/545249，589284 是我早前 grep 误配 reconcile 掉）；三铁律链 rendered。
+- **正面实证**：**D17 修复面健康**（LLM closing summary 正确报 40+自曝 report_mismatch、没盲抄 render 的 42——对照批3 首跑 4+4=8 误归类，转述层准了）；§11.9 对账断言+迟到回收 run-identity 严判都实证工作。
+- **小缺口（非阻塞）**：defect_candidates.md 歧义 note（ALL优先级/show session 手册未载待产品确认）非逐字——收口批渲染层补进复核链。
+
+**§11.9 终验全项完成（leader 令，归档 HOLD 待 D31+40/42）**：
+- **leader 裁数字口径=40**（fact-supported 底数），对外一律 40+2 争议不说 42；ⓐⓑ 都待 **D31**（Py-Eng 离线对账器裁 checker-bug vs real-gap）——判 real-gap→ⓐ移 unfinished（下批 resume=ⓑ 效果不烧本批轮）、判 checker-bug→留 42 修对账器，两分支都不重跑。
+- **两件行级证据（给 Py-Eng）**：①516389/533097 **无显式 stale/late_recovery facts 字段**——"迟到回收"来自 TUI 显示消息、"stale"是我推断（artifact 恒定=卷只产一次后续复验用同一 artifact）；leader 自纠对（印章吻合不证 run-identity 新鲜），以 D31 全字段为准。②**517196 归属矛盾自曝更正**：末 verdict=(delivery,pass)、在 delivered/、**我"止损自封顶到 terminal"是从 failed_terminal 计数误推的错误**，CORRECT=livelock 自然解到 pass 采信；failed_terminal 真身=2（545097/545249）非 6。
+- **三铁律**：13 ask 链 effective:13 无 false / 517196 链采信 / 5 escalated 处置全账（517027/600113 编写0次 fork-fail、588766/589503/589432 broken+E 环境床）honest「引擎无法继续需人工」/该交付未交付=REPORT_MISMATCH 自捕唯一未定。**结论：除 40/42 待 D31 外全项自洽、无静默挂起/无编造/裁决链完整**。
+- **四脑图准入冲刺全 compile 完**（task#38）：CNAME_dongkl 9/13+dongkl 29/34+yzg 25/26+zhaiyq 40（fact-supported）。**【下方 §6.8 D31 定谳后反转：真值=42，40 是 checker-bug 侧】**
+
+### 6.8 ⚡ D31 定谳·checker-bug·真值 42（口径反转，2026-07-18）
+
+**D31 = checker-bug、真值=42**（leader 亲核+Py-Eng 复现两处行级 bug）：`report_gate.py:32` 无条件 any-escalated 丢 + `views.py _is_escalated`（run18 authored 解除逻辑）——**516389/533097 是 escalated@0 被 authored@1/@5 解除的真 pass**，对账器错把「曾 escalated」当「pass 不支撑」。**我的 delivery pass×5/×4 链证据正是真 pass 的支撑**（不是 stale）。**不移卷、不重跑、对外口径 42/53**。
+- **⚡ 口径反转（记档纠错）**：**40 是 bug 侧、render 42 才对**。**我早前「D17 正面=LLM 摘要照台账 40 没盲抄 42」反转重记**——LLM 摘要的 40 反映的是 **buggy checker 的重算值**、不是 positive；**对账门（REPORT_MISMATCH）的价值在逼出仲裁（flag 分歧、触发 D31 离线分析），不在它重算的那边（40）先对**。这是双路漂移教训：一次计算三处回声（对账/report/LLM）≠三个独立源。
+- **假设面演进留痕**（对账门工作实证，leader 注意①存档）：REPORT_MISMATCH 自捕（报 40 vs 42）→ 我给行级证据（无 stale 字段、artifact 恒定、delivery pass×5/×4）→ leader 反转假设（迟到回收=编写侧非设备 stale）→ Py-Eng D31 复现两处行级 bug → 定谳 checker-bug 真值 42。**旧 REPORT_MISMATCH.json + 本 D31 裁决注不随重渲丢**（对账门+双路漂移双实证）。
+- **归档时序改（D31 修复先落）**：Py-Eng D31 修（列首件+四关）→ 合入 commit → 重启 TUI → 同参数重调 zhaiyq（checkpoint 续跑、主卷 42 案无 broken、delivery 幂等闸跳设备=**零设备轮**、顺带实弹验证修后对账器）→ 重渲 delivery_report（应 recount==claimed==42、无 REPORT_MISMATCH）→ **Test-Eng §11.9 归档**。**两注意**：①REPORT_MISMATCH.json+D31 注存 docs/forensics/；②重渲后核幂等闸确没烧设备轮（run_marker）。
+- **【DEFINITIVE 补链 2026-07-18】纯 checker-bug、非账链缺口/第三出口**：leader 亲核+Py-Eng 复现确认——**账链完整**（authored/produced 事件在账），bug 在 `report_gate:32` 无条件 any-escalated 未镜像 `views` run18 authored 解除语义（recount 谓词漏解除）、不在事件写入。**账链缺口/第三出口假设已排除**（比它更干净）。全量验证：旧 checker 40 / 新 checker 42 / claimed 42，修后三者一致零误减。
+- **归档预案三件按定谳全改**：①「移 unfinished」**永久撤销**（2 案真 pass 留 delivered）②主卷**不重排**（42 行原样即对）③头行**维持 42**+落 D31 裁决注+旧 REPORT_MISMATCH.json 存 `docs/forensics/zhaiyq_recon_gate_D31/`（已存）。重渲新报告应 recount==claimed==42 无 MISMATCH。
+- **归档 HOLD 待重启放行令**（Py-Eng D31 修复合入后）。**zhaiyq 真值 42/53**（516389/533097 真 pass、留 delivered）+ unfinished 11。**四脑图准入：9+29+25+42。终验全项正式闭。**

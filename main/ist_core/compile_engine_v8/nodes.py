@@ -384,6 +384,43 @@ def _needs_decision_qid(aid: str, mine: list[dict], nd_json: dict) -> str:
     return f"nd:{aid}:{nd_seq}:{ck}"
 
 
+def _resume_reopen_needs_decision(aid: str, mine: list[dict]) -> dict | None:
+    """#37 resume 重开欠定(存量路由缺口修 9d59c08f):只写 resumed 案变 S_PENDING,但图路由
+    `_after_ask_contradiction`(无 author 出口)+ 案无未答欠定(旧 nd 已被裁决「答过」)→ closing、
+    本轮零 re-author/零 needs_decision 重生成(#36 实证:668 族 7 案 decision_outcome 全
+    effective=false、旧毒 改描述 decision 原封管命运)。补 Design 后果集第2步:**欠定类挂起**
+    (改描述/未获答自动挂起——reason 前缀 `user_decision:`/`auto:`;keep/显式 suspend/env 不重开,
+    边界①)的 resume 追加**新 qid needs_decision**(nd_seq 与旧 decision 差异化,replay 稳)→ 案转
+    S_AWAITING_USER → 路由见欠定>0 → 回 ask_decision(gather)→ shape-fix 下用户被正常问→采纳落。
+    旧 decision 经新 qid 隐式压盖(Theory §5.5.7,append-only 不删、不另立 void 事实)。
+    返新 needs_decision 事实(带 ⓐ 上次裁决上下文);非欠定类/无账本 claims → None(不重开)。
+    mine 取 pre-node fs(不含本节点 append 的 resume decision),保 nd_seq replay 稳定。"""
+    last_susp = next((f for f in reversed(mine) if f.get("ev") == "suspended"), None)
+    reason = str((last_susp or {}).get("reason") or "")
+    # Design ① 精确谓词(结构化 kind 前缀判,非枚举硬编——同 F-Py-5① 白名单模式):重开 ⟺
+    # `user_decision:改描述` ∨ (`auto:` ∧ 原 panel kind∈{panel,cap,contra})。不重开:`auto:`∧
+    # {env,bed}(外部因素未变、重开无意义)/`keep:`(用户明确保持,不被 resume 覆盖)。理由=resume
+    # 是用户「接着修」意图,只对用户可重裁的欠定裁决类有意义。auto:{qid} 的 qid 前缀=原 panel
+    # kind(bed:/env:/panel:/cap:/contra:),split 取之。#36 实测 7 案 reason 全 user_decision:改描述。
+    reopen = reason == "user_decision:改描述"
+    if not reopen and reason.startswith("auto:"):
+        _orig_kind = reason[len("auto:"):].split(":", 1)[0]
+        reopen = _orig_kind in ("panel", "cap", "contra")
+    if not reopen:
+        return None
+    nd_json = sh.read_json(sh.outputs_root() / aid / "needs_decision.json", {}) or {}
+    if not any(isinstance(c, dict) for c in (nd_json.get("claims") or [])):
+        return None   # 无欠定账本→无处可问,不重开
+    prev_dec = next((str(f.get("answer")) for f in reversed(mine)
+                     if f.get("ev") == "decision" and f.get("answer")), "")
+    # Theory 审②暗礁核死:nd_seq=decision 计数(mine,pre-node)+1。旧 nd:1 建于 0 decision→seq=1;
+    # 此刻 mine 含旧 改描述 decision(≥1)→新 seq≥2>1,新 qid 严格大于旧→(48) 幂等键(decision 引
+    # question_id)不碰撞、不被静默吞。needs_decision 自身走内容键(全字段:qid+reopened 皆异)不去重。
+    return {"ev": "needs_decision", "aid": aid,
+            "question_id": _needs_decision_qid(aid, mine, nd_json),
+            "reopened": {"prev_decision": prev_dec}}   # ⓐ 重问题面上下文载荷
+
+
 def author(state: dict) -> dict:
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
@@ -654,6 +691,15 @@ def ask_decision(state: dict) -> dict:
         fold.setdefault(rep, []).append(aid)
 
     qs = build_questions({aid: ledgers[aid] for aid in sorted(fold) if aid in ledgers})
+    # ⓐ #37(重开欠定题面上下文):resume 重开的欠定案题面前缀「你上次裁过 X」,防用户困惑「怎么又
+    # 问」(post-process 不侵入 build_questions;reopened 载荷在 needs_decision 事实 :2464 落)。
+    _reopened_prev = {str(f.get("aid")): str((f.get("reopened") or {}).get("prev_decision") or "")
+                      for f in fs if f.get("ev") == "needs_decision" and f.get("reopened")}
+    for _q in qs:
+        _rp = _reopened_prev.get(str(_q.get("_autoid")))
+        if _rp:
+            _q["question"] = (f"(你上次对此案裁过「{_rp}」,但那次裁决未能落地,这次请重新裁定)\n"
+                              + str(_q.get("question") or ""))
     # P3:三元组题的 label→token 显式映射(长 label「采纳「…」」不含"改过程",
     # substring 兜底匹配不到——run22 会掉 Other 兜底致 re-ask)。
     _tok_by_rep = {str(q.get("_autoid")): (q.get("_token_by_label") or {}) for q in qs}
@@ -2441,6 +2487,11 @@ def ask_contradiction(state: dict) -> dict:
                               "evidence": "user"})
         elif tok == "resume":
             new_facts.append({"ev": "resumed", "aid": aid, "of": qid})
+            _reopen = _resume_reopen_needs_decision(aid, mine)
+            if _reopen:
+                new_facts.append(_reopen)
+                sh.emit(f"…{aid[-6:]} 恢复处理:重开欠定问询"
+                        f"(上次裁过「{_reopen['reopened']['prev_decision']}」)")
         elif tok == "keep":
             new_facts.append({"ev": "suspended", "aid": aid, "reason": f"keep:{qid}"})
         # confirm/correct:decision(含用户原文)即全部所需——briefs 把 panel 理解 Z

@@ -148,12 +148,26 @@ unfiled observations evaporate; the engine decides mechanically whether they ent
 
 ## Deliver
 
-File via `submit_attribution(xlsx_path, autoid, layer, disposition, evidence, fix_direction)` —
-pass the brief's `last_run_path` as xlsx_path (accepted directly; do not point at the
-per-case sheet, its directory has no run ledger).
+File via `submit_attribution(xlsx_path, autoid, layer, disposition, evidence, fix_direction,
+user_note)` — pass the brief's `last_run_path` as xlsx_path (accepted directly; do not point
+at the per-case sheet, its directory has no run ledger).
 disposition ∈ reflow / frozen / rerun_isolated / env_blocked / defect_candidate /
-expectation_suspect (panel-mandatory, see Five checks). End with two
-machine-read lines:
+expectation_suspect (panel-mandatory, see Five checks).
+
+`user_note` is a short Chinese line for the user, not the engine — what the stop-loss /
+round-grant panels replay across rounds so the user can tell healthy iteration from a stuck loop
+worth stopping. State this round's failure nature; once a previous round exists, also say how
+this round relates to it — not an isolated single-round cause but the trend: e.g. "本轮语法拒绝,
+与上轮框架异常不同因" or "断言主体已过,仅收尾段未达". Keep `fix_direction` as your English
+technical record (the next round's "same approach?" check reads it); `user_note` is the
+plain-language trend the user acts on (measured 545249: users read three rounds' detail to tell
+healthy iteration from a livelock, and isolated English prose in the panel left them unable to).
+Chinese, one or two sentences, clipped by the panel — lead with the gist; a mostly-English line
+trips the narrative-field gate, so produce the Chinese at the source. Do NOT paste the device
+echo into it — the panel already shows the raw device lines verbatim; `user_note` carries only
+your Chinese judgement, not quoted output.
+
+End with two machine-read lines:
 
 VERDICT: <layer>/<disposition>
 ASK: <panel|none>

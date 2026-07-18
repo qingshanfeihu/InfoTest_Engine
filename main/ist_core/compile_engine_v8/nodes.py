@@ -2810,6 +2810,18 @@ def closing(state: dict) -> dict:
     if dc_entries:
         report["defect_candidates"] = {"count": len(dc_entries),
                                        "autoids": [e["autoid"] for e in dc_entries]}
+    # F-Py-8(极性照抄先例·审计透明,Design 三层定案:机械来源 + 上机 oracle 判对错 + 报告标注):
+    # 扫已交付案 provenance,标注 source.kind=precedent 的断言(极性照抄先例语法)——**非拒卷**,
+    # 极性对错已由上机 oracle 判(交付=已过机)。缩审计面(全断言→precedent-sourced 少量),让复核者
+    # 知「这些交付断言极性来自先例」便于抽查方向;只标来源、不判极性对错(不做假机械门)。
+    _prec_flags = []
+    for _aid in deliverable:
+        _pv = sh.read_json(sh.outputs_root() / str(_aid) / "case.provenance.json", {})
+        _ps = RD.precedent_sourced_assertions(_pv) if isinstance(_pv, dict) else []
+        if _ps:
+            _prec_flags.append({"autoid": str(_aid), "count": len(_ps)})
+    if _prec_flags:
+        report["precedent_polarity_flags"] = _prec_flags
     (mdir / "engine_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 

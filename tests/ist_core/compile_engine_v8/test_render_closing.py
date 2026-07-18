@@ -52,6 +52,45 @@ def test_leak_scan_code_fence_exempts_device_echo():
     assert RD.leak_scan(fenced) == []
 
 
+# ── F-Py-8:断言极性照抄先例 flag(Design 定案·机械做来源/不判极性语义对错) ──────────────────────
+def test_precedent_sourced_assertions_flags_by_source_only():
+    """机械 flag source.kind=precedent 的断言(照抄先例语法候选);intent/manual/emit_auto 不 flag。"""
+    prov = {"steps": [{"F": "found", "source": {"kind": "precedent", "ref": "precedent:203000000000000001"}},
+                      {"F": "not_found", "source": {"kind": "emit_auto", "ref": ""}},
+                      {"F": "found", "source": {"kind": "intent", "ref": "intent"}}]}
+    flagged = RD.precedent_sourced_assertions(prov)
+    assert len(flagged) == 1 and flagged[0]["F"] == "found"      # 只 precedent 那条被 flag
+    assert RD.precedent_sourced_assertions(
+        {"steps": [{"F": "found", "source": {"kind": "manual", "ref": "m"}}]}) == []   # manual 不 flag
+
+
+def test_precedent_flag_does_not_judge_polarity_correctness():
+    """★Design 命门:helper **只标来源、绝不判极性语义对错**——precedent 断言不论极性方向对错都只
+    flag(极性对错=语义、留上机 oracle 判,机械不碰;防将来给 flag 加'极性对齐机械判'做成假门)。"""
+    # 极性方向"对本案意图错"的 precedent 断言:仍只 flag、helper 不机械判它错、不拒
+    wrong_polarity = {"steps": [{"F": "not_found", "source": {"kind": "precedent", "ref": "p:x"}}]}
+    assert RD.precedent_sourced_assertions(wrong_polarity)       # 被 flag(标来源)
+    # 极性方向"恰对"的 precedent 断言:同样只 flag(不因"对"就不标)——一致标来源,不判对错
+    right_polarity = {"steps": [{"F": "found", "source": {"kind": "precedent", "ref": "p:y"}}]}
+    assert RD.precedent_sourced_assertions(right_polarity)       # 也被 flag(对/错都标=只标来源)
+
+
+def test_precedent_polarity_flags_render_as_audit_note_not_reject():
+    """F-Py-8 closing 报告标注:precedent_polarity_flags 渲染为审计标注(供复核抽查来源),
+    **非拒卷**——outcome 不被标注改写(delivered_all_pass 保持)、渲染人话+用例标题、零 token 泄漏。"""
+    report = {"engine": "v8", "outcome": "delivered_all_pass",
+              "totals": {"cases": 1, "deliverable": 1}, "volume": "v",
+              "moved_tail": [], "coexist_violations": [],
+              "cases": {A: {"status": "deliverable", "artifact": "a1", "rounds": 1}},
+              "precedent_polarity_flags": [{"autoid": A, "count": 2}]}
+    manifest = {"source": "t.txt", "cases": [{"autoid": A, "title": "SDNS 示例用例"}]}
+    md = RD.render_delivery_report(report, [], manifest, {}, {})
+    assert "断言极性照抄先例" in md and "供复核抽查" in md   # 标注渲染(人话)
+    assert "SDNS 示例用例" in md                              # 用例标题(非机读 autoid)
+    assert report["outcome"] == "delivered_all_pass"         # 非拒卷:outcome 不被标注改写
+    assert RD.leak_scan(md) == [], RD.leak_scan(md)          # 标注零 token 泄漏(复用 leak_scan)
+
+
 def _v(result, ctx, rid="r1", art="a1", vol="v"):
     return {"ev": "verdict", "aid": A, "run_id": rid, "ctx": ctx, "result": result,
             "artifact": art, "volume": vol, "signatures": []}

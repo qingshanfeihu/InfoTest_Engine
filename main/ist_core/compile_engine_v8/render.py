@@ -280,6 +280,14 @@ def render_delivery_report(report: dict, fs: list[dict], manifest: dict,
                      f"已按规则排到卷尾执行:{'、'.join(names)}")
     if report.get("coexist_violations"):
         lines.append("- ⚠ 本卷存在官方标注互斥的操作组合,已在组卷时检查并声明(详见机读报告)")
+    # F-Py-8:极性照抄先例的审计标注(非拒卷、非 ⚠ 警告——交付=已上机验方向;仅供复核抽查来源)
+    _prec = report.get("precedent_polarity_flags") or []
+    if _prec:
+        _pn = sum(int(p.get("count") or 0) for p in _prec)
+        _pnames = [str((mcases.get(p.get("autoid")) or {}).get("title")
+                       or ("…" + str(p.get("autoid"))[-6:])) for p in _prec]
+        lines.append(f"- {len(_prec)} 个交付用例的 {_pn} 条断言极性照抄先例语法"
+                     f"(已上机验方向,仅作来源标注供复核抽查):{'、'.join(_pnames)}")
     bad = {a: c for a, c in (report.get("cases") or {}).items()
            if c.get("status") != "deliverable"}
     if bad:
@@ -423,4 +431,24 @@ def leak_scan(text: str) -> list[str]:
             continue
         for m in _LEAK.finditer(re.sub(r"`[^`]*`", "", ln)):
             out.append(m.group(0))
+    return out
+
+
+# ── F-Py-8:断言极性照抄先例 flag(Design 定案·三层审计抽查:机械做来源/语义留上机 oracle) ─────────
+# 机械只做**可靠的来源 flag**(provenance source.kind=precedent=照抄先例语法),**不判极性语义对错**
+# (极性对不对本案意图=语义,机械判不了、硬门会误杀合法极性,该上机验的别离线硬推)。closing 据此
+# 报告标注「N 案断言极性照抄先例、已上机验方向」(暴露非掩盖、非硬门不拒卷),上机 oracle 兜底极性
+# 对错(也兜 worker 自标 intent 骗过 flag 的盲区——极性方向错→上机 fail)。
+def precedent_sourced_assertions(provenance: dict) -> list:
+    """扫 case.provenance.json 断言步,返回 source.kind=precedent(照抄先例语法)的断言——极性照抄
+    风险**候选**(缩抽查面从全断言到 precedent-sourced 少量)。**只标来源、不判极性对错**(语义留上机)。
+    返回 [{"step":i, "F":算子, "ref":先例 ref}, ...]。closing 报告标注用、非硬门。"""
+    out = []
+    for i, step in enumerate((provenance or {}).get("steps") or []):
+        if not isinstance(step, dict):
+            continue
+        src = step.get("source") or {}
+        f = str(step.get("F") or "")
+        if str(src.get("kind")) == "precedent" and f in ("found", "not_found", "abs_found"):
+            out.append({"step": i, "F": f, "ref": str(src.get("ref") or "")})
     return out

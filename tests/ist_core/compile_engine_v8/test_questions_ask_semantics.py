@@ -76,6 +76,21 @@ def test_cap_other_defect_intent_not_merged_to_continue():
     assert answer_token("cap", "这是产品缺陷,别修了") == "defect"
     assert answer_token("cap", "实机行为是产品问题,提单吧") == "defect"
     assert answer_token("env", "不是环境,是产品缺陷") == "defect"
+
+
+def test_answer_token_whitespace_suspends_not_correct():
+    """F-Py-5①(裁点2·Design 裁 minimal):whitespace-only 答案→suspend(与 empty 的上游
+    auto-suspend 一致),修唯一真可达 bug——whitespace " " 因 `not " "`==False 绕上游
+    `if not a:` 到 answer_token、旧落末尾 correct 兜底=静默降级(把没答当纠正决策)。"""
+    for kind in ("panel", "cap", "env", "bed", "contra"):
+        assert answer_token(kind, "   ") == "suspend"       # 纯空白→suspend(非 correct)
+        assert answer_token(kind, "\t\n ") == "suspend"     # 制表/换行空白→suspend
+    # suspended 类:空白→keep(保持挂起,已正确待答语义)——例外,不归 suspend
+    assert answer_token("suspended", "   ") == "keep"
+    # 非空实质答案照常映射(guard 只拦纯空白,不误伤纠正/确认/意图词)
+    assert answer_token("panel", "确认") == "confirm"
+    assert answer_token("cap", "改预期为 X") == "correct"
+    assert answer_token("bed", "已处理") == "retry"
     assert answer_token("panel", "这是bug,记缺陷候选") == "defect"
     assert answer_token("contra", "这是产品缺陷") == "defect"
 
@@ -227,6 +242,73 @@ def test_pure_sampling_claim_keeps_legacy_wording():
     proc = next(o for o in qs[0]["options"] if o["label"] == "改过程")["description"]
     assert proc.startswith("加请求/观测次数到可验水平(≥24 次)")
     assert "断言形态按 dist" in proc
+
+
+# ── F-Py-5②(scheme 通道拒空):等价方案类 option 结构标记 _needs_scheme_labels ──────────
+
+def test_scheme_requiring_options_carry_needs_scheme_labels():
+    """F-Py-5②:「需用户自定义 scheme」的 option 带结构标记 _needs_scheme_labels(非 grep 字面)——
+    consumer 据此判「答案 strip==标签(无 scheme 补充)」拒落 re-ask(532618 空答陷阱)。
+    ★窄化(实现视角精化设计判据):只等价方案类(自定义输入型)需 scheme,missing_teardown 的
+    改预期(保留残留)自足不列——避免误折自足决策。"""
+    # test_point 三元组面板:「我给别的等价方案」需 scheme(选它=承诺给方案)
+    tp = {"claim_kind": "verification_path_absent", "test_point": "验证 X",
+          "sources": [{"kind": "step", "quote": "步骤"}], "obstacle": "床跑不了",
+          "no_equivalent_reason": "无等价手段"}
+    q_tp = build_questions({A: {"claims": [tp]}})[0]
+    assert q_tp.get("_needs_scheme_labels") == ["我给别的等价方案"]
+    # forbidden 面板:opt_expect「改预期」(描述=在下面自定义输入里写你的等价方案)需 scheme
+    fm = {"claim_kind": "forbidden_mechanism", "reason": "禁止机制 wrr", "proposed_equivalent": "用 rr"}
+    q_fm = build_questions({A: {"claims": [fm]}})[0]
+    assert q_fm.get("_needs_scheme_labels") == ["改预期"]
+    # ★missing_teardown 面板:改预期=保留残留(自足决策)不需 scheme→不列(窄化命门)
+    mt = {"claim_kind": "missing_teardown", "reason": "缺恢复步", "suggested_tau": ["逆序回放"]}
+    q_mt = build_questions({A: {"claims": [mt]}})[0]
+    assert not q_mt.get("_needs_scheme_labels")             # 空/无——不误把自足改预期当需 scheme
+    # ★consumer 判据 scheme_answer_empty:与 W3 :728 子串判据一致(容 TUI 序号/换行加工),
+    # 剥标签+序号/标点/空白后无实质=空 scheme→拒(Design 审的同面板判据一致性 gap 修)
+    from main.ist_core.compile_engine_v8.questions import scheme_answer_empty
+    _tp_lbls = set(q_tp["_needs_scheme_labels"])
+    assert scheme_answer_empty("我给别的等价方案", _tp_lbls)            # 纯标签=空 scheme→拒
+    assert scheme_answer_empty("我给别的等价方案  ", _tp_lbls)          # 尾空格(F-Py-5① 血泪边界)→拒
+    assert scheme_answer_empty("1. 我给别的等价方案", _tp_lbls)         # ★TUI 序号加工→仍拒(gap 修)
+    assert scheme_answer_empty("我给别的等价方案：", _tp_lbls)          # 标签+空冒号→拒
+    assert not scheme_answer_empty("我给别的等价方案:用 dig 验命中", _tp_lbls)   # 带真 scheme→land
+    _fm_lbls = set(q_fm["_needs_scheme_labels"])
+    assert scheme_answer_empty("改预期", _fm_lbls)                     # 纯标签→拒
+    assert scheme_answer_empty("1. 改预期", _fm_lbls)                  # 序号+纯标签(无 scheme)→拒
+    assert not scheme_answer_empty("1. 改预期为实机实际值", _fm_lbls)   # 序号+真 scheme→land(不误拒)
+    # ★纯数字 scheme 不误拒(Design re-审 F:断言预期值多是数字——端口/TTL/权重/命中数;
+    # 旧剥全部 \d 会把 scheme 实质数字当噪音剥致误拒,^ 锚只剥前导序号后修复)
+    assert not scheme_answer_empty("改预期 100", _fm_lbls)             # 数字值 scheme→land
+    assert not scheme_answer_empty("改预期：3600", _fm_lbls)           # TTL 数字→land
+    assert not scheme_answer_empty("1. 改预期 53", _fm_lbls)           # 序号+数字 scheme→land
+
+
+# ── F-Py-4(清单感知折叠·数据按引用):机械清单折叠、散文不折 ──────────────────────────
+
+def test_fold_enumeration_folds_command_lists_not_prose():
+    """F-Py-4(leader 判据):≥5 短枚举项(换行/顿号/斜杠/逗号)∧ 项短(≤20)无句读 → 折叠
+    「共 N 项(前 3)」;3-4 项、散文(含句读)、长项不折。600113 sdns pool 方法斜杠清单实证。"""
+    from main.ist_core.compile_engine_v8.questions import _fold_enumeration, clip_text
+    # ≥5 斜杠枚举(600113 形态)→折叠
+    f = _fold_enumeration("rr/wrr/sh/lc/dh/sed/random")
+    assert f and f.startswith("共 7 项(前 3:rr、wrr、sh")
+    assert _fold_enumeration("a、b、c、d、e、f").startswith("共 6 项")   # 顿号枚举
+    # 3-4 项→不折(短清单全显价值>折叠)
+    assert _fold_enumeration("rr/wrr/sh") is None
+    assert _fold_enumeration("a、b、c、d") is None
+    # 散文(含句读)→不折(即使 ≥5 逗号分句)
+    assert _fold_enumeration("先配置池,再加成员,然后下发,查看状态。最后验证访问,确认命中") is None
+    # 长项(≥5 项但单项 >20 字符=散文样长句、非命令样)→不折
+    long5 = "/".join(["配置轮询算法为加权模式并在下发保存后立即生效不受任何缓存影响"] * 5)
+    assert _fold_enumeration(long5) is None
+    # ★边界锚(Design 审·显式化):无句读逗号短句散文会误折(逗号是弱清单指示、散文也用)——承认为
+    # 可接受边界:发生率低(clip_text caller 归因类多含句读、evidence 走 clean_device_echo)、题面素材
+    # 本有损摘要,罕见逗号散文折叠可接受;顿号/斜杠是强清单指示、逗号弱。eval 锚死边界防将来误判为 bug。
+    assert _fold_enumeration("先看配置,再查状态,然后测试,最后验证,完成").startswith("共 5 项")
+    # clip_text 吃到折叠(清单先于 cap 判断,与长度无关)
+    assert clip_text("rr/wrr/sh/lc/dh/sed/random").startswith("共 7 项")
 
 
 # ── ⑤ 超长题面摘要(句读留痕,不无痕硬截) ─────────────────────────────────────

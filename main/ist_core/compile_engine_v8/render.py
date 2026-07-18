@@ -99,7 +99,10 @@ def case_timeline(mine: list[dict]) -> list[str]:
         elif ev == "decision" and f.get("answer"):
             out.append(f"你的裁决:{f.get('answer')}")
         elif ev == "suspended":
-            out.append("挂起,留待下批继续")
+            # F-Py-5①:decision 类未作答挂起显「未作答」;bed 床治理/resume 恢复/欠定/改描述→「挂起」
+            out.append("未作答,留待下批再问"
+                       if _is_no_answer_reason(str(f.get("reason") or ""))
+                       else "挂起,留待下批继续")
         elif ev == "resumed":
             out.append("恢复处理")
         elif ev == "delivery_blocked":
@@ -217,6 +220,9 @@ def remedy_text(queue: list[dict], mine: list[dict], panel: dict | None = None) 
                 "案内恢复);下批续跑会带此反馈重新编写,补上后即可交付。")
     from main.ist_core.compile_engine_v8.views import _is_suspended
     if _is_suspended(mine):
+        # F-Py-5①:未作答挂起 vs 床治理/欠定挂起分流(会签初衷=让用户知道要答)
+        if _no_answer_suspended(mine):
+            return "**去向**:你未作答,本轮先挂起;重跑同参数会再次呈报请你裁决。"
         return "**去向**:已挂起;重跑同参数时会再次询问是否恢复。"
     caps = [f for f in mine if f.get("ev") == "cap_reached"]
     if caps and not decs:
@@ -227,11 +233,41 @@ def remedy_text(queue: list[dict], mine: list[dict], panel: dict | None = None) 
 # ── 报告生成 ─────────────────────────────────────────────────────────────────
 
 
+def _is_no_answer_reason(reason: str) -> bool:
+    """suspended reason 是否「decision 类未答挂起」——reason=`auto:{qid}`、qid 前缀=题面 kind
+    (nodes ask_contradiction qids:panel/cap/env/bed/resume/contra)。★仅 decision 类
+    (panel/cap/env/contra)未答=待用户答→「未作答」;**bed 未答=床治理待外部处理(§11.7 bed 语义
+    独立、Design 硬约束)、resume=不恢复→保持挂起**,虽也走 :2336 auto: 但显「挂起」不是「未作答」。
+    白名单(非 startswith("auto:") 笼统黑名单)贯彻 bed 独立到渲染、防新 kind 误判。"""
+    if not str(reason).startswith("auto:"):
+        return False
+    kind = str(reason)[len("auto:"):].split(":")[0]   # auto:{kind}:{aid}:{n} → kind 前缀
+    return kind in ("panel", "cap", "env", "contra")
+
+
+def _no_answer_suspended(mine: list[dict]) -> bool:
+    """当前挂起是否 decision 类「未作答挂起」(最新 suspended 事实判据)——用户面分流用
+    (F-Py-5①·会签初衷走渲染层、不改状态机):未作答→显「未作答」、床治理/欠定/恢复→「挂起」。"""
+    sus = [f for f in mine if f.get("ev") == "suspended"]
+    return bool(sus) and _is_no_answer_reason(str(sus[-1].get("reason") or ""))
+
+
+def _status_cn(status: str, mine: list[dict]) -> str:
+    """状态人话(F-Py-5①):suspended 按 reason 分流——no-answer 挂起→「未作答」、其余→STATUS_CN
+    (床治理/欠定/改描述挂起仍显「挂起」)。收口卡/详报同源,避免「收口卡说挂起、详报说未作答」自矛盾。"""
+    if status == "suspended" and _no_answer_suspended(mine):
+        return "未作答(下批会再次问你)"
+    return STATUS_CN.get(status, status)
+
+
 def _case_section(aid: str, c: dict, mine: list[dict], mcase: dict,
                   queue: list[dict], panel: dict | None) -> list[str]:
     title = str(mcase.get("title") or "")
+    # F-Py-7(短号·A 配套):18 位 autoid 后缀标尾号——用户记忆里是短号(如 655233),18 位长号
+    # 认不出是自己哪条用例(User 21:21 实证);18 位保留(框架 dev_run_batch canonical 匹配用),
+    # 尾号仅供用户辨识。题面侧本已用尾号(questions.py),此处补齐交付物侧(Design F-Py-7 A 配套)。
     out = [f"## {title or ('用例 …' + aid[-6:])}",
-           f"- 编号 `{aid}` · 状态:{STATUS_CN.get(str(c.get('status')), c.get('status'))}"
+           f"- 编号 `{aid}`(尾号 {aid[-6:]}) · 状态:{_status_cn(str(c.get('status')), mine)}"
            f" · 编写 {c.get('rounds')} 次"]
     tl = case_timeline(mine)
     if tl:

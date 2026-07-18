@@ -503,7 +503,7 @@ def ask_decision(state: dict) -> dict:
     if not pending:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state, fs)}
     from main.ist_core.compile_engine_v8.questions import (
-        load_ledgers, build_questions, _first_clause)
+        load_ledgers, build_questions, _first_clause, scheme_answer_empty)
     aids = [str(f.get("aid")) for f in pending]
     ledgers = load_ledgers(sh.outputs_root(), aids)
     _qid_by_aid = {str(f.get("aid")): f.get("question_id") for f in pending}
@@ -643,6 +643,11 @@ def ask_decision(state: dict) -> dict:
     # (=q['_form'],FORM_BY_KIND 派生∈dist/member/captured_relation);机制类免 form
     # 由工具侧判,传空无害。缺此→compile_user_decision form 门拒落→活锁。
     _form_by_rep = {str(q.get("_autoid")): str(q.get("_form") or "") for q in qs}
+    # F-Py-5②(scheme 通道拒空):需自定义 scheme 才有实质的 option 标签集(等价方案类,questions
+    # 侧结构标记 _needs_scheme_labels 派生,非 grep 字面;strip 归一防 whitespace 骗过——F-Py-5① 血泪)。
+    _scheme_by_rep = {str(q.get("_autoid")): {str(lbl).strip()
+                                              for lbl in (q.get("_needs_scheme_labels") or [])}
+                      for q in qs}
     for q in qs:
         mem = fold.get(str(q.get("_autoid")), [])
         if len(mem) > 1:
@@ -708,6 +713,15 @@ def ask_decision(state: dict) -> dict:
     for rep in sorted(fold):
         a = answers.get(rep, "")
         if not a:
+            continue
+        # F-Py-5②(scheme 通道拒空,与 §18.14 D1 form 门分层——form 门管形态类 assertion_form 空、
+        # 此管机制类/实质内容空):选了「需自定义 scheme」option 但无实质 scheme 补充 → 不落 decision、
+        # 案 needs_decision 保持未答 → 下批重问(不静默落空「改预期」、不拒丢案;532618 实证:worker
+        # 收空改预期无从执行)。判据 scheme_answer_empty **与下方 W3 :728 子串判据同风格**(容 TUI
+        # 序号/换行加工——「1. 改预期」也命中拒),避免同面板精确匹配漏 TUI 加工致静默失效(Design 审)。
+        _scheme = _scheme_by_rep.get(rep, set())
+        if _scheme and scheme_answer_empty(a, _scheme):
+            sh.emit(f"…{rep[-6:]} 你选了自定义等价方案但没填具体方案,本轮不落、下批会再问你")
             continue
         m = fm_meta.get(rep)
         tbl = _tok_by_rep.get(rep) or {}
@@ -2635,6 +2649,32 @@ def closing(state: dict) -> dict:
     from main.ist_core.compile_engine_v8 import render as RD
     fs = sh.load_facts(state)
     vw = sh.view(state, fs)
+    # F-Py-7 A-加固对账(手工覆盖·事后检测,§11.9 交付对账纵深;approach+4 边界 Design 审 P):
+    # 读**上一轮** engine_report.json 的 delivery_stamp_ts,若受监交付物当前 mtime > 上轮 stamp+ε
+    # → 上轮 closing 返回后被手工改写(prompt 是主防线、此为纵深兜底;批3 LLM openpyxl 重建实证)
+    # → 落 delivery_overwritten 事实 + log(**滞后一轮检测、非实时挡**;用户面克制不进主报告)。
+    # 边界①受监集**排除 facts.jsonl(INV-7 跨轮 append)+ engine_report.json(含 stamp、下轮打戳
+    # 重写)**,只对账引擎一次性写、下轮不动的成品卷;②mtime>stamp+ε(ε=2s)防 FS 秒级精度同秒假阳。
+    _out_name = str(state.get("out_name") or "")
+    _prev_stamp = float((sh.read_json(sh.outputs_root() / _out_name / "engine_report.json", {})
+                         or {}).get("delivery_stamp_ts") or 0) if _out_name else 0
+    if _prev_stamp > 0:
+        _watched = ("case.xlsx", "unsuccessful_cases.xlsx", "unsuccessful_cases.md",
+                    "delivery_report.md")
+        _overwritten = []
+        for _fn in _watched:
+            try:
+                _fp = sh.outputs_root() / _out_name / _fn
+                if _fp.is_file() and _fp.stat().st_mtime > _prev_stamp + 2.0:
+                    _overwritten.append(_fn)
+            except OSError:
+                pass
+        if _overwritten:
+            logger.warning("交付物手工覆盖检测(滞后一轮):%s 于上轮 closing 后被改写——引擎"
+                           "交付物应确定性产出、禁手工重建(非实时挡)", _overwritten)
+            sh.append(state, [{"ev": "delivery_overwritten", "batch": _out_name,
+                               "files": _overwritten}])
+            fs = sh.load_facts(state)
     # 收口前置门兜底(回归#2 修 B,§16 批末必有聚合点 / §18.2 式③不静默):到 closing
     # 仍有未答欠定案(post-ask 路径 dismiss/非交互零答,或流失于极端错误)——落显式
     # awaiting_user_unasked 事实,禁静默吞。区分「从没被问」(无 ask_shown)与「问过没答」。
@@ -2990,6 +3030,16 @@ def closing(state: dict) -> dict:
         except Exception:  # noqa: BLE001
             pass
         sh.emit(f"⚠ 交付物缺失({', '.join(missing)})——收口结论降级为交付不完整")
+    # F-Py-7 A-加固对账·打戳:所有交付物落盘后记 delivery_stamp_ts + engine_report.json 最后再写
+    # 一次(stamp 反映「交付物已全部落盘」时刻——引擎写的交付物 mtime<stamp;手工覆盖在 closing
+    # 返回后 mtime>stamp)。下轮 closing START 据此检手工覆盖(见本函数首)。engine_report.json
+    # 自身排除对账(它 mtime≈stamp)。
+    report["delivery_stamp_ts"] = time.time()
+    try:
+        (mdir / "engine_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
     # G4 echo 入收口卡(§18.6 坑#21:此前仅流水行,收口卡无痕):每条用户裁决带
     # 「引擎理解为」复述,截断/兜底误判在收口卡上可核对
     _decision_echo = _g4_decision_echoes(fs)
@@ -2997,7 +3047,11 @@ def closing(state: dict) -> dict:
         "outcome": report["outcome"],
         "decisions": _decision_echo,
         "ok": len(deliverable), "total": len(vw["cases"]),
-        "labels": [{"autoid": a, "text": RD.STATUS_CN.get(str(c["status"]), str(c["status"]))}
+        # F-Py-5①:收口卡状态标签走 _status_cn(按 reason 分流 未作答/挂起)——与详报/去向段
+        # 同源,避免「收口卡说挂起、详报说未作答」自相矛盾(Design 生效面全覆盖)
+        "labels": [{"autoid": a,
+                    "text": RD._status_cn(str(c["status"]),
+                                          [f for f in fs if str(f.get("aid")) == a])}
                    for a, c in sorted(others.items())],
         "report": f"workspace/outputs/{out_name}/delivery_report.md",
         "files": deliver_files, "missing": missing,

@@ -107,6 +107,49 @@ def test_batch_name_strips_absolute_path_no_home_leak():
     assert "/home/" not in md and "/inputs/" not in md               # 全文无绝对路径泄漏
 
 
+def test_case_section_shows_tail_number_for_recognition():
+    """F-Py-7(短号·A 配套):交付物 _case_section 编号行=18位 autoid +(尾号 后6位)——用户
+    记忆里是短号(如 655233)、18位长号认不出(User 21:21);18位保留供框架 dev_run_batch
+    canonical 匹配。render_delivery_report(bad案)与 render_unsuccessful_md 同享 _case_section。"""
+    report = {"engine": "v8", "outcome": "delivered_with_labels",
+              "totals": {"cases": 1, "deliverable": 0}, "volume": "v",
+              "moved_tail": [], "coexist_violations": [],
+              "cases": {A: {"status": "contradicted", "artifact": "a1", "rounds": 1}}}
+    manifest = {"source": "t.txt", "cases": [{"autoid": A, "title": "示例用例"}]}
+    md = RD.render_delivery_report(report, [], manifest, {}, {})
+    assert f"编号 `{A}`(尾号 {A[-6:]})" in md          # 18 位 canonical + 尾号 辨识 并存
+    umd = RD.render_unsuccessful_md(report, [], manifest, {}, {}, {})
+    assert f"(尾号 {A[-6:]})" in umd                    # 未通过详报同享 _case_section
+
+
+def test_suspended_reason_split_no_answer_vs_other():
+    """F-Py-5①(会签初衷走渲染层·不改状态机):suspended 按 reason 分流——decision 类未答
+    (auto:{panel/cap/env/contra}:)显「未作答」;★bed 未答(auto:bed:,床治理待外部 §11.7 语义
+    独立)、改描述/欠定挂起显「挂起」。qid 前缀=kind,白名单贯彻 bed 独立到渲染(Design 增量审 F 修)。"""
+    # decision 类未作答(panel/cap/env/contra)→「未作答」
+    for k in ("panel", "cap", "env", "contra"):
+        na = [{"ev": "suspended", "aid": A, "reason": f"auto:{k}:{A}:1"}]
+        assert RD._no_answer_suspended(na), k
+        assert RD._status_cn("suspended", na) == "未作答(下批会再次问你)"
+    # ★bed 未答(auto:bed:)=床治理待外部处理(§11.7 独立)→显「挂起」不是「未作答」(防回归锚)
+    bed = [{"ev": "suspended", "aid": A, "reason": f"auto:bed:{A}:1"}]
+    assert not RD._no_answer_suspended(bed)
+    assert RD._status_cn("suspended", bed) == RD.STATUS_CN["suspended"]        # 挂起,非未作答
+    # 改描述/欠定挂起(非 auto:)→「挂起」
+    other = [{"ev": "suspended", "aid": A, "reason": "user_decision:改描述"}]
+    assert not RD._no_answer_suspended(other)
+    assert RD._status_cn("suspended", other) == RD.STATUS_CN["suspended"]
+    # 详报:decision 类未作答案状态行显「未作答」
+    report = {"engine": "v8", "outcome": "delivered_with_labels",
+              "totals": {"cases": 1, "deliverable": 0}, "volume": "v",
+              "moved_tail": [], "coexist_violations": [],
+              "cases": {A: {"status": "suspended", "rounds": 1}}}
+    manifest = {"source": "t.txt", "cases": [{"autoid": A, "title": "示例"}]}
+    md = RD.render_delivery_report(report, [{"ev": "suspended", "aid": A, "reason": f"auto:panel:{A}:1"}],
+                                   manifest, {}, {})
+    assert "未作答" in md and "编号" in md
+
+
 def _v(result, ctx, rid="r1", art="a1", vol="v"):
     return {"ev": "verdict", "aid": A, "run_id": rid, "ctx": ctx, "result": result,
             "artifact": art, "volume": vol, "signatures": []}
@@ -291,6 +334,41 @@ def test_closing_cleanup_contract_and_summary(engine_env, monkeypatch):
     assert emitted["labels"] and "…" not in emitted["labels"][0]["text"]
     assert emitted["labels"][0]["text"] in RD.STATUS_CN.values()
     assert "delivery_report.md" in " ".join(emitted["files"])
+
+
+def test_delivery_overwrite_detected_next_closing(engine_env, monkeypatch):
+    """F-Py-7 A-加固对账(手工覆盖·事后检测):上轮 engine_report.json 有 delivery_stamp_ts,交付物
+    mtime>stamp+ε → 本轮 closing START 检出手工覆盖(delivery_overwritten 事实);ε 容差内 +
+    facts.jsonl(跨轮 append 排除)不误判;closing END 重打 stamp。滞后一轮(prompt 主防线外纵深)。"""
+    import os
+    env = engine_env
+    _mark_b_deliverable(env)
+    mdir = env["mdir"]
+    monkeypatch.setattr(sh, "emit_summary", lambda s, d: None)
+    T0 = 1000.0
+    (mdir / "engine_report.json").write_text(json.dumps({"delivery_stamp_ts": T0}), encoding="utf-8")
+    (mdir / "unsuccessful_cases.md").write_text("overwritten", encoding="utf-8")
+    os.utime(mdir / "unsuccessful_cases.md", (T0 + 100, T0 + 100))   # >stamp+ε=手工覆盖
+    (mdir / "delivery_report.md").write_text("x", encoding="utf-8")
+    os.utime(mdir / "delivery_report.md", (T0 + 1, T0 + 1))          # <stamp+ε=容差内不误判
+    N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
+    fs2 = F.load_facts(env["facts"])
+    ov = [f for f in fs2 if f.get("ev") == "delivery_overwritten"]
+    assert ov and "unsuccessful_cases.md" in ov[-1]["files"]         # 覆盖检出
+    assert "delivery_report.md" not in ov[-1]["files"]              # ε 容差内不误判
+    assert "facts.jsonl" not in ov[-1]["files"]                     # ★facts.jsonl 排除不误判(跨轮 append)
+    rep2 = json.loads((mdir / "engine_report.json").read_text(encoding="utf-8"))
+    assert float(rep2.get("delivery_stamp_ts") or 0) > T0           # closing END 重打 stamp
+
+
+def test_delivery_no_false_overwrite_fresh_batch(engine_env, monkeypatch):
+    """F-Py-7:首跑批次(无上轮 delivery_stamp_ts)不检测——零 delivery_overwritten 误报。"""
+    env = engine_env
+    _mark_b_deliverable(env)
+    monkeypatch.setattr(sh, "emit_summary", lambda s, d: None)
+    N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
+    fs2 = F.load_facts(env["facts"])
+    assert not [f for f in fs2 if f.get("ev") == "delivery_overwritten"]
 
 
 def test_prep_restores_unfinished_for_resume(engine_env, monkeypatch):

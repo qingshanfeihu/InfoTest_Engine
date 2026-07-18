@@ -136,6 +136,23 @@ def test_forbidden_question_template():
     assert [o["label"] for o in qs[0]["options"]] == ["改过程", "改预期", "改描述"]
 
 
+def test_scheme_requiring_option_empty_scheme_rejected_reask(monkeypatch):
+    """F-Py-5②(scheme 通道拒空):禁令面板选「改预期」(描述=在下面自定义输入里写你的等价方案)
+    但答案==选项标签本身(没进 Other 文本态、没填 scheme,TUI-Eng 机读证=标签原文)→ 拒落、
+    不写 user_decision、案 needs_decision 保持未答(下批重问);532618 空答陷阱。对照:「改过程」
+    (采纳引擎推导、自足不需 scheme)照常 land 见 test_fold_one_question_fanout_both_land。"""
+    _mk_case(A1)
+    appended, asked = _drive(monkeypatch, [_pend(A1, 1)], {A1: "改预期"})
+    assert sum(len(b) for b in asked) == 1                      # 呈报了(interrupt 收到题)
+    # ★拒落:无 decision 事实 + 无 user_decision.json(案留 needs_decision 未答→下批重问)
+    assert not any(f.get("ev") == "decision" and f.get("aid") == A1 for f in appended)
+    assert not (sh.outputs_root() / A1 / "user_decision.json").is_file()
+    # ★TUI 序号加工「1. 改预期」也拒(Design 审 gap:精确匹配会漏 TUI 序号、子串判据修,与 W3 一致)
+    appended2, _ = _drive(monkeypatch, [_pend(A1, 1)], {A1: "1. 改预期"})
+    assert not any(f.get("ev") == "decision" and f.get("aid") == A1 for f in appended2)
+    assert not (sh.outputs_root() / A1 / "user_decision.json").is_file()
+
+
 def _triple_claim(equiv=True):
     c = {"claim_kind": "verification_path_absent",
          "test_point": "验证 write mem 存盘后重启配置是否丢失",

@@ -85,10 +85,48 @@ def english_leak_fields(obj, threshold: float = _ENGLISH_LEAK_RATIO) -> list:
     return out
 
 
+def scheme_answer_empty(a: str, scheme_labels) -> bool:
+    """F-Py-5②:答案是否「选了 scheme-requiring 标签但无实质 scheme 补充」——**与 consumer W3
+    label→token 子串判据(nodes :728 `lbl in a or a in lbl`,注释容 TUI 序号/换行加工)一致**:对每个
+    scheme 标签,若子串匹配 a,剥掉标签+序号/标点/空白后无实质残留=空 scheme(拒落 re-ask)。
+    比精确匹配鲁棒——「1. 改预期」(TUI 序号加工)W3 命中 token、精确匹配却漏拒致 F-Py-5② 静默
+    失效(Design 审的同面板判据一致性 gap)。"""
+    a1 = str(a or "").strip()
+    for lbl in scheme_labels:
+        lbl = str(lbl).strip()
+        if lbl and (lbl in a1 or a1 in lbl):        # 同 nodes W3 :728 子串判据(容 TUI 加工)
+            rest = a1.replace(lbl, "", 1)
+            # 剥【前导】TUI 序号(数字+分隔符+空白,如"1. "/"2、")——**只剥前导序号、非裸数字**:保留
+            # scheme 内数字(端口/TTL/权重/命中数等断言预期值常见)。Design re-审 F:旧 `re.sub([\d…])`
+            # 剥全部数字→「改预期 100」误拒(把 scheme 实质数字当噪音剥了);前导序号=噪音、内部数字=实质。
+            rest = re.sub(r"^\s*\d{1,2}\s*[.、)）]\s*", "", rest)     # 剥前导序号(数字+分隔符)
+            rest = re.sub(r"^[\s:：,，.。;；、/]+", "", rest).strip()   # 剥标签后残留前导标点/空白
+            if not rest:                            # 剥前导序号/标点后无实质残留=空 scheme
+                return True
+    return False
+
+
+def _fold_enumeration(s: str) -> str | None:
+    """机械清单折叠(F-Py-4·数据按引用红线):≥5 枚举项(换行/顿号、/斜杠//逗号,，分隔均算——
+    600113 sdns pool 方法斜杠清单实证)∧ 项短命令样(单项 ≤20 字符 ∧ 无句读。；!?)→ 折叠
+    「共 N 项(前 3:…)」,不整段灌题面。否则 None(交常规句读摘要)。散文(含句读)/长项天然不
+    命中;3-4 项不折(短清单全显价值>折叠,leader 裁)。设备回显另走 clean_device_echo 不经此。"""
+    parts = [p.strip() for p in re.split(r"[\n、/,，]", str(s or "")) if p.strip()]
+    if len(parts) < 5:
+        return None
+    if any(len(p) > 20 or re.search(r"[。；;!?！?]", p) for p in parts):
+        return None                          # 长项/带句读=散文,不折
+    return f"共 {len(parts)} 项(前 3:{'、'.join(parts[:3])};余 {len(parts) - 3} 项详见事实台账)"
+
+
 def clip_text(s: str, cap: int = 160) -> str:
     """超长题面素材的句读摘要(P0-新② 题面硬化;zhaiyq 实弹:题面曾被裸 [:N] 词中
     断成「调整断言为not_found方)」且无省略标记,读者不知道被截)。整句累加到 cap,
-    放不下的丢弃并以「…」留痕;首句即超长时退回定长截断但仍带「…」——截断永远可见。"""
+    放不下的丢弃并以「…」留痕;首句即超长时退回定长截断但仍带「…」——截断永远可见。
+    F-Py-4:机械清单(≥5 短枚举项)先折叠(与长度无关、≥5 项即折),不整段灌题面。"""
+    _folded = _fold_enumeration(s)
+    if _folded is not None:
+        return _folded
     s = " ".join(str(s or "").split())
     if len(s) <= cap:
         return s
@@ -201,7 +239,11 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             questions.append({"question": q_text, "header": f"欠定·{aid[-6:]}",
                               "options": opts, "multiSelect": False, "_autoid": aid,
                               "_ordering": ordering, "_form": form,
-                              "_token_by_label": tok})   # P3:label→token 显式映射
+                              "_token_by_label": tok,   # P3:label→token 显式映射
+                              # F-Py-5②:需用户自定义 scheme 才有实质的 option(选它=承诺给等价
+                              # 方案,没填=空答陷阱)。消费点核「答案==此标签(无 scheme 补充)」→拒
+                              # 落 re-ask。「采纳 proc」/「挂起」自足不需 scheme,不列。
+                              "_needs_scheme_labels": [lbl_other]})
             continue
 
         if all(k == "forbidden_mechanism" for k in kinds):
@@ -209,7 +251,9 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             # 题面主推 worker 按配置面模型推导的等价实现(模型条件,差异已声明),
             # 投降选项必须携穷举论证语义;误报(字面命中非机制)一答放行。
             c0 = claims[0]
-            prop = str(c0.get("proposed_equivalent") or c0.get("suggested_fix") or "")[:200]
+            # F-Py-4:prop 路由过 clip_text(旧 [:200] 硬截够不到清单感知)——proposed_equivalent
+            # 若是设备能力/方法清单(600113 实证)由 _fold_enumeration 折叠,不整段灌题面。
+            prop = clip_text(str(c0.get("proposed_equivalent") or c0.get("suggested_fix") or ""), 200)
             q_text = (f"用例 {aid}(尾号 {aid[-6:]})的意图要求测试床禁止的机制:{reasons}。"
                       + (f"worker 按配置面模型推导的等价实现:{prop}。" if prop else "")
                       + "等价性为模型条件(启动通道等差异已在报告声明),如何处置?")
@@ -224,7 +268,11 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             questions.append({"question": q_text, "header": f"禁令·{aid[-6:]}",
                               "options": [opt_process, opt_expect, opt_desc],
                               "multiSelect": False, "_autoid": aid,
-                              "_ordering": False, "_form": form})
+                              "_ordering": False, "_form": form,
+                              # F-Py-5②:opt_expect(改预期)描述=「在下面自定义输入里写你的等价
+                              # 方案」,选它须给 scheme;opt_process(采纳引擎推导)/opt_desc(挂起)
+                              # 自足不需。missing_teardown 的「改预期(保留残留)」不列(自足决策)。
+                              "_needs_scheme_labels": [opt_expect["label"]]})
             continue
 
         if all(k == "command_existence" for k in kinds):
@@ -436,6 +484,13 @@ def answer_token(kind: str, a: str) -> str:
       继续词 → continue;停修词 → stop;其余 → correct(原文即信息,不虚假授权轮次)。
     特权词只在短指令里生效(≤8 字):长句里的「挂起/停止」多为叙述
     (「不要挂起,按手册来」),按题面语义走、原文全程保留在 decision 里。"""
+    # F-Py-5①(裁点2·Design 裁 minimal):whitespace-only 答案 → suspend(与 empty 的 nodes ask
+    # 消费 `if not a:` auto-suspend 一致)。修唯一真可达 bug:whitespace " " 因 `not " "`==False
+    # 绕上游 `if not a:` 到本函数、旧落末尾 correct 兜底=静默降级(把没答当纠正决策)。suspended
+    # 类除外(空白→下方 keep 保持挂起)。会签「未答→awaiting」状态精化押后(触 §11.7 床权/§11.11
+    # 安全件公理闸门,收益/风险不成比例);未答案诉求改走 render reason 分流(用户面显「未作答」)。
+    if kind != "suspended" and not a.strip():
+        return "suspend"
     short = len(a) <= 8
     if kind == "suspended":
         # 先于特权判定:「保持挂起」是本题面的常规选项,不是特权触发

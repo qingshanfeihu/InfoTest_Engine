@@ -177,6 +177,9 @@ PLAN_footprint_v2 → PLAN_v3 → PLAN_v3R → PLAN_v4 → DESIGN_v6 → DESIGN_
 | F12 | 锚回填 b | §16.4 片3 定形④终验幂等闸补「组成内无 broken 三态案」条件 + broken 断批例外全记载（17过+27 not_run 误吸收实证、`_delivery_verify_skippable` 纯函数、`test_delivery_idempotency_gate.py`、commit b3ce3b4b） | §16.4 片3 ④ |
 | F13 | leader 批准增量 | §18.7 追加「修订波及面自查」写作纪律一段（撤销/取代/收窄条款落笔时 grep 全命中处三选一：打指针/回填/如实豁免；取代声明必须双向+逐单元交代去向）——team4/Theory 独立收敛病灶的制度化 | §18.7 |
 | F14 | Py-Eng 报告 1-9 | 新增 §16.5b「dongkl 定稿回指」：§⑥ ask-liveness（broken 连击 per-case/卷指纹隔离）与 §④ pyATS 七码的跨文档权威声明——nodes.py/views.py 对应注释可缩引用 | §16.5b（新） |
+| F15 | F-Doc-1 增量回填（2026-07-18，收口批**定案部分**） | ①§18.16 folding 门变体 A 新节（凭证路 folded_members+集合判定+三源恒等抗伪不变量+知情同意串联链§6.4+5 守门测试）②§11.12 leak_scan detector 新节（双 detector token/中文占比+作用域三分+scrubber 主线不动）③§11.4 补 D2/D4 选项文案契约（label=token 承重/description=后果人话，推广全 43 面板）④§1 公式表+§18.16 (18b) 辖区判据全式（Theory 起草，注记 source=team4_fold_gate_eval §6.1/6.4/6.7） | §18.16/§11.12/§11.4/§1（4 新增/补段） |
+
+**F-Doc-1 轮验证**（2026-07-18）：纯 docs 增量、零代码变更、不影响 pytest（leader 亲跑口径不变）；未 commit（待 leader 一并提交）。**待 leader 拍**：⑤方法 13 条归档（TEAM_WORKFLOW 引用 vs 附录正文，TEAM_WORKFLOW 我未动等放行）+ 未定案 F-Py-5/6/7/8 是否正文留占位（现遵「正文=定案投影」不留半成品，待各 Eng commit 后增量）。
 
 **按令未动**：P1-5（DS-1/2/3 承接需设计裁决，非文档对账——与 P0-1 的 E 同族，留给用户定夺后一并立节）；P2×6 全部（风格类，leader 未点名，避免大动引入新风险）；CLAUDE.md C1-C12（leader 令：等 IST_FORK_WALLCLOCK_S 裁决后一次性改）；docs 归档 mv 30 份（押后等令）。
 

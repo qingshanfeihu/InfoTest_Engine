@@ -20,8 +20,9 @@
 | **F-Py-5** | 「我给别的等价方案」静默空答陷阱（选 option 未进 Other 文本态→静默落改预期） | P1 | Test-Eng D6（532618）；precheck 面3 | emit/落盘层：option 选中未进文本态→拒空等价+回退 re-ask | 守门测试：空等价被拒；重跑 532618 型不静默降级 |
 | **F-Py-6** | fork 零产物显示「✓ 完成」假完成（进程结束即绿勾，无视产物落盘） | P1 | Test-Eng D7；User 21:36 | 卡片状态按产物落盘判定非进程退出（events.jsonl fork_end 带产物标志） | 重跑观测零产物案显失败/未产出态 |
 | **F-Py-7** | 交付物 xlsx 人话化 + leak_scan 扩 xlsx + 短号映射 | P1 | precheck 面2①；User 21:21（诊断表黑话）/23:48（尾号正面） | **二案对比**（禁手工路径 vs 手工产物过门）；leak_scan 现只扫 md，扩 xlsx 单元格 | leak_scan(xlsx) 门；重跑交付物无黑话/带短号 |
-| **F-Py-8** | 532618 等价方案断言极性核（引 dongkl 先例语法勿照抄断言方向，F3 极性禁运） | P1 | precheck 面3.2 | closing 核重编卷断言极性溯自本案意图/手册非照抄先例 | closing 抽查 532618 断言溯源 |
+| **F-Py-8**（降级审计抽查项·非硬门，2026-07-18） | 断言极性照抄先例（引 dongkl 先例语法勿照抄断言方向，F3 极性禁运） | P1 | precheck 面3.2；Py-Eng provenance 核实 | **三层（机械触发+语义 oracle+报告）非硬门**：①provenance source.kind=precedent 机械触发缩抽查面（结构化事实可机械）②极性↔意图对齐是语义→closing 报告列 precedent-sourced 断言供人核 + **上机 oracle 兜底**（极性方向错→上机 fail）③不加"极性溯源"字段（假精确、极性对齐机械判不了）。**别做成机械判语义对错的假门** | 532618（precedent-sourced 触发实例）被触发缩面 + 上机验极性方向 |
 | **F-Py-9** | R_sig 测试污染（.frozen.json 硬编码路径绕过 monkeypatch，测试伪键 R_sig 写进生产 workspace/outputs/） | P1 | Py-Eng 根因（batch_tools.py:1278-1281 写 / emit_xlsx_tool.py:1215 读硬编码；run_log:413 `\b1.2.3.4\b` 占位污染）；同 #18 三写入点族 | 方案 A 根治：两处硬编码 `parents[4]/workspace/outputs` → 统一可 monkeypatch 解析器（runtime_paths.outputs_root()）；一改修全 caller | 回归断言"跑全量后 workspace/outputs/ 无新增 R_sig/t_*/_pytest_*" |
+| **F-Py-10**（F-Py-3 观察逼出，并 F-Py-7 人话化族） | 报告标题露绝对本地路径（`/Users/jiangyongze/.../inputs/automatic_case/yzg.txt`）——泄漏本机 home+用户名+冗长 | P2 | Py-Eng F-Py-3 增量审观察；yzg 金标准回放 | 【渲染质量】标题只显批名/相对路径（yzg）非绝对路径；与 F-Py-7 交付物人话化同批 | 重跑观测报告标题无绝对路径/本机用户名 |
 
 ### A-TUI · TUI-Eng 域（ink 渲染 + reducer 交互；TUI-Eng §13 详表，13 项，标【纯渲染】TUI 独立 /【跨域】需引擎接口）
 
@@ -131,3 +132,23 @@
 - **重跑观测点（yzg 从头）**：User 视角逐 ask 面板核——①零英文句②零内部黑话 token③选项带人话后果④选项 label 无截断⑤短号伴随⑥引文完整⑦footer 不倒退/终验有心跳⑧多题面板逐题落答不丢。
 - **红线**：不回归、通过率不降、编译链改动过 redline-reviewer + Theory×Design 双评审。
 - **证据边界**：本清单 A 区 Eng 项多为"实证/机读坐实"（Test-Eng+User+机读）；F-Py-1 规格已终审 P，其余 Eng 项待出 diff 后各自双评审。B 区待用户最终确认解冻。
+
+---
+
+## 方法沉淀（F-Py-9 系列 + 评审可复用教训，Design 记 2026-07-18）
+
+修复轮评审中反复出现、值得后续任何"开豁免/立过渡/扫污染面/审跨域改动"时对照：
+
+1. **门豁免/过渡态纪律（Py-Eng 一般化）**：给门开豁免/立过渡态时**同步定"还清路径 + 本轮清零"**，否则过渡态悄悄永久化（allowlist 26 过渡债本轮内清零=正例；compile_pipeline 保留/单元 E 悬空=反例）。
+2. **"保留不隔离"是 fail-open 方向**：判错"该隔离的保留了"→污染（重），判错"该保留的隔离了"→无害（轻）；故保留判定要更保守、**必须核被调函数实际读写、不能只看参数名**（emit_xlsx:1866 + runtime_fill_tools:114 两个 apply_fills 型隐藏写实证——参数名 project_root 看似读、内部 _sync_provenance 写）。
+3. **1866 型隐藏写全抓法**：特征=本文件传 project_root 给被调、写在被调函数内——**grep 本文件写点抓不到，要沿调用链 trace**（第6处 runtime_fill_tools:114 连 grep 重扫都漏、redline 全量 trace 才抓）。
+4. **empirical discovery 两盲区**：①skipif-masked 测试 discovery 时 skip→其污染看不见（清 skip 恒跑才现）②测试读 stale 伪键假过（清 stale 后复跑才暴露真失败）。
+5. **清 stale/改隔离后跑两遍验稳定**：防"清 stale 扰动"非确定性绿（第一遍侥幸）。
+6. **全库机械全扫 > 人工 scoping**：污染面/写点这类"要穷举"的靠机械全扫（grep + 调用链 trace），别信人工聚焦（9b-1 人工聚焦 3 文件漏 5+1，empirical 全扫补齐）。
+7. **两笔改同文件（尤其安全门）要行级核正交不撞**：F-Py-1 门匹配（:421-430）vs F-Py-9b root 解析（:409）虽同函数但正交不同行——同文件改动最易暗撞，"逻辑零变化"声明须行级背书。
+8. **完备性交叉例锁语义防未来误改**：T-compat②b（损坏行不污染有效行）/跨路径 armed（enter↔数字交叉确认）/光标三位置——为"共享状态/兜底分支"补交叉测试，防将来重构破坏语义。
+9. **修订波及面/拆批/押后必登记**：撤销/取代/拆批/押后项都要在册（F-TUI-11 拆批登记、F-TUI-4 押后重跑观测点、§18.15 单元 E 落空反例），防"拆了/押后了没人管"。
+10. **eval 当场坐实设计前提（前提证伪器）**：对"未证实但有架构支撑的前提"（如 F-Py-2 ②剔『』命令依赖"命令走独立通道、reason 不嵌命令"），**构造边界用例让 eval 在实现阶段证伪**（误伤即当场调），而非"等生产真出问题再调"——早一个阶段、双层兜底（eval 当场坐实 + detector 生产暴露）。eval 不只测行为，还当场验设计前提成不成立。
+11. **辨析低假阳结构化判据 vs 强字典误杀**：不一刀切反对机械判据——有结构锚（F-Py-3「要求下划线」排缩略语）/剔合法内容（F-Py-2「剔命令引用」）/字段边界二分（叙述验 vs 原文引用豁免 device_quote）+ eval 守假阳的，是低假阳设计；无结构特征的宽泛匹配（GA-CUT/裸数字）才是强字典。判据看有无结构锚+假阳控制。
+12. **门/判据必区分暴露 vs 掩盖**：detector（报 leak/拒背书/单列 broken 逼修源头）暴露问题；scrubber（渲染删泄漏/静默修正/折叠 broken）掩盖问题。一律选暴露（G5/broken/leak_scan detector 同族）。
+13. **实现/eval/评审是设计边界的暴露器（二次设计面）**：纸面设计常漏边界，实现/eval/redline 时才撞出——本批 4 实证：F-Py-3 路径段假阳（eval 逼）、F-Py-9b apply_fills 隐藏写（redline trace）、F-Py-2 裸命令 reason（坐实器 eval）、F-Py-2 fact 顶层机读码作用域（hookup 实现）。**别只照设计做、把实现当二次设计暴露面**；实现期发现的边界要**回灌设计认知**（不只修实现）。配套：设计早审定 approach + 实现增量审核实现期暴露的边界（双阶段评审）。

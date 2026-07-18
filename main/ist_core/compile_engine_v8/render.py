@@ -241,6 +241,16 @@ def _case_section(aid: str, c: dict, mine: list[dict], mcase: dict,
     return out
 
 
+def _batch_name(manifest: dict, report: dict | None = None) -> str:
+    """交付物标题批名(F-Py-10:标题不露绝对本地路径/home/用户名/冗长目录)——取 source 文件名主干
+    (=批名),回落 report.batch。/Users/jiangyongze/.../inputs/automatic_case/yzg.txt → yzg。
+    纯字符串操作(去目录+去扩展名),不依赖 Path;空则回落 report.batch。"""
+    src = str(manifest.get("source") or "").replace("\\", "/")
+    base = src.rsplit("/", 1)[-1]                              # 去目录(剥 home/用户名/路径)
+    stem = base.rsplit(".", 1)[0] if "." in base else base     # 去扩展名
+    return stem or str((report or {}).get("batch") or "")
+
+
 def render_delivery_report(report: dict, fs: list[dict], manifest: dict,
                            queues: dict[str, list[dict]],
                            panels: dict[str, dict] | None = None) -> str:
@@ -249,7 +259,7 @@ def render_delivery_report(report: dict, fs: list[dict], manifest: dict,
     ok = int(t.get("deliverable") or 0)
     total = int(t.get("cases") or 0)
     mcases = {str(c.get("autoid")): c for c in (manifest.get("cases") or [])}
-    lines = [f"# 交付报告 — {manifest.get('source') or report.get('batch', '')}",
+    lines = [f"# 交付报告 — {_batch_name(manifest, report)}",
              f"> 生成 {time.strftime('%Y-%m-%d %H:%M', time.localtime())}",
              "",
              f"本批 {total} 个用例:**{ok} 个通过整卷复验,已入交付卷**"
@@ -314,7 +324,7 @@ def render_defect_candidates_md(entries: list[dict], manifest: dict) -> str:
     claim 全史(517027 型多主张并列,不只最新)+ 处置轨迹(如实展示后轮改判)。
     候选≠终判(§11.7 缺陷确认权在人)——轨迹与确认状态如实标注。
     设备证据放 code fence(leak_scan 豁免面;正文守零术语泄漏)。"""
-    lines = [f"# 缺陷候选单 — {manifest.get('source') or ''}",
+    lines = [f"# 缺陷候选单 — {_batch_name(manifest)}",
              f"> 生成 {time.strftime('%Y-%m-%d %H:%M', time.localtime())} · "
              f"共 {len(entries)} 案 · 候选非终判,确认权在人",
              ""]
@@ -362,7 +372,7 @@ def render_unsuccessful_md(report: dict, fs: list[dict], manifest: dict,
     mcases = {str(c.get("autoid")): c for c in (manifest.get("cases") or [])}
     bad = {a: c for a, c in (report.get("cases") or {}).items()
            if c.get("status") != "deliverable"}
-    lines = [f"# 未通过用例详报 — {manifest.get('source') or ''}",
+    lines = [f"# 未通过用例详报 — {_batch_name(manifest)}",
              f"> 生成 {time.strftime('%Y-%m-%d %H:%M', time.localtime())} · 共 {len(bad)} 个",
              ""]
     for aid, c in sorted(bad.items()):

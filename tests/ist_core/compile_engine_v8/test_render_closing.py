@@ -91,6 +91,22 @@ def test_precedent_polarity_flags_render_as_audit_note_not_reject():
     assert RD.leak_scan(md) == [], RD.leak_scan(md)          # 标注零 token 泄漏(复用 leak_scan)
 
 
+def test_batch_name_strips_absolute_path_no_home_leak():
+    """F-Py-10:交付物标题只显批名(source 主干),不露绝对本地路径/home/用户名/冗长目录。"""
+    assert RD._batch_name({"source": "/home/ci/proj/inputs/automatic_case/yzg.txt"}) == "yzg"
+    assert RD._batch_name({"source": "yzg"}) == "yzg"                 # 已是批名
+    assert RD._batch_name({"source": "/a/b/test.case.txt"}) == "test.case"   # 只去末扩展名
+    assert RD._batch_name({"source": ""}, {"batch": "fb"}) == "fb"    # 空回落 report.batch
+    manifest = {"source": "/home/ci/proj/inputs/automatic_case/yzg.txt",
+                "cases": [{"autoid": A, "title": "示例用例"}]}
+    report = {"engine": "v8", "outcome": "delivered_all_pass",
+              "totals": {"cases": 1, "deliverable": 1}, "volume": "v",
+              "moved_tail": [], "coexist_violations": [], "cases": {A: {"status": "deliverable"}}}
+    md = RD.render_delivery_report(report, [], manifest, {}, {})
+    assert md.splitlines()[0] == "# 交付报告 — yzg"                   # 批名精确(无路径/扩展名)
+    assert "/home/" not in md and "/inputs/" not in md               # 全文无绝对路径泄漏
+
+
 def _v(result, ctx, rid="r1", art="a1", vol="v"):
     return {"ev": "verdict", "aid": A, "run_id": rid, "ctx": ctx, "result": result,
             "artifact": art, "volume": vol, "signatures": []}

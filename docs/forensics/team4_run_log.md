@@ -415,6 +415,20 @@ barrier 次轮 footer「轮次6 对账 37/53 · 欠定9 通过37 失败7」，§
 - **销项机制**：yzg 重跑时逐条对照缺陷单，每 D 类在新批面板复现与否=修复实效判定，配合 User 体感双路销项。
 - **修复基线**：批4 中止态 facts.jsonl（`runtime/backups/batch4_zhaiyq_stopped_20260718/`）。
 
+## 5. yzg 重跑（修复轮验收场，HEAD=af4ceb3c pytest 2215-0）
+
+**交付**：19/26 deliverable + 7 suspended（655/668 族真床限制：VLAN/HA fip/bond/write mem·file·all·net 持久化/reboot）+ **0 failed**。首轮 17/18 pass、ask effective=8（无 effective=false）。**修复轮质量显著优于批4**（批4 多轮混乱 vs yzg 首轮近满、床限制诚实挂起）。
+
+**销项结果**（详见 `yzg_rerun_verification_plan.md` + `ist_core_ask_interaction_defects.md`）：
+- ✅ **#27/⑤ 进度语义**双✓（barrier authored18==xlsx18==产出18 哨兵一致）
+- ✅ **D2 用户可判断性**（最严重）机读✓：选项带「对你的用例：…」人话后果（F-LLM-1 生效）
+- ✅ **D1 英文泄漏**未复现（面板全中文，批4=7→yzg 0）；◐ **D5 黑话**大改善（header「欠定·」非 nd:）残 tool名/autoid
+- ⚠ 新缺陷全归 Py-Eng：**D12** 折叠-eq 对 panel 落盘失败（668000/668044，非 599838 同因）/ **D13** _land error 只 TUI emit 不落日志 / **D14** 判例 body 乱码泄漏交付报告（批3 `## Revision` 头+截断串）/ **D15** 判例覆盖本轮采纳+误标「你的裁决」（→升级权威序疑点交 Design+Theory 快评：用户本轮显式裁决应高于历史判例）
+
+**leader 裁示**：668000/668044 挂起接受（不回改，批3 真 PASS 实证+缝修后跨批可回）；判例覆盖交 Design+Theory 快评。
+
+**方法论教训（deadline 双保险 + 行为合理性）**：①**deadline 双保险立功**——re-ask panel **未增 ask_shown 计数**（监测盲区），引擎空等 19.5min，1.5× deadline 自查兜住（leader 改进令价值实证）；②**产物缺失先查引擎产出条件再定缺口**——我先把缺 unsuccessful_cases.xlsx 标「产物 gap」，实为正确行为（nodes.py:2477 `if not cases: return None`，7 挂起案编写0次无卷→有意不产）。行为合理性先于缺口定性（leader ③ 纪律）。
+
 **599906 IPv6 领悟（frozen 揭真签名）**：答后 599906 即冻结，frozen sig=`dig @3ffb::70 www.zyq.com CNAME +short`——**真实 failure 是 IPv6 dig 失败（床 IPv4-only，同 517112 IPv6 轴床限制）**，非矛盾面板说的「起点残留污染」（worker 误判）。重排复验救不了（重排不加 IPv6 支持），已冻结→将 cap→honest 未通过（正确终局，只多一次重排尝试，无害）。**教训**：矛盾/cap 面板不总揭示真失败签名，`.frozen.json` 的 signatures 才是机读真相——下次答矛盾面板前若可，先查该案有无 frozen sig 判是否床限制类。589432 frozen 亦重写（新 sig `www\.zyq\.com\s+\d+…` IP-match、ovr3，已挂起 defer 救赎轮）。leader「本轮不干预」——599906 经止损自然收敛，不介入。
 
 **轮次10 收敛态 + 6案 escalated 隐忧（leader 裁决三条）**：批末 gather 机制（§14-R4 山穷水尽才问）——599838/532781:2 欠定等 reflow 案全 settle 才 gather，非 bug。当前 10 案终态：**6 escalated**（516389/532349/533020/588766/589359/589503，reason 均「no output from fork/wallclock watchdog」，疑 deepseek provider 并发压力误杀，P2-4 族）/ 2 suspended（517112/600113 我裁决）/ 1 cap failed（589432 ALL QueryType 纠正卷仍触顶）/ 1 user_stop（561213）。532618 仍 reflow 未终态。**leader 裁决**：①**收敛尾段不干预、不降并发、不动 provider**（批中禁改运行链路，改配置只影响残余几案、收益不抵扰动）②**交付后加一轮 escalated 救赎续跑**——同参数重调（checkpoint 续跑、run_marker 幂等不重烧已过轮），6 案子集重派并发自然降为 6，若确系 provider 并发超时误杀则低并发大概率过（同批3「续跑带闸净救 3 案」路径）；救回走正常 merge 并卷+重生成报告、救不回维持 honest 未通过；首版交付报告如实标 6 案 escalated+「救赎续跑待执行」注记，避免报告先说死。③#3 终检加两项：escalated 6 案 late-artifact 核查（run18 兜底有无迟到产出被收割）+ 532618 reflow 终态链完整性。

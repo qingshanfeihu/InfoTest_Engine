@@ -428,7 +428,7 @@ ask_contradiction 未获答 → 不再直接 closing，改经 **attribute(final 
 
 **交付目录 `workspace/outputs/<批名>/` 一处齐全**：
 - `case.xlsx` — 通过卷（整卷终验背书的交付集）；
-- `unsuccessful_cases.xlsx` — 未通过卷（全部非交付案,含人话标签/轮次/当前诊断列）；
+- `unsuccessful_cases.xlsx` — 未通过卷（**有卷面的非交付案**：fail/broken 等有 steps 的案,含人话标签/轮次/当前诊断列。**xlsx 是卷面合并、需 `case_rows`**——挂起案无卷面（case_rows 空,改描述/未答挂起不产卷）故**不入 xlsx、只进 .md**；`_archive_unsuccessful`（nodes.py:2472-2478）`if not cases: return None`——**零 fail 全挂起时无卷可合并→有意不产 .xlsx（.md 叙事+delivery_report 判定式渲染已覆盖）**,非缺口）；
 - `delivery_report.md` — 判定式渲染的人话总报告（§11.2）；
 - `unsuccessful_cases.md` — 失败案完整叙事（每案三段式全文：时间线/机理引文/修复方案与
   当前队列状态——比总报告详,续跑或人工接手的第一读物）；

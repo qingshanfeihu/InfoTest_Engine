@@ -83,6 +83,22 @@
 - **严重级**：P0（用户无正常中止通路=交互死角，尤其长批想中途停时）。
 - **修复建议**：interrupt 挂起态放行 Ctrl-C（归 F-TUI 面板族，leader 已入修复池）；或面板显式中止键 + footer 提示同步。
 
+## yzg 重跑·四标准快评实录（销项验收场，先于答题）
+
+**gather 面板（8 欠定，655/668 族床限制案）四标准快评**：
+- **D2 用户可判断性 → 已修 ✓✓（最严重缺陷销项）**：选项现带「**对你的用例：…**」人话后果说明——Q1(655203)选1「你来指定用什么等价办法」/选2「这轮不出、留着等环境」；用户无引擎知识也能懂每选项后果。F-LLM-1 选项后果导向化生效，对照批4 裸「改过程/挂起」token 的可判断性缺失，**D2 销项**。
+- **D1 英文泄漏 → 未复现 ✓**：Q1 题面全中文、无英文技术长句（对照批4 该类面板嵌「pyATS Errored…」「MX cross-type query…」英文句 7 处，销项目标 0）。后续问题继续验。
+- **D5 黑话 → 大改善、残 1 轻微**：header「欠定·655203」非「nd:」✓；但题面残留工具名 `compile_report_underdetermined`（worker 引用意图指引时带出，轻微泄漏，非阻断）。**D5-残**：题面仍可能带 compile_* 工具名，建议渲染层再滤一层。
+- **D3 裸清单 dump / D4 选项 label 截断 → 未复现 ✓**（选项 label 简洁人话，无半句技术串）。
+
+（逐题续记；User 体感路并行验读感。）
+
+**yzg gather 新缺陷发现（P1-6 邻近 + 可观测性）**：
+- **D12【P1·折叠-eq 对 panel 广播落盘失败】**：668000(代表)+668044(folded_into 668000)、verification_path_absent + equivalent=yes + test_point=yes（三元组-eq），走 panel 路径双双「裁决落盘失败」。**非批4 599838 同因**（尾6 都在 ask_user_answers.jsonl、先问后落门过）、**非 adopted×门**（adopted noeq/eq 案全落盘成功）、**非单 eq 案**（panel-eq 非折叠 655262 落盘✓）。区分变量=**panel+折叠+eq 三条件叠加**。疑折叠广播 `_land`(nodes.py:714-715) 对代表+成员的 form门/eq 校验交互。归 Py-Eng。下轮 re-ask 恢复。
+- **D13【P2·_land 落盘失败仅 TUI emit 不落日志】**：`_land` 失败经 `sh.emit`(nodes.py:554) 只显 TUI，**不写 fastlog/tui.log**，Py-Eng 排障看不到确切 error 文本=可观测性缺口。建议补 logger 落盘（含 compile_user_decision 返回的 error 原文）。
+- **D14【P1·判例 body 乱码化泄漏交付报告】**：unsuccessful_cases.md 里 668000/668015/668030/668044 的「裁决要点」= 判例 ruling body 原样拼进用户报告，内含 **`## Revision @2026-07-15T04:15:09`（批3 markdown 头）+ 采纳「…write memory→」（截断）+ 挂起,如实报告 + 采纳「将forward)。（乱码截断）** 多修订版杂糅。用户报告出现内部 markdown 头/批3 时间戳/截断技术串=脏泄漏。归 Py-Eng（渲染层判例 body 应取结论句、不原样拼多修订史）。
+- **D15【P1·判例 adopt 误标「你的裁决」+ 覆盖本轮采纳】**：668000/668044 交付报告写「你的裁决:改描述→挂起」，但我本轮实选 option 1 采纳（worker 新 sound 等价）——判例（`adopted:eq--forbidden-mechanism--10-5` 批3 改描述 ruling）粘性 auto-adopt 改描述**覆盖了我的采纳**，且报告把判例决定**误标成「你的裁决」**（misattribution）。双问题：①判例覆盖本轮更优新等价（旧 ruling 盖新解）②报告 provenance 误标（adopted 判例 ≠ 你的裁决）。归 Py-Eng（判例覆盖逻辑 + provenance 渲染）。
+
 ## 批 1-4 全量面板回溯（补作业，从各批 facts.jsonl 机读提取）
 
 **面板总量 43**：批1=2 / 批2=14 / 批3=6 / 批4=21。**缺陷分布（机读特征扫描）**：

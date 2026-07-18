@@ -8,8 +8,8 @@
 
 | 缺陷 | 描述 | 严重 | 修复 commit | 重跑可观测机读验证点 |
 |------|------|------|------------|---------------------|
-| **D2** | 用户可判断性缺失（选项=引擎动作名，无人话后果） | P0 | F-LLM-1（选项后果导向化、走 description 层） | yzg ask 面板每选项含「对你的用例意味什么」人话；read-screen 选项行 + facts ask_shown.options 非纯「改过程/改预期/改描述」裸 token |
-| **D1** | 英文 LLM-facing 泄漏 user-facing 面板 | P0 | F-LLM-1（源头中文，待）+ **F-Py-2=ee992976**（句 detector/渲染兜底）+ F-Py-3 | facts ask_shown.question **零英文技术长句**（扫 `\b[A-Za-z]{4,}\s+[A-Za-z]{4,}\s+[A-Za-z]{4,}`==0）；批4 该值=7，销项目标=0 |
+| **D2** | 用户可判断性缺失（选项=引擎动作名，无人话后果） | P0 | F-LLM-1（选项后果导向化、走 description 层） | **✅机读路销项**（yzg gather 实测）：选项现带「对你的用例：…」人话后果（655203 选1「你来指定用什么等价办法」/选2「这轮不出、留着等环境」），用户无引擎知识可判断。对照批4 裸 token。待 User 体感路合流双✓ |
+| **D1** | 英文 LLM-facing 泄漏 user-facing 面板 | P0 | F-LLM-1（源头中文，待）+ **F-Py-2=ee992976**（句 detector/渲染兜底）+ F-Py-3 | **✅未复现**（yzg gather 题面全中文、零英文技术长句；批4 该值=7→yzg 0）。后续面板继续验，收官汇总闭项 |
 | **D5** | 黑话/机读 token 泄漏展示 | P1 | F-TUI-2（截断族，待）+ 展示映射层 | 面板 header/题面无 `nd:/contra:/cap:/panel:/captured_relation/member/dist/s₀/h_s0/reflow` |
 | **D6** | 「我给别的等价方案」静默空答→改预期 | P1 | F-Py-5（在途） | 测试：选该 option 不输文本→**拦截/提示**（非静默落改预期）；facts 无「option 选中但 answer=改预期」空答记录 |
 | **D11** | ask 面板挂起态拦截 Ctrl-C，无中止通路 | P0 | F-TUI（面板族，押后） | 测试：面板态 Ctrl-C **能中止引擎轮**（或有显式中止键+footer 提示同步） |
@@ -23,6 +23,7 @@
 | **P1-4/P1-7** | 测试写生产 outputs/台账 | P1 | **F-Py-9b=e37a9634(写侧)+2de2dffe(读侧)** 路径隔离治本 + F-Py-9 conftest 收尾锁 t_* | yzg 重跑后 `workspace/outputs/` **无 t_*/_pytest_*/R_sig 污染**；`runtime/ask_user_answers.jsonl` 无 ts=0 pytest fixture 混入 |
 | **P2-10** | rr/wrr 跨案时序污染 | P2 | 待确认（整卷内隔离/已知限制） | 同类 rr/wrr 案整卷复验不再单卷pass整卷contradicted（或引擎降级保护生效） |
 | **P1-3** | freeform 裁决意图解析降级 | P1 | 待确认 | 条件式 freeform 答案不被 token 化取最强信号跳主动作（G4 echo 已改进，核回显解析） |
+| **#27/⑤** | footer 进度语义（barrier-collect 零排误导卡死感） | P2 | ⑤进度语义修复 | **双✓闭项**：体感路✓（footer 新文案「编写中N · 产出将在合并时结算」替旧「产出0 通过0 失败0」零排误导）+ 机读路✓（yzg barrier 实测 authored 18==case.xlsx 18==产出18、跳变时序正常、_pid 47666 干净、8 欠定无卷正确=哨兵一致无丢失） |
 
 ## 2. 总清单 8 观测点整合（重跑时集中盯这 8 项）
 
@@ -53,5 +54,20 @@
 - **验证基线**：批4 中止态 `runtime/backups/batch4_zhaiyq_stopped_20260718/facts.jsonl`（对照修复前后同类面板行为）。
 - **监测 deadline 双保险**（leader 改进令，批4 停批教训固化）：凡「等某事件再动作」的等待，设**事件监测器 + 超时自查**双保险——预估窗口时间 ×1.5 到点仍未触发，**主动 read-screen 核一次现场**，别让监测器单点失灵变成静默空转（批4 停批时 run 返回监测没及时触发、引擎多烧 5 轮 ¥184→188 是 leader 巡检抓的）。Monitor/Bash 后台 re-arm 习惯保持，每个都补 deadline 闭环。上机轮预估~10-12min→18min 自查；reflow 轮~6min→9min 自查。
 
+## D12 mini 批复跑实弹验证（下一棒，补修包#35 四关+TUI 重启后、zhaiyq 之前）
+
+leader 令：用 yzg `unfinished/` 跨批续跑输入起 mini 批（668000/668044），走到 gather 面板**答采纳**，实弹验证 D12 修复。
+
+**真因更新（Py-Eng 翻案+我小核时序闭合坐实）**：D12 真因=**adopt 环跨 claim_kind 采信碰撞**——668000（verification_path_absent+三元组-eq）被 **forbidden-mechanism 判例**（sig=`eq--forbidden-mechanism--10-5`）跨 kind adopt 抢占（sig 的 eq 前缀相同致误采），后轮面板不再出、re-ask 采纳永无门。修法=shape-aware（判例采信须 claim_kind/shape 匹配，不跨 kind）。
+
+**验证判据（四点 shape-aware，facts 机读+fastlog）**：
+- **⓪ 面板应出（前置·新真因核心）**：668000/668044 **不被 FM 判例抢占**——facts 出现新 ask_shown（668000 重新问）、**无 provenance=adopted:*forbidden-mechanism* 的抢占 decision**。对照首轮=被 eq--forbidden-mechanism 抢占、面板不出。
+- **ⓐ panel decision 落账**：facts 出现 668000/668044 decision，qid=`panel:…` 或 `nd:…` 但 **provenance 非 adopted**（我的采纳落成 panel decision）。
+- **ⓑ 本轮裁决优先**：走**采纳→改过程**（worker 对照法 write memory→show startup 不持久化）进 brief 重编，**非判例 adopt 改描述挂起**。
+- **ⓒ D13 拒因可见**（若 _land 仍拒）：fastlog/tui.log 有 compile_user_decision error 原文（首轮零盘记录）。
+
+**执行序**：①确认 HEAD=补修包 commit、TUI 重启新 PID ②起 mini 批（unfinished 续跑，如 `编译 yzg.txt` 同参数续跑 或 ist-compile-engine 续跑接口）③gather 面板：先四标准快评→**逐题直答采纳**（防丢答、o→文本若需）→enter ④核 ⓐⓑⓒ + _pid==新PID 过滤。
+**结果**：成功=D12 收案 + zhaiyq 前冒烟一石二鸟；失败=_land 拒因原文交 Py-Eng 对症。
+
 ## 就绪状态
-方案就绪。修复轮收完 + leader 放行 = yzg 重跑即启，零间隙。重跑中按本表逐条销项，新面板即时四标准快评续记缺陷单。
+方案就绪。修复轮收完 + leader 放行 = yzg 重跑即启，零间隙。重跑中按本表逐条销项，新面板即时四标准快评续记缺陷单。**下一棒 D12 mini 批验证待放行**。

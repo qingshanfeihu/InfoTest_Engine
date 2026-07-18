@@ -27,6 +27,15 @@ def test_command_existence_panel_carries_full_aid():
     assert f"尾号 {A[-6:]}" in q
 
 
+def test_command_existence_panel_self_contained_no_external_ref():
+    """:299 虚指修(Design 时序案):命令 >3 用示例+计数「其余为同类命令」自足,**不指向交付报告等
+    外部载体**(答题时报告 closing 才产、当下不存在,指向必不可达)。"""
+    q = _q({A: {"claims": [{"claim_kind": "command_existence", "command": f"cmd{i}"}
+                           for i in range(5)]}})
+    assert "见交付报告" not in q and "见报告" not in q, "残留外部载体虚指(时序不可达)"
+    assert "其余为同类" in q and "共 5 条" in q          # 示例+计数自足
+
+
 def test_verification_forbidden_panels_carry_full_aid():
     """三元组/禁令面板题面全 aid+尾号(#37 B / 既有)。"""
     tri = _q({A: {"claims": [{"claim_kind": "verification_path_absent",

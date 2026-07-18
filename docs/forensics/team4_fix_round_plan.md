@@ -19,7 +19,7 @@
 | **F-Py-4** | 裸命令/参数清单 dump 进题面（设备能力清单整段灌题面） | P1 | Test-Eng D3（600113 sdns pool 方法清单）；User 21:21 诊断表 | 题面渲染截结论句、清单折叠（数据按引用红线） | 重跑观测题面无清单 dump |
 | **F-Py-5** | 「我给别的等价方案」静默空答陷阱（选 option 未进 Other 文本态→静默落改预期） | P1 | Test-Eng D6（532618）；precheck 面3 | emit/落盘层：option 选中未进文本态→拒空等价+回退 re-ask | 守门测试：空等价被拒；重跑 532618 型不静默降级 |
 | **F-Py-6** | fork 零产物显示「✓ 完成」假完成（进程结束即绿勾，无视产物落盘） | P1 | Test-Eng D7；User 21:36 | 卡片状态按产物落盘判定非进程退出（events.jsonl fork_end 带产物标志） | 重跑观测零产物案显失败/未产出态 |
-| **F-Py-7** | 交付物 xlsx 人话化 + leak_scan 扩 xlsx + 短号映射 | P1 | precheck 面2①；User 21:21（诊断表黑话）/23:48（尾号正面） | **二案对比**（禁手工路径 vs 手工产物过门）；leak_scan 现只扫 md，扩 xlsx 单元格 | leak_scan(xlsx) 门；重跑交付物无黑话/带短号 |
+| **F-Py-7**（终裁 A·禁手工路径 · 双做，2026-07-18 铁证闭环） | 交付物黑话根因=**LLM 手工 openpyxl 重建 unsuccessful_cases.xlsx**（非引擎产，注入 nd:/facts.jsonl/escalated 黑话）；引擎 `render_unsuccessful_md`/`_archive_unsuccessful` 本已产人话/确定性交付物 | P1 | precheck 面2①；User 21:21（黑话）/23:48（尾号）；Py-Eng `main_activity:1237-43` 铁证 openpyxl 重建 | **裁 A 双做**（禁手工路径治本；**否 B** leak_scan 扩 xlsx=治标+xlsx 设备命令假阳）：①短号 md 做全（`render_unsuccessful_md` 加尾号、xlsx autoid 保 18 位框架 canonical、尾号走 title）②A-主 prompt 禁令（**LLM-Eng**：引擎交付物唯一源+禁手工重建）③A-加固机械对账（**Py-Eng** closing：交付物 mtime 晚于产出=手工覆盖告警）；**不加文件名硬写门**（误伤合法 outputs 写）。**A 正确形态=引擎做全+禁手工，缺一→新手工冲动** | 重跑交付物无黑话（引擎唯一源）+带短号+对账捕获手工覆盖 |
 | **F-Py-8**（降级审计抽查项·非硬门，2026-07-18） | 断言极性照抄先例（引 dongkl 先例语法勿照抄断言方向，F3 极性禁运） | P1 | precheck 面3.2；Py-Eng provenance 核实 | **三层（机械触发+语义 oracle+报告）非硬门**：①provenance source.kind=precedent 机械触发缩抽查面（结构化事实可机械）②极性↔意图对齐是语义→closing 报告列 precedent-sourced 断言供人核 + **上机 oracle 兜底**（极性方向错→上机 fail）③不加"极性溯源"字段（假精确、极性对齐机械判不了）。**别做成机械判语义对错的假门** | 532618（precedent-sourced 触发实例）被触发缩面 + 上机验极性方向 |
 | **F-Py-9** | R_sig 测试污染（.frozen.json 硬编码路径绕过 monkeypatch，测试伪键 R_sig 写进生产 workspace/outputs/） | P1 | Py-Eng 根因（batch_tools.py:1278-1281 写 / emit_xlsx_tool.py:1215 读硬编码；run_log:413 `\b1.2.3.4\b` 占位污染）；同 #18 三写入点族 | 方案 A 根治：两处硬编码 `parents[4]/workspace/outputs` → 统一可 monkeypatch 解析器（runtime_paths.outputs_root()）；一改修全 caller | 回归断言"跑全量后 workspace/outputs/ 无新增 R_sig/t_*/_pytest_*" |
 | **F-Py-10**（F-Py-3 观察逼出，并 F-Py-7 人话化族） | 报告标题露绝对本地路径（`/Users/jiangyongze/.../inputs/automatic_case/yzg.txt`）——泄漏本机 home+用户名+冗长 | P2 | Py-Eng F-Py-3 增量审观察；yzg 金标准回放 | 【渲染质量】标题只显批名/相对路径（yzg）非绝对路径；与 F-Py-7 交付物人话化同批 | 重跑观测报告标题无绝对路径/本机用户名 |
@@ -109,7 +109,7 @@
 **跨面关键衔接**（避免漏改/重复）：
 1. **F-Py-1 vs F-TUI-1 两条独立线**（Test-Eng 机读坐实 599838=引擎 fold 门非 TUI 落盘）——别合并；
 2. **F-Py-2/3（渲染兜底）vs F-LLM-1（源头产出）双层**——英文/黑话既要 LLM 产中文、又要渲染层兜底映射，两层都做才根治；
-3. **F-Py-7 leak_scan 扩 xlsx** 是交付物人话化的机器门，与 F-Py-2/3 的 leak_scan 扩项同源，一次扩；
+3. **F-Py-7 终裁 A（禁手工路径）不扩 xlsx leak_scan**——根因=LLM 手工重建交付物（非引擎产），治本=禁手工+引擎做全（prompt 禁令+机械对账双保险），**B 案 xlsx 网兜已否**（xlsx 设备命令假阳+治标手工路径还在）；F-Py-2/3 的 **md** leak_scan 扩项照常；
 4. **③config_generator 退役先于补 try/except（leader 精确化）**——**仅 5 个 config-automation 脚本随退役消解**（别给待删代码打补丁）；**memory_adapter.py 是独立项、照修 try/except**（不随退役，归 A 区 LLM-Eng/评审）。
 
 ---
@@ -152,3 +152,4 @@
 11. **辨析低假阳结构化判据 vs 强字典误杀**：不一刀切反对机械判据——有结构锚（F-Py-3「要求下划线」排缩略语）/剔合法内容（F-Py-2「剔命令引用」）/字段边界二分（叙述验 vs 原文引用豁免 device_quote）+ eval 守假阳的，是低假阳设计；无结构特征的宽泛匹配（GA-CUT/裸数字）才是强字典。判据看有无结构锚+假阳控制。
 12. **门/判据必区分暴露 vs 掩盖**：detector（报 leak/拒背书/单列 broken 逼修源头）暴露问题；scrubber（渲染删泄漏/静默修正/折叠 broken）掩盖问题。一律选暴露（G5/broken/leak_scan detector 同族）。
 13. **实现/eval/评审是设计边界的暴露器（二次设计面）**：纸面设计常漏边界，实现/eval/redline 时才撞出——本批 4 实证：F-Py-3 路径段假阳（eval 逼）、F-Py-9b apply_fills 隐藏写（redline trace）、F-Py-2 裸命令 reason（坐实器 eval）、F-Py-2 fact 顶层机读码作用域（hookup 实现）。**别只照设计做、把实现当二次设计暴露面**；实现期发现的边界要**回灌设计认知**（不只修实现）。配套：设计早审定 approach + 实现增量审核实现期暴露的边界（双阶段评审）。
+14. **禁令/门锚目标集合、非工具通道枚举 + 「引擎做全+禁手工」配套**（F-Py-7 双洞察，leader 点名）：①**禁令锚目标非通道枚举**——F-Py-7 A-主 prompt 实证：禁手工重建交付物的禁令按「工具通道」枚举（run_python/openpyxl）漏 fs_write/fs_edit，而同节 bullet 2 恰认可 fs_write 落 outputs → LLM 可用 fs_write 绕过。**枚举通道必漏**（现漏 fs_write、将来漏新工具）；锚「交付物这个集合」（目标）才闭合，且天然区分合法（写新分析文件）vs 非法（改交付物）。同源「机械闭集从结构锚不枚举」（GA-CUT/裸数字强字典误杀反面）。②**引擎做全+禁手工配套（只堵不疏必生新绕行）**——禁 LLM 手工建交付物，必先让引擎交付物做全（含用户要的短号），否则用户需求没满足→新手工冲动；堵（禁令锚目标）+ 疏（引擎做全）配套才治本，缺一复发。

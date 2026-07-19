@@ -354,6 +354,25 @@ D23（数字直选"选完跳走下一题"）→ 用户想回去确认 → D24（
 - **四关**：收口批同窗 #27 第⑦项（zhaiyq 批后开工令),Theory+Design 双评审（Design 随收口批终审:对齐 B 事实+多选保 enter+末题区分+第二处注释债清+D23-b 前进 D24 配套同批)→leader redline(纯渲染豁免)+pytest+commit;补守门测试(数字直选落答+前进/回退已答题 _highlight 落已选/未答题 _highlight=0)。
 - **关联记忆**：`[[tui-multiquestion-panel-key-semantics]]`（run15/17 数字只高亮丢答)的 hint 对齐**收尾**——F-TUI-1(B) 治行为、D23 补 hint/注释让 B 治法完整闭环。
 
+## 13.3 D11 Ctrl-C 语义 + D7 fork 零产物卡片态复验（2026-07-19 team-lead 派静态走查,回 Test-Eng 入表）
+
+Py-Eng commit 归属核出两件,我做**静态代码走查**(未真按 Ctrl-C/未上机,活体项标"搭下批面板自然验")。
+
+### D11 Ctrl-C 语义(ask 挂起态)——低风险
+- **Ctrl-C 非 SIGINT**:ink raw mode(app.py:176 `set_raw_mode(True)`→termio:53 `tty.setraw` 关 ISIG)→ Ctrl-C=字节 0x03,不产生 SIGINT;仅注册 SIGWINCH(app.py:192)无 SIGINT handler。
+- **ask 挂起态落点**:_handle_key(ist_app:976)顺序——:998 ask 面板拦截**在** :1021 ctrl+c 主处理**之前**。挂起态 Ctrl-C→:998 `_ask_user.handle_key`→无 ctrl+c 分支→ask_user_view:243 `return True` 吞掉→**无效果**。中止通路=ESC(ask_user_view:213,已证在)。
+- **PTY/checkpoint**:挂起态 Ctrl-C 被吞无副作用→不撕不脏;退出路径 finally cancel_all_pending(ist_app:729-735)让挂起问询干净收尾(引擎无答案=自动挂起)→checkpoint 不脏。:727 KeyboardInterrupt except 兜底(raw mode 常态不触发)。
+- **数据流已验**:Ctrl-C→[app.py:176 raw ISIG off]→字节→[parse_keypress ctrl+c]→[_handle_key:998 ask 拦截→ask_user_view:243 吞],全链无 SIGINT 分支/无 checkpoint 中断点。
+- **活体验证点**(搭下批自然验,别真按):挂起态 Ctrl-C 应无反应;非 ask 态双击退出走干净 teardown。
+
+### D7 fork 零产物卡片态——卡片层已修但判据窄 + #27 计数交互
+- **卡片层已有 P1-10 修**(_render_fork_card ist_app:528-534):`compile-worker ∧ artifact_fresh is False ∧ ¬tail_status`→黄⚠「完成·无产出」不显✓(实弹 035493/035570)。
+- **残留漏洞 A(卡片层判据窄)**:① artifact_fresh is False 严格,`None`(无判据/旧事件)不触发→零产物仍✓;② 限 compile-worker,非 worker fork(attributor/dyn-*)零产物→显✓。
+- **⚠残留漏洞 B(#27 计数交互,自曝)**:`_count_fork_cards_by_status`(ist_app:383)计 status in(ok,error)→done_n,**白跑 fork status 仍"ok"**(reducer:617,卡片只显示降级⚠、status 字段没改)→计入 #27 编写期 bar done_n。**非明确 bug 是判据选择**——done_n 定义"编写孔跑完数不管成败"(含 error 同理),白跑计入自洽;若 bar 语义要"有效产出数"则该剔。卡片层降级 vs 计数层不降级的一致性**交 Design 裁 bar 语义**。
+- **依据字段**:status(reducer:617)+artifact_fresh(:626)+tail_status(:625,均 fork_end 事件字段)。
+- **修法方向**:卡片层 silent_run 判据放宽(artifact_fresh None 保守/覆盖非 worker)需 Design 定 artifact_fresh 语义;计数层是否剔白跑需 Design 裁。均活体搭下批自然验。
+- **Design 终裁(2026-07-19)**:**bar 维持「跑完数」零改动**——四判据:①双轴不混(bar=进度维/卡片=质量维)②单调性(剔白跑会回退)③编写期可知(有效产出需质量判定,barrier 下不可靠)④与 #27 done_n 定义一致。**残留 B 不改,#27 计数定义站住**。**但硬配套前提=残留 A 必须补**:bar 不管质量的正当性 key on「白跑在卡片⚠可见」,卡片判据窄→白跑落**两轴缝隙**(bar 说跑完、卡片没⚠)。**残留 A 卡片⚠补全入后批池新四关件**(Design 定规格:真白跑=新 fork 跑完零有效产物→补⚠;**向后兼容 None**=旧事件无 artifact_fresh 字段/#27 有意不判→**不误标**,A2 防误杀)。现零动作,待后批池派工。配套不变量入册:**白跑必在卡片⚠可见**(否则两轴缝隙),是 bar 零改动的前提。
+
 ## 13. 修复轮方案清单（2026-07-18 批 4 停后开启,Design 牵头总清单;本节=TUI 域施工图,等开工令动码）
 
 标注：【纯渲染】我域独立可做｜【跨域】需引擎/Py-Eng 配合｜证据引用报告章节。全部走四关（Theory+Design 双评审→leader redline+pytest+commit）。

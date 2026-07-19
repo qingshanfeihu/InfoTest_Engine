@@ -1,0 +1,149 @@
+{
+ "CNAME pool支持ipo算法_dongkl": {
+  "all_events": {
+   "run_start": 2,
+   "bed_checked": 2,
+   "escalated": 3,
+   "authored": 15,
+   "merged": 3,
+   "verdict": 24,
+   "attribution": 7,
+   "writeback": 18,
+   "sibling_contrast": 4,
+   "ask_panel": 1,
+   "diagnosis": 1,
+   "ask_shown": 1,
+   "decision": 1,
+   "decision_outcome": 1
+  },
+  "gate_violation_events": {
+   "escalated": 3,
+   "attribution": 7
+  },
+  "attribution_dispositions": {
+   "reflow": 5,
+   "expectation_suspect": 1,
+   "defect_candidate": 1
+  }
+ },
+ "dongkl": {
+  "all_events": {
+   "run_start": 2,
+   "bed_checked": 2,
+   "needs_decision": 9,
+   "authored": 45,
+   "merged": 18,
+   "verdict": 185,
+   "attribution": 19,
+   "writeback": 166,
+   "sibling_contrast": 16,
+   "ask_panel": 2,
+   "diagnosis": 3,
+   "ask_shown": 12,
+   "decision": 12,
+   "escalated": 2,
+   "strong_claim_unaddressed": 4,
+   "s0_dispute": 3,
+   "common_cause": 2,
+   "cap_reached": 1,
+   "rollback": 3,
+   "user_stop": 1,
+   "awaiting_user_unasked": 1,
+   "decision_outcome": 12
+  },
+  "gate_violation_events": {
+   "escalated": 2,
+   "s0_dispute": 3,
+   "rollback": 3,
+   "strong_claim_unaddressed": 4,
+   "cap_reached": 1,
+   "user_stop": 1,
+   "awaiting_user_unasked": 1,
+   "common_cause": 2,
+   "needs_decision": 9,
+   "attribution": 19
+  },
+  "attribution_dispositions": {
+   "reflow": 12,
+   "expectation_suspect": 2,
+   "frozen": 1,
+   "defect_candidate": 1,
+   "rerun_isolated": 2,
+   "user_stop": 1
+  }
+ },
+ "yzg": {
+  "all_events": {
+   "run_start": 3,
+   "bed_checked": 3,
+   "authored": 26,
+   "needs_decision": 14,
+   "merged": 9,
+   "verdict": 108,
+   "writeback": 107,
+   "sibling_contrast": 1,
+   "attribution": 1,
+   "ask_shown": 19,
+   "decision": 21,
+   "suspended": 8,
+   "adopted": 5,
+   "decision_outcome": 35,
+   "resumed": 7,
+   "delivery_overwritten": 1
+  },
+  "gate_violation_events": {
+   "delivery_overwritten": 1,
+   "needs_decision": 14,
+   "attribution": 1
+  },
+  "attribution_dispositions": {
+   "reflow": 1
+  }
+ },
+ "zhaiyq": {
+  "all_events": {
+   "run_start": 2,
+   "bed_checked": 2,
+   "escalated": 7,
+   "authored": 75,
+   "needs_decision": 7,
+   "merged": 11,
+   "verdict": 246,
+   "attribution": 42,
+   "writeback": 206,
+   "sibling_contrast": 32,
+   "ask_panel": 5,
+   "s0_dispute": 5,
+   "diagnosis": 6,
+   "common_cause": 6,
+   "ask_shown": 17,
+   "decision": 17,
+   "cap_reached": 1,
+   "rollback": 3,
+   "strong_claim_unaddressed": 3,
+   "suspended": 8,
+   "evidence_suspect": 1,
+   "decision_outcome": 17,
+   "report_mismatch": 1
+  },
+  "gate_violation_events": {
+   "escalated": 7,
+   "report_mismatch": 1,
+   "s0_dispute": 5,
+   "rollback": 3,
+   "evidence_suspect": 1,
+   "strong_claim_unaddressed": 3,
+   "cap_reached": 1,
+   "common_cause": 6,
+   "needs_decision": 7,
+   "attribution": 42
+  },
+  "attribution_dispositions": {
+   "reflow": 29,
+   "expectation_suspect": 5,
+   "defect_candidate": 3,
+   "rerun_isolated": 3,
+   "frozen": 2
+  }
+ }
+}

@@ -37,3 +37,15 @@
 ## 五、越界不改的 flag（呈 leader/release）
 
 `README.md:5`「1.0.5-beta.1（**V6** 循环驱动引擎）」既存 staleness（引擎已 V8、V6→V8 早于本会话）；版本标签是 release/leader 裁量，Design 位不单方改。**CLAUDE.md/README 经核无真·失效**(footer #27 反更准、D28/D31 是新增/低于粒度)——不做无谓编辑是正确的 fix。
+
+## 六、会话末状态更新（收口批 committed + #44/corpus 早对齐 + loose end 清零）
+
+**收口批 #42 全 committed**：`81fc792b`(engine: D31/D28/六件套) + `7984867f`(agents: D28 user_note 产侧) + `cd63877d`(tui: #27/D23/D24/D22 滞后测) + `2c6fc37d`(theory: K §5.5.7/5.5.8) + `12b01ad2`(design: 我的 §17.5/§20 回填 + #44 交接注)。权威 2261 绿。
+
+**②术语对齐（IETF human-in-the-loop → 交互设计术语规范）→ leader 裁 descope 销项**（非欠账）：理由=五加速点里最轻（零代码文档级）、真实消费方是**专利/对外叙事工作（未启动）**，现在落规范=没读者的文档；L0-L5 分级语言已在准入报告 §1 用上（五点#1）。**后批池注记（Design 认领）**：「IETF `draft-cui-nmrg-llm-nm` 术语对齐——**专利/对外叙事工作启动时重启**」。future-me：此项非未完成、是有意押后，触发条件=专利叙事启动。
+
+**#44 自由度映射早对齐（已收敛、待 #43 数据底）**：`team4_llm_freedom_mapping.md`（LLM-Eng）+ `team4_theory_corpus_study.md`（Theory）。轴口径拍齐并全应用——**双轴正交**（需 gate 性=错误代价×无人值守〔我〕/ 可 gate 性=ABC〔对齐 `[[compile-quality-abc-three-layer]]`〕决定门形态）、**C×需强单列「防御纵深」类**（判例+安全禁令窄桥+ask+升深度+观察级监测，门密度=纵深层数）、**判据挂轴零双写**、**B 验证器兜底=正交事后-gate 维**（自由发挥面标"验证器兜底?有/无"）。corpus C1 咬合更正：`form=f(op,H)` 105 零例外**机械、非决策面**（归 engine emit 门 A 层），唯一真决策面=`worker/断言op&H选择`(C 层)——scaffold 现 26 面。**future-me #44 条款化**：C1/C2 喂断言形态面、C5 补 available-but-unused 判别器（判"footprint 治理缺口"vs"正常沉默"、防误杀）+ 接 C×需强防御纵深（footprint=判例层厚度、数据两处共用）；待 #43 delta 落数据底后逐面条款化入 DESIGN/skill。
+
+**本场 loose end 清零**：scaffold 过目 done（无偏差+更正自己 imprecision）、②术语对齐 descope（后批池注记已录本节）。余件均待触发/待他方：#44 条款化 blocked by #43 / corpus 完整版待 delta（§4 轴③⑤⑥）/ zhaiyq 复验批 await trigger / README V6→V8 呈 leader。
+
+**一个自留的行为教训（非项目、给未来自己）**：本场尾巴 SendMessage summary 撞 200 上限连撞三次，最狠一次还写下"我数了~150"却照样超（假的数=肉眼估计）——**修法不是"估准一点"，是"写短到明显安全、别判断够不够"**（最后两条 short-first 就过了）。教训真被用上的形，往往比"记住规则"更朴素：短，就直接短。同 `[[cloud-drive-no-run-in-place]]` 系「知道≠做到、内化在改打法那一下」。

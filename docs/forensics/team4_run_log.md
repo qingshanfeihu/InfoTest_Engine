@@ -592,3 +592,32 @@ leader 冒烟策略：①zhaiyq 53 案大批**批中标记自然踩到的路径*
 - **【DEFINITIVE 补链 2026-07-18】纯 checker-bug、非账链缺口/第三出口**：leader 亲核+Py-Eng 复现确认——**账链完整**（authored/produced 事件在账），bug 在 `report_gate:32` 无条件 any-escalated 未镜像 `views` run18 authored 解除语义（recount 谓词漏解除）、不在事件写入。**账链缺口/第三出口假设已排除**（比它更干净）。全量验证：旧 checker 40 / 新 checker 42 / claimed 42，修后三者一致零误减。
 - **归档预案三件按定谳全改**：①「移 unfinished」**永久撤销**（2 案真 pass 留 delivered）②主卷**不重排**（42 行原样即对）③头行**维持 42**+落 D31 裁决注+旧 REPORT_MISMATCH.json 存 `docs/forensics/zhaiyq_recon_gate_D31/`（已存）。重渲新报告应 recount==claimed==42 无 MISMATCH。
 - **归档 HOLD 待重启放行令**（Py-Eng D31 修复合入后）。**zhaiyq 真值 42/53**（516389/533097 真 pass、留 delivered）+ unfinished 11。**四脑图准入：9+29+25+42。终验全项正式闭。**
+
+### 6.9 ✅ zhaiyq 收官全环闭·§11.9 归档完成（2026-07-19）
+
+**收口批合入**（四域 commit 81fc792b/7984867f/cd63877d/2c6fc37d、权威 2261 绿）→ **重启放行令** → 执行序全过：
+- **①干净重启**：Ctrl-C+Ctrl-D 净退 86305 → 起新 TUI 77336（HEAD 2c6fc37d）。
+- **②同参重调**：续跑还原 53 案→prep→**触发 #37 挂起案恢复问询 gather（4 题）**（放行令未预告=序漏，我异常即停上报，leader 认序漏+裁 ⓐ答②保持挂起×4）→答完续跑 **15s 快速 closing、fork=0、devrun=0**。
+- **③核三点全过**（产物 mtime 铁证）：delivery_report/engine_report/facts 07-19 re-gen、**头行 42 警告头 0**（修后对账门实弹验证过）/ LLM 摘要「42 个交付」干净 / **零设备轮**（fork0/devrun0/跳板机 pytest0）/ 主卷 case.xlsx 07-18 未变（不重排）。
+- **④§11.9 归档六项**：删 stale REPORT_MISMATCH.json（删前 git 2c6fc37d 确认双保）+ backup 封存（zhaiyq_final_42_20260719/）+ 交付目录终态干净 + `unfinished/RESUME_NOTE.md`（defer-caveat：4 案 keep 后未来 resume 不自动回 gather、重开需显式触发；unfinished 11 分类；两条歧义 note）+ **交付对账断言 PASSED（case.xlsx 42==delivered 42==deliverable 42）** + 产物 7 件齐全。
+
+**zhaiyq 收官完全落地·真值 42/53**（D31 checker-bug 修复→重渲验证→归档全环闭、账面 42==42==42、零设备轮、诚实边界、defer≠丢有注）。**#42 收口批闭。四脑图准入冲刺全交付：9+29+25+42。**
+
+### 6.10 方法笔记·commit 归属核查要宽搜+行证（准入报告料③ D13/D14 漏扫教训，2026-07-19 leader 令记档）
+
+**现象**：准入报告料③ defect 表（`team4_admission_defect_final_status.md`）初版把 **D13/D14** 归「B 区后批池·未在可见 commit 明证」——实际二者在 **59fbc326「ask 交互五项修」**内早已修（D13=_land 排障 logger 落盘 / D14=render.py:100 `_ruling_summary` MULTILINE 剥 md 头）。Py-Eng `git show`/`git log -S "剥**每一行**行首 md 头"` verbatim 行证一发即纠，移入 A 区。
+
+**根因=窄搜**：我核 commit 归属时**只查了收口批四域 commit（81fc792b/7984867f/cd63877d/2c6fc37d）**，把 59fbc326 那句「ask 交互五项修」的**概括词当黑箱、没展开是哪五项**——而 59fbc326 明明就在我 `git log -45` 的输出里。有 git 只读能力却没用 `git log -S <代码串>` 反查，是可提升点。
+
+**教训（同 Design 窄搜假想名族，方法#17「宽搜实体」例证）**：
+- commit message 的**概括词**（「五项修」「族性清扫」「批」）藏着肉眼扫 message 够不到的具体改动——归属核查默认 `git log -S <代码/症状串>` / `git show <commit>` 展开到**行级**，不停在概括词。
+- **只读边界的诚实下限对了、宽搜上限没够到**：拒猜（初版标「未明证」而非瞎归 commit）是对的、防了编造；但「该主动宽搜的没搜」让 leader/Py-Eng 多跑一轮。**归属类核查以后：先自己 `git log -S` 宽搜到行级，仍不确定的再请 Py-Eng verbatim 行证**——两道都走，不止步于四域窄查。
+
+### 6.11 下批活体盯点·D7 对照判据（TUI-Eng 交接 → Design 终裁修正，2026-07-19）
+
+**⚠ Design 终裁修正（2026-07-19 晚，划掉原漏洞 B、避免下批误报）**：
+- **原「漏洞 B（#27 计数白跑）」作废为 bug——bar 含白跑=正确行为**（Design 裁：bar=进度维/跑完数、**不管质量**；#27 四判据「双轴不混/单调/编写期可知/一致」站住，bar 维持零改动）。**下批见「bar N 含白跑」别当异常报，那是设计**。原二分判据（bar N 比 ✓卡多=坐实）**划掉**。
+- **新盯点=两轴缝隙**（配套不变量：bar 不管质量的正当性 key on「白跑必在卡片⚠可见」）——下批**不看 bar 数**，改看**零产物/白跑 fork 的卡片色**：
+  - 卡片**黄⚠**「完成·无产出」→ 不变量守住（bar 报跑完 + 卡片⚠标质量）→**正常**；
+  - 卡片**绿✓**（零产物却✓）→ **两轴缝隙坐实**（bar 说跑完、卡片假✓无警）→ 残留 A（卡片判据窄）后批池必补的**活体佐证**，回填 D7。
+- **残留 A（卡片层判据窄）保留**：零产物卡片显绿✓=判据窄坐实（artifact_fresh=None 或非 worker fork 漏网），入后批池新四关件（卡片 silent_run 判据放宽+硬配套不变量），Design 裁「该改」后 TUI-Eng 随四关执行。下批（#38 冲刺）跑起即对照，观察结果回填 D7。

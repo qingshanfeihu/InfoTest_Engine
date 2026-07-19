@@ -42,7 +42,9 @@ sit over 150 with every rule attributed — the per-file threshold is bumped to 
 actual line count, not a hard cap; from this baseline **any net-line increase must be preceded by a
 replacement** (delete an un-attributed / obsolete rule into `removed-rules.md`). First replacement
 on record: retrieval-order detail moved worker prompt → `contracts.md` (§5.5:217), so the prompt
-keeps only the pointer.
+keeps only the pointer. Deliberate bump on record: attributor 187→193 (#52 SSL enablement, [A24]
+silent-failure-faces pointer with fresh #50 S1-S5 evidence — a new-capability rule, detail lives in
+`contracts.md §SSL dispatch`, prompt keeps only the pointer; no obsolete A-rule existed to delete).
 
 | Rule | Kind:Ref | Evidence |
 |---|---|---|
@@ -87,3 +89,4 @@ keeps only the pointer.
 | A21 | grammar:verbatim-substring | evidence is a gate-checked verbatim substring of device original |
 | A22 | theory:§3.2 | insufficient evidence → reflow with named observation, not a forced layer |
 | A23 | failmode:attribution-language-drift | reason/fix_direction English, user_note Chinese — no per-field drift |
+| A24 | theory:§3.2 | SSL/cert/execute/server silent-failure faces (contracts §SSL) masquerade as V — layer decision must rule out harness-silent-failure first (#50 S1-S5 evidence) |

@@ -6,6 +6,22 @@
 
 **SLB 判例基座远薄于 SSL,本身即上线风险项**。全域 86 卷含 slb 命令,但 **79 卷是纯脚手架**(slb real/group 作 sdns 本地池,断言全是 DNS/sdns 面);**真 SLB-face 仅 7 卷**,其中真正 SLB-中心仅 **2 卷**(`sdns_support_slb_3` 健康翻转 + `snmpd/bug123456` VS+策略)。对比 SSL(45 卷、cert 族主力、6 目录)——**SLB 金标准调用形态单薄**。更关键:leader 点名的四模式里**两个零金标准**——**调度/分发验证=0**(rr 只作 config、无一卷发流量验分发到不同 real)、**会话持久=0**(唯 2 个 persist 命中是 sdns GSLB 持久非 SLB L4 粘)。**SLB 上线的 emit 文法可从 config 形态推,但"行为验证判例"几乎无先例可循——这是比 SSL 更硬的缺口**。
 
+## 0.5 按 G-area 逐区 thinness 量化（喂 Theory 矩阵③,G-id 锚 feature_model §7）
+
+> leader 协调令 2026-07-19:按 Theory 的 G1-G7 结构化。**thinness 二分**:config-face(emit 文法可推的定义用量)vs **behavior-face**(check_point 验的行为判例)——SLB 的硬缺口全在 behavior-face。
+
+| G-id | 特性 | config-face 用量(金标准) | **behavior-face 判例** | thinness 判定 |
+|---|---|---|---|---|
+| **G1** | virtual service | `slb virtual` 549(define-shape 526,含 **167 IPv6**);type 闭集 http388/https78/tcps45/addrlists6/portlists6/tcp1/l2/ftplist | VS 可达 `found <vs名>`+`200 OK`(后端经 VS 响应)——**仅 1 卷**(bug123456,且 SLB+SSL+security 组合) | config 厚 / **behavior 薄(1 卷)** |
+| **G2** | real+group binding | `slb real` 152 · `slb group member` 138 · `slb policy default` 164 | 无独立 real/group 行为断言——79/86 卷作 sdns 池脚手架;绑定正确性仅隐式(健康翻转间接验) | config 厚(**脚手架**) / **behavior 近零** |
+| **G3** | scheduling/distribution | `slb group method` 128(**仅 rr**,无 wrr/lc/sh);hip/persistence 2(属 dot=sdns GSLB 非 SLB) | **0 分发断言**——无一卷发流量并验落到不同 real;rr 的**效果从未被验** | **最薄(近零先例)** |
+| **G4** | health check | `slb virtual health on\|off` 8(VS-toggle)· real 好/坏 IP:port 驱动 | **`Health: UP/DOWN` 41 断言行**(最厚 SLB-face);walkthrough=§4.1 sdns_support_slb_3;观测经 `show statistics {sdns service ip\|slb virtual}` | **唯一充分(41 行+walkthrough)** |
+| **G5** | L4 persistence | 0(金标准无 SLB 会话粘;唯 2 "persist" 是 dot 的 sdns GSLB hip/persistence) | **0**——SLB L4 session persistence 零金标准 | **零先例** |
+| **G6** | policy-qos | `slb policy default` 164(默认绑定);qos/static/persistent 变体金标准近零(manual 有) | policy 命中数 `policy static\s+1` **3 行**(bug123456,且是 security service policy) | default 绑定薄 / **qos 变体零** |
+| **G7** | stats/观测 | `show slb summary` 23 · `show statistics slb {virtual4\|group6\|policy3}`——共 **~36 观测调用** | G7 是 G1/G4 的**观测通道**(health/可达经它读),非独立被测面 | 观测面 ~36,支撑 G1/G4 |
+
+**launch-risk 直读**(per-area):**G4 健康**是唯一可照判例编首批的区(41 断言行厚);**G1 可达/G6 default 绑定**各仅 1-3 卷薄先例(且绑 SSL/security);**G3 分发 / G5 持久 = 零 behavior 先例**(Theory 预判对),须**新造金标准或上机建 footprint** 才能测,首批**暂缓**。config-face(G1/G2 定义用量)全厚——emit 文法这层不缺料(已落 domain_grammar SLB 条目 #51-C)。
+
 ## 1. 全域扫描（诚实清点）
 
 | 类别 | 卷数 | 说明 |

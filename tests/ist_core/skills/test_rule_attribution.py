@@ -115,7 +115,8 @@ def test_attribution_refs_in_closed_set():
 # ── ③ 150 熔断 tripwire(=标注后实际行数;越线先置换+bump,frozen-override 型)──────
 # bump 规程:先删无据规则入 removed-rules.md / 检索顺序类置换入 contracts.md,再有意识
 # 改本常量到新实际行数(bump 动作=§5.5「越线先做减法」的强制触发,防多轮增补不回填漂移)。
-_LINE_CEILING = {"compile-worker.md": 203, "compile-attributor.md": 187}
+# attributor 193←187: +[A24](#52 SSL 静默失败面 pointer,#50 S1-S5 证据;无过时 A 规则可删,frozen-override 型 bump)
+_LINE_CEILING = {"compile-worker.md": 203, "compile-attributor.md": 193}
 
 
 def test_line_count_tripwire():

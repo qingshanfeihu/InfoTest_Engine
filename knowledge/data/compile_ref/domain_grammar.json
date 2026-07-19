@@ -55,6 +55,54 @@
     "name": "负载均衡算法 token(与 algorithm_classes 分类表对照)"
    },
    "provenance": "形态取证自 mirror 金标准卷 method 配置行(`… method <对象> <算法>`);_detect_lb_methods 用它抽当前生效算法"
+  },
+  "ssl_host_define": {
+   "pattern": "ssl\\s+host\\s+(?:virtual|real)\\s+\"?(?P<name>[\\w.-]+)\"?",
+   "roles": {
+    "name": "SSL 主机对象名(vhost/rhost)"
+   },
+   "provenance": "形态取证自 mirror 金标准卷(smoke_test/sdns/sdns_ssl_conn/**、snmpd/bug123456);`ssl host virtual|real <name>` 定义 SSL 主机对象(golden 实测 vhost/vh1/rh1… 88+29+23 次),供证书激活/启停引用(定义,不引用)。#52 SSL enablement,2026-07-19"
+  },
+  "ssl_cert_activate_ref": {
+   "pattern": "ssl\\s+(?:activate|deactivate)\\s+certificate\\s+\"?(?P<name>[\\w.-]+)\"?",
+   "roles": {
+    "name": "被激活证书所属的 SSL 主机名(引用 ssl_host_define)"
+   },
+   "provenance": "形态取证自金标准卷(`ssl activate certificate <host>`,golden 65+19+17 次);语义=在某 SSL host 上激活/去激活证书,引用先由 ssl_host_define 定义的 host(引用,不定义)。#52 SSL enablement,2026-07-19"
+  },
+  "slb_virtual_service_define": {
+   "pattern": "slb\\s+virtual\\s+\\w+\\s+\"?(?P<name>[\\w.-]+)\"?\\s+(?P<vip>[0-9a-fA-F:.]+)(?:\\s+(?P<port>\\d+))?",
+   "roles": {
+    "name": "VS 名（供 policy 引用）",
+    "vip": "虚拟 IP（IPv4/IPv6）",
+    "port": "端口（可选）"
+   },
+   "provenance": "形态取证自金标准卷(smoke_test `slb virtual <type> <vs> <vip> [vport]`，golden 526 次含 167 IPv6)+ manual `slb virtual {http|https|dns|…} <name> <vip> [vport]`(APV app_21，vport 可选)。name=VS 名。LLM-Eng fine-check：vip 扩 IPv6 charset、port 可选。Theory #51-C 草案 team4_slb_grammar_draft.md。SLB first-batch G1，2026-07-19"
+  },
+  "slb_real_service_define": {
+   "pattern": "slb\\s+real\\s+(?!health\\b|enable\\b)\\w+\\s+\"?(?P<name>[\\w.-]+)\"?\\s+(?P<rsip>[0-9a-fA-F:.]+)(?:\\s+(?P<port>\\d+))?",
+   "roles": {
+    "name": "real 名（供 group member 引用）",
+    "rsip": "后端 IP（IPv4/IPv6）",
+    "port": "端口（可选）"
+   },
+   "provenance": "形态取证自金标准卷(`slb real <type> <rs> <rsip> [port]`，golden 151 次)+ manual(port 可选)。name=real 名。LLM-Eng fine-check：rsip 扩 IPv6、port 可选、负向前瞻排除 `slb real health`(附加健检 `<hc_name> <real_service>…` 非 define)与 `slb real enable`(toggle)。Theory #51-C 草案。SLB first-batch G2，2026-07-19"
+  },
+  "slb_group_member": {
+   "pattern": "slb\\s+group\\s+member\\s+\"?(?P<group>[\\w.-]+)\"?\\s+\"?(?P<name>[\\w.-]+)\"?",
+   "roles": {
+    "name": "成员 real 名（引用，供 member→real 闭包）",
+    "group": "组名"
+   },
+   "provenance": "形态取证自金标准卷(`slb group member <group> <rs> [weight] [priority]`，golden 138 次)+ manual。name=成员 real 名(引用)、group=组名。Theory #51-C 草案。SLB first-batch G2，2026-07-19"
+  },
+  "slb_policy_default": {
+   "pattern": "slb\\s+policy\\s+default\\s+\"?(?P<name>[\\w.-]+)\"?\\s+\"?(?P<group>[\\w.-]+)\"?",
+   "roles": {
+    "name": "被绑 VS 名（引用，供 policy→vs 闭包）",
+    "group": "组名"
+   },
+   "provenance": "形态取证自金标准卷(`slb policy default <vs> <group>`，golden 164 次)+ manual(policy 另有 static/qos/persistent 变体属 G5/G6 DEFERRED)。name=被绑 VS 名(引用)、group=组名。Theory #51-C 草案。SLB first-batch G2，2026-07-19"
   }
  },
  "reference_closures": [
@@ -76,6 +124,56 @@
    "footprint_node": "sdns.pool.cname",
    "silently_accepted": true,
    "provenance": "2026-07-08 设备实证(A/B 定向实验仲裁,035570 上机 PASS/ANSWER:0)+手册『CNAME和MX类型的pool支持根据域名状态选择cname或mx』:成员未配本地域名→GA 视其恒可用/解析链在成员处断头;设备对该形态静默接受零报错,只有离线引用图能查到"
+  },
+  {
+   "id": "ssl_cert_activate_needs_host_define",
+   "references": [
+    "ssl_cert_activate_ref"
+   ],
+   "defines": [
+    "ssl_host_define"
+   ],
+   "normalize": "dns_name",
+   "skip_leading_verbs": [
+    "no",
+    "clear",
+    "show"
+   ],
+   "footprint_node": "ssl.host",
+   "silently_accepted": true,
+   "provenance": "金标准 SSL 序列(sdns_ssl_conn_2:`ssl host virtual vh1` → importKey/Cert → `ssl activate certificate vh1`)恒先定义 host 再激活证书;worker 若 emit `ssl activate certificate <h>` 而漏 `ssl host virtual <h>` 定义=悬空引用(证书激活无宿主)。**scope**:只覆盖裸 G 文本引用(activate/deactivate);cert-import 走 F=importKey/importCert 方法调用(G=host,path,非 `ssl import` 文本)不在本闭包,归 contracts『SSL dispatch』检索面。**caveat**:host 定义若在框架 fixture(非卷内)本条会误报——advisory 非门(grade_extract 渲染提示、不拒绝),读者对照意图判。normalize 复用 dns_name 仅取其大小写折叠(SSL 名 CLI 大小写不敏感)。#52 SSL enablement,2026-07-19"
+  },
+  {
+   "id": "slb_group_member_needs_real",
+   "references": [
+    "slb_group_member"
+   ],
+   "defines": [
+    "slb_real_service_define"
+   ],
+   "normalize": "name",
+   "skip_leading_verbs": [
+    "no",
+    "clear",
+    "show"
+   ],
+   "provenance": "Theory #51-C 草案 + LLM-Eng verbatim fine-check：group 成员引用的 real 名(slb_group_member.name)须先由 slb_real_service_define 定义，否则成员引用悬空(后端服务不存在)。金标准恒先配 real 再加 group member。normalize=name(SLB 对象名，非 DNS，as-is 大小写敏感；金标准同名一致，误报风险低)。footprint_node/silently_accepted 留空(device-pending，leader 令勿臆造)。advisory 非门(grade_extract 渲染提示)。SLB first-batch G2，2026-07-19"
+  },
+  {
+   "id": "slb_policy_needs_vs",
+   "references": [
+    "slb_policy_default"
+   ],
+   "defines": [
+    "slb_virtual_service_define"
+   ],
+   "normalize": "name",
+   "skip_leading_verbs": [
+    "no",
+    "clear",
+    "show"
+   ],
+   "provenance": "Theory #51-C 草案(原 slb_policy_needs_vs_and_group)+ LLM-Eng fine-check 收窄：dangling_references 单-name 命名空间一闭包只能查一引用，故仅查 policy→VS(slb_policy_default.name=vs 须由 slb_virtual_service_define 定义)。policy→group 半边需 group-命名变体 statement 或 detector 泛化，DEFERRED(见给 Theory 报告)。DROP 项：Theory slb_real_health_bind + slb_health_needs_real 已剔(金标准 0 用 `slb real health`，真形态 `slb virtual health on|off` VS-toggle 无 real 引用；且 manual `slb real health <hc_name> <real_service>…` 首参是健检名非 real，pattern 捕错 token)。footprint_node/silently_accepted 留空。advisory 非门。SLB first-batch G2，2026-07-19"
   }
  ],
  "anchoring_chains": [

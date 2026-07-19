@@ -911,20 +911,42 @@ def _reclaim_late_artifacts(state: dict, fs: list[dict]) -> list[dict]:
 
 
 def _delivery_verify_skippable(vw: dict, comp: list[str], volume: str,
-                               fs: list[dict]) -> bool:
+                               fs: list[dict], *, cur_bed: str = "",
+                               cur_build: str = "", coexist: list | None = None) -> bool:
     """终验幂等闸(纯判定,DESIGN §16.4 片3-④):同卷组成指纹的 delivery 裁决已在
     事实流=零信息重跑,跳过(无此闸 s₀ 停车案会驱动兄弟案无限重复终验,实测 livelock)。
-    两个不可吸收例外(重跑有信息):待升格案(subset_verified 须拿 delivery-pass)/
-    组成内有 broken 三态案(那次终验是断批快照,重跑非零信息——否则真通过案被断批
-    marker 钉死到 delivery_incomplete,zhaiyq 实证,详见设计锚)。"""
+    缝合合法 ⟺ 拼接仍属 ctx_delivery 连续执行(THEORY 公式(15)补注·缝合语境等价,
+    ①A 用户裁 2026-07-19):以下任一破坏 ⇒ 拒吸收、回整卷连跑重验——
+    ⒈同床同版本(被依赖裁决 bed/build vs 当前;一变即非同一 ctx_delivery,等价前提破。
+      旧账缺字段保守视同,仅两侧都非空且不等才拒,同 _s0_parked 床锚容错);
+    ⒉断点两侧独立(通道④共存违例=保存族反例的**静态 config 形态**[persistence 纯形态
+      检测、不看运行结果],即 δ(c)≠∅ 残留污染后段的风险形态,命中=拼接退化为 ∃-pass
+      量词投影失真;运行时 τ 违例经 broken/下游 fail 兜)——代价:coexist 非空卷每次
+      续跑都整卷重验、不幂等,条款⒉安全侧取舍(Design 问2;DESIGN §16.4 侧对应注);
+    ⒊broken 不吸收(断批快照,重跑非零信息——否则真通过案被断批 marker 钉死到
+      delivery_incomplete,zhaiyq 实证)。另待升格案(subset_verified 须拿 delivery-pass)
+      不吸收。cur_bed/cur_build/coexist 缺省=旧调用兼容(检查惰性),生产由 merge 传入。
+    防护范围诚实边界(Theory 问1):本闸只防「换床/换版本/断点残留/断批」这类拼接非法,
+      **不防单案自身的残留假 PASS**——那由 oracle 残差机制((16)禁第四种消费)独立防护,
+      缝合闸不新增、也不替代此风险的防护。"""
     st = {a: vw["cases"][a]["status"] for a in comp}
     if any(s == V.S_SUBSET_VERIFIED for s in st.values()):
         return False
     if any(s in (V.S_BROKEN, V.S_BROKEN_ERRORED, V.S_BROKEN_BLOCKED)
            for s in st.values()):
+        return False                               # ⒊ broken 不吸收
+    if coexist:
+        return False                     # ⒉ 断点两侧独立:共存违例=δ(c)≠∅ 的静态风险形态
+    prior = [f for f in fs if f.get("ev") == "verdict"
+             and f.get("ctx") == F.CTX_DELIVERY and str(f.get("volume")) == volume]
+    if not prior:
         return False
-    return any(f.get("ev") == "verdict" and f.get("ctx") == F.CTX_DELIVERY
-               and str(f.get("volume")) == volume for f in fs)
+    last = prior[-1]                               # ⒈ 同床同版本(缺字段保守视同)
+    p_bed, p_build = str(last.get("bed") or ""), str(last.get("build") or "")
+    if (p_bed and cur_bed and p_bed != cur_bed) or \
+       (p_build and cur_build and p_build != cur_build):
+        return False
+    return True
 
 
 # --------------------------------------------------------------- [mech] merge
@@ -1051,7 +1073,11 @@ def merge(state: dict) -> dict:
 
     pairs = [(a, sh.artifact_fingerprint(a)) for a in comp_ordered]
     volume = sh.volume_fingerprint(pairs)
-    if is_delivery and _delivery_verify_skippable(vw, comp_ordered, volume, fs):
+    if is_delivery and _delivery_verify_skippable(
+            vw, comp_ordered, volume, fs,
+            cur_bed=str(state.get("bed_host") or ""),
+            cur_build=str(state.get("device_build") or ""),
+            coexist=coexist):
         return {"phase_status": "nothing_to_merge", **sh.counts_update(state, fs)}
 
     seq = int(state.get("vol_seq") or 0) + 1

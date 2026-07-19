@@ -1972,3 +1972,26 @@ emit `override_frozen_reason` 门强制显式声明;终态=frozen∧轮次封顶
 - **判例层封闭性论证**：新条目走既有判例层封闭环——正则 R 对命令 C 的抽取正确性经 `device_verified` **入库**（同既有 footprint 观察的验证门）、`footprint_lookup` **检索**、emit **check_point 打抽出字段零代码消费**。不新增代码层、不破判例层「唯一无限增长层」性质。`validity`（uncertain→verified）迁移同既有 footprint 观察（K §5.1 状态机：uncertain=观察级未实证 / verified=device 实证带 build 锚）。
 - **层归属边界**：R 是设备输出格式的观察（随 build 变）=判例层（经验性）；**不是** mirror 源码可推导物（那归文法层，闭合于版本）。`provenance` 标「设备观察」非「mirror 推导」——层归属在字段体现，防与文法层混。
 - **收益**：渐进消解 §18.14 恒真断言族的窗口脆弱面（断言从 raw 无 MULTILINE 窗口移到抽出字段值），零代码数据层扩展。
+
+## 21. LLM 自由度分层纪律（#44，2026-07-19 用户令；逐决策面全表 → `docs/forensics/team4_llm_freedom_mapping.md` 按引用，不在此复制避数据双写）
+
+编译链每个「可独立判自由度的判断点」（决策面）的 prompt/skill 该给多少自由度，由**双轴正交机械导出**——不逐面拍标签。本节落**判据框架 + 已实证固化条款 + 修复模板**；30 决策面（worker 14 / attributor 9 / engine 7）逐面映射在 forensics 表消费。
+
+**双轴（门密度框架的补全）**：
+- **需 gate 性（该不该 gate）= 错误代价 × 无人值守时长**：错误代价 极高（自毁命令清整机床）/高（emit 门 miss 崩整卷）/中（假 PASS 单卷）/低（措辞）；无人值守=worker/attributor fork·自动跑批（错了没人当场拦）vs ask 位·leader 在环·emit 门即时拒（有值守）。
+- **可 gate 性（能不能 gate）= A/B/C 三层**（`[[compile-quality-abc-three-layer]]`）：A 机械可判定（写时机械门）/ B 条件可证伪（事后验证器+反馈环）/ C 无 oracle（靠 prompt+值守）。
+- **门密度 key 需 gate 性、门形态由可 gate 性定**（A→写时机械门 / B→事后验证器 / C→prompt 护栏+值守）。B 验证器兜底是与写时自由度正交的「事后-gate 维」——自由发挥面的**首选** gate 形态（能上验证器就上，上不了才落 prompt 护栏）。
+
+**三极收束**（非单向"该收紧"）：① **机械默认可**——唯一机械导出、LLM 零/低 latitude（`form=f(op,H)` 守成 / `min_requests→suggested_fix` 修复）；② **engine 强制**——机械节点直调、天然强制单路（INV-7 闭环 / emit 结构门 / reconcile 全射 / 终验幂等闸）；③ **必留人工**——机械判定**原理上测不准**、强行机械化=固化系统性误判（`worker/用例覆盖判定`：脑图→用例满射三粒度一致机械不可判，观察级不作门，理论根=THEORY C8 三粒度定理）。**③ 与"该机械化"对称**，防 over-mechanize。
+
+**C×需强「防御纵深」类**（该 gate 但无 oracle 上不了机械门，如 `worker/命令选择`/`worker/等价方案推导`）：不并入自由发挥、不守成麻痹、不靠值守缴械——**多层栈强制 + 观察级监测**（判例层检索 + 安全边界禁令窄桥 + ask 兜底 + 首败升深度 + uncertain 观察入库补 oracle）。门密度在此 = **纵深层数**（需越强→栈越厚），非机械门条数。实证反面=自毁命令跑死两床（`[[destructive-command-killed-beds]]`），正是此格「引擎不注入具体命令建议」裁决（2026-07-13）的位置。
+
+**已固化条款（axis-backed，prov. 终候选待六轴收卷转终定）**：
+- **条款① `form=f(op,H)` 守成（强制单路）**：`engine/form判定` 锁 A 层机械门，`form=f(op,H)`（105 卷零例外，Theory 轴①）不得改为 LLM 可判/可覆盖——防机械确定性退化成 C 面自由度。**自由度边界钉在「claim→选 op&H」那跳**（worker 决策面 `worker/断言op&H选择`，C 层高自由度）；form 判定是 engine 机械门面、非 worker latitude。
+- **条款② `worker/欠定修法方向` 修复（机械默认+LLM 覆盖，全表首个修复条款）**：`suggested_fix` 由 `min_requests` 二分**机械默认打底**（null=表达力边界→改预期 / 有限=采样边界→改过程，Theory 轴⑤ 11/11）+ **LLM 覆盖须声明理由（记 exception）**——无理由不得覆盖，防 escape hatch 退化成 silent bypass（同 frozen override 需 `override_frozen_reason`）。判据挂 min_requests 轴（单源、条款不重写）。
+
+**修复条款模板**（后续错配面照此）：`现状→应然箭头` + `判据挂轴（单源、不重写）` + `escape hatch 有摩擦（覆盖须声明理由=exception 非 norm）`。通用护栏=机械打底缩小 LLM 错误面 + escape hatch 防机械误伤特殊 case，但**覆盖必须有摩擦**，否则可判性收益被稀释成纯自由发挥。
+
+**与 CLAUDE.md 对齐**：本节 = CLAUDE.md「degrees-of-freedom 分层」（高自由度陈述+方向+why / 低自由度精确护栏）+「三层栈数据形态判定表」在**决策面维**的投影；官方锚 B3（自由度匹配主锚）/M1/M3/W1/W2/A2（`team4_skill_official_zh_recheck.md` #30 全类目对照）。
+
+**边界**：本节是判据框架 + 已实证条款；30 面逐面映射（含 ~13 attributor 侧无轴覆盖面=理论初判、待实证）在 forensics 表按引用。任何 worker/attributor prompt/skill 实改属后续批走四关，改时按本节三极 + 门密度对号。

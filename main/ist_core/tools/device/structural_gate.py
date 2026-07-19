@@ -125,6 +125,51 @@ def _execute_returning_actions(src_rel: str) -> frozenset:
 # 注册表源码位置(E=APV_* 走设备侧 action 混入,E=直连槽走客户端侧 client_action)
 _APV_ACTION_SRC = "lib/apv/apv_action.py"
 _CLIENT_ACTION_SRC = "lib/client_action.py"
+_APV_SYNONYMS_SRC = "lib/apv/apv_synonyms"
+_CLIENT_SYNONYMS_SRC = "lib/client_synonyms"
+
+
+def _norm_action(s: str) -> str:
+    """动作名归一化——与 dic_operation.get_same 同款(去空白+小写,dic_operation.py:18/28)。"""
+    return re.sub(r"\s+", "", str(s).lower())
+
+
+@lru_cache(maxsize=1)
+def _execute_action_registry() -> dict:
+    """execute 动作注册表 {归一化动作名: 原名}——从 mirror apv_action/client_action 的
+    command_function_mapping 键 ∪ 两 synonyms 文件值**解析**(闭集从源码、不手抄 40 名;
+    mirror 增动作自更新)。归一化面供精确匹配(等价 dic_operation.get_same 的 exact 面)、
+    原名面供拒时候选提示可读。mirror 读不到→空 dict→门 fail-open(不误杀,§33-37 纪律)。"""
+    reg: dict[str, str] = {}
+    # ① command_function_mapping 键（'动作名': self.func_N）
+    for src_rel in (_APV_ACTION_SRC, _CLIENT_ACTION_SRC):
+        for k in re.findall(r"'([^']+)':\s*self\.func_\d+", _mirror_src(src_rel)):
+            reg[_norm_action(k)] = k.strip()
+    # ② synonyms 文件值（key：val1，val2；get_same 也认这些值，dic_operation.load_synonyms）
+    for syn_rel in (_APV_SYNONYMS_SRC, _CLIENT_SYNONYMS_SRC):
+        for line in _mirror_src(syn_rel).splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("：")            # 全角冒号，同 load_synonyms
+            if len(parts) == 2:
+                for val in parts[1].split("，"):  # 全角逗号
+                    raw = val.strip()
+                    if raw:
+                        reg.setdefault(_norm_action(raw), raw)
+    return reg
+
+
+def _execute_action_names() -> frozenset:
+    """execute 动作名归一化精确闭集（membership 面）。不入此集=运行时落 fuzzy
+    (SequenceMatcher≥0.8)静默派发（可语义反转，#56）。"""
+    return frozenset(_execute_action_registry().keys())
+
+
+def _execute_action_of(g: str) -> str:
+    """从 execute 行 G 抽动作名——复刻 dic_operation.execute:58-62(全角冒号前段，贪婪到末个 ：)。"""
+    m = re.search(r"(.*)：", str(g))
+    return m.group(1) if m else str(g)
 
 
 @dataclass
@@ -626,11 +671,48 @@ def _check_command_payload_sanity(steps: list, result: StructuralResult) -> None
             )
 
 
+def _check_execute_action_registry(steps: list, result: StructuralResult) -> None:
+    """execute 动作名精确集门（#56，A 层，2026-07-19 用户裁经 leader 批）：F=execute 行的 G
+    动作名必须是注册表精确成员，否则运行时落 fuzzy 匹配（dic_operation.py:72，SequenceMatcher
+    ≥0.8）**静默派发**——可派到语义相反的 func（健检等 UP 变等 DOWN、绑定变检查，#51-A §4
+    仿真 9 碰撞对/5 语义反转），且 device 侧不可见（不像 cmd 错有 ``^`` 拒回显）。闭集从 mirror
+    解析（_execute_action_names，等价 get_same 精确匹配面）。拒时给最近候选**仅提示、不自动改写**
+    ——自动纠正会把 fuzzy 隐患搬到门上，worker 须有意识改（treat 同"门挂凭证不挂编辑路"哲学）。
+    §21 双轴推导（设计锚 DESIGN §21）:A 层（动作注册表 mirror 可解析闭集，同 H 名字空间门先例）
+    × 高需 gate（语义反转→假验证 × 无人值守 fork 跑批 × 设备不可见，比 cmd 错更险）→ 写时机械门;
+    hint-not-rewrite = escape-hatch 有摩擦（worker 有意识改，不把 fuzzy 隐患搬门上）。"""
+    reg = _execute_action_registry()
+    if not reg:
+        return   # mirror 读不到（离线/路径变）→ 空 → fail-open，不误杀（§33-37 纪律）
+    from difflib import SequenceMatcher
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            continue
+        if str(s.get("F", "")).strip() != "execute":
+            continue
+        action = _execute_action_of(s.get("G", "") or "")
+        na = _norm_action(action)
+        if na in reg:
+            continue
+        # 候选提示用**原名**（reg 值），非归一化名——可读且逐字可抄
+        ranked = sorted(reg.values(),
+                        key=lambda raw: SequenceMatcher(None, na, _norm_action(raw)).ratio(),
+                        reverse=True)
+        result.add(
+            "execute_action_not_in_registry",
+            f"execute 动作名 {action!r} 不是注册表精确成员——运行时会落 fuzzy 匹配（≥0.8）"
+            f"静默派发，可能派到语义相反的动作（如健检 UP↔DOWN），device 侧不可见。请改成"
+            f"注册表精确动作名（从 mirror apv_action/client_action 逐字取；最近候选仅供参考、"
+            f"须你有意识确认，门不自动改写）：{'、'.join(ranked[:3])}。",
+            i,
+        )
+
+
 def check_crash_gates_mandatory(steps: list) -> StructuralResult:
     """必崩形态**无条件**拒绝门集合——与 strict_structural opt-in 解耦(A 层机械崩溃门)。
 
     收录标准(严进):该形态上机**保证**崩整份 pytest 文件(崩溃点之后全不跑)——
-    误判即真错、不存在误杀好制品的可能。当前三条:
+    误判即真错、不存在误杀好制品的可能。现役成员（必崩形态族，条数不写死——以函数体调用序为准）:
     - found_times:框架分派只传 2 参必崩(_check_no_found_times;dongkl 首跑 31 unknown 根因)。
     - 悬空断言:check_point(I 空)前无 result 生产步 → found(None) 必崩(_check_dangling_assertions;
       实证 dongkl 778012 重编版:配置步后直接断言,worker 漏传 strict_structural 使 opt-in 门被
@@ -650,6 +732,7 @@ def check_crash_gates_mandatory(steps: list) -> StructuralResult:
         _check_no_manual_ip_cleanup(steps, result)
         _check_command_payload_sanity(steps, result)
         _check_dispatch_targets(steps, result)
+        _check_execute_action_registry(steps, result)
         _check_line_anchor_assertions(steps, result)
         _check_assertion_matches_command_echo(steps, result)
         _check_has_assertion(steps, result)

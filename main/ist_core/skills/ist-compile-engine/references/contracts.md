@@ -43,3 +43,14 @@ Data-driven from `knowledge/data/compile_ref/domain_grammar.json`
 (`persistence_channels`, `bed_probes`) — adding a channel or probe is a JSON edit, zero code.
 Bed ledger: `runtime/bed_ledger/<host>.jsonl` (created/restored pairs; auto-cleanup only for
 our own unrestored artifacts).
+
+## Retrieval order (worker grounding; §5.5:217 replacement — detail lives here, prompt keeps only the pointer)
+
+Grounding an expected value or a command consults these in order — each is a distinct authority,
+higher listed = same-intent-closer:
+
+1. `compile_precedent` — same-intent verified forms (config **form**, never assertion direction).
+2. `kb_footprint` — verified grammar/behavior; uncertain observations are context-tagged — judge
+   them against your own config form, and arbitrate by device experiment when they conflict.
+3. manual under `knowledge/data/markdown/product/manual_<version>/`.
+4. `dev_probe` / `dev_help` — live syntax and echo shape; their docstrings state their scope.

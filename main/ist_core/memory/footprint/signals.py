@@ -41,6 +41,9 @@ SIGNALS = frozenset({
     # V8(2026-07-10 验收期转正):终验反证已交付态 / 对账兜底(健康运行恒零)
     "final_verify_failed",
     "verdict_unconsumed",
+    # emit correct-by-construction 归一化(#61 003:worker 全角逗号 `，` → 半角,治 get_parameter
+    # 拆参崩 importKey/importCert;可观测 auto-fix,非静默——健康输入恒零)
+    "fullwidth_comma_normalized",
 })
 
 # 生产默认路径;测试可 monkeypatch 本变量把信号定向到自定义位置断言(既有用法)。

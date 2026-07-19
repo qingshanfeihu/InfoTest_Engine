@@ -119,11 +119,12 @@ def test_attributor_a24_ssl_silent_failure_pointer():
     assert "method_reference" in low, "attributor [A24] 未指向 fork-可达的 method_reference.json 投影"
 
 
-# ── ④ #58：ssl.activate.certificate footprint 节点补 YES 交互确认 enablement ──────
-# 根因订正:003 escalated 真凶是 `ssl activate certificate vh1, prompt=YES` 内联注解→
-# 独立 YES 命令撞命令存在性门(needs_decision 铁证),非 show/clear 观测形态(那些 manual-valid)。
-# 修法=编辑现有 footprint 节点(非新建;213 个 ssl.* 节点已存在),补 YES 陷阱 known_issue +
-# importCert 自动 activate decision_rule。检索 run-时失联另属 Py-Eng footprint-index 可达性。
+# ── ④ #58/#61：ssl.activate.certificate footprint 节点 importCert 自动 activate 规则 ──────
+# #61 device verdict 订正(三层证据 case.xlsx→device run→passing case.xlsx 收敛):003 真凶是
+# rows33-35 全角逗号 `，`(get_parameter 半角拆→TypeError→not_run,Py-Eng emit 域),非 prompt=YES。
+# `,prompt=YES` 设备实证 VALID(comma-rerun row36 未变仍 PASS,cmd_config 自动应答交互 YES)——
+# 原 YES known_issue 已删(它会误导 worker 避开合法形态)。**保留** importCert 自动 activate
+# decision_rule(仍正确:importCert 内部已 activate,手动再 activate 冗余)。教训:device run 是 oracle。
 
 import json as _json  # noqa: E402
 from main.knowledge_paths import KNOWLEDGE_FOOTPRINTS_NODES  # noqa: E402
@@ -131,19 +132,13 @@ from main.knowledge_paths import KNOWLEDGE_FOOTPRINTS_NODES  # noqa: E402
 _SSL_ACTIVATE_NODE = KNOWLEDGE_FOOTPRINTS_NODES / "ssl.activate.certificate.json"
 
 
-def test_ssl_activate_node_carries_yes_known_issue():
-    """节点补了 `, prompt=YES`→独立 YES 撞门的 known_issue（003 直接行为修复）。"""
+def test_ssl_activate_yes_known_issue_removed():
+    """#61 device verdict:`,prompt=YES` 是合法形态(设备 PASS),原 YES known_issue 已删——
+    不得回潮(它会教 worker 避开正确形态)。"""
     node = _json.loads(_SSL_ACTIVATE_NODE.read_text(encoding="utf-8"))
-    ki = {k["fact_key"]: k for k in node.get("known_issues", [])}
-    assert "inline_prompt_yes_emits_standalone_yes_command" in ki, "缺 YES 陷阱 known_issue"
-    content = ki["inline_prompt_yes_emits_standalone_yes_command"]["content"]
-    assert "prompt=YES" in content, "known_issue 未点名 prompt=YES 内联注解"
-    assert "cmd_config" in content and "YES" in content, "known_issue 未给正确 2 参 YES 机制"
-    assert "203601753067668044" in content, "known_issue 缺 yzg tftp→YES 同类先例 cross-ref"
-    # Theory #58 note:validity=uncertain → merger 自动升级环(003 重校准 PASS 后 uncertain→verified)
-    ki_e = ki["inline_prompt_yes_emits_standalone_yes_command"]
-    assert ki_e.get("validity") == "uncertain", "YES known_issue 缺 validity:uncertain（绕过自愈自动升级环）"
-    assert ki_e.get("observed_under"), "YES known_issue 缺 observed_under（自动升级需此字段）"
+    ki_keys = {k["fact_key"] for k in node.get("known_issues", [])}
+    assert "inline_prompt_yes_emits_standalone_yes_command" not in ki_keys, \
+        "YES known_issue 应已删(`,prompt=YES` 设备实证合法);回潮会误导 worker"
 
 
 def test_ssl_activate_node_carries_importcert_auto_activate_rule():
@@ -166,4 +161,24 @@ def test_ssl_activate_node_reachable_via_kb_footprint():
     r = idx.lookup("ssl activate certificate")
     assert r is not None and r.get("feature_id") == "ssl.activate.certificate"
     blob = _json.dumps(r, ensure_ascii=False)
-    assert "prompt=YES" in blob and "importcert_auto_activates" in blob
+    assert "importcert_auto_activates" in blob  # YES known_issue 已删(#61),仅验 importCert 规则可达
+
+
+# ── ⑥ #61：ssl.host 节点补案尾 teardown guidance（治 003 二次 missing_teardown claim） ──
+# 根因订正:τ 检测器**正确识别** worker 的 `clear ssl host vh1` 为 teardown(covered 非 missing,
+# 已 check_tau_coverage 复现);claim 反映 worker 加 tail clear 前的 round-1 态。guidance 助 worker
+# 首轮就补 teardown、免 missing_teardown 往返(clear/no 均被 inverse_forms pair 认可)。
+
+_SSL_HOST_NODE = KNOWLEDGE_FOOTPRINTS_NODES / "ssl.host.json"
+
+
+def test_ssl_host_carries_teardown_decision_rule():
+    node = _json.loads(_SSL_HOST_NODE.read_text(encoding="utf-8"))
+    dr = {r["fact_key"]: r for r in node.get("decision_rules", [])}
+    assert "ssl_host_config_write_needs_case_tail_teardown" in dr, "ssl.host 缺案尾 teardown 规则"
+    rule = dr["ssl_host_config_write_needs_case_tail_teardown"]
+    # clear 与 no 两恢复形态都点到(inverse_forms pair 均认可)
+    assert "clear ssl host" in rule["decision"] and "no ssl host" in rule["decision"]
+    # Theory validity 机制:参与自愈自动升级环
+    assert rule.get("validity") == "uncertain", "teardown 规则缺 validity:uncertain"
+    assert rule.get("observed_under"), "teardown 规则缺 observed_under"

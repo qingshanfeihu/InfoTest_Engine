@@ -777,6 +777,46 @@ delivery_report 出。outcome：3 案＝**2 交付通过**（000001 纯配置存
 - **⚠️ 如实标·屏外未测**：import-prompt 实际文本 / 长证书内联截断——**不在 TUI 屏、在 case.xlsx/evidence，Test-Eng 机读侧核**，我不虚报。Z1 全证/Z3/D28 本批**无面板触发**、无从实弹测（如实标）。
 - **诚实边界**：本批只 1 个面板（版本门），SSL/SLB 题面内容始终没上屏；我只报亲见屏帧+如实标屏外/未触发。观察完，待命。
 
+---
+
+## #54 re-calibrate 003（surface:1 · PID 22932 · 载 360e730c #58 · SSL END-TO-END PROOF · 2026-07-19）
+
+**性质**：单卷 SSL 证书导入（003，#54 escalated 案，#58「SSL interactive-confirmation enablement」修复后重校准到 PASS）。SSL launch-readiness 最后一步。
+**注**：我 #54 mild ①（英文机器状态行）已立 **#59 收口池**（TUI-Eng），接线。
+
+### 上座（23:15 · 批起点）
+脑图已读：SSL 证书导入·1 案（autoid …003）·验证导入私钥/证书/根CA + 激活后证书可见性。版本门将渲染（同 #54 正面防御式，不重评）。
+**本批关键盯**：①**#58 import-prompt 是否做成屏上 ask 面板**（若是我逐字截+核长证书截断，对照 #54 屏外）②**003 是否上机通过**（#54 escalated→#58 修后应 PASS，END-TO-END 铁证）③SSL 面板卡片新域 UX+Z1-Z8。起 90s。
+
+### ⚠️⚠️ END-TO-END PROOF 未达成（23:24 · 关键·与预期相反）
+版本答 10.5→000003 编写完成(5m48s)→`上机完成 1 case 20s`→`对账 通过 0 条`→再一轮上机→`◆ ⚠ 1 案连续多轮未跑成——复跑无效,升级人工`→`对账 通过 0 条`。footer `轮次2 对账 0/1 · 失败1`。
+- **#54 escalated 案 #58 修复后重校准，屏上仍上机 0 通过、两轮后再次升级人工——与 #54 同结局。END-TO-END 铁证未成**（预期 003 PASS，实测仍 fail+escalate）。
+- **⚠️ 因果存疑（不下结论）**：为何仍 fail 屏上看不到（无失败详情面板，原因在 case.xlsx/evidence）——#58 修复不足 vs 断言形态 vs 床/证书根因，**请 Test-Eng/机读侧从 evidence 诊断**；我只报「屏上 003 两轮上机 0 通过→升级人工」观察事实，不断定 #58 是否生效。
+- **import-prompt 仍屏外**：20s 上机是设备侧，#58 interactive-confirmation 若实现也在设备侧、**没做成屏上 ask 面板**——import-prompt 盯点仍无从屏观察。
+- 将收尾→delivery_report（003 escalated）。守收官 ③⑥/D31。转 90s。
+
+### 根因已上屏（23:27 · 更正上条「因果屏外」）
+升级人工后 orchestrator 主动 `dev_run_case` 把根因挖上屏，逐字：
+- 报错 `TypeError: importKey() missing 1 required positional argument: 'keyfile'`。
+- 屏上诊断：importKey/importCert/importRootCA 数据字段用了**中文逗号 ，（全角）**，框架 get_parameter() 按半角 `,` 拆参→整串当一个参数→缺第二参数。表格 行33/34/35 `vh1，cert/...`→`vh1,cert/...`。
+- needs_decision.json 两欠定项 orchestrator 均判**误报**：①「YES 命令不存在」（YES 是 ssl activate certificate 交互确认字，非独立命令）②「缺少 teardown」（行40 已有 clear ssl host vh1）。
+- orchestrator 问用户「要我修复中文逗号后重新编译合并上机？」（等输入）。
+
+**naive-user 观察**：① 轻——raw `TypeError: importKey() missing 1 required positional argument: 'keyfile'` 上屏（紧跟人话，低）；`needs_decision.json` 机读文件名泄进叙述。✓ 正面——全角/半角逗号讲清+行/步骤/当前/应改为表+清晰 yes/no，好人话 UX。
+
+**跨轨 flag（交 Test-Eng 机读核，不断定）**：① **END-TO-END blocker=worker-emit 全角逗号**（另一处 worker 产出正确性问题，#58 SSL interactive-confirmation 未触及此点）；② #58 存疑——引擎仍标「YES命令不存在」欠定，是 #58 未压住误报 vs unfinished/ stale 残留，请机读核。对照台账 #61（YES 结构门+teardown 缺口+footprint 父查）已开——全角逗号是否在 #61 scope 内待 leader 定。
+
+**边界**：屏上问句**没答**（surface 只读）；收官 delivery render 滚屏外、本批未见「交付完成」渲染，③⑥/D31 本批无从核。
+
+### ✅ END-TO-END 达成·003 PASS（23:51 · 但附 scale caveat）
+操作授权后 orchestrator 手改逗号→重编（连撞 lint-credential 门/command-existence 门→切 steps 通道绕过→emit 成功）→ist-verify 复验：`上机完成 1 case 40s`→`整卷通过 P:1 F:0`→逐case `205400000000000003 PASS · Issuer✓ Subject✓`→双写回（precedent verified_...xlsx + footprint G 4 条 device-verified）。问题回顾人话：全角逗号→半角→一次通过。
+- **✅ SSL cert-import 案终于 PASS，SSL 判例入库。**
+- **⚠️ 关键 caveat（比 PASS 更该记，#61/#55 scale）**：PASS 是**操作手动修逗号+ist-verify 复验旁路**达成的，**非引擎自动闭环自愈**——引擎 delivery_report 仍 escalated 0/1。worker 一开始 emit 全角逗号→引擎自身修不了→escalate→人手修；放量后每 SSL 案都这样则不 scale。真·#61 落点=worker-emit 别产全角逗号 / emit 门 catch 全角逗号。来源（worker 自造 vs 脑图带入）屏上未明。
+- **✓ 正面（gate 实战）**：lint-credential 门守住 orchestrator run_python direct-edit（逼回 compile_emit 正门，[[gates-on-credential-path-not-edit-path]]）。
+- **跨轨 flag（Test-Eng 机读核）**：command-existence 门拦框架方法 importKey/importCert/importRootCA（判「不在 CLI 手册」nearest none），orchestrator 判误拦切 steps 绕过——门是否该识别框架方法≠CLI命令，真 gap vs strict_structural 预期，待核。
+- **收官 render 审**：ist-verify 复验 summary（非 compile delivery_report，D31 不覆盖此 render）；全中文/结构清/问题回顾好 UX；数字 1/1/0 内部一致无 mismatch。mild ① 机器 token：`<RUNTIME>`/"reflow"/"footprint G 段" 英文上屏→**并入 #59**。
+- **① 半内部**：重编过程 4 条 `error:` 全英文机器串上屏（lint-credential/blocks combinator/command-existence/missing provenance），tool-result 行半内部→并入 #59。
+
 
 
 

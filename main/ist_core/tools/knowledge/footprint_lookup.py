@@ -79,12 +79,25 @@ def _module_enable_hint(idx, command: str) -> str:
             f"case fails on device): {body}\n\n")
 
 
+def _issue_label(issue: dict) -> str:
+    """known_issue 短标签——兼容两 schema:老 `{issue_id,title}` / 新观察式 `{fact_key,content}`
+    (#61:观察式 known_issue 用 fact_key/content,渲染器原只读 issue_id/title → 内容不可见,
+    worker 看不到陷阱)。优先 title/issue_id/fact_key,退 content 前缀。"""
+    if not isinstance(issue, dict):
+        return str(issue)[:60]
+    label = issue.get("title") or issue.get("issue_id") or issue.get("fact_key")
+    if label:
+        return str(label)
+    return str(issue.get("content") or issue.get("condition") or "?")[:60]
+
+
 def _format_node(data: dict, brief: bool = False) -> str:
     """将 footprint JSON 格式化为人可读摘要。
 
     brief=True:父节点深展开后代时用——每条命令只附**枚举类参数**(method: rr|wrr|ga|topology)
-    的取值范围,省略冗长 desc 与 rules/behaviors/issues,紧凑以容纳全部子命令、不被 cap 截掉核心
-    命令(name/service/method)。leaf 直查用 brief=False(默认)给完整语义(含 desc),解 WRR 当 GA。"""
+    的取值范围,省略冗长 desc 与详细 rules/behaviors,紧凑以容纳全部子命令、不被 cap 截掉核心
+    命令(name/service/method)。**但浮现 known_issues 标题**(#61:父查漏子叶陷阱=知识可达但
+    worker 自然查路径不可见;高频陷阱须在父查也可见)。leaf 直查用 brief=False(默认)给完整语义。"""
     lines: list[str] = []
     fid = data.get("feature_id", "?")
     level = data.get("level", "?")
@@ -112,7 +125,17 @@ def _format_node(data: dict, brief: bool = False) -> str:
                 sep = " — " if vr and ds else ""
                 lines.append(f"      {p.get('name', '?')} ({req}): {vr}{sep}{ds}")
 
-    if brief:        # 深展开后代:命令+枚举取值即够,省 rules/behaviors/issues(leaf 直查才详给)
+    # #61 surfacing:brief(父节点深展开)也**浮现子节点 known_issues 标签**——否则父查(如
+    # `ssl activate`)拿到 compact grammar 却漏了叶节点的陷阱警告,worker 看不到→重犯(知识可达但
+    # 在 worker 自然查的路径上不可见)。只附标签 + 指针,详情引导直查叶节点。
+    issues = data.get("known_issues", [])
+    if brief and issues:
+        titles = "; ".join(_issue_label(i) for i in issues[:3])
+        more = f" (+{len(issues) - 3} more)" if len(issues) > 3 else ""
+        lines.append(f"  ⚠ {len(issues)} known issue(s): {titles}{more} "
+                     f"— query `{fid}` for repro/detail")
+
+    if brief:        # 深展开后代:命令+枚举取值+issue 标签即够,详细 rules/behaviors 留 leaf 直查
         return "\n".join(lines)
 
     # 判例化渲染(2026-07-08):观察级字段(validity/observed_under)+ 两级提示——
@@ -186,12 +209,19 @@ def _format_node(data: dict, brief: bool = False) -> str:
         for b in rest_behaviors[:3]:
             lines.append(f"  - {_fmt_obs(b)[:200]}")
 
-    issues = data.get("known_issues", [])
     if issues:
         lines.append(f"\nKnown issues ({len(issues)}):")
         for iss in issues[:5]:
-            title = iss.get("title", "")
-            lines.append(f"  - {iss.get('issue_id', '?')}: {title[:80]}")
+            # 兼容两 schema(#61,leaf 直查=surfacing 指针的「详情终点」):
+            #   老 {issue_id,title} / 新观察式 {fact_key,validity,content}。原实现只读 title/issue_id
+            #   → 新式渲成 `?: `(空),worker 跟父查 surfacing 指针直查叶子仍看不到陷阱 repro/detail。
+            # id 取 issue_id/fact_key,正文取 title/content 全文(此处是详情终点,截断即让指针落空;
+            # validity 标签透出「观察级、未 PASS-verify」的临时性,worker 据此可设备实验仲裁)。
+            iid = iss.get("issue_id") or iss.get("fact_key") or "?"
+            body = (iss.get("title") or iss.get("content") or "").strip()
+            v = (iss.get("validity") or "").strip()
+            tag = f"〔{v}〕" if v else ""
+            lines.append(f"  - {iid}{tag}: {body}" if body else f"  - {iid}{tag}")
 
     vs = data.get("version_scope", {})
     if vs.get("product_versions"):

@@ -75,3 +75,15 @@
 - **SSL 未达标：003 escalated**——cert-import **核心步骤 sound**（arg/path/form 全对、digest held up、mirror 非阻塞），但 **worker 把 interactive-confirmation `YES` authored 成 standalone command**（错误 `, prompt=YES` 语法）+ importCert 后多余手动 re-activate（importCert auto-activates）=escalated 根因（**机读账 needs_decision.json 定谳**，same class as yzg tftp→YES interactive-prompt bug）。**建议 SSL 补 enablement pass**：SSL interactive-confirmation 语法处理 + importCert auto-activate 知识 + SSL-observation footprint node（#58）。
 - **gates 全 validated on real content**：#56 execute 门 fire（003）+ command-existence 门 fire（003 standalone YES）+ structural 门 fire（001 comma）。
 - **两瑕疵**（非 digest 错）：①全角逗号"，"（worker authoring 笔误，emit 应归一化半角）②interactive-confirmation YES 被 authored 成 standalone command（worker 引导需补 #58）。
+
+## #58 后 re-calibrate 003 结果（2026-07-19 23:24，单卷 slbssl_calib_003，TUI 22932 载 360e730c/09373283）
+
+**结果：003 re-calibrate 又 escalated（0/1，非 PASS）**——evidence-first 读 `slbssl_calib_003/unfinished/003/needs_decision.json` 机读账（**#54 lesson 执行：读 primary source、非 provenance 推断**）。
+
+**四 proof points 实证**：
+- **(a) footprint reachable ✅ 生效**：worker `kb_footprint(ssl host)` → `ssl.host: ssl host {virtual|real} <host_name> [slb_service] (+6)`；`kb_footprint(ssl activate)` → `ssl activate certificate <host_name>...`；`kb_footprint(show ssl certificate)` → `ssl.certificate: no ssl certificate...` ——都 **RETURN node**（非 #54 "not found for 'ssl'"）。**#58 footprint retrieval fix 坐实生效**（whole-domain disconnect 修复）。
+- **(b) YES/activate ✗ 部分**：needs_decision claim①=**`command_existence` command=`YES`**（"命令『YES』在 10.5 手册未命中"）——**standalone YES 仍在**，#58 SSL footprint node 的 YES/auto-activate knowledge **reach 了但没阻止 worker 把 `, prompt=YES` authored 成 standalone YES 命令**。（redundant re-activate 未再现=可能已修，但 YES 本体形态仍错。）
+- **⚡新 gap（#54 未暴露）**：needs_decision claim②=**`missing_teardown`**——`ssl host virtual vh1` 是网络层配置写（框架 per-case cleanup 够不着）、无案尾恢复步，机械派生 tau=`no ssl host vh1`（paired-teardown gate；233/203 六次拆床实证的同类）。
+- **(c) 003 PASS ✗**（0/1）/ **(d) node promote 未触发**（未 PASS、validity:uncertain 未升 verified）。
+
+**结论（SSL launch-readiness）**：**#58 的 footprint retrieval fix 生效（(a)✅ whole-domain 修复坐实），但 SSL enablement 仍两处不足**——①**YES 交互确认知识**（footprint node 有 knowledge 但没让 worker 避开 `, prompt=YES`→standalone YES 的形态陷阱）②**未覆盖 missing_teardown**（ssl host virtual 需案尾 `no ssl host`）。**SSL 仍未 launch-ready，需 #58 再补一轮**：YES 语法根治（`, prompt=YES` 不 emit standalone YES）+ SSL teardown 知识（ssl host 配对 no ssl host）。**#54 lesson 复用成功**：读 needs_decision.json 机读账直接拿到权威两 claims，未再从 provenance 推断。

@@ -1403,6 +1403,32 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                 if isinstance(_g, str) and "\\n" in _g:
                     _s["G"] = _g.replace("\\n", "\n")
                     _fixed_literal_n += 1
+    # 全角逗号归一化(#61 003 device-verified 根因;与字面 \n 同址同理——命令语境无全角逗号合法用途):
+    # 框架 get_parameter 按**半角** `,` 拆位置参(test_xlsx.py:307-311 → get_parameter split_pattern
+    # 仅半角);worker 打的全角 `，`(CJK 输出 artifact,prompt 拦不住)不被识别为分隔符 → 整串当一个参数
+    # → importKey/importCert/importRootCA 等缺位置参 → TypeError → 整案 not_run(003 rows 32-34 铁证
+    # `vh1， cert/...` 崩 importKey,dev_run_case 设备真错)。dispatch G(init 各行 + 非 check_point 步)
+    # 全 ASCII、全角逗号恒为误打,无歧义 auto-normalize(区别 #56 模糊动作名的语义歧义→hint-not-rewrite);
+    # check_point 断言 pattern 匹配设备回显、保守不动。须在 init_rows 与各 gate 之前(门也看归一后值)。
+    _fw_comma = 0
+    if "，" in init_g:
+        _fw_comma += init_g.count("，")
+        init_g = init_g.replace("，", ",")
+    if isinstance(steps, list):
+        for _s in steps:
+            if not isinstance(_s, dict) or str(_s.get("E", "")).strip() == "check_point":
+                continue
+            _g = _s.get("G")
+            if isinstance(_g, str) and "，" in _g:
+                _fw_comma += _g.count("，")
+                _s["G"] = _g.replace("，", ",")
+    if _fw_comma:
+        try:
+            from main.ist_core.memory.footprint.signals import emit_signal
+            emit_signal("fullwidth_comma_normalized", autoid,
+                        source="compile_emit", count=_fw_comma)
+        except Exception:  # noqa: BLE001
+            logger.debug("fullwidth_comma_normalized signal 落盘失败", exc_info=True)
     init_rows = [Row(test_object="APV_0", method="cmds_config", data=init_g)]
 
     # 可达性校验门:配置/触发用的 IP 必须在拓扑可达集(挡住 1.1.1.1 等不可达示例 IP)

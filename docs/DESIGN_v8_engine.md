@@ -2016,3 +2016,13 @@ emit `override_frozen_reason` 门强制显式声明;终态=frozen∧轮次封顶
 **三层数据形态复位（架构红线本例）**：坑=把 **worker-DATA**（SSL dispatch facts）放 references md、指望 fs_read 送达——违「机器间传→JSON 按引用流」（应在可达的 `knowledge/data`）。修=**机制/设计→references md（人定义、维护者读）、数据→`knowledge/data`（机器间传、worker 可达按引用）**。这是 `[[reference-docs-mechanism-not-data]]` 的**通道维**：不只「md 写机制不抄数据」，还要「数据放 worker 真够得着的位」——**形态对（md 写了指针）≠ 通道通（worker 读不到 `main/`）**。
 
 **边界不变量（防回归·机器可核）**：任何「让 worker fs_read X」的设计，X 必须在 sandbox 可达根内（`knowledge/data` / `workspace` / `IST_SESSION_DIR` / `IST_USER_DIR`——见 `file_tools._agent_roots`），**不在 `main/`**（platform-denied）。prompt 指针指可达位，机制/设计文档留 references（维护者面）。**机器门（→ #60 follow-up，非 #58）**：CI 校验 worker/attributor prompt 里的 fs_read 指针路径 ∈ sandbox 可达根（防再指 `main/references/` 死通道）——Py-Eng 于 **#60** 落地（preventive 非 launch-blocking，不入 #58 避 batch 膨胀），在 #58 repoint 后、以 repointed 态为 passing baseline，**本节边界不变量即其 spec**。
+
+## 23. emit 自动归一化条款（#61，2026-07-19；deterministic-unambiguous only·Design 起草经四关）
+
+emit 路在 init_rows 构造与各门**之前**，对 dispatch G（init 行 + 非 check_point 步）做**确定性无歧义**修正：① 字面 `\n` 转义→换行；② 全角逗号 `，`→半角 `,`（#61 003 device-verified：框架 `get_parameter` 仅按半角拆位置参 `test_xlsx.py:307-311`，全角→importKey/importCert 缺位置参 TypeError→整案 not_run，dev_run_case 设备真错）。
+
+**边界（判据=可 gate 性歧义轴，锚 §21 门形态）**：仅 **deterministic-unambiguous** 变换才 auto-rewrite——device-CLI dispatch G 是 ASCII 受限文法，全角标点/字面转义恒为误打、无合法用途（唯一映射，worker 改也只能这么改）；**check_point 断言 pattern 匹配设备回显、可能合法含此类字符，保守不动**（这条边界纪律是 auto-normalize 合法性的关键）。可 gate 性**模糊**者（如 #56 execute 动作名 fuzzy 匹配、语义歧义 UP⇄DOWN）走 **hint-not-rewrite 不 auto**（auto 会把 fuzzy 隐患搬上门）。三分判据：确定 1:1 无歧义→auto-normalize / 有歧义多候选→hint-not-rewrite / 必崩但修法需 worker 判→reject。
+
+**可观测（no silent caps）**：每次归一化落 observability signal（`fullwidth_comma_normalized` 等，注册入闭集，健康输入恒零）——auto-fix 可观测非静默，运行期可溯「归一化了几处」。
+
+**scale 意义**：worker 打全角 `，` 是 CJK 输出 artifact、prompt 拦不住；auto-normalize 让引擎自愈、不需人工手改（#54 校准实证：未归一化则 worker 全角逗号→escalate→靠人手修，放量每案人工介入不 scale）。落点 `emit_xlsx_tool.py`（与既有 `\n` normalize 同址同理）。

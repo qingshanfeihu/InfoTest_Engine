@@ -621,3 +621,34 @@ leader 冒烟策略：①zhaiyq 53 案大批**批中标记自然踩到的路径*
   - 卡片**黄⚠**「完成·无产出」→ 不变量守住（bar 报跑完 + 卡片⚠标质量）→**正常**；
   - 卡片**绿✓**（零产物却✓）→ **两轴缝隙坐实**（bar 说跑完、卡片假✓无警）→ 残留 A（卡片判据窄）后批池必补的**活体佐证**，回填 D7。
 - **残留 A（卡片层判据窄）保留**：零产物卡片显绿✓=判据窄坐实（artifact_fresh=None 或非 worker fork 漏网），入后批池新四关件（卡片 silent_run 判据放宽+硬配套不变量），Design 裁「该改」后 TUI-Eng 随四关执行。下批（#38 冲刺）跑起即对照，观察结果回填 D7。
+
+**⚡ 活体首触发·yzg 全新重跑（2026-07-19，#46）**：编写期 655188 零产物 escalated **compile-worker** fork 卡片显 **⚠「完成·无产出(引擎按无产出处理)」、非绿✓** → **D7 残留 A 不变量守住**（silent_run 判据正确命中：compile-worker ∧ artifact_fresh=False ∧ ¬tail_status → 黄⚠）。漏洞 A 漏网条件（artifact_fresh=None / 非 worker fork）**本案未触发**（655188 是 compile-worker、artifact_fresh 有判据）——即残留 A 在本案=理论边界、非缝隙。文案「完成·无产出(引擎按无产出处理)」中文人话清晰（D1/D2 旁证）。**#27 footer bar 编写期更新**（18/26·产出18，cd63877d 编写期 fork 卡驱动工作、非 batch4 冻结）。漏洞 B（bar 含白跑）：Design 裁设计正确、不报异常，产出18 未含 655188 白跑（"产出"口径剔白跑、"编写完成"口径含）。
+
+### 6.12 yzg 全新重跑收批·#45 触发项实弹销账（用户令「看效果」，2026-07-19 #46）
+
+**执行序**：封存 yzg 输出→`runtime/backups/yzg_pre_rerun_20260719` + 清输出+checkpoint 净 → 干净重启 TUI（77336 旧码 2c6fc37d → **99953 载 1a958a06 新码**）+ ③A 启动核 → 起 26 案批（版本 10.5）→ 守批（Monitor+后台事件驱动）→ 收批。**交付 22/26**（vs 基线 25/26）、D31 无 MISMATCH、delivered=22、ask answered7/effective7（三铁律②无 false）。
+
+**逐案对账（降3=质量升非回归，leader 口径钉死）**：
+| 案 | 基线 | 本轮 | 性质 |
+|---|---|---|---|
+| 655203 | delivered（假等价凑过） | 挂起 | **移除假验证**（⑤A 质量升） |
+| 655233 | delivered（采纳等价凑过） | 挂起 | **移除假验证**（⑤A 质量升） |
+| 655248 | 挂起（基线唯一未交付） | 挂起（判例沿用免问） | 一致（ha fip 床限制） |
+| 655188 | delivered | escalated（fork 无产出） | **fork wallclock 可续跑非质量** |
+| 668030 | delivered | delivered（fail 中间轮 reflow 救回） | 一致（归因闭环） |
+
+**#45 触发项实弹销账**：
+- **⑤A ✓✓**：①归因 fix_direction **英文**（`write all→write memory`·build585，语言分层无中英漂移）②**44 writeback 落库**（不蒸发，对照基线 035644/035453 蒸发）③655203/655233 拒物理口假等价（诚实性↑）
+- **③A ✓**：config 删净+映射 `set()`+启动无 gating 异常 | **①A** 本批无断批·未触发(N/A) | **⑥C ✓**：离线门 2272 绿
+- **D7 ✓**：655188 零产物卡片黄⚠守住（silent_run 判据）| **#27 ✓**：footer bar 编写期更新（18/26）| **Z2/D26 ✓**：题面带尾号 | **D31 ✓**：对账门无 MISMATCH（recount==claimed==22）
+- **判例采纳×2**：668044（改过程免问）+ 655248（挂起沿用）= P2-d 沿用④实弹 | **D19 症2 双句号回归**（gather 选项文本，小修后批 ◐）
+
+**核心结论**：22 是**更诚实交付**（基线 25 含 2 例假验证 bond/VLAN）；⑤A+自愈「拒假等价+语言分层+不蒸发」三实弹坐实、修复全绿。fork wallclock（655188）是唯一非质量变异（deepseek 并发，可续跑）。基线 655203/655233 两卷对照账标「疑似假验证」（leader 口径）。
+
+**终检4项（leader 令，双报口径与机读核一致）**：①**三铁律对账**：ask answered7/effective7（无 false）；7 决策链完整（655203/655233 我答②挂起→suspended、668044/655248 判例沿用、其余 authored）；escalated 655188 honest「引擎无法继续需人工·编写0次」；4 未交付全账（delivery_report 逐案说明）。②**对照表定稿·三案性质分开**：-2 假验证移除（655203 bond/655233 VLAN，质量提升）/ -1 fork 无产出波动（655188 基线曾过·本轮 no-output·可下批救回）/ 655248 基线本轮一致挂起。③**668030 reflow 链实弹（⑤A 归因）**：round1 authored→attribution(layer V·disposition reflow·fix_direction 英文 `write all→write memory·build585`)→round2 authored 重编→pass→delivered。归因修法生效闭环坐实。④**观察位收官帧**：D31 靶=达成（对账门无 MISMATCH，D31 修后首个全新批实弹干净）；cap/双方记载(s0_dispute)面板本轮**未触发**=如实标未验证（不编造）。
+
+**续跑落定 + §11.9 归档（leader 裁②，2026-07-19）**：
+- **655188 有界续跑一次实测·escalated 续跑不复活**：checkpoint 续跑 authored=0、escalated 仍=1、引擎**不重派** fork（同批1「续跑补齐 escalated 案实测不复活」）——非「再 no-output」，是引擎 escalated 续跑行为。leader 有界处置（留 escalated 不追）达成、机制是「不复活」。
+- **resume 路径实弹坐实（P2-m keep + P2-n resume 双路径）**：续跑触发 3 挂起案恢复问询 gather（`resume:655203/655233/655248:2`）→ 答保持挂起×3 → `suspended(keep:resume:...)`（TUI G4 echo 引擎回显「保持挂起→引擎理解为:保持挂起」确认零丢答）；keep 非首批改描述→**跨批续跑不自动回 gather**（keep 不重开、同 zhaiyq caveat）。续跑后 22/26 不变、**ask answered10/effective10**（首批7+resume3 全 effective、D18 无 false）、D31 无 MISMATCH。
+- **§11.9 归档全环闭**：交付对账断言过（delivery_report「22 通过+4 未决」== delivered 22 == unfinished 4 == case.xlsx distinct autoid 22 == engine deliverable 22，报告说有盘上有）+ backup 封存（`yzg_rerun_final_22_20260719` 724K，delivered22+unfinished4）+ `unfinished/RESUME_NOTE.md`（对照注写死+4 案分类+caveat：keep 不自动回 gather、escalated 续跑不复活、床能力限制 note）+ 产物 6 件齐全（case.xlsx/delivery_report/engine_report/facts/unsuccessful_cases.md/RESUME_NOTE）。
+- **yzg 全新重跑收官全环闭·终局 22/26**（delivered 22 + unfinished 4=3 挂起 keep+1 escalated）+ 前批 pre_rerun_20260719 封存对照。新回归观察：D19 症2 双句号（gather 选项文本）+ D16 header 短号（resume 面板「挂起5203」），均小修后批。

@@ -71,3 +71,16 @@
 - **#44 §1.3.3 必留人工极背书** P：与 corpus C8 三粒度不可判定理咬合、与我评审轴（信号只授权它实际量到的）同构。
 
 **docs 落点（我 land 待 leader commit）**：DESIGN §5.5(⑥C)／§18.15(②B)／§18.16(④B)／§16.4 代价注。**待**：leader redline 整批→pytest→#45 尾 commit；#44 full mapping 待收口窗口从 §6 台账一次 land（评审门优先于自己产出）。
+
+## 八、#48 R0 归因（供给侧 6 探针·framework-capability-before-limitation 实战）
+
+用户令：归因 #47 R0「本质行为层不可行」= design/contract gap 还是 never-demanded。我供给侧 6 探针（行级证据）、Theory 公式侧、交互点 gate↔formula。
+
+**核心结论**：R0 = **demand-side 为主、供给侧无结构性阻断**（framework-capability-before-limitation 命中，同 abs_found）。
+- **探针①⑤（决定性）**：gate F 方法闭集**从 mirror 动态解析、非硬编码 8**——`structural_gate._valid_fs_by_e`:95（提 mirror env/check_point/ssh_server public methods）+ `_execute_returning_actions`:112（正则解析 apv_action 32+client_action 8=**40 execute 动作**）；execute∈allowed→accept。「词汇=8」是 105 卷 sdns **观测产出**、非能力上限。
+- **门三态判据钉死**：found_times REJECT（:419-427 框架 2 参真做不到）vs execute ACCEPT（框架 ssh_server 有 40 动作）——**门 accept/reject 判据=框架支持性、非需求**。
+- ②blocks 无 execute shape=prompt-data（steps 可绕）／③worker refs 未指 execute=prompt-data／④domain_grammar slb×1/ssl×0=grammar-data／⑥DESIGN 沉默=非排除。**缺口仅 prompt 引导+slb/ssl grammar JSON（低成本），无 engine/design-contract gap**。
+
+**G/V 分层（双专家交叉·收口）**：R0 拆 G 层（execute 命令供给，我证 gate accept 无阻断）∧ V 层（π 投影可观测，Theory R1 逐个盘：握手/健康 V 通、信任验证走既有 V_U）。**form/π 正交**（Theory 精化：form 判断言形态 100% 覆盖、π 判观测面存在性，V 瓶颈在 π 非 form）。**R0 重构终态**：≠「不可行」，= G 通∧V 逐个盘∧需求侧未证∧缺口低成本。#47「不可行」是把「逐个盘 V 层+需求侧空白+引导缺口」笼统压成一个标签。
+
+**方法样本（带走）**：R0「零产出」信号实际只量到「没产出过」——没当「结构性排除」，行级 grep 查证发现 gate/parser/框架全支持 execute。同本场那根轴（信号只授权它实际量到的）+ framework-capability-before-limitation。双专家 G（我 gate）+V（Theory 公式）交叉把 R0 从笼统标签拆成分层诊断——同 ①A 独立同结论交叉验证。**待**：leader 合并 #48+Theory §4 → #47 amendment。

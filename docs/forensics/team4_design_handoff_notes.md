@@ -83,4 +83,16 @@
 
 **G/V 分层（双专家交叉·收口）**：R0 拆 G 层（execute 命令供给，我证 gate accept 无阻断）∧ V 层（π 投影可观测，Theory R1 逐个盘：握手/健康 V 通、信任验证走既有 V_U）。**form/π 正交**（Theory 精化：form 判断言形态 100% 覆盖、π 判观测面存在性，V 瓶颈在 π 非 form）。**R0 重构终态**：≠「不可行」，= G 通∧V 逐个盘∧需求侧未证∧缺口低成本。#47「不可行」是把「逐个盘 V 层+需求侧空白+引导缺口」笼统压成一个标签。
 
-**方法样本（带走）**：R0「零产出」信号实际只量到「没产出过」——没当「结构性排除」，行级 grep 查证发现 gate/parser/框架全支持 execute。同本场那根轴（信号只授权它实际量到的）+ framework-capability-before-limitation。双专家 G（我 gate）+V（Theory 公式）交叉把 R0 从笼统标签拆成分层诊断——同 ①A 独立同结论交叉验证。**待**：leader 合并 #48+Theory §4 → #47 amendment。
+**方法样本（带走）**：R0「零产出」信号实际只量到「没产出过」——没当「结构性排除」，行级 grep 查证发现 gate/parser/框架全支持 execute。同本场那根轴（信号只授权它实际量到的）+ framework-capability-before-limitation。双专家 G（我 gate）+V（Theory 公式）交叉把 R0 从笼统标签拆成分层诊断——同 ①A 独立同结论交叉验证。**已合并**：leader 入 #47 amendment（新节「R0 归因修正：G/V 分层」，三方 sign-off）。
+
+**#48 erratum（2026-07-19·Py-Eng #50 per-method READ 抓·最刺的自打脸）**：我 #48 引的 `ssh_server.py:151 def execute` 是 **grep 命中当 read line 引**——实际 :151 落在 `"""…"""` 注释块（:130-160）内 = **dead code**，live dispatch 在 `dic_operation.py:57`。结论 **unchanged**（40 动作 registry 我真读了 `_execute_returning_actions` parse + gate :559-561 no-whitelist skip 与死引无关）。**轴咬了 championing 它的人**：满会话讲「grep 命中≠read line」，自己在 #48 证据里犯——引 file:line 前必 Read 那行上下文、不拿 grep 命中当读过。已入 `[[signal-licenses-only-what-measured]]` 引证侧。
+
+## 九、#44 LLM 自由度分层映射（committed bfac0b41「三层定稿」）+ 一个 thrashing 过程教训
+
+**交付（三层各归其位、cross-ref、零双写）**：
+- **DESIGN §21「LLM 自由度分层纪律」**（clause/framework 层，byte-identical @ 1997 行，过 Theory P + leader P）：双轴（门密度 key 需 gate 性 × 门形态 by 可 gate 性 ABC）+ 三极收束（机械默认可/engine 强制/必留人工）+ C×需强防御纵深 + 2 firm 条款（form 守成/欠定修法方向修复）+ 修复模板。
+- **mapping doc §7 Design 全映射定稿**（per-face 数据层）：30 面 + #48 派生面（`worker/execute-form可见性`）三极 verdict × ⑥C `[Wn]/[An]` cross-ref × 官方锚 × clause 状态（firm 9 / 理论初判 ~14，不 over-claim）。
+- LLM-Eng §1-§6 数据底（双轴框架/决策面/§3 表/六轴注入/§6 台账）。
+- **后批**：worker/attributor prompt/skill 实改（#48 派生面 contracts.md 补句、条款② min_requests 接线）走四关 with eval，按 §21 三极+门密度对号。
+
+**一个 thrashing 过程教训（记打法·负面样本）**：这轮 land→revert（leader「mapping DOC only」澄清，我把原任务「条款化入 DESIGN」当即时 land）→leader ruling reinstate→**我 reinstate 撞 leader 已做的 reinstate 成 duplicate**→dedup（verify 两副本 byte-identical → git checkout 两份 + 单次 re-add）→relocate §7 + 删独立 doc。**根因=并发动作 + 消息交叉 + 我 reinstate 前没 re-read 盘上状态**（leader 说「byte-identical to reviewed state」已暗示 reviewed 副本在盘、我该先 read）。同 `[[signal-licenses-only-what-measured]]` 的执行侧——**动作前先核盘上状态**（指令不授权盲目行动）。正面：clean revert 尊重权威 process 对了、dedup 前 verify byte-identical 才动对了；负面：reinstate 前漏核状态造 duplicate。**结果**：leader commit 了 §7 版（=我 relocate 的 ruling 版），committed 状态正确、你 flag 的 3 点随独立 doc 删除消解。future-me：多 agent 并发编辑同文件时，任何 re-add/restore 前先 `git status`+grep 盘上现状。

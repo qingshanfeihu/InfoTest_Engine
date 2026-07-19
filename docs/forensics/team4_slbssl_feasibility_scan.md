@@ -152,7 +152,7 @@ product 手册总 1720 md;**slb 118 / ssl 104 / sdns 79**——slb/ssl 手册覆
 
 **Theory 需求侧铁证**（§4，`team4_slb_ssl_risk_theory.md`）：105 交付卷 **I 列非空 0 次 vs 同族 H 列 73 次**（用了 H 没用 I=没需要，不是表达不了）；21 个未决案欠定原因全为可验性边界/测试床缺 host，案文「触发」全指 dig 客户端——**零案因动作表达不了而欠定**。K 的 form 域与 σ 结构容纳 execute 类动作；π 本就含客户端工具观测（routera=dig 235 次），加 TLS 客户端 host 属数据条目。
 
-**Design 供给侧行级证据**（六探针）：①门 **accept** execute——structural_gate `_valid_fs_by_e`:95-108 + `_execute_returning_actions`:112-122 从 mirror ssh_server **动态解析**方法闭集，execute 解析出 **40 动作**（apv_action 32+client_action 8），非硬编码 8 方法；F=execute 放行 :559-567。②I 列 accept（:973-1004 仅校注入 format 安全）。③blocks 无 EXECUTE kind 但 steps 原生通道天然绕过——非硬阻断。④DESIGN 无「config+dig」scope 条款（沉默=未需求过，非排除）。**能力链（gate/parser/框架/设计契约）全通、零代码改动需求。**
+**Design 供给侧行级证据**（六探针）：①门 **accept** execute——structural_gate `_valid_fs_by_e`:95-108 + `_execute_returning_actions`:112-122 从 mirror **动态解析**方法闭集，execute 解析出 **40 动作**（apv_action 32+client_action 8），非硬编码 8 方法；F=execute 放行 :559-567。〔**#50-A 错勘**：#48 曾引 `ssh_server.py:151 def execute` 佐证框架有 execute——该处实为 :130-160 注释块内**死代码**；活体 execute 在 `dic_operation.py:57`，动作注册表在 apv_action/client_action。**结论不变**（门放行走 :559-561 无白名单跳过、40 动作注册表真实存在），仅证据锚订正——「数得出、没读出」的实例，#50 逐函数精读补上。〕②I 列 accept（:973-1004 仅校注入 format 安全）。③blocks 无 EXECUTE kind 但 steps 原生通道天然绕过——非硬阻断。④DESIGN 无「config+dig」scope 条款（沉默=未需求过，非排除）。**能力链（gate/parser/框架/设计契约）全通、零代码改动需求。**
 
 ### 真实缺口清单（按成本类）
 
@@ -192,3 +192,5 @@ product 手册总 1720 md;**slb 118 / ssl 104 / sdns 79**——slb/ssl 手册覆
 - **OCSP 定格＝needs device probe**（LLM-Eng 手册深挖定证：`SSL_Hostname_List.md:1` 权威表 OCSP 仅 config 面 `ssl settings ocsp`、**无 show 投影**——与 CRL 有 `show ssl crlstatus` 不对称；全手册 grep 零命中；间接候选 `show statistics ssl`/握手行为观测需上机证。诚实标注非猜测）。
 
 **结论**：SSL/SLB **无结构性观测盲区**，V 层不构成扩域高风险关口。普查 **11/11 全定格＝风险清单零 undetermined 项**（10 V 通 + OCSP 1 项「需上机探」的有界闭合项——试点若含 OCSP 意图案，归探路层顺带 probe；OCSP config-有/show-无 的不对称本身可作产品观察候选）。残余前置＝床工具链一次性 probe（openssl/curl 实装确认，试点阶段一顺带）。
+
+〔**#50-B 修正（Theory 自认盲区）**：本普查观测通道枚举为 show/客户端工具**两值，漏了第三通道**——设备侧抓包+hex 断言（金标准 SSL 加密验证实法：`debug trace live tcp` I 列注入端口 + `found (1703 03)|(17 0303)` 匹配 TLS record 头）。taxonomy 修正为**三值**；握手/加密验证由「客户端条件工具」升级为**有金标准硬路径**。教训入档：观测盘点≠逐用例读用法，#50 三线（A 机制/B 用法/C 特性）合璧才算吃透。〕

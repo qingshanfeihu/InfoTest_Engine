@@ -55,7 +55,7 @@ _SKILL_GROUPS: dict[str, set[str]] = {
     "compile-worker": {"compile", "device"},
     "ist-verify": {"compile", "device"},
     "device-verify": {"device"},
-    "config-automation": {"device"},
+    "config-automation": set(),   # config_generator 程序化管线退役(#45 ③A):SKILL.md 现只用 fs_* 基础组做 IP 替换,不再需 device 组
     "config-answer": {"device"},
     "config-answer-draft": {"device"},
     "config-answer-verifier": {"device"},

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from collections import Counter
@@ -822,6 +823,33 @@ _FORK_ARG_KEYS = (
 )
 
 
+# 凭证键名脱敏(#58 security,sec58 报告 `docs/forensics/team4_sec58_report.md` 的精确模式):
+# `dev_ssh`(ssh.py:173)/`dev_rest`(restapi.py:46)收 password/enable_password 作**输入参**且
+# arg-priority 解析(ssh.py:33-35),在 dyn-agent 注册表(loader.py:222-223)非 `_ON_DEVICE_BLOCKED`
+# ——dyn-* agent 传 `password=` 会 verbatim 进 .events.jsonl(sec58 实证的条件泄漏)。故"记全参"
+# 必须脱敏、硬红线代码强制(非 convention)。模式:`password` 子串覆盖 `enable_password`;无裸
+# `key`/`pass`(避免 `keyword`/路径误中);诊断参 version/command/pattern/query/path/autoid 不受影响。
+_REDACT_ARG_KEY = re.compile(
+    r"(?i)(password|passwd|secret|token|credential|api[_-]?key|access[_-]?key)")
+
+
+def _compact_args(args: Any, limit: int = 300) -> str:
+    """Fix C(#58):tool_call **全参**紧凑序列化(含 kwargs)供事件诊断。短 `arg` 只显一个
+    代表参——kb_footprint 的 `version` kwarg 曾因日志只记位置参而不可诊(#54 whole-domain
+    footprint 断连的诊断死角:silent-empty + unlogged-kwarg = 不可见 bug)。此字段记全参,
+    下一个同类 bug 可溯;凭证键名值脱敏见 `_REDACT_ARG_KEY`(sec58 实证 dyn-agent dev_ssh
+    的 password 参会泄进日志,故必须脱敏)。"""
+    if not isinstance(args, dict) or not args:
+        return ""
+    import json as _json
+    safe = {k: ("***" if _REDACT_ARG_KEY.search(str(k)) else v) for k, v in args.items()}
+    try:
+        s = _json.dumps(safe, ensure_ascii=False, default=str, sort_keys=True)
+    except Exception:  # noqa: BLE001
+        s = str(safe)
+    return s if len(s) <= limit else s[:limit] + "…"
+
+
 def _short_fork_args(args: Any, limit: int = 48) -> str:
     """从 tool_call 的 args 取一个有代表性的标量参数,截断成单行展示。
 
@@ -999,6 +1027,7 @@ def _emit_fork_step_events(fork_id: str, msg: Any, counter: list[int]) -> None:
         arg = _short_fork_args(targs, limit=60)
         _fork_emit_event({"event": "tool", "fork_id": fork_id, "tool": name,
                           "arg": arg[1:-1] if arg.startswith("(") else arg,
+                          "args": _compact_args(targs),   # Fix C(#58):全参含 kwargs 供诊断
                           "n_calls": counter[0]})
     is_tool_result = (
         getattr(msg, "type", "") == "tool" or msg.__class__.__name__ == "ToolMessage"

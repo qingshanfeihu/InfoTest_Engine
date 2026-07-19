@@ -92,12 +92,15 @@ class FootprintIndex:
     内存占用: ~1.5MB for 500 nodes
     """
 
+    _MAX_LOAD_RETRY = 3
+
     def __init__(self, footprint_dir: Path):
         self._dir = footprint_dir
         self._nodes: dict[str, dict] = {}
         self._bug_index: dict[str, str] = {}
         self._token_index: dict[str, set[str]] = {}
         self._loaded = False
+        self._load_attempts = 0
 
     def _ensure_loaded(self) -> None:
         if self._loaded:
@@ -106,11 +109,17 @@ class FootprintIndex:
             self._loaded = True
             return
 
+        self._load_attempts += 1
+        transient_skipped = 0   # Fix B(#58):OSError=瞬态读失败(云盘 online-only/sync-lag)
         for f in self._dir.rglob("*.json"):
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
-                logger.debug("footprint 加载失败 %s: %s", f, exc)
+            except json.JSONDecodeError as exc:
+                logger.warning("footprint 节点 JSON 损坏(永久跳过)%s: %s", f, exc)
+                continue
+            except OSError as exc:
+                transient_skipped += 1
+                logger.debug("footprint 读失败(瞬态)%s: %s", f, exc)
                 continue
 
             fid = data.get("feature_id")
@@ -134,9 +143,24 @@ class FootprintIndex:
             for tok in tokens_to_index:
                 self._token_index.setdefault(tok, set()).add(fid)
 
+        # Fix B(#58):瞬态读失败(云盘 online-only/sync-lag)→偏载。单例 loaded-once 缓存偏载
+        # 会整轮持久、无自愈(#54 whole-domain 断连的次要 latent 路径)。有瞬态跳过且未超重试
+        # 上限 → 清空不缓存、下次 _ensure_loaded 重试(等 materialize);超上限则 loud warn +
+        # 缓存现状(避免病态每访问重 glob)。JSONDecodeError(永久损坏)不触发重试。
+        if transient_skipped and self._load_attempts < self._MAX_LOAD_RETRY:
+            logger.warning("FootprintIndex 偏载:%d 节点、%d 个瞬态读失败跳过——不缓存,第 %d 次重试",
+                           len(self._nodes), transient_skipped, self._load_attempts)
+            self._nodes.clear()
+            self._bug_index.clear()
+            self._token_index.clear()
+            return   # 不置 _loaded → 下次 _ensure_loaded 重试
         self._loaded = True
-        logger.info("FootprintIndex loaded: %d nodes, %d BUG, %d tokens",
-                    len(self._nodes), len(self._bug_index), len(self._token_index))
+        if transient_skipped:
+            logger.warning("FootprintIndex 载入 %d 节点、%d 个瞬态读失败仍跳过(重试达上限 %d)",
+                           len(self._nodes), transient_skipped, self._MAX_LOAD_RETRY)
+        else:
+            logger.info("FootprintIndex loaded: %d nodes, %d BUG, %d tokens",
+                        len(self._nodes), len(self._bug_index), len(self._token_index))
 
     def lookup(self, command: str) -> dict | None:
         """精确查找。
@@ -366,11 +390,20 @@ _FOOTPRINT_INDEX_SINGLETONS: dict[str, FootprintIndex] = {}
 
 
 def get_footprint_index(nodes_subdir: str = "nodes") -> FootprintIndex:
-    """获取进程级 FootprintIndex 单例（按 nodes_subdir 缓存）。"""
+    """获取进程级 FootprintIndex 单例（按 nodes_subdir 缓存）。
+
+    Fix A（#58，2026-07-19）：版本分区 subdir `nodes_<version>/` 不存在时**回退默认 `nodes/`**。
+    版本分区是可选特性——footprint 树默认全在 `nodes/`，版本化未启用。缺此回退时
+    `kb_footprint(command, version=X)` 会指向不存在的 `nodes_<version>/` → 空索引 → 静默
+    "not found"（#54 实证：ssl+slb whole-domain footprint 全断，写回落默认树但查询读版本树、
+    subdir 路由不一致）。"""
     idx = _FOOTPRINT_INDEX_SINGLETONS.get(nodes_subdir)
     if idx is None:
         from main import knowledge_paths as kp
         fp_dir = kp.KNOWLEDGE_FOOTPRINTS / nodes_subdir
+        if nodes_subdir != "nodes" and not fp_dir.is_dir():
+            logger.info("footprint 版本分区 %s 不存在，回退默认 nodes/（优雅降级）", nodes_subdir)
+            return get_footprint_index("nodes")
         idx = FootprintIndex(fp_dir)
         _FOOTPRINT_INDEX_SINGLETONS[nodes_subdir] = idx
     return idx

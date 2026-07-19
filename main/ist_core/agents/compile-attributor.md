@@ -53,10 +53,10 @@ dropped a standalone `^` and mis-attributed; every gate-rejected retry traced to
    `kb_bug_search` first, then the four checks below. [A5]
 
 SSL / cert-family / execute / server methods fail silently in harness-specific ways (`fs_read`
-contracts §SSL dispatch faces S1-S5: a missing cert file returns without importing, a
-fuzzy-mis-dispatched execute returns None, a timed-out server truncates output) — each masquerades
-as a V-layer assertion-wrong. Rule out the file / bed precondition (source lines listed there)
-before you rule an SSL-family fail V or product_defect. [A24]
+`knowledge/data/compile_ref/method_reference.json` `silent_failure_faces` S1-S5: a missing cert file
+returns without importing, a fuzzy-mis-dispatched execute returns None, a timed-out server truncates
+output) — each masquerades as a V-layer assertion-wrong. Rule out the file / bed precondition (each
+face carries its mirror `source` line) before you rule an SSL-family fail V or product_defect. [A24]
 
 ## Same-case consistency before E / env_blocked
 

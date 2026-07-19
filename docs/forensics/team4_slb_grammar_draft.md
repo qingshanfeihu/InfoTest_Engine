@@ -33,4 +33,18 @@
 - **四关**：合入后随 ssl 条目走四关（Design 一致性 + Theory 理论面 + redline + leader pytest）。本草案 Theory 侧结构=引用闭包同 sdns 现役体例,理论面无新构件（复用既有 statement/reference_closure 机制,零新公式）。
 
 ## §4 estimate 对账
-6-8 entries 预期 → 实交 **8**（5 statements + 3 reference_closures），覆盖 first-batch G1/G2/G4 的定义形态 + 引用闭包。G3/G5 DEFERRED 未计（scoped）。
+6-8 entries 草案 **8**（5 statements + 3 reference_closures）→ **#52 fine-check 后 landed 4 statements + 2 closures**（订正见 §5）。
+
+## §5 LLM-Eng fine-check 订正记录（#52 cross-check，审计痕迹保留、非静默重写）
+
+本草案 pattern 从 §7 CLI 频度推、未逐字核 manual（§6 已预留「待精校」口）——LLM-Eng #52 fine-check 对 manual verbatim 精校，**Theory 读 manual 复核全部 concur**：
+
+| # | 我 draft | LLM-Eng 订正 | manual verbatim 证据（Theory 复核） | 判 |
+|---|---|---|---|---|
+| F1 | slb_real_health_bind 首 token=rs | **DROP**（+其 closure） | manual `slb real health <hc_name> <real_service> <ip> <port>` 首参=**hc_name 非 real**（我捕获错 token）；gold standard health 全用 `slb virtual health on\|off`（VS-toggle，多卷 verbatim、零 real ref） | concur DROP |
+| F2 | vip/rsip `[\d.]+`（IPv4 only） | widen `[0-9a-fA-F:.]` | gold standard `slb virtual tcp v1 2::abcd`（IPv6 VS verbatim）+ SLB IPv6 test list | concur |
+| F3 | port `\d+` 必需 | port optional | `slb real dns dns_rs1 192.168.2.x` / `"RS_DNS_1" 10.1.1.10`（无 port verbatim） | concur |
+| F4 | roles vs/rs/group | rename concern→`name` | dangling_references detector 读固定 concern（sdns host_pool_bind 用 `name`）——vs/rs/group 读不到崩 closure | concur |
+| F5 | slb_policy_needs_vs_and_group | narrow policy→VS；policy→group DEFERRED | policy→group=multi-concern closure，detector 现 single-concern；见 RULING（recommend generalize detector） | concur narrow |
+
+**净结果 theoretically sound**：drop 1=纠我 pattern 实证错误、narrow 1=detector 机制约束下正确 scoping、F2/F3=覆盖**扩大**（我 draft 过窄）。cross-check 抓到 3 实证错误+2 遗漏——正是 §6 预留「pattern 待逐字精校」口的设计闭环。G3/G5 仍 DEFERRED（scoped）。

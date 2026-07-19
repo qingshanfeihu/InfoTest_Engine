@@ -115,13 +115,13 @@
 
 | G | ① product | ② framework (A, **CONFIRMED generic**) | ③ manual (B, 预期 THIN) | ④ observation (四形态) | verdict |
 |---|---|---|---|---|---|
-| G1 virtual service | ✓ slb virtual service/http/tcp | ✓ generic + client func_1 curl | ◐ **VS-reachability 1 vol**（HTTPS-VS triple=SSL∩SLB 交集） | ✓ show slb virtual（**pure-SLB show 独立性 pending probe #53**;金标准 obs 全 sdns-embedded） | **first-batch**(1 先例) |
+| G1 virtual service | ✓ slb virtual service/http/tcp | ✓ generic + client func_1 curl | ◐ **VS-reachability 1 vol**（HTTPS-VS triple=SSL∩SLB 交集） | ✓ show slb virtual（**existence/traffic standalone confirmed #53 item5**） | **first-batch**(1 先例) |
 | G2 real+group | ✓ slb real/group member | ✓ generic + apv func_5/6(A:72/79) | ◐ scaffolding(slb 对象作 sdns local pool) | ✓ show slb real/group（pending probe） | with-gaps(manual 薄) |
 | G3 scheduling | ✓ slb group method(rr/wrr…) | ✓ generic + client func_1 curl | ⚠ **ZERO**（rr 配 128× 但**无 volume 按流量验分布**） | ✓ show slb group + client-tool(curl 采样)+ capture（pending probe） | **DEFERRED**(无先例=novel,higher risk) |
-| G4 health check | ✓ slb real health | ✓ execute func_1/209-213(A:48/257-337)+ self-assert(func_3/4/8/203) | ✓ **THICK 41 assertion lines**（good/bad real IP:port driven） | ✓ show health + **execute-self-assert** | **first-batch**(厚先例) |
+| G4 health check | ✓ slb real health | ✓ execute func_1/209-213(A:48/257-337)+ self-assert(func_3/4/8/203) | ✓ **THICK 41 assertion lines**（good/bad real IP:port driven） | ✓ **per-entity health 走 sdns face** `show statistics sdns service ip`（#54 case002:`show statistics slb virtual` 无 Health 行）+ execute-self-assert | **first-batch**(厚先例) |
 | G5 session persistence | ✓ slb group persistence/timeout | ✓ generic + execute func_219(A:409) | ⚠ **ZERO L4**（唯一命中=sdns GSLB affinity=不同物） | ✓ show statistics slb group + client-tool（pending probe） | **DEFERRED**(无先例=novel) |
 | G6 policy-rules | ✓ slb policy default/qos/static | ✓ generic cmd_config | ◐ scaffolding | ✓ show slb policy（pending probe） | with-gaps(manual 薄) |
-| G7 stats-observability | （观测面本身） | N/A(纯 show) | ◐ scaffolding embedded | ✓ show statistics slb 全 + show slb connection（**全 sdns-embedded,pure-SLB 独立性 pending probe #53**） | 观测最全、独立性 pending |
+| G7 stats-observability | （观测面本身） | N/A(纯 show) | ◐ scaffolding embedded | ✓ show statistics slb 全 + show slb connection（**traffic/connection standalone confirmed #53 item5**;**health 维走 sdns face 见 G4**） | 观测最全、三维独立 confirmed(health 例外) |
 
 ## §9 SLB Per-Area Verdict + SLB vs SSL 对比
 
@@ -149,6 +149,8 @@
 
 **manual THIN 坐实（B 数据）**：86 卷 mention slb、**79 纯 scaffolding**（slb 对象作 sdns local pool、DNS-face 断言）、true SLB-face 仅 **7**、SLB-centric **2**——**SLB 从未作独立测试域**（§9 finding 被 B 数字实证）。
 
-**④ observation（B fold + #53 item5 PASS）**：金标准 SLB observation 历史上 sdns-embedded——但 **#53 item5 上机证实=CONVENTION 非 device limitation**:`show statistics slb ?` 10 独立子命令(all/global/group/node/policy/proxyip/real/summary/virtual/vlink)、`show statistics slb global` 零 sdns 上下文结构化输出(conn/sec、ssl conn/sec、current conn、throughput、Real UP/DOWN、client/server 维)、`show slb connection current` 结构化连接表——**pure-SLB 编译案可 standalone 观测**。④ cells 从 pending **升 confirmed standalone**。**data-prerequisite footnote**:per-VS stats(`show statistics slb all`)在 VS 配置前为空——first-batch 卷自然先配 VS,故 **case-structure fact(config before observe)、非 gap**。matrix 除 routerA 工具链(◐ 凭证取中)全 settled。
+**④ observation（B fold + #53 item5 PASS + #54 case002 calibration refine）**：金标准 SLB observation 历史上 sdns-embedded——#53 item5 上机证实**对 existence/traffic/connection 三维 = CONVENTION 非 device limitation**:`show statistics slb ?` 10 独立子命令、`show statistics slb global` 零 sdns 上下文结构化输出(conn/sec、current conn、throughput、聚合 Real UP/DOWN counts、client/server 维)、`show slb connection current` 结构化连接表——**这三维 pure-SLB 编译案可 standalone 观测**。
+**⚠ HEALTH 维度例外（#54 case002 device 铁证,refine #53 item5）**:`show statistics slb virtual tcp <vs>` **无 `Health:` 行、仅流量计数器**;**per-entity health UP/DOWN 状态必走 sdns service face** `show statistics sdns service ip`（global 的聚合 UP/DOWN counts ≠ per-VS/per-real 状态,health-flip 断言要 per-entity）——**health 的 sdns-embedded 是 device limitation、非 convention**（corroborates line B §3.1:health cases sdns-embedded 有实证原因,是 observation-surface fact 非习惯）。故 ④ **分维度**:existence/traffic/connection **confirmed standalone**、**health routes through sdns face**。
+**data-prerequisite footnote**:per-VS stats(`show statistics slb all`)VS 配置前为空——case-structure fact(config before observe)、非 gap。matrix 除 routerA 工具链(◐ 凭证取中)全 settled。**#54 case002 归因=mindmap observation-lens 选择(Test-Eng authoring)reflow 修,非 engine/framework 缺陷**——校准赢:paper 说 pure-SLB 全维 standalone,device 说 health 是例外。
 
 matrix 四面齐（① product + ② confirmed generic + ③ B per-G thinness + ④ pending probe）。SLB 理解层就绪,line C 收口。

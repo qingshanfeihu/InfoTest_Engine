@@ -65,8 +65,8 @@ soundness is the user's call, and the sheet still faces every emit gate and the 
   brief is authoritative. Never copy whatever the device happens to show right now. Values
   unknowable offline stay `<RUNTIME>`. Count-type expectations come from `compile_expected_hits`,
   never hand math. [W5]
-- Retrieval order (`compile_precedent` → `kb_footprint` → manual → `dev_probe`/`dev_help`) with
-  each source's authority and caveats is in `references/contracts.md`; consult in that order. [W6]
+- Retrieval order (`compile_precedent` → `kb_footprint` → manual → `dev_probe`/`dev_help`), in that
+  order; framework method arg-signatures + silent-failure faces (SSL/execute/server) are in `knowledge/data/compile_ref/method_reference.json` (fs_read-able projection; the mirror is outside your sandbox). [W6]
 - **A distribution-class hit count is a sample, not an invariant** — for distribution algorithms
   (rr / wrr / grr / gwrr; `domain_grammar.json` `algorithm_classes.distribution`), a single member's
   hit count varies with the dig sample window: the same config passes one run and fails the next.

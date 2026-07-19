@@ -31,7 +31,7 @@ InfoTest Engine 把技术文档（网络 / IPv6 / HTTP/2 / 网关配置指南等
 9. **断言期望值溯源脑图/手册，不 observe-then-assert。** 把设备 show 回显照抄成断言期望值＝假验证（项目铁红线）。
 10. **判「框架做不到」前先查是不是用错了已有能力。** 先确认不是自己用错（abs_found vs found 教训）再下结论（`[[framework-capability-before-limitation]]`）。
 11. **改闸门前先画状态生命周期、核对设计意图。** 门的条件常与远处机制成对（如 frozen 闸配 override 通道）；门挂凭证路不挂编辑路（直改文件会绕过编辑入口门），翻案需行级证据（`[[gate-change-verify-design-intent]]`、`[[gates-on-credential-path-not-edit-path]]`）。
-12. **写 prompt/skill 讲事实、按自由度分层。** 陈述现象+后果+为什么，别造术语、别把 ALL-CAPS「必须/绝不」当默认；高自由度给方向信任模型，低自由度才上精确护栏；参考文档只写机制、数据按引用（fs_read mirror 现查）（`[[prompt-facts-not-coined-terms]]`、`[[reference-docs-mechanism-not-data]]`）。
+12. **写 prompt/skill 讲事实、按自由度分层。** 陈述现象+后果+为什么，别造术语、别把 ALL-CAPS「必须/绝不」当默认；高自由度给方向信任模型，低自由度才上精确护栏；参考文档只写机制、数据按引用（worker fs_read `knowledge/data/compile_ref/` 投影现查，投影由 mirror 生成——mirror 源不在 worker 沙箱，只引擎门直读，#58 FINDING #1）（`[[prompt-facts-not-coined-terms]]`、`[[reference-docs-mechanism-not-data]]`）。
 
 ## Claude Team 工作流（cmux claude-teams，2026-07-17 实战定型）
 
@@ -154,7 +154,7 @@ main/ist_core/tools/
   - **输出形态/格式**的示例（断言长什么样、provenance JSON 的结构骨架）——官方鼓励，帮 LLM 看清形态，可给。
   - **领域判断答案**的具体例子（「算法类应改成 `show statistics`」）——禁。LLM 会当通用规则一刀切套用、误伤异类。实证：grade 重做意见写死「算法类补 `show statistics`」→ GA 本该 `dig` 验命中、却被迫套出 `Hit:\d+` 恒真断言 → 3 个 GA case 连续 CUT 回归。
 - **术语一致 + 假设 LLM 已聪明**：同一概念自始至终用同一个词（别一会儿「成员 IP」一会儿「落点」——术语漂移会让 LLM 误判同/异）；不解释 LLM 已知的基础（RR 是什么、dig 是什么），把 token 留给真正的踩坑点。
-- **参考文档只写机制，数据按引用**：框架动作注册表/命令清单/主机方法表是**数据**（随框架版本增长，抄进文档必漂移）；文档写分发机制、语法契约、静默失败模式 + **源码路径**，让 LLM 编写时现查（mirror 在盘上 fs_read 直读）。别把清单内联进 md 替模型思考——违背「LLM 走控制面、数据按引用流」构造（实证 2026-07-05：execute 27 动作分组清单+用途点评被用户拦下）。机械门同理：闭集判定从 mirror 源码解析，不硬编码。
+- **参考文档只写机制，数据按引用**：框架动作注册表/命令清单/主机方法表是**数据**（随框架版本增长，抄进文档必漂移）；文档写分发机制、语法契约、静默失败模式；**数据投影进沙箱可达的 `knowledge/data/compile_ref/`**（生成式、由 mirror 解析生成，如 `method_reference.json`），worker fs_read **投影**现查——**mirror 源码不在 worker 沙箱**（`_FRAMEWORK_MIRROR_READ_ALLOW` 2 文件白名单只放 test_xlsx/check_point，混有明文测试口令故最小暴露），只有引擎门经 `_mirror_src` 直读 mirror 并生成投影（FINDING #1 修法·#58：worker「fs_read mirror 现查」是死指针，读投影）。别把清单内联进 md 替模型思考——违背「LLM 走控制面、数据按引用流」构造（实证 2026-07-05：execute 27 动作分组清单+用途点评被用户拦下）。机械门同理：闭集判定从 mirror 源码解析（引擎侧 `_mirror_src`），不硬编码。
 - **引擎不得向 LLM 注入具体命令建议（2026-07-13 用户裁决，两床被跑死的实证）**：引擎能给的只有两类——①**机械可推导**的引用（如 inverse_forms 从 command_inventory 的签名配对现查：`no X` 是 `X` 的逆元，闭合于手册版本、作用域恒等于原命令）②**安全边界禁令**（destructive_commands：`clear config all` 类整机清配置一律拒，属窄桥护栏非知识）。**经验性知识一律走判例层**（设备行为观察入 footprint），由 worker 检索后自主查手册决策。反例：曾在文法层放一条 `suggested_teardown: "clear slb all"`（人写的经验命令），worker 朝"清得更干净"升级成 `clear config all`，93/105 两台设备床被跑死——**给 LLM 一条它不知道边界的命令建议，等于把作用域判断权交出去**。
 - **改 prompt 前先有 eval（官方 eval-first）**：把要防的回归固化成可机读断言（如「产出 excel 不含写死的 `Hit:\s+1` / 命中 IP」），改完跑 eval + baseline 对比，别只靠肉眼看一次产物就下结论。
 

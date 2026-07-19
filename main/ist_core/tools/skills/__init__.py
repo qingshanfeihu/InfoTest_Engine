@@ -85,16 +85,14 @@ def invoke_skill(skill: str, brief: str = "") -> str:
         return execute_fork_skill(skill, brief)
 
     
-    # 交互面 XML 分节(2026-07-05):skill 正文是「行为指令」,引用清单是「可按需取的
-    # 资源指针」——标签区分角色,LLM 不再从混排文本里猜哪段是指令哪段是数据。
-    # (机读面不受影响:本返回只有 LLM 消费。)
+    # 交互面 XML 分节(2026-07-05):skill 正文是「行为指令」。
+    # `<skill_references>` 列表机制已删(#58/Design §22 B4):它列 `main/ist_core/skills/*/reference/`
+    # 路径给 LLM「按需 fs_read」,但 `main/` 在 worker 沙箱黑名单(`_PLATFORM_DENIED_TOP_LEVEL`)
+    # → 那些路径 fs_read **不可达=死指针**(且历史上 loader 查 `reference/` 单数、实际目录 `references/`
+    # 复数,块从未 emit)。修单复数只会复活一个「列不可达路径」的误导块(比死更糟);故整块删。
+    # worker 需要的框架数据经 `knowledge/data/compile_ref/` 投影(method_reference.json)可达流;
+    # `references/` 降为维护者文档(§22)。
     content = skill_path.read_text(encoding="utf-8")
-    refs = []
-    ref_dir = _SKILLS_DIR / skill / "reference"
-    if ref_dir.exists():
-        for ref_file in sorted(ref_dir.iterdir()):
-            if ref_file.is_file():
-                refs.append(f"  - main/ist_core/skills/{skill}/reference/{ref_file.name}")
     parts = [
         f'<skill_content name="{skill}">',
         f"# Skill loaded: {skill}",
@@ -102,6 +100,4 @@ def invoke_skill(skill: str, brief: str = "") -> str:
         content.rstrip(),
         "</skill_content>",
     ]
-    if refs:
-        parts += ["<skill_references note=\"按需 fs_read,不必全读\">", *refs, "</skill_references>"]
     return "\n".join(parts)

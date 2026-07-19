@@ -1,0 +1,504 @@
+{
+  "_meta": {
+    "purpose": "worker-reachable projection of framework method arg-signatures + execute action registry + silent-failure faces (mirror NOT in worker sandbox; this is the fs_read-able data-by-reference surface, #58 FINDING #1 fix a)",
+    "regenerate": "python scripts/gen_method_reference.py",
+    "generated_parts": [
+      "cert_methods",
+      "execute_actions"
+    ],
+    "curated_parts": [
+      "dispatch_skeleton",
+      "cert_arity_notes",
+      "cert_behavior_notes",
+      "server_trigger_hosts",
+      "silent_failure_faces",
+      "attribution_note"
+    ],
+    "generated_from": "mirror lib/apv/ssl_comm.py + apv_action.py/client_action.py + synonyms"
+  },
+  "cert_methods": {
+    "csrVhost": {
+      "required": [
+        "vhost"
+      ],
+      "optional": [
+        "len",
+        "index"
+      ]
+    },
+    "csrRhost": {
+      "required": [
+        "vhost"
+      ],
+      "optional": [
+        "len",
+        "index"
+      ]
+    },
+    "eccCsrVhost": {
+      "required": [
+        "vhost"
+      ],
+      "optional": [
+        "curve",
+        "index",
+        "signature",
+        "sni"
+      ]
+    },
+    "sm2CsrVhost": {
+      "required": [
+        "vhost"
+      ],
+      "optional": [
+        "curve",
+        "index",
+        "signature",
+        "yesNo",
+        "passwd"
+      ]
+    },
+    "importKey": {
+      "required": [
+        "vhost",
+        "keyfile"
+      ],
+      "optional": [
+        "passwd",
+        "index"
+      ]
+    },
+    "importKey_tftp": {
+      "required": [
+        "vhost",
+        "keyFile"
+      ],
+      "optional": [
+        "passwd",
+        "index"
+      ]
+    },
+    "importCert": {
+      "required": [
+        "vhost",
+        "certfile"
+      ],
+      "optional": [
+        "passwd",
+        "index"
+      ]
+    },
+    "importCert_tftp": {
+      "required": [
+        "vhost",
+        "certFile"
+      ],
+      "optional": [
+        "passwd",
+        "index"
+      ]
+    },
+    "importMutiKey": {
+      "required": [
+        "vhost",
+        "id",
+        "keyfile"
+      ],
+      "optional": [
+        "passwd"
+      ]
+    },
+    "importMutiCert": {
+      "required": [
+        "vhost",
+        "id",
+        "certfile"
+      ],
+      "optional": [
+        "passwd"
+      ]
+    },
+    "importMutiKey_tftp": {
+      "required": [
+        "vhost",
+        "id",
+        "keyfile"
+      ],
+      "optional": [
+        "passwd"
+      ]
+    },
+    "importMutiCert_tftp": {
+      "required": [
+        "vhost",
+        "id",
+        "certfile"
+      ],
+      "optional": [
+        "passwd"
+      ]
+    },
+    "importRealKey": {
+      "required": [
+        "rhost",
+        "keyfile"
+      ],
+      "optional": []
+    },
+    "importRealCert": {
+      "required": [
+        "rhost",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "importSniKey": {
+      "required": [
+        "vhost",
+        "keyfile",
+        "domain"
+      ],
+      "optional": [
+        "id",
+        "passwd"
+      ]
+    },
+    "importSniCert": {
+      "required": [
+        "vhost",
+        "certfile",
+        "domain"
+      ],
+      "optional": [
+        "id"
+      ]
+    },
+    "importSniKey_tftp": {
+      "required": [
+        "vhost",
+        "keyfile",
+        "domain"
+      ],
+      "optional": [
+        "id"
+      ]
+    },
+    "importSniCert_tftp": {
+      "required": [
+        "vhost",
+        "certfile",
+        "domain"
+      ],
+      "optional": [
+        "id"
+      ]
+    },
+    "importSniRootca": {
+      "required": [
+        "vhost",
+        "domain",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "importSniRootca_tftp": {
+      "required": [
+        "vhost",
+        "domain",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "importSniInterca": {
+      "required": [
+        "vhost",
+        "domain",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "importSniInterca_tftp": {
+      "required": [
+        "vhost",
+        "domain",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "importSniCrlca": {
+      "required": [
+        "vhost",
+        "domain",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "importSniCrlca_tftp": {
+      "required": [
+        "vhost",
+        "domain",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "activeCert": {
+      "required": [
+        "vhost"
+      ],
+      "optional": [
+        "index",
+        "sni",
+        "certType"
+      ]
+    },
+    "importRootCA": {
+      "required": [
+        "vhost",
+        "certFile"
+      ],
+      "optional": [
+        "sni"
+      ]
+    },
+    "importRootCA_tftp": {
+      "required": [
+        "vhost",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "importInterCA": {
+      "required": [
+        "vhost",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "importInterCA_tftp": {
+      "required": [
+        "vhost",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "importCRLCA": {
+      "required": [
+        "vhost",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "importCRLCA_tftp": {
+      "required": [
+        "vhost",
+        "certfile"
+      ],
+      "optional": []
+    },
+    "sm2ImportKey": {
+      "required": [
+        "keyType",
+        "vhost",
+        "keyFile"
+      ],
+      "optional": [
+        "index",
+        "passwd"
+      ]
+    },
+    "sm2ImportCert": {
+      "required": [
+        "certType",
+        "vhost",
+        "certFile"
+      ],
+      "optional": [
+        "index"
+      ]
+    },
+    "sm2ImportSniKey": {
+      "required": [
+        "keyType",
+        "vhost",
+        "keyFile",
+        "domain"
+      ],
+      "optional": [
+        "index",
+        "passwd"
+      ]
+    },
+    "sm2ImportSniCert": {
+      "required": [
+        "certType",
+        "vhost",
+        "certFile",
+        "domain"
+      ],
+      "optional": [
+        "index"
+      ]
+    },
+    "sm2ImportMutiCert": {
+      "required": [
+        "method",
+        "vhost",
+        "id",
+        "certfile"
+      ],
+      "optional": [
+        "passwd"
+      ]
+    },
+    "sm2ImportMutiKey": {
+      "required": [
+        "method",
+        "vhost",
+        "id",
+        "keyfile"
+      ],
+      "optional": [
+        "passwd"
+      ]
+    }
+  },
+  "execute_actions": {
+    "exact_action_names": [
+      "dnsperf访问域名解析",
+      "real server 添加header",
+      "rs 响应内容为",
+      "rs 添加header",
+      "rs响应里有header",
+      "rs添加响应头",
+      "rs添加头部",
+      "server添加header",
+      "server返回",
+      "server返回值为",
+      "ssh登录",
+      "创建Mysql数据库数据",
+      "创建Mysql数据库用户",
+      "发送 http 请求",
+      "发送http request",
+      "响应为",
+      "响应内容为",
+      "批量检查绑定的30个常见的错误码",
+      "批量绑定30个常见的错误码",
+      "指定Service健康检查DOWN",
+      "指定Service健康检查UP",
+      "指定类型健康检查DOWN",
+      "指定类型健康检查UP",
+      "提取PTR自动生成名称",
+      "提取发包间隔",
+      "提取日志告警最小时间间隔",
+      "查看白名单",
+      "检查16条sdns listener配置结果",
+      "检查CRL下载是否完成",
+      "检查HA初始化成功",
+      "检查STUB区域传输AXFR同步成功",
+      "检查STUB区域传输IXFR同步成功",
+      "检查区域传输AXFR同步成功",
+      "检查区域传输IXFR同步成功",
+      "检查命中白名单",
+      "检查备机同步会话保持表是否成功",
+      "检查白名单permit一次",
+      "检查白名单命中",
+      "检查白名单规则",
+      "检查白名单里有",
+      "登录Mysql",
+      "等待ha domain状态up",
+      "等待ha link状态up",
+      "等待hc up",
+      "等待health check up",
+      "等待health up",
+      "等待健康检查up",
+      "获取PID",
+      "获取SSLsessionid",
+      "获取接口的MAC地址",
+      "获取数据库备份包名",
+      "设置rs响应为",
+      "设置响应内容为",
+      "访问",
+      "访问url",
+      "请求",
+      "请求url",
+      "进入ASF插件",
+      "进入asf容器",
+      "退出ASF插件",
+      "退出Mysql",
+      "退出asf容器",
+      "配满16条sdns listener",
+      "配置DNSSEC",
+      "配置白名单规则",
+      "配置白名单规则为"
+    ],
+    "note": "F=execute 的 G 动作名必须是本集精确成员(全角冒号前段);非精确会落 fuzzy≥0.8 静默派发、可语义反转(#56 门在 emit 期拒非精确名)。"
+  },
+  "dispatch_skeleton": {
+    "E_F_G_H_I": "getattr(E_obj, F)(*positional, **kwargs);G 逗号分参(引号感知);H=把返回值存进命名寄存器(device 步)/取期望值(check_point 步);I=把变量或对象.属性 .format() 注入 G 首参(须带 {} 占位)。",
+    "source": "mirror test_xlsx.py:280-336"
+  },
+  "cert_arity_notes": {
+    "rsa_import": "RSA importKey/importCert = 2 参 <vhost>,<file_path>(#50 CC1)",
+    "sm2_import": "SM2 sm2ImportKey/Cert = 3 参 <keyType>,<vhost>,<file_path>;keyType=signkey/enckey(签名)或 signcertificate/enccertificate——SM2 国密双证书体系;参数个数写错崩整卷(#50 CC2,8 金标准行核对)。",
+    "csr_subject": "CSR subject 硬编码 US/CA/San Jose/clickarray/qa,不可参数化。",
+    "file_branch": "文件名 .key/.crt/.pem 结尾→本地读文件内联粘贴;否则→TFTP 从 172.16.35.215 取。金标准全走本地分支(#50 CC3),床就绪只需本地 cert 树。",
+    "activate_dependency": "ssl activate certificate <h> 依赖先有 ssl host virtual <h>(文法门 ssl_cert_activate_needs_host_define 已查)。"
+  },
+  "cert_behavior_notes": {
+    "importCert": {
+      "note": "导入后**自动 ssl activate certificate + YES**,勿再手动 activate",
+      "source": "ssl_comm.py:153-154"
+    },
+    "importRealCert": {
+      "note": "同 importCert,自动 activate",
+      "source": "ssl_comm.py:286-287"
+    },
+    "sm2ImportCert": {
+      "note": "自动 activate",
+      "source": "ssl_comm.py:622-623"
+    }
+  },
+  "server_trigger_hosts": {
+    "hosts": [
+      "server213",
+      "server231",
+      "server232",
+      "routera",
+      "routerb",
+      "clientc",
+      "clientd",
+      "cliente",
+      "console"
+    ],
+    "contract": "E=test_env,F=serverNNN;SSH 到 config [env] 段该逻辑名的 IP(user test/click1),G=后端 shell 命令(起停真实服务器造 UP/DOWN);ip addr/route add 自动记账、case 尾框架自动恢复(勿自行 del)。",
+    "source": "mirror env.py:66-98 + ssh_server.py:34-118"
+  },
+  "silent_failure_faces": [
+    {
+      "id": "S1",
+      "mechanism": "证书/密钥文件缺→print+return,import 没发生、不抛错(假象=断言错)",
+      "source": "ssl_comm.py:102-104"
+    },
+    {
+      "id": "S2",
+      "mechanism": "execute 动作名不中/fuzzy≥0.8 误派→None(可派到语义反义 func)",
+      "source": "dic_operation.py:72/:79-80"
+    },
+    {
+      "id": "S3",
+      "mechanism": "server/read_until 超时→返回部分输出、非抛错(断言搜残缺窗口假 fail)",
+      "source": "ssh_server.py:91"
+    },
+    {
+      "id": "S4",
+      "mechanism": "TFTP 源 172.16.35.215 不可达/文件缺(金标准不走此分支,床需本地 cert 树)",
+      "source": "ssl_comm.py *_tftp"
+    },
+    {
+      "id": "S5",
+      "mechanism": "H 存 None(多数 SSL import 无 return)→后续 H 引用无意义",
+      "source": "test_xlsx.py:332-336"
+    }
+  ],
+  "attribution_note": "上机 fail 归因时,先用 S1-S5 把 harness 静默失败与真实设备行为分开——harness 静默失败伪装成 V 层断言错(#50-A / #52 attributor S1-S5)。"
+}

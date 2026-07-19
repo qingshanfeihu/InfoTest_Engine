@@ -2002,3 +2002,17 @@ emit `override_frozen_reason` 门强制显式声明;终态=frozen∧轮次封顶
 **与 CLAUDE.md 对齐**：本节 = CLAUDE.md「degrees-of-freedom 分层」（高自由度陈述+方向+why / 低自由度精确护栏）+「三层栈数据形态判定表」在**决策面维**的投影；官方锚 B3（自由度匹配主锚）/M1/M3/W1/W2/A2（`team4_skill_official_zh_recheck.md` #30 全类目对照）。
 
 **边界**：本节是判据框架 + 已实证条款；30 面逐面映射（含 ~13 attributor 侧无轴覆盖面=理论初判、待实证）在 forensics 表按引用。任何 worker/attributor prompt/skill 实改属后续批走四关，改时按本节三极 + 门密度对号。
+
+## 22. worker 数据通道边界 + references/ 定位（#58，2026-07-19 用户批 ruling B；FINDING#1 mirror 可达性驱动·随 #58 四关批 land）
+
+**背景（FINDING#1，读证实）**：#58 校准发现 skill-references 通道对 forked worker **三重死**——① `<skill_references>` block 列 `main/ist_core/skills/*/references/` 路径为 fs_read 指针（`tools/skills/__init__.py:97/:106`）；② `main/` 在 `_PLATFORM_DENIED_TOP_LEVEL`（`file_tools.py:70`，:257/:926 enforce），worker fs_read 不到；③ loader 查 `reference/`（单数，`__init__.py:93`）而盘上是 `references/`（复数）→ `ref_dir.exists()=False` → block **永不 emit**。故 `contracts.md`/`theory-map.md` 自设立起**从无路径到达 worker**（105 sdns 卷仍跑通=essential 指引 inline 在 `compile-worker.md` 正文 + 可达的 `compile_ref` 数据；references 是 quality-additive 非 load-bearing——但等于维护了一条死通道）。
+
+**裁决（B）**：
+- **`references/*.md` = 维护者/人面 设计+机制文档，不是 worker fs_read 通道**（也不可能——`main/` sandbox-denied）。据三层数据形态红线「人定义→md」：references md 给维护者读系统。
+- **worker 数据通道 = `knowledge/data/`（sandbox 可达根内）**：worker-facing 数据（命令注册表/文法/SSL dispatch facts/S1-S5 面）投影到 `knowledge/data/compile_ref/`，worker 真 fs_read 得到；prompt 的 `[Wn]/[An]` 指针指这里、**非 references/**。
+- **`<skill_references>` loader 机制 = 死代码移除**（非修 plural bug）：references/ 转 maintainer-only 后无可达 worker 消费者；修 `reference→references` 只会复活一个列**不可达 `main/` 路径**的 block=主动误导（比死更坏）。worker fs_read 靠 inline prompt 指针指 `knowledge/data`。
+- **references/ 头注**：标「maintainer-facing、非 worker fs_read 通道；worker 数据在 `knowledge/data/compile_ref/`，经 inline prompt 指针引用」，防再有人往这加 worker 指引期待 fs_read 送达（#52 的 SSL-dispatch 段正是这么掉的坑）。
+
+**三层数据形态复位（架构红线本例）**：坑=把 **worker-DATA**（SSL dispatch facts）放 references md、指望 fs_read 送达——违「机器间传→JSON 按引用流」（应在可达的 `knowledge/data`）。修=**机制/设计→references md（人定义、维护者读）、数据→`knowledge/data`（机器间传、worker 可达按引用）**。这是 `[[reference-docs-mechanism-not-data]]` 的**通道维**：不只「md 写机制不抄数据」，还要「数据放 worker 真够得着的位」——**形态对（md 写了指针）≠ 通道通（worker 读不到 `main/`）**。
+
+**边界不变量（防回归·机器可核）**：任何「让 worker fs_read X」的设计，X 必须在 sandbox 可达根内（`knowledge/data` / `workspace` / `IST_SESSION_DIR` / `IST_USER_DIR`——见 `file_tools._agent_roots`），**不在 `main/`**（platform-denied）。prompt 指针指可达位，机制/设计文档留 references（维护者面）。**机器门（→ #60 follow-up，非 #58）**：CI 校验 worker/attributor prompt 里的 fs_read 指针路径 ∈ sandbox 可达根（防再指 `main/references/` 死通道）——Py-Eng 于 **#60** 落地（preventive 非 launch-blocking，不入 #58 避 batch 膨胀），在 #58 repoint 后、以 repointed 态为 passing baseline，**本节边界不变量即其 spec**。

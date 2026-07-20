@@ -817,6 +817,57 @@ delivery_report 出。outcome：3 案＝**2 交付通过**（000001 纯配置存
 - **收官 render 审**：ist-verify 复验 summary（非 compile delivery_report，D31 不覆盖此 render）；全中文/结构清/问题回顾好 UX；数字 1/1/0 内部一致无 mismatch。mild ① 机器 token：`<RUNTIME>`/"reflow"/"footprint G 段" 英文上屏→**并入 #59**。
 - **① 半内部**：重编过程 4 条 `error:` 全英文机器串上屏（lint-credential/blocks combinator/command-existence/missing provenance），tool-result 行半内部→并入 #59。
 
+## #61 clean-recompile 003（engine self-heal proof · surface:30 / PID 70482 载 1e0e0298）
+Test-Eng 交接（00:45）：#61 后全新 recompile 003，看引擎能否**自动 normalize 全角逗号**→003 无人手一条龙 PASS（=对拍我上条 scale caveat 的正面证明 / SSL saga 最终 proof）。surface 1→30（新建 workspace:5，旧 shell 回收）。fastlog `compile_evidence.70482.live.log`、facts `slbssl_calib_003/facts.jsonl`。
+**盯**：①自动 normalize 全角逗号（emit 门/worker 产出）②003 上机 pass/fail（自愈闭环）③SSL 证书导入面板/import-prompt 文本上屏否/长证书截断 ④Z1-Z8。
+**00:45 起始帧**：EngineRun→prep:1 案→轮次0 准备·编写中1。**本 run 没触发版本 ask**（上 run 问「请确认目标版本」等 10.5，这次直接 EngineRun——脑图或带版本/或走 bed-gate，早期不定谳）。fresh workspace glob 无匹配→orchestrator 搜几下找到脑图，正常非缺陷。转 120s。
+- 版本 ask 未触发之谜解开：`床态体检 build=10.5.0.585`——版本经 bed-gate build 解析、不需问用户，非缺陷。
+
+### ✅✅ ENGINE SELF-HEAL PROOF 达成（00:50 · SSL saga 收官）
+`compile engine (v8) done: delivered_all_pass`→`编写·000003 完成 19 calls 3m5s`→`合并[整卷]`→`上机完成 1 case 40s`→`对账:通过 1 条`→`交付:1/1·交付物 4 件已核对`→`✓ 交付完成 1/1 全部通过整卷复验`。footer `轮次1 已收尾 1/1 · 通过1 失败0`。
+- **✅✅ 003 一轮 clean PASS，零升级、零人手修逗号、走完整引擎交付路（非上次 ist-verify 旁路）——上条 scale caveat 闭合**。SSL saga 最终 proof 成立。
+- **⚠️ 因果边界**：屏证**结果**（clean PASS 无升级无人手）；**机制**（#61 引擎 auto-normalize 全角逗号 vs worker 直接 emit 半角 vs 脑图本干净）屏上看不到——请 Test-Eng 从 fastlog compile_evidence.70482.live.log / facts.jsonl 核。我只报「一轮 clean PASS」观察。
+- **收官 render 审 ③⑥/D31 ✅ 干净**：全中文/结构清；**交付对账跑了**（交付物 4 件已核对，§11.9 防线）；数字 1/1 内部一致无 report_mismatch；交付物列表带中文注解（facts.jsonl=全程审计事实流可续跑 / engine_report.json=机读报告）。
+- **import-prompt/长证书**：屏上**无 SSL 导入面板**——证书导入（含 YES 交互确认）在 40s 上机设备侧完成、非 TUI ask，import-prompt 文本/长证书截断无从屏评估（该 Test-Eng fs_read case.xlsx 核）。
+- **① 非新**：`delivered_all_pass`/`deliverable 1` 英文 tool-result echo→#59。Z1-Z8 无回归；Z1-full/Z3/D28 仍未触发挂账。
+
+### 机制坐实·caveat 闭合（leader 机读账核出，00:49）
+`k_signals.jsonl`（mtime 00:49 本次 clean-recompile）003 记录：`{"signal":"fullwidth_comma_normalized","subject":"205400000000000003","source":"compile_emit","payload":{"count":3}}`。
+- **机制**：非「worker emit 半角」/非「脑图干净」，而是 **worker 照打全角逗号 → 引擎 #61 在 compile_emit 自动 normalize 3 处**（对应 importKey/importCert/importRootCA 三行）。engine self-heal scale 能力机读账实证。
+- **我的因果边界声明被验证正确**：屏上只证结果、机制如实说「看不到、请核机读账」——没盲断，leader 从机读账坐实。
+- **自校准（方法论）**：flag 机制核验时我**点错了具体文件**——报 fastlog/facts.jsonl，signal 实落 `k_signals.jsonl`（第三个机读账文件），Test-Eng grep fastlog 未命中。教训：以后说「机读账」泛指、或先确认 signal 落哪文件，别报没把握的具体路径误导 grep。
+- **SSL saga 完整三幕+机制闭环**：#54 escalated（全角逗号引擎修不了）→ #54-recal 手动旁路 PASS（非自愈，我 flag 不 scale）→ #61 clean-recompile 引擎自动 normalize count 3 + 设备 PASS + delivery=pass（自愈坐实）。
+
+---
+
+## User 席交接（新任观察员上座 · surface:20 · PID 34041 · 2026-07-20）
+
+**交接**：继任 User 角色。已通读本台账全 888 行，继承前身判例三档——已修销项（#27 进度语义 / D1 题面英文 / D2「对你的用例」/ ③长清单折叠 / ⑥交付表尾号 / ④采纳 label 短语化 / D19 重问前缀 / D31 report_mismatch 三次 PASS / Z2 尾号 / Z7 markdown 泄）、**未测挂账**（Z1 全证 / Z3 / Z5·D28 / Z6 / Z8，前三批均无对应面板触发）、在池未闭（#59 英文机器状态行、D19 症2 双句号 `。。`、输入框串框 watch-item）。铁律不变：只读、逐字、因果不清标「请机读侧核」。
+
+### 基线首读（2026-07-20 · surface:20 · PID 34041 · 启动画面）· 未触发上报
+屏幕原文（逐字，全屏）：
+```
+  InfoTest Engine v1.0.5b1
+  deepseek-v4-pro · /Users/jiangyongze/Library/CloudStorage/S
+ynologyDrive-macbook/Project/InfoTest_Engine
+
+  输入自然语言描述测试分析需求，自动调用工具查阅知识库。
+  /help 查看命令 · /init 初始化项目 · /model 切换模型
+─────────────────────────────────────────────────────────────
+> 输入消息（/ 触发补全）─────────────────────────────────────
+─────────────────────────────────────────────────────────────
+↑ 0 · ↓ 0 tokens · deepseek-v4-pro · ¥0.0000─────────────────
+ctrl+c abort · ctrl+d exit · / commands · ↑↓ history
+```
+**naive-user 评（三类均未触发）**：① 看不懂＝无——引导语/命令说明/输入框提示全中文且说清「输入自然语言描述测试分析需求」，naive 用户知道该干什么；② 不知怎么答＝N.A.（无 ask 面板）；③ error＝无 traceback/乱码/崩溃，计数器归零态（`↑0 ↓0 tokens · ¥0.0000`）符合未起批。
+**基线读数**：模型 `deepseek-v4-pro`（非既往批的 mimo 档，如系本轮有意切换请 leader 确认，我只记屏上所见不推断）；版本 `v1.0.5b1`；成本计数器零位。
+
+**两条 mild watch-item（均不上报，记录留档）**：
+1. **底栏快捷键提示全英文**：`ctrl+c abort · ctrl+d exit · / commands · ↑↓ history`——`abort/exit/commands/history` 是 user-facing 区英文，属 **#59 收口池同族**（英文 token 上屏）。判 mild 不单报：常驻控件非决策位，且 ctrl+c/ctrl+d 是终端通用肌肉记忆，不挡用户做事。若 #59 收口时一并中文化更彻底。
+2. **路径折行断词**：`.../CloudStorage/S` ↵ `ynologyDrive-...` 在窄 pane（~61 列）把 `SynologyDrive` 拦腰折断——cosmetic，非缺陷（终端换行本性），仅记以免后续误当渲染崩坏。
+
+**待命态**：基线干净、无触发。转静默观察，等 leader 开批通知。**开批后首要靶＝五项未测挂账**（Z1 题面来源泄原始文件名 / Z3 diagnose 状态行 s₀ 黑话 / Z5·D28 cap 面板各轮判断英文截断 / Z6 cap 轮次数字不一致 / Z8 机读 token 泄选项与等价方法）——#55 真实脑图放量批若含预期冲突面板、cap 轮次封顶面板、等价方法面板，即为这五项首次实弹场。
+
 
 
 

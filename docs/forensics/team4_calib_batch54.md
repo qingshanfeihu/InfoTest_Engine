@@ -87,3 +87,30 @@
 - **(c) 003 PASS ✗**（0/1）/ **(d) node promote 未触发**（未 PASS、validity:uncertain 未升 verified）。
 
 **结论（SSL launch-readiness）**：**#58 的 footprint retrieval fix 生效（(a)✅ whole-domain 修复坐实），但 SSL enablement 仍两处不足**——①**YES 交互确认知识**（footprint node 有 knowledge 但没让 worker 避开 `, prompt=YES`→standalone YES 的形态陷阱）②**未覆盖 missing_teardown**（ssl host virtual 需案尾 `no ssl host`）。**SSL 仍未 launch-ready，需 #58 再补一轮**：YES 语法根治（`, prompt=YES` 不 emit standalone YES）+ SSL teardown 知识（ssl host 配对 no ssl host）。**#54 lesson 复用成功**：读 needs_decision.json 机读账直接拿到权威两 claims，未再从 provenance 推断。
+
+## ⚡ needs_decision emit-gate claims 是 two false positives（leader 完整视图纠正·教训再升级）
+
+**leader+orchestrator 完整视图纠正**：上节我报的两 claims（YES standalone + missing_teardown）**都是 emit-gate false positives**：
+- **YES claim 误报**："YES" 是 `ssl activate certificate` 的**交互确认字**、非独立命令（gate 把 `, prompt=YES` 的 YES 误当独立命令去手册匹配）。
+- **teardown claim 误报**：teardown **实际已有**（案卷行 40:`clear ssl host vh1`）——gate 漏看了。
+- **真 blocker=中文全角逗号"，"**（importKey 的 `vh1， cert/...` 全角逗号使参数解析错）。
+- **教训再升级（比 #54 更深）**：**needs_decision.json 是「gate claim 了什么」的机读账，但 gate 本身可能误报/陈旧；device error（上机实测）才是 ground truth**。我上节读机读账（#54 lesson 对了）但**把 gate claims 误当真根因**——漏了「gate 可能错」这层。归因链正确姿势：读机读账拿 claim → 但 claim 需 device run 验证 → device error 才是终判。（#62 = ledger 卫生：清 resolved/stale claim 根治此类误导。）
+
+## 🎉 #61 后 clean-recompile 003·SSL saga 最终 proof（四点全成立，2026-07-20 00:50）
+
+**#61（1e0e0298，comma auto-normalize）后 CLEAN-RECOMPILE 003（非手改、非 resume、全新 thread）→ PASS via engine self-heal**。四 proof points 全成立：
+- **(a) engine normalize 全角逗号 ✅ 直接实证（升级·leader 补全）**：`runtime/logs/k_signals.jsonl` 有 003 记录 `{"signal": "fullwidth_comma_normalized", "subject": "205400000000000003", "source": "compile_emit", "payload": {"count": 3}}`——**worker 照打全角逗号 → 引擎 compile_emit auto-normalize **3 处**（importKey/importCert/importRootCA）→ case.xlsx 落半角","**，机制链完整、非推断。〔证据边界补全教训：`fullwidth_comma_normalized` signal **落 `k_signals.jsonl`、不落 fastlog/facts/events**，故我原 grep 三处未命中、退而用 case.xlsx 半角逗号+PASS 作间接推断并诚实标边界——leader 核出 k_signals 记录后升级为直接实证。**signal 核查以后先看 `runtime/logs/k_signals.jsonl`**。〕
+- **(b) 003 PASS via ENGINE delivery ✅**：verdict `result=pass, ctx=delivery, run:3e2d571e:delivery:0`（引擎自己的整卷复验、非 manual re-verify），build 585。
+- **(c) delivery_report 1/1 PASS ✅**：`1 个通过整卷复验，已入交付卷`，engine_report deliverable=1，**无 REPORT_MISMATCH**，delivered 目录=1。
+- **(d) writeback 自愈闭环 ✅**：`targets=[precedent,footprint] provisional=false`（validity:uncertain→verified，self-healing loop 闭环）。
+
+**#54 saga 完整闭环**：003 首批 escalated（全角逗号+gate 误报）→ #58 footprint retrieval fix（footprint 通了、但逗号未治）→ re-calibrate 仍 escalated（卡全角逗号）→ #61 comma auto-normalize（scale 修）→ **clean-recompile PASS via engine self-heal（engine 自动修 CJK-artifact 全角逗号→003 无人工干预 PASS→写回先例+footprint 自愈闭环）**。
+
+## 最终结论
+
+**SSL TRULY launch-ready！两域全达标：SLB 2/2 PASS（001 纯配置+002 G4 reflow 自愈）+ SSL 1/1 PASS（003 clean-recompile engine self-heal）**。#54 首批校准闭环 END-TO-END 证明扩展工作：编译→上机 oracle→归因→修复轮/工程补丁→真 PASS→写回自愈。**可 proceed #55**（真实脑图放量、对齐 4 脑图准入）。gates 全 validated、digest（CC2/CC3）held up、engine self-heal 坐实。**两条 evidence-first 教训固化**：①读 needs_decision.json 机读账非 provenance 推断（#54）②gate claims 可能误报、device error 才是 ground truth（#58 re-calibrate）。
+
+## Leader 复核注（2026-07-20，Theory 措辞审定，适用于本文档与 user_observations 台账）
+
+- 「gate claims 可能误报、device error 才是 ground truth」的精确表述：**限于「内容相关判断被塌缩进 L_struct」的那类 claim**（#54 两误报即此类）——不得推广为 L_struct 门族整体降 advisory（那是 GA-CUT 的反向回归诱因，(47) L_struct 判据与 §0「结构门留」不动）。
+- 本文档所称「engine self-heal / 引擎自愈」（#61 全角逗号）术语校正为 **「emit 期机械归一化」**（A 层门修复，含 .py 变更）；「自愈」一词保留给判例层零代码增长与 (d) writeback 闭环，防与「自愈合四层封闭」定义漂移。

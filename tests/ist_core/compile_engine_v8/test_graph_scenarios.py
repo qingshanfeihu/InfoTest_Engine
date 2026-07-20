@@ -28,7 +28,8 @@ class FakeDevice:
         self.script = script            # fn(aid, ctx, n_runs_so_far) -> "pass"|"fail"
         self.calls: list[tuple] = []
 
-    def digest(self, xlsx_path: str, autoids: list[str]) -> str:
+    def digest(self, xlsx_path: str, autoids: list[str], build: str = "") -> str:
+        # build=bed 探针实测值,由 run 节点下传(gap② S3);假件只需接住不消费
         ctx = "delivery" if "__sub" not in xlsx_path else "subset"
         recs = []
         for aid in autoids:

@@ -264,7 +264,11 @@ def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools
             # 与主 claim 的台账并存——改法必须同时对得上两条。
             seq_entry = seq_verdict.to_dict()
             seq_entry["ordering_sensitive"] = True
-            _land_needs_decision(autoid, "sequence_periodicity", seq_entry)
+            # 落账失败必须随文返回(同 :325/:367 样板):台账没写成却回"已落账",
+            # 用户面就少一道题且无人知道(P0 假承诺同型)。
+            if not _land_needs_decision(autoid, "sequence_periodicity", seq_entry):
+                return (render_needs_user_decision(autoid, seq_verdict)
+                        + "\n(ledger write FAILED — report this verbatim to the engine)")
             return render_needs_user_decision(autoid, seq_verdict)
 
     if verdict.verifiable:

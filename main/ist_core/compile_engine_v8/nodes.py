@@ -63,9 +63,17 @@ def _call_fork(executor, skill: str, brief: str, *, tag: str, effort: str = "") 
     return executor.call(skill, brief, tag=tag, effort=effort)
 
 
-def _digest_fn(xlsx_path: str, autoids: list[str]) -> str:
+def _digest_fn(xlsx_path: str, autoids: list[str], build: str = "") -> str:
+    """build=bed_gate 探针实测的设备自述版本(K 锚 build 位)。
+
+    不下传时 batch_tools 侧退到 config 硬编码默认值——那是**兜底不是事实**:#54 校准批
+    全部台账被盖成 config 的 568、设备实测 585,K 锚静默失真整批无人察觉(gap② S3)。
+    """
     from main.ist_core.tools.device.batch_tools import dev_run_batch_digest
-    return dev_run_batch_digest.func(xlsx_path, autoids)
+    # 出处显式声明:本路的 build 来自 bed_gate 探针实测(state.device_build),故 "probe";
+    # 空值不声明出处,由工具侧记 unspecified/config_fallback(P1-D:函数内不许猜出处)。
+    return dev_run_batch_digest.func(xlsx_path, autoids, build=build,
+                                     build_source="probe" if (build or "").strip() else "")
 
 
 def _jh_exec_fn(cmd: str) -> str:
@@ -1169,7 +1177,7 @@ def run(state: dict) -> dict:
     # P1-7:语境词用户面翻译,对齐 merge 侧「合并[整卷/子集]」(run_ctx 原值是英文枚举)
     _ctx_cn = "整卷" if str(state.get("run_ctx")) == F.CTX_DELIVERY else "子集"
     sh.emit(f"上机[{_ctx_cn}]:{len(comp)} 案 @ {state.get('bed_host')}")
-    out = _digest_fn(str(merged), comp)
+    out = _digest_fn(str(merged), comp, str(state.get("device_build") or ""))
     if isinstance(out, str) and ("device_busy" in out or "run_in_progress" in out
                                  or "stale_run_on_device" in out):
         # stale 残留=「床被占」非「引擎错」,归 busy 走上机互斥处置(DESIGN §4 run 失败语义②)

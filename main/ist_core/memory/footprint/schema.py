@@ -38,6 +38,10 @@ class RawFact:
     # verified_runs.jsonl 的一条上机 PASS 台账;非空时 merge 的 evidence 门走
     # device_verified 分支(命令必须真实出现在该 PASS 卷面上),不再要求手册命中。
     device_evidence: dict = field(default_factory=dict)
+    # 设备上**实际发出**的整条原文(含框架执行器 kwarg 如 `,prompt=YES`)。cli_syntax 只
+    # 存剥净的 CLI 语法位(gap② S1),原文另存这里供审计回溯——不占 evidence_quote,
+    # 那个字段是证据门的针(要在手册/卷面命中),塞原文会让写回被整条 skip。
+    raw_invocation: str = ""
 
     # 观察级字段(2026-07-08 判例化,自愈环):validity=verified(默认,PASS 实证)|
     # uncertain(fail/escalated 轮的设备观察——最有信息量的 episode 此前被"fail 候选

@@ -267,6 +267,10 @@ def _evidence(fact) -> dict:
         ev["source_file"] = fact.evidence_file
     if fact.evidence_quote:
         ev["quoted_text"] = fact.evidence_quote
+    # 剥了执行器 kwarg 时留一份设备实发原文(gap② S1;与语法位不同才写,健康路径无此键)
+    _raw = (getattr(fact, "raw_invocation", "") or "").strip()
+    if _raw and _raw != (fact.cli_syntax or "").strip():
+        ev["raw_invocation"] = _raw
     # K 锚持久化(理论 §5.1 anchor=(build, run_ts, lineage)):设备实证的条目把运行锚
     # 落进 evidence.device_run——没有它,后续 build 锚差派生 stale(缺口 C)无数据可算。
     # 缺位诚实缺位(autoid 有而 run/build 无=uncertain 级观察只有谱系锚),不造值。
@@ -304,6 +308,51 @@ def _merge_parameters(existing: list[dict], incoming: list[dict]) -> bool:
     return changed
 
 
+_PLACEHOLDER_RE = re.compile(r"[<\[{]")
+
+
+def command_words(cmd: str) -> list[str]:
+    """命令的**命令词序列**:从头取到第一个非命令词 token 为止。
+
+    命令词=纯字母(含连字符)的 token;实参(`vh1`/`10.4.1.1`/`80`)与手册占位符
+    (`<host_name>`/`[index]`)都不是。用于把一次 PASS 的实例命令对上手册签名:
+      `ssl activate certificate vh1`                  → [ssl, activate, certificate]
+      `ssl activate certificate <host_name> [index]`  → [ssl, activate, certificate]
+
+    **不剥动词**(与 `uncertain._behavior_feature_head` 的差别所在,勿混用):那个函数
+    服务行为知识挂载、故意跨 show/配置归一,拿它当签名匹配键会让
+    `show ssl certificate` 与 `ssl certificate` 判等,把观测命令的设备证据挂到配置
+    命令的手册签名上——正是 gap② 在治的失真(Design 裁决⑴保守侧)。
+    """
+    words: list[str] = []
+    for tok in _PLACEHOLDER_RE.split(str(cmd or ""))[0].split():
+        t = tok.strip().rstrip(",")
+        if not t or not t.replace("-", "").isalpha():
+            break
+        words.append(t)
+    return words
+
+
+def _attach_device_run(existing: dict, fact) -> str:
+    """把本次 PASS 的 device_run 证据挂到**已有手册签名**上(不新建实参条目)。
+
+    gap② S2:同一命令在知识树里既有手册签名 `ssl activate certificate <host_name>`
+    又有实参条目 `ssl activate certificate vh1,prompt=YES`,worker 会读到两个互相
+    矛盾的「语法」。签名仍以手册为准。
+
+    **device_run 是覆盖非累积**:只保留最近一次上机实证的 (autoid, run_ts, build)。
+    多次实证的语境累积(同命令在不同 build/配置下的历次运行)属 R2 语境轴,未做。
+    """
+    ev = existing.setdefault("evidence", {})
+    new_ev = _evidence(fact)
+    if not new_ev.get("device_run"):
+        return "skip"
+    ev["device_run"] = new_ev["device_run"]
+    if new_ev.get("raw_invocation"):
+        ev["raw_invocation"] = new_ev["raw_invocation"]
+    return "update"
+
+
 def _append_cli_command(fp: dict, fact) -> str:
     """按完整 cli_syntax 去重（非 fact_key）。
 
@@ -325,11 +374,30 @@ def _append_cli_command(fp: dict, fact) -> str:
                 )
                 return "append" if changed else "skip"
             return "skip"
+    # gap② S2(Design 裁决⑴):设备实证的实例命令,若命令词序列**完全相等**于某条已有
+    # 手册签名(evidence.source_file 为凭),证据挂到那条上,不新建以实参为键的重条目。
+    # 不等→宁可新建(保守侧:绝不污染手册签名),并打 verbatim 标记以示「这是跑通的一个
+    # 实例,不是语法」。
+    is_device_verbatim = bool((getattr(fact, "device_evidence", None) or {}).get("autoid"))
+    if is_device_verbatim:
+        words = command_words(syntax)
+        if words:
+            targets = [e for e in commands
+                       # 非手册出处的条目不作挂载靶(只往权威签名上挂)
+                       if (e.get("evidence") or {}).get("source_file")
+                       and command_words(e.get("command", "")) == words]
+            # 命中恰好一条才挂;多条同命令词序列的手册签名(不同参数形态)无从判该挂哪条,
+            # 挂错=把实证按到错误签名上。宁可多一条带 verbatim 标记的条目(Design 精化)。
+            if len(targets) == 1:
+                return _attach_device_run(targets[0], fact)
     entry = {
         "fact_key": fact.fact_key,
         "command": fact.cli_syntax,
         "evidence": _evidence(fact),
     }
+    if is_device_verbatim:
+        # 渲染/检索层据此告诉 worker:此条是设备实发原文,不是手册语法(Design 裁决⑵)
+        entry["syntax_provenance"] = "device_run_verbatim"
     if fact.parameters:
         entry["parameters"] = fact.parameters
     commands.append(entry)

@@ -108,7 +108,12 @@ def _format_node(data: dict, brief: bool = False) -> str:
     if cli:
         lines.append(f"\nCLI commands ({len(cli)}):")
         for cmd in cli[:5]:
-            lines.append(f"  - {cmd.get('command', '?')}")
+            # gap② S2(Design 裁决⑵):设备实发原文条目必须与手册签名可分辨——不标注的话
+            # worker 把「跑通过的一个实例」读成语法(含实参、甚至框架 kwarg),重蹈 #61
+            # 「知识存了读不回」。标注走 LLM-facing 英文(本行进 worker 上下文)。
+            _sp = (cmd.get("syntax_provenance") or "").strip()
+            _tag = "  [device-run verbatim, not manual syntax]" if _sp == "device_run_verbatim" else ""
+            lines.append(f"  - {cmd.get('command', '?')}{_tag}")
             # 渲染参数:枚举参数(method: rr|wrr|ga|topology)的 value_range 是 draft 写对断言的
             # 关键依据(否则只见 <method> 占位符,rr/wrr/ga 信息全同 → 把 WRR 当 GA 测)。
             for p in cmd.get("parameters", []) or []:

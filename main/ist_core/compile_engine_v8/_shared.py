@@ -267,24 +267,31 @@ def emit(text: str) -> None:
         logger.debug("engine 进度 emit 失败", exc_info=True)
 
 
-# V8 内部 13 态 → V6 footer 九态词汇的投影(显示契约与引擎词汇解耦,前端零改动消费)。
-# 九桶必须覆盖全部 13 个 case 状态、每态恰入一桶——否则 footer 桶和<total、案在 footer 凭空
-# 消失(活证 29906 round1:51<53,broken 三态漏投)。纯遥测,不碰编译行为。
-# 测试锚:test_footer_projection_complete(全 13 态 → Σ九桶==total,残差 0)。
+# V8 内部 13 态 → footer 显示词汇的投影(显示契约与引擎词汇解耦,前端零改动消费)。
+# 桶必须覆盖全部 13 个 case 状态、每态恰入一桶——否则桶和<total、案在 footer 凭空消失
+# (活证 29906 round1:51<53,broken 三态漏投)。纯遥测,不碰编译行为。
+# 2026-07-20 FOOTER-1:折桶按**状态语义**归位,不按"最近的非通过桶"将就——投影错位
+# 让 footer 说谎(挂起报「失败」、死床报「编写中」),比漏投更难发现(桶和仍等于 total)。
+# 测试锚:test_footer_projection_complete(全 13 态 → Σ桶==total,残差 0)。
 def _footer_bucket_counts(c: dict) -> dict:
     return {
         "pending": c.get("pending", 0),
         "dispatched": 0,
         "produced": c.get("authored", 0) + c.get("subset_verified", 0),
-        "pending_decision": c.get("awaiting_user", 0),
+        # suspended 是**非终态**(views.py:33:用户裁决挂起,下批同参续跑)——旧版折进
+        # failed_terminal 让 footer 显示「失败N」,把可续跑的案报成死案(FOOTER-1)。
+        # 归欠定桶:它确实卡在用户决策上,与 awaiting_user 同轴。
+        "pending_decision": c.get("awaiting_user", 0) + c.get("suspended", 0),
         "awaiting_user": 0,
         "passed": c.get("deliverable", 0),
-        # broken 三态(broken/broken_errored/broken_blocked)=非通过、非终态、仍在编译环内
-        # (复跑/reflow/env 呈报)——折进 failed_active(九态词汇无 broken 桶,这是最近的非通过桶)。
+        # broken/broken_errored=非通过非终态、仍在编译环内(复跑/reflow)→ failed_active(待重跑)。
         "failed_active": (c.get("failed", 0) + c.get("contradicted", 0)
-                          + c.get("broken", 0) + c.get("broken_errored", 0)
-                          + c.get("broken_blocked", 0)),
-        "failed_terminal": c.get("failed_terminal", 0) + c.get("suspended", 0),
+                          + c.get("broken", 0) + c.get("broken_errored", 0)),
+        # broken_blocked=设备 ping 不通,复跑救不了(views.py:26)——折进 failed_active 会让
+        # 死床显示「编写中N」(TUI 把 failed_active 计入编写中),等于报告一个不存在的进度。
+        # 独立成桶:不属显示层五组任何一组,由 TUI 既有「其他N」残差桶浮现(FOOTER-1)。
+        "broken": c.get("broken_blocked", 0),
+        "failed_terminal": c.get("failed_terminal", 0),
         "escalated": c.get("escalated", 0),
     }
 

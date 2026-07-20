@@ -29,6 +29,54 @@ from main.ist_core.compile_engine_v8 import _shared as _sh
 
 logger = logging.getLogger(__name__)
 
+
+def _read_claims_ledger(ndp: Path, autoid: str) -> dict | None:
+    """读 needs_decision 台账;**读损返回 None=调用方必须跳过落盘,不得覆写**。
+
+    旧行为:parse 失败静默 `pass` → data 停在空 claims → 整份覆写把**其他门**已落的
+    claims 一起抹掉,用户题面凭空消失且无任何痕迹(P0,Design 发现+leader 盘面坐实)。
+    台账是「先问后落」的凭据,损坏时正确处置是保留原文件 + 出声,不是拿空账盖掉。
+    """
+    aid = (autoid or "").strip()
+    if not ndp.is_file():
+        return {"autoid": aid, "claims": []}
+    try:
+        loaded = json.loads(ndp.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        logger.warning("needs_decision 台账读损(autoid=%s, path=%s):保留原文件不覆写,"
+                       "本次 claim 跳过落盘", aid, ndp, exc_info=True)
+        return None
+    if isinstance(loaded, dict) and isinstance(loaded.get("claims"), list):
+        return loaded
+    logger.warning("needs_decision 台账结构不符(autoid=%s, path=%s):保留原文件不覆写,"
+                   "本次 claim 跳过落盘", aid, ndp)
+    return None
+
+
+def _land_claims(autoid: str, mutate, *, gate: str) -> bool:
+    """读台账 → 由 mutate(claims)->claims 改写 → **原子**落盘。返回是否真落成。
+
+    读损/写失败一律返回 False 且出声(logger.warning),调用方据此**不得**再向 LLM 承诺
+    「ledger entry is already written」——台账没写成却报已写,用户面就少一道题且无人
+    知道(P0 三件:读损清账 / 非原子 / 假承诺)。各门自己的 claim 合并语义留在 mutate 里,
+    本件不碰(两出口是否统一走 `_land_needs_decision` 属行为面变更,归 #62)。
+    """
+    try:
+        from main.ist_core.tools.device.verifiability_tool import _write_json_atomic
+        outd = _sh.outputs_root() / (autoid or "").strip()
+        outd.mkdir(parents=True, exist_ok=True)
+        ndp = outd / "needs_decision.json"
+        data = _read_claims_ledger(ndp, autoid)
+        if data is None:
+            return False   # 读损:原文件保持不动
+        data["claims"] = mutate(list(data.get("claims") or []))
+        _write_json_atomic(ndp, data)   # 裸 write_text 被打断留截断台账(07-16 实证)
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("%s needs_decision 落盘失败(autoid=%s):返回文本不再承诺台账已写",
+                       gate, autoid, exc_info=True)
+        return False
+
 # 框架执行契约(死知识):test_xlsx.py 是**延迟执行模型**——最后一个 case 走 `if last_case`
 # 收尾分支,只 parser_case_id 记录、**不执行步骤**。所以 xlsx 末尾必须垫一个哨兵 case,
 # 让真实 case 都不是最后一个、走正常执行路径。哨兵自己当 last_case 不执行,无副作用。
@@ -727,19 +775,8 @@ def _gate_command_existence(autoid: str, steps: list, init: str = "",
     except Exception:  # noqa: BLE001
         logger.debug("command_existence 用户裁决检查失败(按未裁决)", exc_info=True)
     # 呈报:写 needs_decision 台账(问询节点按 questions.py 组题)+信号,拒落卷
-    try:
-        outd = _sh.outputs_root() / (autoid or "").strip()
-        outd.mkdir(parents=True, exist_ok=True)
-        ndp = outd / "needs_decision.json"
-        data: dict = {"autoid": (autoid or "").strip(), "claims": []}
-        if ndp.is_file():
-            try:
-                loaded = json.loads(ndp.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict) and isinstance(loaded.get("claims"), list):
-                    data = loaded
-            except Exception:  # noqa: BLE001
-                pass
-        old = [c for c in data["claims"]
+    def _mutate_command_existence(claims: list) -> list:
+        old = [c for c in claims
                if not (c.get("claim_kind") == "command_existence"
                        and c.get("command") in {m[0] for m in misses})]
         for cmd, near in misses:
@@ -754,10 +791,9 @@ def _gate_command_existence(autoid: str, steps: list, init: str = "",
                 "suggested_fix": "换用版本内存在的等价命令/形态,或确认功能不属本版本后挂起",
                 "min_requests": 0, "ordering_sensitive": False,
             })
-        data["claims"] = old
-        ndp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        logger.debug("command_existence needs_decision 落盘失败", exc_info=True)
+        return old
+
+    ledger_landed = _land_claims(autoid, _mutate_command_existence, gate="command_existence")
     try:
         from main.ist_core.memory.footprint.signals import emit_signal
         emit_signal("command_existence_miss", autoid, source="compile_emit",
@@ -776,9 +812,12 @@ def _gate_command_existence(autoid: str, steps: list, init: str = "",
             "ceiling): verify via the device `?` syntax reflection (dev_probe) or locate "
             "the manual line, then re-emit with command_existence_evidence="
             "'<file>.md:<line>' or 'dev_help: <what you verified>'.\n"
-            "2) If it truly does not exist on this build (or records conflict), the "
-            "needs_decision ledger entry is already written — end your reply with "
-            "状态：NEEDS_USER_DECISION and the engine will bring it to the user.")
+            "2) If it truly does not exist on this build (or records conflict), "
+            + ("the needs_decision ledger entry is already written — " if ledger_landed
+               else "the needs_decision ledger write FAILED (report this verbatim to the "
+                    "engine; the user panel may be missing this item) — ")
+            + "end your reply with 状态：NEEDS_USER_DECISION and the engine will bring "
+              "it to the user.")
 
 
 def _gate_tau_coverage(autoid: str, steps: list, init: str = "") -> str | None:
@@ -812,22 +851,10 @@ def _gate_tau_coverage(autoid: str, steps: list, init: str = "") -> str | None:
     except Exception:  # noqa: BLE001
         logger.debug("missing_teardown 用户裁决检查失败(按未裁决)", exc_info=True)
     # 呈报:needs_decision 台账+信号
-    try:
-        outd = _sh.outputs_root() / (autoid or "").strip()
-        outd.mkdir(parents=True, exist_ok=True)
-        ndp = outd / "needs_decision.json"
-        data: dict = {"autoid": (autoid or "").strip(), "claims": []}
-        if ndp.is_file():
-            try:
-                loaded = json.loads(ndp.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict) and isinstance(loaded.get("claims"), list):
-                    data = loaded
-            except Exception:  # noqa: BLE001
-                pass
-        data["claims"] = [c for c in data["claims"]
-                          if c.get("claim_kind") != "missing_teardown"]
+    def _mutate_missing_teardown(claims: list) -> list:
+        kept = [c for c in claims if c.get("claim_kind") != "missing_teardown"]
         inv_seq = [m["suggested_inverse"] for m in reversed(rep.missing)]
-        data["claims"].append({
+        kept.append({
             "claim_kind": "missing_teardown",
             "commands": [m["cmd"] for m in rep.missing],
             "suggested_tau": inv_seq,
@@ -838,9 +865,9 @@ def _gate_tau_coverage(autoid: str, steps: list, init: str = "") -> str | None:
             "suggested_fix": "案尾追加恢复序列(逆序 no 回放),或确认该写是被测行为本身需保留",
             "min_requests": 0, "ordering_sensitive": False,
         })
-        ndp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        logger.debug("missing_teardown needs_decision 落盘失败", exc_info=True)
+        return kept
+
+    ledger_landed = _land_claims(autoid, _mutate_missing_teardown, gate="missing_teardown")
     try:
         from main.ist_core.memory.footprint.signals import emit_signal
         emit_signal("missing_teardown", autoid, source="compile_emit",
@@ -858,9 +885,12 @@ def _gate_tau_coverage(autoid: str, steps: list, init: str = "") -> str | None:
             "1) Append the restore steps at the end of the case (reverse-order `no` "
             "replay as suggested above; place them AFTER your assertions so they do not "
             "destroy what you are verifying), then re-emit.\n"
-            "2) If the write itself IS the behavior under test and must persist, the "
-            "needs_decision ledger entry is already written — end your reply with the "
-            "NEEDS_USER_DECISION tail and the engine will bring it to the user.")
+            "2) If the write itself IS the behavior under test and must persist, "
+            + ("the needs_decision ledger entry is already written — " if ledger_landed
+               else "the needs_decision ledger write FAILED (report this verbatim to the "
+                    "engine; the user panel may be missing this item) — ")
+            + "end your reply with the NEEDS_USER_DECISION tail and the engine will "
+              "bring it to the user.")
 
 
 def _emit_stat(autoid: str, out: str, channel: str) -> None:

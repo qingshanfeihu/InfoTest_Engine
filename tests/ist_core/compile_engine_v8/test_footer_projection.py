@@ -28,7 +28,32 @@ def test_footer_projection_broken_three_states_bucketed():
     counts = {"broken": 2, "broken_errored": 1, "broken_blocked": 3}
     buckets = sh._footer_bucket_counts(counts)
     assert sum(buckets.values()) == 6
-    assert buckets["failed_active"] == 6   # 非通过/非终态/仍在环内 → failed_active
+    # 可复跑的两态 → failed_active(TUI 计入「编写中」,语义相符:确实还要再跑)
+    assert buckets["failed_active"] == 3
+    # blocked=设备 ping 不通,复跑救不了 → 独立 broken 桶,不冒充「编写中」(FOOTER-1)
+    assert buckets["broken"] == 3
+
+
+def test_suspended_is_not_reported_as_failure():
+    """FOOTER-1:suspended 是非终态(views.py:33 下批同参续跑),报「失败」是谎报死亡。"""
+    buckets = sh._footer_bucket_counts({"suspended": 4})
+    assert buckets["failed_terminal"] == 0, "挂起案不得计入失败桶"
+    assert buckets["pending_decision"] == 4, "挂起案卡在用户决策上 → 欠定桶"
+    assert sum(buckets.values()) == 4
+
+
+def test_failed_terminal_still_counts_only_user_sourced_stoploss():
+    """真终态(用户止损裁决)仍进失败桶——修 suspended 不能顺手把真失败也挪走。"""
+    buckets = sh._footer_bucket_counts({"failed_terminal": 2, "suspended": 1})
+    assert buckets["failed_terminal"] == 2 and buckets["pending_decision"] == 1
+
+
+def test_blocked_bed_does_not_render_as_authoring_progress():
+    """死床批:五个显示组之和 < total,差额由 TUI 既有「其他N」残差桶浮现,不报「编写中」。"""
+    buckets = sh._footer_bucket_counts({"broken_blocked": 7})
+    spin = buckets["pending"] + buckets["dispatched"] + buckets["failed_active"]
+    assert spin == 0, "设备不可达却显示编写进度=报告一个不存在的进度"
+    assert sum(buckets.values()) == 7, "总量守恒不能因分桶变化被破坏"
 
 
 def test_footer_projection_all_pass_unchanged():

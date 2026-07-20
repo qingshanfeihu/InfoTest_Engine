@@ -44,6 +44,13 @@ SIGNALS = frozenset({
     # emit correct-by-construction 归一化(#61 003:worker 全角逗号 `，` → 半角,治 get_parameter
     # 拆参崩 importKey/importCert;可观测 auto-fix,非静默——健康输入恒零)
     "fullwidth_comma_normalized",
+    # command_existence 门(emit_xlsx_tool):worker 命令未在 command_inventory 现身时的两个出口
+    # miss=呈报落 needs_decision claim;evidence_accepted=worker 携行级证据机械核验通过放行。
+    "command_existence_miss",
+    "command_existence_evidence_accepted",
+    # teardown 门(emit_xlsx_tool):配置类命令无案内恢复步 → 呈报落 needs_decision claim
+    # (不硬拒,worker 可选"改预期保留残留")。
+    "missing_teardown",
 })
 
 # 生产默认路径;测试可 monkeypatch 本变量把信号定向到自定义位置断言(既有用法)。

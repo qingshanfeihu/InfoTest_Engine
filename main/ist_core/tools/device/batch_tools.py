@@ -981,12 +981,16 @@ def _xlsx_apv_lines(xlsx_path) -> dict[str, list[str]]:
 
 
 def _append_verified_runs(xlsx_path, results: list, cur_round: int, run_ts: float,
-                          build: str = "") -> None:
+                          build: str = "", build_source: str = "") -> None:
     """运行台账(V6 支柱2a):逐 case 追加 runtime/logs/verified_runs.jsonl。
 
     build 字段=本次 run 提交用的目标 build(K 锚三元组 (build, run_ts, lineage) 的
     build 位,理论 §5.1)——写回链经 device_run_ref 透传进 footprint 条目的
-    evidence.device_run,后续 build 锚差派生 stale 判定靠它;空串=当次未解析出。"""
+    evidence.device_run,后续 build 锚差派生 stale 判定靠它;空串=当次未解析出。
+
+    build_source ∈ {probe, config_fallback, ""}:build 值的**出处**,治「兜底值静默
+    冒充实测值」(gap② S3:#54 全批被盖 config 的 568、设备实测 585)。config_fallback
+    的 build 不是设备事实,渲染层不得据它判已验证版本作用域。"""
     apv = _xlsx_apv_lines(xlsx_path)
     ledger = _project_root() / "runtime" / "logs" / "verified_runs.jsonl"
     ledger.parent.mkdir(parents=True, exist_ok=True)
@@ -1001,6 +1005,7 @@ def _append_verified_runs(xlsx_path, results: list, cur_round: int, run_ts: floa
                 "run_ts": run_ts, "round": cur_round,
                 "xlsx": str(xlsx_path), "xlsx_mtime": xstat.st_mtime,
                 "build": (build or "").strip(),
+                "build_source": (build_source or "").strip(),
                 "apv_cmds": apv.get(aid, []),
             }, ensure_ascii=False) + "\n")
 
@@ -1121,7 +1126,8 @@ def _exec_failure_markers() -> list:
 
 @tool(parse_docstring=True)
 def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: str = "",
-                         build: str = "", max_s_each: int = _RUN_DEFAULT_MAX_S,
+                         build: str = "", build_source: str = "",
+                         max_s_each: int = _RUN_DEFAULT_MAX_S,
                          force_clean: bool = False) -> str:
     """Run the whole xlsx on-device once + per-case four-layer attribution, returning a **compact readable** digest (never offloaded).
 
@@ -1170,6 +1176,13 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
             rejected explicitly.
         module: staging submodule (default: compiler config).
         build: target device build (default: compiler config).
+        build_source: where ``build`` came from. Use ``probe`` only when it is the value
+            the bed-gate probe actually read off the device during this run; anything
+            else must say so (``config_fallback``, ``caller_declared``). Leave it empty
+            and the ledger records ``unspecified`` — a build with no stated origin is
+            never counted as a measured fact. The K anchor (build, run_ts, lineage) and
+            every downstream staleness judgement rest on this field, so do not label a
+            value ``probe`` unless you measured it.
         max_s_each: whole-file budget floor (same as ``dev_run_batch``).
 
     Returns:
@@ -1355,13 +1368,22 @@ def dev_run_batch_digest(xlsx_path: str, autoids_json: list | str = "", module: 
         # runtime/logs/verified_runs.jsonl——footprint 写回的 device_verified 第二权威源。
         # runtime/ 在 agent 文件沙箱黑名单,工具进程写、agent 伪造不了;追加失败不阻断 run。
         try:
-            # build 锚:digest 入参可能为空,按 dev_run_batch 同款 cfg 兜底解析生效值
-            try:
-                from main.case_compiler.config import get_config as _gc
-                _eff_build = (build or _gc().build or "").strip()
-            except Exception:  # noqa: BLE001
-                _eff_build = (build or "").strip()
-            _append_verified_runs(xlsx_path, results, cur_round, now_ts, build=_eff_build)
+            # build 锚:出处由**调用方声明**(build_source 入参),函数内不猜——「入参非空」
+            # 只证明有人传了值,不证明它来自探针(P1-D:凭据≠事实同病)。未声明出处的
+            # build 一律记 "unspecified",宁可诚实缺位也不冒充实测。
+            _eff_build = (build or "").strip()
+            _build_source = (build_source or "").strip()
+            if _eff_build and not _build_source:
+                _build_source = "unspecified"
+            if not _eff_build:
+                try:
+                    from main.case_compiler.config import get_config as _gc
+                    _eff_build = (_gc().build or "").strip()
+                    _build_source = "config_fallback" if _eff_build else ""
+                except Exception:  # noqa: BLE001
+                    _eff_build, _build_source = "", ""
+            _append_verified_runs(xlsx_path, results, cur_round, now_ts,
+                                  build=_eff_build, build_source=_build_source)
         except Exception:  # noqa: BLE001
             logger.debug("verified_runs 台账追加失败(忽略)", exc_info=True)
         try:

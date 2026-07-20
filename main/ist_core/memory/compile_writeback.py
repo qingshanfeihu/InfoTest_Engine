@@ -26,6 +26,39 @@ from main.ist_core.memory.footprint.schema import RawFact
 logger = logging.getLogger(__name__)
 
 
+def _strip_executor_kwargs(cmd: str) -> str:
+    """剥掉 G 段命令尾部的**框架执行器 kwarg**,返回纯 CLI 语法部分。
+
+    `ssl activate certificate vh1,prompt=YES` 里的 `,prompt=YES` 不是设备 CLI 语法,
+    是 xlsx 执行器的具名参数(mirror `lib/test_xlsx.py::get_parameter`)。原样写进
+    footprint 的 cli.commands 后,worker 检索会读成「这条命令的语法含 prompt 参数」
+    ——知识树被交付流程持续污染(gap② 现象,ssl.activate 实证)。
+
+    判据**机械推导自 get_parameter 语义**,不建 {prompt,timeout} 键名白名单:该键集随
+    框架版本增长,白名单会漏判(参考文档只写机制、数据按引用)。切法复用 structural_gate
+    的引号外逗号正则(test_xlsx.py:57 原样复刻),勿另写第三份——两路切法漂移正是
+    缺口①的成因。get_parameter 对 `key=value` 段的 kwarg 判据是「`=` 左侧无空格」
+    (test_xlsx.py:71-77:含空格则退回位置参),这里照搬。
+    """
+    from main.ist_core.tools.device.structural_gate import _PARAM_SPLIT_RE
+    raw = str(cmd or "")
+    if "\n" in raw or "," not in raw:
+        return raw.strip()   # 含真实换行时框架整段单参(不切),无 kwarg 可言
+    segs = [p.strip() for p in _PARAM_SPLIT_RE.findall(raw) if p.strip()]
+    if not segs:
+        return raw.strip()
+    kept = [segs[0]]
+    for seg in segs[1:]:
+        if "=" in seg:
+            key = seg.split("=", 1)[0].strip()
+            # get_parameter:键无空格 ∧ 是标识符 → 具名参数;否则仍是位置参(属命令)
+            if key and " " not in key and key.replace("_", "").isalnum() \
+                    and not key[0].isdigit():
+                continue   # 执行器 kwarg,剥除
+        kept.append(seg)
+    return ",".join(kept).strip()
+
+
 @dataclass
 class WritebackResult:
     """一次写回的结果汇总，供编排器/日志观测 ρ_k 增长。"""
@@ -64,8 +97,13 @@ def _g_step_to_rawfacts(step, autoid: str, manual_glob: str) -> list[RawFact]:
     elif manual_glob:
         evidence_file = manual_glob
     out: list[RawFact] = []
-    for cmd in (step.G or "").splitlines():
-        cmd = cmd.strip()
+    for raw_cmd in (step.G or "").splitlines():
+        raw_cmd = raw_cmd.strip()
+        if not raw_cmd:
+            continue
+        # 语法位剥执行器 kwarg;**原文另存 evidence_quote**,审计要回溯「设备上实际
+        # 发的是什么」时不丢(gap② S1)。
+        cmd = _strip_executor_kwargs(raw_cmd)
         if not cmd:
             continue
         # feature_path 与 footprint 命名约定对齐:剥操作前缀(no/show/clear)再取
@@ -82,7 +120,8 @@ def _g_step_to_rawfacts(step, autoid: str, manual_glob: str) -> list[RawFact]:
             fact_key=cmd,
             cli_syntax=cmd,
             evidence_file=evidence_file,
-            evidence_quote=cmd,
+            evidence_quote=cmd,      # 门的针:剥净后更易在手册命中(原文含 kwarg 恒不中)
+            raw_invocation=raw_cmd,  # 设备实发原文,审计回溯用
             source_thread=f"compile_writeback:{autoid}",
         ))
     return out

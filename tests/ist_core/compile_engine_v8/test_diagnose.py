@@ -312,7 +312,7 @@ def test_diagnose_common_cause_cluster(rig):
     rig["monkeypatch"].setattr(N, "_FORK_OVERRIDE", fork)
 
     class SameSigDevice(FakeDevice):
-        def digest(self, xlsx_path, autoids):
+        def digest(self, xlsx_path, autoids, build=""):
             ctx = "delivery" if "__sub" not in xlsx_path else "subset"
             recs = []
             for aid in autoids:

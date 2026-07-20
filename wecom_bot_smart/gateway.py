@@ -38,6 +38,48 @@ def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
     from main.ist_core.runner import _ensure_env
     _ensure_env()
 
+    # ── 确保用户存在于 ist_audit.users ──
+    session_id = ""
+    conversation_id = ""
+    # 解析加密 userid → 真实姓名 → wx_拼音格式
+    display_name = _resolve_display_name(user_id)
+    db_username = _to_wx_username(display_name) if display_name else f"wx_{user_id}"
+    try:
+        from main.ist_core.auth.db import pg_cursor
+        with pg_cursor() as cur:
+            cur.execute(
+                "SELECT id, role FROM ist_audit.users WHERE username = %s",
+                (db_username,),
+            )
+            row = cur.fetchone()
+        if not row:
+            with pg_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO ist_audit.users (username, password_hash, role, account_status)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (username) DO NOTHING""",
+                    (db_username, "", "admin", "normal"),
+                )
+            logger.info("企微用户自动注册: user=%s (raw=%s, name=%s)", db_username, user_id, display_name)
+        role = row["role"] if row else "admin"
+
+        # ── 创建 session 和 conversation ──
+        from main.ist_core.auth.session_manager import SessionManager
+        mgr = SessionManager()
+        session_id, _jwt = mgr.create_session(db_username, role, channel="wecom")
+        conv = mgr.create_conversation(db_username, session_id=session_id)
+        conversation_id = conv.get("conversation_id", "")
+        logger.info("企微会话建立: user=%s session=%s conv=%s", db_username, session_id[:20], conversation_id[:20])
+    except Exception as exc:
+        logger.warning("企微用户/会话初始化失败: user=%s err=%s", db_username, exc)
+        session_id = f"wecom_{user_id}"
+        conversation_id = thread_id or f"wecom_{user_id}"
+
+    # ── 注入环境变量（全部用 wx_ 拼音格式，LangGraph namespace 安全）──
+    _os.environ["IST_SSH_USER"] = db_username
+    _os.environ["IST_AUTH_SESSION_ID"] = session_id
+    _os.environ["IST_CONVERSATION_ID"] = conversation_id
+
     from main.ist_core.graph import build_ist_core_graph
     from main.ist_core.streaming import stream_and_collect
     from main.ist_core.events import IstCoreEvent
@@ -122,7 +164,12 @@ def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
         try:
             with InMemorySaver() as saver:
                 graph = build_ist_core_graph(checkpointer=saver, checkpointer_mode="async")
-                config: dict[str, Any] = {"configurable": {"thread_id": tid, "wx_user_id": user_id}}
+                config: dict[str, Any] = {"configurable": {
+                    "thread_id": tid,
+                    "wx_user_id": user_id,
+                    "auth_session_id": session_id,
+                    "auth_conversation_id": conversation_id,
+                }}
                 initial_state: dict[str, Any] = {
                     "task_type": "QA",
                     "user_input": user_query,
@@ -401,7 +448,7 @@ def _get_or_fetch_access_token() -> str:
         resp = _req.get(
             "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
             params={"corpid": smart_config.corp_id or "",
-                    "corpsecret": smart_config.secret},
+                    "corpsecret": smart_config.app_secret or smart_config.secret},
             timeout=15,
         )
         resp.raise_for_status()
@@ -440,6 +487,51 @@ def _resolve_user_dir(user_id: str) -> str:
         logger.debug("查询用户信息失败: %s", user_id, exc_info=True)
     _user_display_cache[user_id] = display
     return display
+
+
+def _resolve_display_name(user_id: str) -> str:
+    """从加密 userid 解析真实姓名（企微 API）。解析失败返回空串。"""
+    if not user_id or not user_id.startswith(("wm", "wo", "wp")):
+        return user_id
+    try:
+        import requests as _req
+        token = _get_or_fetch_access_token()
+        if token:
+            resp = _req.get(
+                "https://qyapi.weixin.qq.com/cgi-bin/user/get",
+                params={"access_token": token, "userid": user_id},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("errcode") == 0 and data.get("name"):
+                    return data["name"]
+    except Exception:
+        logger.debug("解析用户姓名失败: %s", user_id, exc_info=True)
+    return ""
+
+
+def _to_wx_username(display_name: str) -> str:
+    """企微用户名转换：中文→拼音，统一加 wx_ 前缀。
+
+    王娟 → wx_wangjuan
+    wangdahai → wx_wangdahai
+    """
+    if not display_name:
+        return ""
+    # 判断是否含中文
+    has_chinese = any("一" <= ch <= "鿿" for ch in display_name)
+    if has_chinese:
+        try:
+            from pypinyin import lazy_pinyin
+            pinyin = "".join(lazy_pinyin(display_name))
+        except Exception:
+            logger.warning("pypinyin 转换失败: %s", display_name)
+            return ""
+        return f"wx_{pinyin}"
+    else:
+        # 已经是拼音/英文，直接加前缀
+        return f"wx_{display_name}"
 
 
 # ============================================================================

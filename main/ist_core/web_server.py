@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import fcntl
+import ipaddress
 import json
 import logging
 import os
@@ -31,6 +32,39 @@ from fastapi.responses import FileResponse
 from main.ist_core.events import get_default_bus
 
 logger = logging.getLogger("ist_web")
+
+
+def _emit_langfuse_auth_trace(
+    name: str,
+    *,
+    user_id: str = "",
+    session_id: str = "",
+    input_data: dict | None = None,
+    output_data: dict | None = None,
+    metadata: dict | None = None,
+    tags: list[str] | None = None,
+) -> None:
+    """往 Langfuse 写一条认证事件 trace（静默失败，不影响主流程）。"""
+    try:
+        from main.ist_core.sinks.langfuse_sink import get_langfuse_client
+        client = get_langfuse_client()
+        if client is None:
+            return
+        from langfuse import propagate_attributes
+        with propagate_attributes(
+            user_id=user_id or None,
+            session_id=session_id or None,
+            metadata=metadata or None,
+            tags=tags or None,
+        ):
+            span = client.start_span(
+                name=name,
+                input=input_data,
+                output=output_data,
+            )
+            span.end()
+    except Exception:
+        pass
 
 
 
@@ -115,10 +149,37 @@ _MAX_UPLOAD_BYTES = int(os.environ.get("IST_WEB_MAX_UPLOAD_MB", "50")) * 1024 * 
 _WRITE_ROLES = {r.strip() for r in os.environ.get("IST_WEB_WRITE_ROLES", "admin,superadmin").split(",") if r.strip()}
 
 
+# 受信代理 IP 列表（逗号分隔）；为空则不信任任何 proxy header。
+# 例: IST_TRUSTED_PROXIES="127.0.0.1,10.0.0.0/8"
+_TRUSTED_PROXIES: list[str] = [
+    p.strip() for p in os.environ.get("IST_TRUSTED_PROXIES", "").split(",") if p.strip()
+]
+
+
 def _client_ip(request: Request | None) -> str:
     if request is None or request.client is None:
         return "unknown"
-    return request.client.host or "unknown"
+    direct = request.client.host or "unknown"
+    if not _TRUSTED_PROXIES:
+        return direct
+    # 只有直连 IP 在受信列表内时，才读取 proxy header
+    try:
+        direct_ip = ipaddress.ip_address(direct)
+    except ValueError:
+        return direct
+    trusted = any(
+        direct_ip in ipaddress.ip_network(cidr, strict=False) for cidr in _TRUSTED_PROXIES
+    )
+    if not trusted:
+        return direct
+    # 优先 X-Real-IP，其次 X-Forwarded-For 取最左（原始客户端）
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return direct
 
 
 def _rate_limited(ip: str) -> bool:
@@ -178,6 +239,10 @@ async def login(body: dict, request: Request):
             payload={"username": username, "reason": "user_not_found"},
             tags={"source_ip": ip},
         )
+        _emit_langfuse_auth_trace("auth:login_failed", user_id=username,
+                                  input_data={"username": username},
+                                  output_data={"result": "user_not_found"},
+                                  metadata={"source_ip": ip}, tags=["auth", "web"])
         raise HTTPException(status_code=401, detail="用户名不存在")
 
     if user.get("account_status") != "normal":
@@ -188,6 +253,10 @@ async def login(body: dict, request: Request):
             payload={"username": username, "reason": "account_locked", "account_status": user.get("account_status")},
             tags={"source_ip": ip},
         )
+        _emit_langfuse_auth_trace("auth:login_failed", user_id=username,
+                                  input_data={"username": username},
+                                  output_data={"result": "account_locked", "status": user.get("account_status")},
+                                  metadata={"source_ip": ip}, tags=["auth", "web"])
         raise HTTPException(status_code=403, detail="账号已被锁定或禁用")
 
     if not verify_password(user["password_hash"], password):
@@ -198,6 +267,10 @@ async def login(body: dict, request: Request):
             payload={"username": username, "reason": "wrong_password"},
             tags={"source_ip": ip},
         )
+        _emit_langfuse_auth_trace("auth:login_failed", user_id=username,
+                                  input_data={"username": username},
+                                  output_data={"result": "wrong_password"},
+                                  metadata={"source_ip": ip}, tags=["auth", "web"])
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
     # 创建会话（PG + Redis）
@@ -221,6 +294,14 @@ async def login(body: dict, request: Request):
         payload={"username": username, "role": role},
         tags={"session_id": session_id, "source_ip": ip, "session_user": username},
     )
+    _conv_id = conv["conversation_id"] if conv else ""
+    _emit_langfuse_auth_trace(
+        "auth:login", user_id=username, session_id=session_id,
+        input_data={"username": username},
+        output_data={"result": "success", "session_id": session_id, "conversation_id": _conv_id, "role": role},
+        metadata={"source_ip": ip, "role": role, "conversation_id": _conv_id, "channel": "web"},
+        tags=["auth", "web"],
+    )
     result = {"token": jwt_token, "session_id": session_id, "username": username, "role": role}
     if conv:
         result["conversation_id"] = conv["conversation_id"]
@@ -239,6 +320,10 @@ async def logout(body: dict):
                 payload={"username": username},
                 tags={"session_id": session_id, "session_user": username},
             )
+            _emit_langfuse_auth_trace("auth:logout", user_id=username, session_id=session_id,
+                                      input_data={"username": username, "session_id": session_id},
+                                      output_data={"result": "success"},
+                                      tags=["auth", "web"])
         except Exception as exc:
             logger.debug("logout invalidate 失败: %s", exc)
     return {"ok": True}
@@ -428,15 +513,31 @@ def _get_user_outputs_dir(session_id: str, token: str) -> Path:
     return user_dir
 
 
+def _build_file_tree(base: Path, current: Path) -> list[dict]:
+    """递归构建目录树。"""
+    entries: list[dict] = []
+    try:
+        items = sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    except OSError:
+        return entries
+    for item in items:
+        if item.name.startswith("."):
+            continue
+        rel = str(item.relative_to(base)).replace("\\", "/")
+        if item.is_dir():
+            children = _build_file_tree(base, item)
+            if children:
+                entries.append({"name": item.name, "path": rel, "type": "dir", "children": children})
+        else:
+            entries.append({"name": item.name, "path": rel, "type": "file", "size": item.stat().st_size})
+    return entries
+
+
 @app.get("/api/files")
 async def list_files(session_id: str = "", token: str = ""):
     user_dir = _get_user_outputs_dir(session_id, token)
-    files = []
-    for f in sorted(user_dir.rglob("*")):
-        if f.is_file() and not f.name.startswith("."):
-            rel = f.relative_to(user_dir)
-            files.append({"name": str(rel).replace("\\", "/"), "size": f.stat().st_size})
-    return {"files": files}
+    tree = _build_file_tree(user_dir, user_dir)
+    return {"files": tree}
 
 
 @app.get("/api/download")
@@ -588,7 +689,6 @@ async def ws_terminal(websocket: WebSocket):
 
     cols = auth.get("cols", 120)
     rows = auth.get("rows", 40)
-
 
     master_fd, slave_fd = pty.openpty()
     _set_winsize(master_fd, cols, rows)

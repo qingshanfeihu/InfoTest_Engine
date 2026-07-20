@@ -105,10 +105,12 @@ IST_POSTGRES_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
 # =============================================================================
 # 五（续）、Langfuse LLM 可观测性（可选，自建实例）
 # =============================================================================
+# 三键缺一则自动跳过，不影响主流程
 # LANGFUSE_PUBLIC_KEY=pk-lf-...
 # LANGFUSE_SECRET_KEY=sk-lf-...
 # LANGFUSE_HOST=http://your-langfuse-server:3000
 # LANGFUSE_BASE_URL=http://your-langfuse-server:3000   # 兼容别名
+# IST_LANGFUSE_ENABLED=0   # 强制关闭（默认 1）
 
 
 # =============================================================================
@@ -265,3 +267,13 @@ WECOM_SMART_MCP_DOC_URL=https://...
 
 # --- 服务配置（可选）---
 # WECOM_SMART_IST_TIMEOUT=600  # IST-Core 单次调用最长等待（秒）
+
+
+# =============================================================================
+# 十四、Web Terminal 登录安全（可选）
+# =============================================================================
+# 受信代理 IP / CIDR（逗号分隔）。为空则不信任任何反向代理 header，
+# source_ip 取 TCP 直连地址。部署在 nginx 反代后面时，填入反代的 IP。
+# IST_TRUSTED_PROXIES="127.0.0.1,10.0.0.0/8"
+# IST_WEB_LOGIN_MAX_FAILURES=5    # 单 IP 窗口内最大失败次数（默认 5）
+# IST_WEB_LOGIN_WINDOW_SEC=300    # 滑动窗口秒数（默认 300）

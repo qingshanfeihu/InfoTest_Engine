@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import uuid
+from contextlib import nullcontext as _null_context
 from typing import Any
 
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -503,18 +504,27 @@ def qa_node(state: IstCoreState, config: RunnableConfig | None = None) -> dict[s
 
             "recursion_limit": max(config.get("recursion_limit") or 0, 300),
         }
-    # [已注释] Langfuse LLM 可观测性
-    # try:
-    #     from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks
-    #     inject_langfuse_callbacks(merged_config["callbacks"])
-    # except Exception:
-    #     pass
+    # Langfuse LLM 可观测性（三键缺一则静默跳过）
+    _lf_cbl = (config or {}).get("configurable") or {}
+    if _lf_cbl.get("auth_session_id"):
+        _lf_entry = "wecom_smart"
+    elif _lf_cbl.get("wx_user_id"):
+        _lf_entry = "wecom"
+    else:
+        _lf_entry = "tui"
+
+    try:
+        from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks, build_trace_attributes
+        _lf_attrs = build_trace_attributes(config, entry=_lf_entry)
+        inject_langfuse_callbacks(merged_config["callbacks"], **_lf_attrs)
+    except Exception:
+        pass
 
     try:
         result = agent.invoke(agent_input, config=merged_config)
     except Exception as exc:  # noqa: BLE001
         if is_transient_error(exc):
-            raise  # 传播到 bridge 层统一处理，不吞掉让 agent 有机会重试
+            raise
         logger.exception("qa_node 调用 MainAgent 失败: %s", exc)
         return {"final_answer": f"[error] {exc}", "messages": [AIMessage(content=f"错误: {exc}")]}
 

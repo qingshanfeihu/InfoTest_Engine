@@ -949,7 +949,8 @@ def _emit_fork_step_events(fork_id: str, msg: Any, counter: list[int]) -> None:
 
 
 def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str, *,
-                          tally: Any = None, fork_id: str = "") -> dict:
+                          tally: Any = None, fork_id: str = "",
+                          skill_name: str = "") -> dict:
     """跑 fork 并把内部每个工具调用实时发到主 bus(让 TUI 看到 draft/grade 运行过程)。
 
     用 ``stream(stream_mode='values')``——每个 superstep 吐全量 state,取最后一个作为
@@ -957,20 +958,20 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str, *,
     ``IST_FORK_STEP_EMIT=0`` 可关实时步骤(只留编排层的轮次标记)。
     tally/fork_id 可选(默认行为不变):tally 由调用方传入以读 per-fork tokens;
     fork_id 非空时步骤同步双写结构化事件(.events.jsonl,TUI 卡片数据源)。"""
+    from contextlib import nullcontext as _null_context
     from langchain_core.messages import HumanMessage
     inp = {"messages": [HumanMessage(content=rendered_body)]}
-    cfg = {"callbacks": [tally if tally is not None else _ForkUsageTally()]}   # fork usage 唯一采集点
+    cfg: dict = {"callbacks": [tally if tally is not None else _ForkUsageTally()]}   # fork usage 唯一采集点
     cfg = {"callbacks": [_ForkUsageTally()]}   # fork usage 唯一采集点(每次 LLM 调用即时计)
-    # [已注释] Langfuse LLM 可观测性
-    # try:
-    #     from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks
-    #     inject_langfuse_callbacks(cfg["callbacks"])
-    # except Exception:
-    #     pass
+    # Langfuse LLM 可观测性：monkey-patch CallbackHandler 直接注入 trace 属性。
+    try:
+        from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks, build_trace_attributes
+        _lf_attrs = build_trace_attributes(None, skill=skill_name, fork_id=fork_id)
+        inject_langfuse_callbacks(cfg["callbacks"], **_lf_attrs)
+    except Exception:
+        pass
     stream = getattr(runnable, "stream", None)
     if not callable(stream) or not _fork_step_emit_enabled():
-        # runnable 不支持流式 或 关了步骤显示(IST_FORK_STEP_EMIT=0)→ 退回阻塞 invoke,
-        # 行为与旧版完全一致(只是看不到实时步骤)。
         return runnable.invoke(inp, cfg)
     final_state: dict = {}
     seen = 0
@@ -1084,7 +1085,8 @@ def execute_fork_skill(skill_name: str, brief: str = "", *, tag: str = "",
 
     try:
         result = _invoke_fork_streamed(runnable, rendered_body, _label,
-                                       tally=_tally, fork_id=_fork_id)
+                                       tally=_tally, fork_id=_fork_id,
+                                       skill_name=skill_name)
     except Exception as exc:
         # 递归上限是「已处理」的预期情况——compile_pipeline 会捕获后**立即 escalate**(不再做
         # 3 轮等价重做:同 brief 必然同样递归 spin)。回带确定性标记 `[recursion-limit]` 让上层

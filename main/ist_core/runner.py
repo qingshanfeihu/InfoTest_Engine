@@ -41,6 +41,13 @@ def _ensure_env() -> None:
     except Exception:  # noqa: BLE001
         pass
 
+    # 后台线程预热 Langfuse client（首次 agent 请求到来时已缓存，零等待）
+    try:
+        from main.ist_core.sinks.langfuse_sink import warmup_langfuse_client
+        warmup_langfuse_client()
+    except Exception:
+        pass
+
     missing: list[str] = []
     if not (os.environ.get("OPENAI_API_KEY") or "").strip():
         missing.append("OPENAI_API_KEY")

@@ -149,17 +149,27 @@ class GraphBridge:
         asyncio.set_event_loop(loop)
         try:
             graph = self._get_graph()
-            config = {"configurable": {"thread_id": self._thread_id}}
             sinks: list[Callable] = [self._sink, *self._extra_sinks]
             from main.ist_core.events import reset_default_bus
             import uuid as _uuid
-            bus = reset_default_bus(run_id=_uuid.uuid4().hex[:12])
+            run_id = _uuid.uuid4().hex[:12]
+            bus = reset_default_bus(run_id=run_id)
             for sink in sinks:
                 bus.subscribe(sink)
             import os as _os
             _session_user = _os.environ.get("IST_SSH_USER", "").strip()
             _session_id = _os.environ.get("IST_AUTH_SESSION_ID", "").strip()
             _conversation_id = _os.environ.get("IST_CONVERSATION_ID", "").strip()
+            # 注入完整认证上下文到 LangGraph config（Langfuse / qa_node 消费）
+            _configurable: dict[str, Any] = {"thread_id": self._thread_id}
+            if _session_user:
+                _configurable["auth_user"] = _session_user
+            if _session_id:
+                _configurable["auth_session_id"] = _session_id
+            if _conversation_id:
+                _configurable["auth_conversation_id"] = _conversation_id
+            _configurable["run_id"] = run_id
+            config = {"configurable": _configurable}
             if _session_user or _session_id:
                 bus.set_default_tags({
                     "session_user": _session_user,

@@ -78,8 +78,8 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 #toolbar .toggle-sidebar:hover { color: #c0caf5; }
 #downloadPanel {
   display:none; position:absolute; top:100%; left:80px; background:#24283b;
-  border:1px solid #414868; border-radius:6px; padding:8px; min-width:240px;
-  max-height:300px; overflow-y:auto; z-index:10; box-shadow:0 4px 12px rgba(0,0,0,0.4);
+  border:1px solid #414868; border-radius:6px; padding:8px; min-width:340px;
+  max-height:360px; overflow-y:auto; z-index:10; box-shadow:0 4px 12px rgba(0,0,0,0.4);
 }
 #downloadPanel .dl-item {
   display:flex; justify-content:space-between; align-items:center;
@@ -88,6 +88,22 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 #downloadPanel .dl-item:hover { background:#414868; }
 #downloadPanel .dl-size { color:#565f89; font-size:0.75rem; margin-left:12px; }
 #downloadPanel .dl-empty { color:#565f89; font-size:0.82rem; padding:4px; }
+#downloadPanel .dl-dir { cursor:pointer; user-select:none; }
+#downloadPanel .dl-dir-header {
+  display:flex; align-items:center; gap:4px; padding:4px 6px; border-radius:3px;
+  font-size:0.82rem; color:#7aa2f7; cursor:pointer;
+}
+#downloadPanel .dl-dir-header:hover { background:#414868; }
+#downloadPanel .dl-dir-arrow { font-size:0.65rem; width:12px; transition:transform 0.15s; color:#565f89; }
+#downloadPanel .dl-dir-arrow.open { transform:rotate(90deg); }
+#downloadPanel .dl-dir-children { padding-left:14px; }
+#downloadPanel .dl-file-row {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:3px 6px 3px 12px; border-radius:3px; cursor:pointer; font-size:0.82rem; color:#c0caf5;
+}
+#downloadPanel .dl-file-row:hover { background:#414868; }
+#downloadPanel .dl-file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#downloadPanel .dl-file-size { color:#565f89; font-size:0.75rem; margin-left:12px; white-space:nowrap; }
 #terminal { flex: 1; }
 
 /* 【屏蔽切换对话功能】重命名输入
@@ -446,19 +462,60 @@ async function refreshDownloads() {
       return;
     }
     panel.innerHTML = '';
-    d.files.forEach(f => {
-      const size = f.size < 1024 ? f.size + 'B' : (f.size/1024).toFixed(1) + 'KB';
-      const item = document.createElement('div');
-      item.className = 'dl-item';
-      item.textContent = f.name;
-      const sizeEl = document.createElement('span');
-      sizeEl.className = 'dl-size';
-      sizeEl.textContent = size;
-      item.appendChild(sizeEl);
-      item.addEventListener('click', () => doDownload(f.name));
-      panel.appendChild(item);
-    });
+    renderTree(panel, d.files);
   } catch(e) { panel.innerHTML = '<div class="dl-empty">加载失败</div>'; }
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + 'B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + 'KB';
+  return (bytes / 1048576).toFixed(1) + 'MB';
+}
+
+function renderTree(container, nodes) {
+  nodes.forEach(node => {
+    if (node.type === 'dir') {
+      const dir = document.createElement('div');
+      dir.className = 'dl-dir';
+      const header = document.createElement('div');
+      header.className = 'dl-dir-header';
+      const arrow = document.createElement('span');
+      arrow.className = 'dl-dir-arrow open';
+      arrow.textContent = '▶';
+      const icon = document.createElement('span');
+      icon.textContent = '📁 ';
+      const label = document.createElement('span');
+      label.textContent = node.name;
+      header.appendChild(arrow);
+      header.appendChild(icon);
+      header.appendChild(label);
+      dir.appendChild(header);
+      const children = document.createElement('div');
+      children.className = 'dl-dir-children';
+      renderTree(children, node.children);
+      dir.appendChild(children);
+      header.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = children.style.display !== 'none';
+        children.style.display = open ? 'none' : 'block';
+        arrow.classList.toggle('open', !open);
+      });
+      container.appendChild(dir);
+    } else {
+      const row = document.createElement('div');
+      row.className = 'dl-file-row';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'dl-file-name';
+      nameEl.textContent = node.name;
+      const sizeEl = document.createElement('span');
+      sizeEl.className = 'dl-file-size';
+      sizeEl.textContent = formatSize(node.size);
+      row.appendChild(nameEl);
+      row.appendChild(sizeEl);
+      row.addEventListener('click', () => doDownload(node.path));
+      container.appendChild(row);
+    }
+  });
 }
 
 function doDownload(name) {

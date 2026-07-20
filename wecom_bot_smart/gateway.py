@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import json
 import logging
 import os
 import queue
@@ -34,6 +35,9 @@ def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
     """流式调用 IST-Core，通过 ``stream_and_collect`` + EventBus sink。"""
     import os as _os
     _os.environ["IST_WECOM_BOT"] = "1"
+    # 用户身份传递给文件工具层，用于 workspace/inputs/ 和 workspace/outputs/ 目录隔离
+    _os.environ["IST_CURRENT_USER"] = _resolve_user_display(user_id)
+    _os.environ["IST_OUTPUT_SUBDIR"] = _resolve_user_display(user_id)
 
     from main.ist_core.runner import _ensure_env
     _ensure_env()
@@ -236,6 +240,10 @@ def _call_ist_core_stream(user_query: str, user_id: str = "smart_user",
 _task_registry: dict[str, dict[str, Any]] = {}
 _registry_lock = threading.Lock()
 
+# ask_user 用户回答暂存（供 drain_stream 记录到 status_lines）
+_pending_answers: dict[str, str] = {}
+_pending_answers_lock = threading.Lock()
+
 
 def _register_task(user_id: str, stream_id: str) -> threading.Event:
     with _registry_lock:
@@ -256,6 +264,11 @@ def _register_task(user_id: str, stream_id: str) -> threading.Event:
 def _deregister_task(user_id: str) -> None:
     with _registry_lock:
         _task_registry.pop(user_id, None)
+    # 任务完成时刷新会话活跃时间，防止长任务完成后触发空闲切分
+    with _sessions_lock:
+        sess = _sessions.get(user_id)
+        if sess is not None:
+            sess["last_active"] = time.time()
 
 
 def _cancel_task(user_id: str) -> bool:
@@ -306,7 +319,9 @@ def _get_thread_id(user_id: str) -> tuple[str, str | None, int]:
         idle = now - sess["last_active"]
         turns = sess["turn_count"]
         reason = None
-        if idle > MAX_IDLE_SECONDS:
+        # 有活跃任务时跳过空闲检查——agent 长任务（编译/上机）可能跑几十分钟
+        has_active_task = user_id in _task_registry
+        if idle > MAX_IDLE_SECONDS and not has_active_task:
             reason = f"空闲超过 {idle / 60:.0f} 分钟"
         elif turns >= MAX_TURNS:
             reason = f"达到轮数上限（{MAX_TURNS} 轮）"
@@ -344,8 +359,11 @@ def _start_cleanup_thread() -> None:
             time.sleep(CLEANUP_INTERVAL)
             now = time.time()
             with _sessions_lock:
-                stale = [uid for uid, s in _sessions.items()
-                         if now - s["last_active"] > SESSION_CLEANUP_SECONDS]
+                stale = [
+                    uid for uid, s in _sessions.items()
+                    if now - s["last_active"] > SESSION_CLEANUP_SECONDS
+                    and uid not in _task_registry  # 有活跃任务的不清理
+                ]
                 for uid in stale:
                     s = _sessions.pop(uid)
                     logger.info("清理僵尸会话: user=%s idle=%.1fh",
@@ -386,8 +404,7 @@ def _clean_content(raw: str, user_id: str) -> str:
 
 def _format_markdown(query: str, answer: str, elapsed_min: int,
                      split_reason: str | None = None,
-                     turn_count: int = 0,
-                     process_summary: str = "") -> str:
+                     turn_count: int = 0) -> str:
     body = answer
     d = body.encode("utf-8")
     if len(d) > 20000:
@@ -403,30 +420,62 @@ def _format_markdown(query: str, answer: str, elapsed_min: int,
           if elapsed_min > 0
           else "🚀 Powered by IST-Core")
     footer = f"{turn_info} | {ft}" if turn_info else ft
-    process_section = f"\n{process_summary}\n" if process_summary else ""
     return (f"## InfoTest Engine 结果\n{prefix}"
-            f"> **问题：**{query[:100]}\n---\n{body}\n---"
-            f"{process_section}\n---\n{footer}")
+            f"> **问题：**{query[:100]}\n---\n{body}\n---\n\n---\n{footer}")
 
 
-# MCP 文档客户端
-_doc_toolkit = None
+# 用户 ID → 显示名映射（本地持久化，首次遇到未知 ID 时自动记录）
+_USER_MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_map.json")
+_user_map: dict[str, str] = {}
+_user_map_lock = threading.Lock()
 
 
-def _get_doc_toolkit():
-    global _doc_toolkit
-    mcp_url = server_config.mcp_doc_url
-    if mcp_url and _doc_toolkit is None:
+def _load_user_map() -> dict[str, str]:
+    global _user_map
+    if _user_map:
+        return _user_map
+    with _user_map_lock:
+        if _user_map:
+            return _user_map
         try:
-            from .tools import DocMcpClient, DocToolKit
-            c = DocMcpClient(mcp_url)
-            c.initialize()
-            _doc_toolkit = DocToolKit(c)
-            logger.info("MCP 文档客户端已就绪")
-        except Exception:
-            logger.exception("MCP 文档客户端初始化失败")
-            return None
-    return _doc_toolkit
+            with open(_USER_MAP_PATH, "r", encoding="utf-8") as f:
+                _user_map = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            _user_map = {}
+    return _user_map
+
+
+def _save_user_map() -> None:
+    try:
+        os.makedirs(os.path.dirname(_USER_MAP_PATH), exist_ok=True)
+        with open(_USER_MAP_PATH, "w", encoding="utf-8") as f:
+            json.dump(_user_map, f, ensure_ascii=False, indent=2)
+    except Exception:
+        logger.debug("保存 user_map 失败", exc_info=True)
+
+
+def _resolve_user_display(user_id: str, user_name: str = "") -> str:
+    """获取用户显示名用于目录命名。
+
+    优先级：
+    1. 消息帧 from.name（企微有时提供）
+    2. 本地 user_map.json 映射
+    3. _resolve_user_dir（API 查询或降级为原始 ID）
+    """
+    if user_name:
+        return _safe_user_dir(user_name)
+
+    umap = _load_user_map()
+    if user_id in umap:
+        return _safe_user_dir(umap[user_id])
+
+    # 企微内部 ID（如 WangDaHai）直接用
+    if user_id and not user_id.startswith(("wm", "wo", "wp")):
+        return _safe_user_dir(user_id)
+
+    # 外部 ID 无法解析，记录并降级
+    logger.info("未知企微用户 ID: %s（可在 %s 中配置映射）", user_id, _USER_MAP_PATH)
+    return _safe_user_dir(user_id)
 
 
 # 用户目录缓存
@@ -611,7 +660,7 @@ class SmartBotGateway:
             try:
                 await c.reply_welcome(frame, {
                     "msgtype": "text",
-                    "text": {"content": "您好！我是 InfoTest Engine 智能助手。可直接发送技术问题。"},
+                    "text": {"content": "您好！我是 InfoTest Engine 智能助手。可直接发送技术问题，或发送「帮助」查看完整功能。"},
                 })
             except Exception:
                 logger.debug("欢迎消息发送失败", exc_info=True)
@@ -705,11 +754,12 @@ class SmartBotGateway:
         msgtype = body.get("msgtype", "")
         from_info = body.get("from", {})
         user_id = from_info.get("userid", "unknown")
+        user_name = from_info.get("name", "")  # 企微用户显示名
         req_id = frame.get("headers", {}).get("req_id", "")
         content = ""
 
         if msgtype in ("file", "image", "voice", "video"):
-            self._handle_file_msg(frame, body, user_id, msgtype, req_id)
+            self._handle_file_msg(frame, body, user_id, msgtype, req_id, user_name=user_name)
             return
 
         if msgtype == "text":
@@ -749,6 +799,9 @@ class SmartBotGateway:
                     answers[q_text] = content.strip()
             if qid:
                 submit_answers(qid, answers)
+                # 暂存回答内容，供 drain_stream 记录到 status_lines
+                with _pending_answers_lock:
+                    _pending_answers[user_id] = content.strip()
                 self._reply_stream(frame, str(uuid.uuid4()),
                                    f"✅ 已收到您的回答：{content.strip()}", finish=True)
                 logger.info("ask_user 答案已提交: qid=%s answer=%.100s", qid, content)
@@ -771,15 +824,30 @@ class SmartBotGateway:
 
         if content in ("帮助", "help"):
             tips = [
-                "InfoTest Engine 智能助手", "",
-                "直接发送技术问题即可获得解答。", "",
-                "命令列表:",
-                "  新会话 / 新对话 -- 开启新对话",
-                "  停止 / 终止 -- 强制终止当前任务",
-                "  帮助 -- 显示此帮助",
+                "📋 InfoTest Engine 智能助手",
+                "",
+                "💬 **智能问答**",
+                "  直接发送技术问题即可获得解答，支持多轮对话。",
+                "",
+                "📁 **文件收发**",
+                "  • 直接发送文件（Excel / PDF / 文档等），我会自动分析内容",
+                "  • 说「把 xxx 发给我」或「发送文件」，我会把最近生成的文件发给您",
+                "",
             ]
             if server_config.mcp_doc_url:
-                tips.append("  报告 -- 将结果生成文档")
+                tips += [
+                    "📄 **云文档**",
+                    "  • 说「生成报告」或发送 /report，自动将测试结果生成企业微信云文档",
+                    "  • 说「搜索文档」可查找历史报告",
+                    "",
+                ]
+            tips += [
+                "⌨️ **命令列表**",
+                "  /report  -- 将最近结果生成云文档报告",
+                "  新会话   -- 开启新对话（清除上下文）",
+                "  停止     -- 强制终止当前任务",
+                "  帮助     -- 显示此帮助",
+            ]
             self._reply_stream(frame, str(uuid.uuid4()), "\n".join(tips), finish=True)
             return
 
@@ -795,7 +863,7 @@ class SmartBotGateway:
     # ------------------------------------------------------------------
 
     def _handle_file_msg(self, frame: dict, body: dict, user_id: str,
-                         msgtype: str, req_id: str) -> None:
+                         msgtype: str, req_id: str, user_name: str = "") -> None:
         from .files import download_qywx_file
         media_info = body.get(msgtype, {})
         file_url = media_info.get("url", "")
@@ -808,7 +876,9 @@ class SmartBotGateway:
         self._reply_stream(frame, stream_id, f"正在接收{msgtype}文件...")
         try:
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            save_dir = os.path.join(project_root, "workspace", "inputs", _resolve_user_dir(user_id))
+            # 用消息帧信息解析用户名，降级为原始 ID
+            dir_name = _resolve_user_display(user_id, user_name)
+            save_dir = os.path.join(project_root, "workspace", "inputs", dir_name)
             save_path = download_qywx_file(file_url, aeskey, save_dir)
             size_kb = os.path.getsize(save_path) / 1024
             size_mb = size_kb / 1024
@@ -878,11 +948,6 @@ class SmartBotGateway:
         total_min = int((time.monotonic() - start_ts) / 60) or 0
         renderer = ThoughtRenderer()
         process_summary = renderer.render_summary(tool_names, tool_details)
-        final_md = _format_markdown(
-            query[:100], answer, total_min,
-            split_reason=split_reason, turn_count=turn_count,
-            process_summary=process_summary,
-        )
         _last_result[user_id] = {"query": query[:100], "answer": answer}
 
         # ask_user 触发且无答案时，不发空的最终消息（通知已单独发送）
@@ -891,18 +956,25 @@ class SmartBotGateway:
             _deregister_task(user_id)
             return
 
-        # 最终流式消息
-        ok, stream_id = self._reply_stream(frame, stream_id, final_md, finish=True)
+        # 流式消息只保留处理过程，结束流
+        progress_md = f"📋 处理完成（{total_min}分钟）"
+        if process_summary:
+            progress_md = f"{process_summary}\n---\n{progress_md}"
+        ok, stream_id = self._reply_stream(frame, stream_id, progress_md, finish=True)
         if not ok:
             new_sid = str(uuid.uuid4())
-            self._reply_stream(frame, new_sid, final_md, finish=True)
+            self._reply_stream(frame, new_sid, progress_md, finish=True)
         _deregister_task(user_id)
 
-        # 完成通知（红点）
+        # 最终回答作为新消息发送（触发企微红点通知）
+        answer_md = _format_markdown(
+            query[:100], answer, total_min,
+            split_reason=split_reason, turn_count=turn_count,
+        )
         try:
-            self._reply_markdown(frame, f"✅ **回答完成**（{total_min}分钟）")
+            self._reply_markdown(frame, answer_md)
         except Exception:
-            logger.debug("完成通知发送失败", exc_info=True)
+            logger.debug("回答消息发送失败", exc_info=True)
 
         # 文件发送
         logger.info("文件发送检查: written_files=%s wants_file=%s query=%.50s",
@@ -946,6 +1018,7 @@ class SmartBotGateway:
         tool_names: list[str] = []
         tool_details: dict[str, str] = {}
         ask_user_triggered = False
+        ask_user_completed = False  # ask_user 工具返回后切换新流
         status_lines: list[str] = []   # 累积状态行
 
         def _send_status() -> None:
@@ -997,6 +1070,10 @@ class SmartBotGateway:
             elif etype == UserEventType.ASK_USER:
                 ask_user_triggered = True
                 self._send_ask_user_notification(frame, event.metadata, user_id)
+                # 记录到 status_lines，新流切换后能看到问了什么
+                questions = event.metadata.get("questions") or []
+                q_texts = [q.get("question", "") for q in questions[:3]]
+                status_lines.append(f"❓ 等待用户回答：{'；'.join(q_texts)}")
 
             # --- 工具状态（经 ThoughtRenderer 渲染） ---
             elif etype == UserEventType.TOOL_STATUS:
@@ -1015,6 +1092,17 @@ class SmartBotGateway:
                         input_data = {"raw": inp}
                 else:
                     input_data = {}
+                # ask_user 工具返回后，切换到新流（后续处理在新消息中显示）
+                if tname == "ask_user" and event.metadata.get("status") == "done":
+                    if ask_user_triggered and not ask_user_completed:
+                        # 读取暂存的用户回答
+                        with _pending_answers_lock:
+                            answer_text = _pending_answers.pop(user_id, "")
+                        if answer_text:
+                            status_lines.append(f"💬 用户回答：{answer_text}")
+                        ask_user_completed = True
+                        stream_id = str(uuid.uuid4())
+                        logger.info("ask_user 完成，切换到新流: %s", stream_id[:8])
                 # 收集 detail 用于最终摘要
                 detail = renderer._extract_detail(tname, input_data)
                 if detail and tname and tname not in tool_details:
@@ -1149,39 +1237,22 @@ class SmartBotGateway:
 
     def _try_create_report(self, frame: dict, query: str,
                            user_id: str, req_id: str) -> None:
-        stream_id = str(uuid.uuid4())
-        last = _last_result.get(user_id)
-        if last:
-            query = last["query"]
-            answer = last["answer"]
-        else:
-            answer = ""
-        if not answer:
-            self._reply_stream(frame, stream_id,
-                               "还没有可用的分析结果。请先发送一个技术问题。", finish=True)
-            return
-        if not server_config.mcp_doc_url:
-            self._reply_stream(frame, stream_id,
-                               "报告功能未配置。请在企微后台授权后设置 WECOM_SMART_MCP_DOC_URL。",
-                               finish=True)
-            return
-        self._reply_stream(frame, stream_id, "正在生成报告文档…")
-        try:
-            from .tools import build_report_markdown
-            tk = _get_doc_toolkit()
-            if tk is None:
-                self._reply_stream(frame, stream_id,
-                                   "MCP 客户端初始化失败", finish=True)
-                return
-            report_md = build_report_markdown(query, answer)
-            doc_url = tk.create_doc_with_content(
-                f"InfoTest 报告 - {query[:50]}", report_md,
-            )
-            if doc_url:
-                self._reply_stream(frame, stream_id,
-                                   f"报告已生成\n\n[点击查看报告]({doc_url})", finish=True)
-            else:
-                self._reply_stream(frame, stream_id, "文档创建失败", finish=True)
-        except Exception as e:
-            logger.exception("报告生成失败")
-            self._reply_stream(frame, stream_id, f"报告生成失败: {e}", finish=True)
+        """将 /report 命令转为 agent query，走正常的 agent 流程。
+
+        报告生成逻辑由 report-gen skill 负责（结构化分析 + 文档创建），
+        gateway 只做意图转译和路由。
+        """
+        parts = query.strip().split(maxsplit=1)
+        extra = parts[1] if len(parts) > 1 else ""
+
+        agent_query = (
+            "请根据当前会话或最近的测试结果生成结构化测试报告，"
+            "并保存为企业微信云文档。"
+            "如果 workspace/outputs/ 下有测试产物（case.xlsx、engine_report.json 等），"
+            "请基于这些数据生成报告；如果没有，请告知用户需要先执行测试。"
+        )
+        if extra:
+            agent_query += f"\n用户补充说明：{extra}"
+
+        logger.info("/report 转 agent query: user=%s extra=%.50s", user_id, extra)
+        self._run_query(frame, user_id, agent_query, req_id)

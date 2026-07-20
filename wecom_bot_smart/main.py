@@ -22,6 +22,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+# 抑制企微 SDK 的 DEBUG 心跳日志
+logging.getLogger("AiBotSDK").setLevel(logging.WARNING)
 logger = logging.getLogger("wecom_bot_smart.main")
 
 # 强制退出看门狗秒数：shutdown 后超时未退出则 os._exit

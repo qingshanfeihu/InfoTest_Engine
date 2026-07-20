@@ -263,6 +263,16 @@ def _resolve_inside_root(raw_path: str | None, *, must_exist: bool = False) -> P
                     f"path is a platform metadata file: {top}"
                 )
 
+    # ── 用户目录隔离（读路径）─────────────────────────────────────────────
+    # workspace/inputs/{user}/ 只允许读自己的目录
+    # workspace/outputs/ 读不限制（编译引擎等写到共享目录，agent 需要读取结果）
+    current_user = os.environ.get("IST_CURRENT_USER", "").strip()
+    if current_user and rel_to_project is not None:
+        rp = rel_to_project.parts
+        if len(rp) >= 3 and rp[0] == "workspace" and rp[1] == "inputs" and rp[2] != current_user:
+            raise PermissionError(
+                f"无权访问其他用户的文件目录: workspace/inputs/{rp[2]}/"
+            )
 
     for root in _agent_roots():
         try:
@@ -949,7 +959,16 @@ def _resolve_writable_path(raw_path: str | None) -> Path:
                     f"path is a platform metadata file: {top}"
                 )
 
-    
+    # ── 用户目录隔离（写路径）─────────────────────────────────────────────
+    current_user = os.environ.get("IST_CURRENT_USER", "").strip()
+    if current_user and rel_to_project is not None:
+        rp = rel_to_project.parts
+        if len(rp) >= 2 and rp[0] == "workspace" and rp[1] == "inputs":
+            if len(rp) >= 3 and rp[2] != current_user:
+                raise PermissionError(
+                    f"无权写入其他用户的文件目录: workspace/inputs/{rp[2]}/"
+                )
+
     try:
         rel = resolved.relative_to(_WORKSPACE_ROOT)
     except ValueError as exc:
@@ -971,6 +990,23 @@ def _resolve_writable_path(raw_path: str | None) -> Path:
             f"write not allowed to workspace/{top_subdir}/; "
             f"writable: {sorted(_WRITABLE_SUBDIRS)}"
         )
+
+    # ── outputs 用户隔离（写路径）──────────────────────────────────────
+    # workspace/outputs/ 按用户隔离：只能写 workspace/outputs/{自己的目录}/
+    output_subdir = os.environ.get("IST_OUTPUT_SUBDIR", "").strip()
+    if output_subdir and top_subdir == "outputs":
+        if len(ws_parts) >= 2:
+            target_sub = ws_parts[1]
+            if target_sub != output_subdir:
+                raise PermissionError(
+                    f"无权写入其他用户的输出目录: workspace/outputs/{target_sub}/"
+                )
+        else:
+            # 写到 outputs/ 根目录也禁止（必须指定子目录）
+            raise PermissionError(
+                f"请写入自己的输出目录: workspace/outputs/{output_subdir}/"
+            )
+
     return resolved
 
 def _atomic_write(target: Path, data: bytes) -> None:

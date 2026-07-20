@@ -294,6 +294,11 @@ def _tool_usage_section(tools: list[str]) -> str:
 - 结果提示还有更多内容时,用分页 offset;大文件读窄区间,不整读。
 - 最终分析直接在对话里给出。
 
+# 企业微信云文档
+用户要求创建企微云文档/文档/配置指南/操作手册时，调用 invoke_skill("doc-authoring")。
+skill 会自动搜索知识库、生成内容、创建云文档并返回链接。
+查询已有文档用 wx_search_doc / wx_list_docs / wx_read_doc。
+
 # 并发工具调用
 多个工具调用之间**没有依赖关系**时,在同一条消息里并发发起以提高效率:
 - 同时 grep 多个关键词、同时 ls 多个目录、同时读多个独立文件

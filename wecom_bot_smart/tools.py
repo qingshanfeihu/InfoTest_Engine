@@ -23,13 +23,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 import requests
 
 logger = logging.getLogger("wecom_bot_smart.tools")
+
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
 
 
 # ============================================================================
@@ -93,7 +97,10 @@ class DocMcpClient:
         if params is not None:
             body["params"] = params
 
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
         if self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
 
@@ -115,16 +122,24 @@ class DocMcpClient:
         return data.get("result", {})
 
     def initialize(self) -> dict[str, Any]:
-        """MCP initialize 握手。"""
-        result = self._rpc("initialize", {
-            "protocolVersion": self._protocol_version,
-            "capabilities": {},
-            "clientInfo": {"name": "ist-core-bot", "version": "1.0.0"},
-        })
-        # 发送 initialized 通知
-        self._rpc("notifications/initialized")
-        logger.info("MCP 初始化完成: url=%.60s…", self._url)
-        return result
+        """MCP initialize 握手。
+
+        某些 MCP 服务端（如企微）不要求 initialize，直接调工具也能工作。
+        握手失败时记录 warning 但不阻断。
+        """
+        try:
+            result = self._rpc("initialize", {
+                "protocolVersion": self._protocol_version,
+                "capabilities": {},
+                "clientInfo": {"name": "ist-core-bot", "version": "1.0.0"},
+            })
+            # 发送 initialized 通知
+            self._rpc("notifications/initialized")
+            logger.info("MCP 初始化完成: url=%.60s…", self._url)
+            return result
+        except Exception as e:
+            logger.warning("MCP initialize 失败（非阻断）: %s", e)
+            return {}
 
     def list_tools(self) -> list[dict[str, Any]]:
         """获取可用工具列表。"""
@@ -134,9 +149,28 @@ class DocMcpClient:
         return tools
 
     def invoke_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """调用 MCP 工具。"""
+        """调用 MCP 工具。
+
+        MCP 标准返回格式：
+        {"content": [{"type": "text", "text": "{...json...}"}], "isError": false}
+
+        本方法自动解包 content 包装，返回内层 JSON。
+        """
         logger.info("MCP 调用工具: name=%s args=%s", name, arguments)
         result = self._rpc(MCP_CALL_TOOL, {"name": name, "arguments": arguments})
+
+        # 解包 MCP content 包装
+        if "content" in result and isinstance(result["content"], list):
+            if result.get("isError"):
+                text = result["content"][0].get("text", "") if result["content"] else ""
+                raise RuntimeError(f"MCP tool error: {text}")
+            for item in result["content"]:
+                if item.get("type") == "text":
+                    try:
+                        return json.loads(item["text"])
+                    except (json.JSONDecodeError, KeyError):
+                        return {"text": item.get("text", "")}
+
         return result
 
 
@@ -283,6 +317,84 @@ class DocToolKit:
         logger.info("已追加 %d 行: docid=%s", len(rows), docid)
         return result
 
+    # ------------------------------------------------------------------
+    # 文档读取
+    # ------------------------------------------------------------------
+
+    def get_doc_content(self, docid: str = "", url: str = "",
+                        max_polls: int = 5, poll_interval: float = 2.0) -> str:
+        """读取企微云文档内容（Markdown 格式）。
+
+        MCP 采用异步轮询：首次调用返回 task_id，需携带 task_id 再次调用
+        直到 task_done=true 时返回完整内容。
+
+        Args:
+            docid: 文档 ID（与 url 二选一）
+            url: 文档链接（与 docid 二选一）
+            max_polls: 最大轮询次数（默认 5）
+            poll_interval: 轮询间隔秒数（默认 2）
+
+        Returns:
+            文档 Markdown 内容
+        """
+        import time as _time
+
+        args: dict[str, Any] = {"type": 2}
+        if docid:
+            args["docid"] = docid
+        elif url:
+            args["url"] = url
+        else:
+            return "错误：必须提供 docid 或 url"
+
+        for attempt in range(max_polls):
+            result = self._client.invoke_tool("get_doc_content", args)
+
+            # 检查是否完成
+            task_done = result.get("task_done", True)
+            content = result.get("content", "")
+
+            if task_done and content:
+                logger.info("文档内容已获取: docid=%s len=%d", docid or url[:30], len(content))
+                return content
+
+            # 未完成，取 task_id 继续轮询
+            task_id = result.get("task_id", "")
+            if not task_id:
+                # 没有 task_id 也没有内容，返回空
+                if content:
+                    return content
+                return "文档内容为空或获取失败"
+
+            args["task_id"] = task_id
+            logger.debug("文档内容轮询中: attempt=%d task_id=%s", attempt + 1, task_id)
+            _time.sleep(poll_interval)
+
+        return f"文档内容获取超时（已轮询 {max_polls} 次）"
+
+    # ------------------------------------------------------------------
+    # 文档管理（扩展）
+    # ------------------------------------------------------------------
+
+    def share_document(self, docid: str, user_ids: list[str] | None = None,
+                       department_ids: list[int] | None = None) -> dict[str, Any]:
+        """设置文档分享权限。
+
+        注意：企微 MCP 当前未提供 share 权限工具，此方法为占位实现。
+        实际使用时需通过企微后台手动设置权限或等待官方 MCP 扩展。
+
+        Args:
+            docid: 文档 ID
+            user_ids: 可访问的用户 ID 列表
+            department_ids: 可访问的部门 ID 列表
+        """
+        logger.warning(
+            "share_document: 企微 MCP 暂无权限管理工具，docid=%s "
+            "请手动在企微后台设置文档权限", docid,
+        )
+        # 占位——等企微 MCP 扩展后替换为实际调用
+        return {"docid": docid, "status": "manual_required"}
+
 
 # ============================================================================
 # IST-Core 结果 → 表格数据转换
@@ -322,13 +434,5 @@ _TABLE_COLUMNS = [
     ("摘要", FIELD_TEXT),
 ]
 
-
-def build_report_markdown(query: str, answer: str) -> str:
-    """生成完整报告 Markdown。"""
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    return (
-        f"# InfoTest Engine 测试报告\n\n"
-        f"**生成时间**: {ts}\n\n"
-        f"**问题**: {query}\n\n---\n\n{answer}\n\n---\n\n"
-        f"*本报告由 IST-Core 自动生成*"
-    )
+# DocRegistry 已迁移至 registry.py（SQLite 方案）。
+# 如需引用，请使用：from .registry import DocumentRegistry

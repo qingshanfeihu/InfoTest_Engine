@@ -340,10 +340,22 @@ def _render_engine_bottom_line(p: dict, fork_running: int = 0, fork_done: int = 
         # 后批量入账),bar/done 改用 fork 卡跑完数(done_n)驱动、编写中用 fork 在跑数(running_n)
         # ——消解"卡片完成但进度条冻 0"。total 借 prep 静态总数(不变)。fork 计数为 0 时(旧调用/
         # 无快照)退化:done=0 同旧 F-TUI-8、编写中回落 spin。
-        done = fork_done
+        # done 夹紧到 total(2026-07-20 ink 自审):fork 卡集跨轮累积(仅新 run 提交/快照重放
+        # 时清,见 :1513/:2394)且含 attributor 卡,重编轮 fork_done 可 > total。此前 filled>barw
+        # 使 `"░"*(barw-filled)` 得空串→进度条超 20 字符、撑破 footer 定宽布局(如 42/34)。
+        # 纯显示夹紧,不动数据源。跨轮累积本身是语义项,已上报待裁。
+        done = min(fork_done, total) if total else fork_done
         filled = round(barw * done / total) if total else 0
-        bar = "█" * filled + "░" * (barw - filled)
-        counts_seg = f"编写中{fork_running or spin} · 产出将在合并时结算"
+        bar = "█" * filled + "░" * max(0, barw - filled)
+        # 残差桶在编写期同样要显(2026-07-20 ink 自审):此前 other_seg 只拼进 :349 非编写分支,
+        # 而编写期正是引擎侧新增状态最可能出现的相位——漏投状态在此静默消失,恰好绕过
+        # 2026-07-16 装的总量防线。欠定/失败同理,编写期发生也应可见,故非零时补挂。
+        _extra = "".join([
+            f" 欠定{pend}" if pend else "",
+            f" 失败{bad}" if bad else "",
+            other_seg,
+        ])
+        counts_seg = f"编写中{fork_running or spin} · 产出将在合并时结算{_extra}"
     else:
         counts_seg = (f"产出{produced} 编写中{spin} "
                       f"欠定{pend} 通过{passed} 失败{bad}{other_seg}")
@@ -408,6 +420,19 @@ def _fmt_secs(v) -> str:
         return _format_elapsed(float(v or 0))
     except Exception:  # noqa: BLE001
         return "0s"
+
+
+def _secs_int(v) -> int:
+    """秒数 → int,非数值/None 一律退 0(2026-07-20 ink 自审)。
+
+    进度卡「Ns/Ms」段专用:该处要的是裸秒整数(与 `_fmt_secs` 的 `3m 43s` 人话格式
+    不同,不能互替——test_fork_cards_render 断言 `223s/1440s`)。裸 `int(v or 0)` 对
+    引擎侧漂出的小数字符串(`"12.5"`)会 ValueError、对 dict 会 TypeError,而该异常
+    经重放路径(ctrl+o)可打死输入线程,故走 float 中转 + 兜底。"""
+    try:
+        return int(float(v or 0))
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 # F-TUI-10 失败卡英文黑话→中文人话+去向(2026-07-18 修复轮;配 F-Doc-1 条款)。fork_end 的
@@ -508,7 +533,7 @@ def _render_fork_card(payload: dict, *, now: float,
                     f"{_middle_ellipsis(str(p.get('detail') or ''), 70)}{X}")
         detail = _middle_ellipsis(str(p.get("detail") or ""), 48)
         return (f"   {Y}{frame}{X} {B}▸ {phase}{X} {D}"
-                f"{int(p.get('elapsed_s') or 0)}s/{int(p.get('total_s') or 0)}s"
+                f"{_secs_int(p.get('elapsed_s'))}s/{_secs_int(p.get('total_s'))}s"
                 f"{env_s}{prog_s}{(' · ' + detail) if detail else ''}{X}")
 
     # kind == "fork"
@@ -691,18 +716,6 @@ class IstInkApp:
         
         from main.ist_core.tui.state import TuiState
         self.tui_state = TuiState(thread_id=self._thread_id or "")
-
-    def append_transcript_info(self, text: str) -> None:
-        """线程安全地向 transcript 追加一行（供 KMS 等后台任务回写进度）。"""
-        with self._app.lock:
-            self._transcript.append_message(f" {text}")
-            self._app.render()
-
-    def set_background_status(self, text: str | None) -> None:
-        """后台任务进度（显示在输入框上方 thinking 行，不刷屏 transcript）。"""
-        with self._app.lock:
-            self._update_thinking_line(text)
-            self._app.render()
 
     def run(self) -> None:
         """Start the TUI (blocking)."""
@@ -892,21 +905,27 @@ class IstInkApp:
         self._welcome_shown = True
 
     def _handle_input(self, event: InputEvent) -> None:
-        """Dispatch input events to appropriate handlers."""
-        
-        
-        
-        
-        with self._app.lock:
-            if isinstance(event, KeyPress):
-                self._handle_key(event)
-            elif isinstance(event, MouseEvent):
-                self._handle_mouse(event)
-            elif isinstance(event, PasteEvent):
-                self._prompt.handle_paste(event.text)
-                self._app.render()
-            elif isinstance(event, UploadEvent):
-                self._handle_upload(event)
+        """Dispatch input events to appropriate handlers.
+
+        兜底(2026-07-20 ink 自审):本方法跑在 ink-input 线程,此前**全链无 try/except**
+        (`ink/app.py` 只捕 OSError)——任一渲染异常逃逸即打死该线程,整个会话键盘失灵。
+        风险不是理论的:畸形卡片 payload 在活路径被 `reducer._notify` 吞掉、却长期留在
+        snapshot 里(卡片按设计常驻),用户按 ctrl+o 重放时才经 `_render_fork_card` 引爆。
+        故此处兜住并把异常记进日志,渲染层出错只丢这一次按键、不夺走输入能力。
+        `except Exception` 不捕 SystemExit/KeyboardInterrupt,退出路径不受影响。"""
+        try:
+            with self._app.lock:
+                if isinstance(event, KeyPress):
+                    self._handle_key(event)
+                elif isinstance(event, MouseEvent):
+                    self._handle_mouse(event)
+                elif isinstance(event, PasteEvent):
+                    self._prompt.handle_paste(event.text)
+                    self._app.render()
+                elif isinstance(event, UploadEvent):
+                    self._handle_upload(event)
+        except Exception:  # noqa: BLE001
+            logger.exception("处理输入事件失败(已兜底,输入线程存活): %r", event)
 
     def _handle_upload(self, event: UploadEvent) -> None:
         """处理带外上传信号（Web Terminal 上传文件经 OSC 序列传入）。
@@ -2332,7 +2351,13 @@ class IstInkApp:
     
 
     def append_transcript_info(self, msg: str) -> None:
-        """Thread-safe: append a status line to transcript (used by kms_command)."""
+        """Thread-safe: append a status line to transcript (used by kms_command).
+
+        本方法与 `set_background_status` 此前在类内**各定义两次**(前份在 :720 一带),
+        Python 静默丢弃前者、生效的一直是这份;2026-07-20 ink 自审删掉死的前份。
+        两份 append 行为已漂移——死份是 `f" {text}"`(单空格无 dim)、活份是双空格+dim,
+        照死份预测 KMS 进度行样式会得到错误答案,正是"重复定义必漂移"的现成实证。
+        """
         with self._app.lock:
             self._transcript.append_message(f"  \x1b[2m{msg}\x1b[0m")
             self._app.render()

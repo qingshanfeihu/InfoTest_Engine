@@ -523,3 +523,87 @@ def test_27_non_authoring_fork_counts_ignored():
     assert "21/53" in eng, "已结算(produced=21)→bar 用 produced,不被 fork_done(6)覆盖"
     assert "产出将在合并时结算" not in eng
     assert "产出21" in eng
+
+
+# ── 2026-07-20 ink 域自审:渲染层健壮性三修回归 ────────────────────────────
+
+
+def test_authoring_bar_clamped_when_fork_cards_exceed_total():
+    """编写期 bar 夹紧:fork 卡集跨轮累积(仅新 run/快照重放时清)且含 attributor 卡,
+    重编轮 fork_done 可 > total。此前 filled>barw 令 `"░"*(barw-filled)` 得空串——
+    进度条超 20 字符撑破 footer 定宽(如 42/34)。夹紧属纯显示,不动数据源。"""
+    eng = _render_engine_bottom_line(
+        {"kind": "engine", "run": "dongkl", "phase": "author", "round": 2,
+         "status": "running", "total": 34, "counts": {"pending": 34}},
+        fork_running=0, fork_done=42)          # 34 轮1 worker + 8 attributor 卡累积
+    bar = "".join(ch for ch in eng if ch in "█░")
+    assert len(bar) == 20, f"进度条必须恒定宽 20,实得 {len(bar)}:{bar!r}"
+    assert "34/34" in eng, "done 夹到 total,不显 42/34 这种超 100% 计数"
+
+
+def test_authoring_phase_surfaces_pending_failed_and_residual():
+    """编写期也要显欠定/失败/残差桶:此前 other_seg 只拼进非编写分支,而编写相位正是
+    引擎侧新增状态最可能出现处——漏投状态在此静默消失,恰好绕过 2026-07-16 装的总量
+    防线。非零才挂,零值仍不添噪(保 F-TUI-8「不冗余显示全 0」)。"""
+    eng = _render_engine_bottom_line(
+        {"kind": "engine", "run": "yzg", "phase": "author", "round": 0,
+         "status": "running", "total": 53,
+         # 5 桶之和=50(pending40+awaiting_user7+failed_terminal3),漏 3 → 残差桶
+         "counts": {"pending": 40, "awaiting_user": 7, "failed_terminal": 3}})
+    assert "产出将在合并时结算" in eng, "仍是编写期显示"
+    assert "欠定7" in eng, "编写期发生的欠定必须可见"
+    assert "失败3" in eng, "编写期发生的失败必须可见"
+    assert "其他3" in eng, "编写期漏投状态同样不得静默消失"
+    # 零值不添噪(F-TUI-8 原契约)
+    clean = _render_engine_bottom_line(
+        {"kind": "engine", "run": "yzg", "phase": "author", "round": 0,
+         "status": "running", "total": 53, "counts": {"pending": 53}})
+    assert "欠定" not in clean and "失败" not in clean and "其他" not in clean
+
+
+def test_secs_int_tolerates_engine_drift():
+    """进度卡「Ns/Ms」段数值兜底:裸 int() 对引擎漂出的小数字符串 ValueError、对 dict
+    TypeError,而该异常经重放路径(ctrl+o)可打死输入线程。保裸秒格式(不与 _fmt_secs
+    的 `3m 43s` 人话格式互替——本行断言 `223s/1440s` 依赖裸秒)。"""
+    from main.ist_core.ink.components.ist_app import _secs_int
+    assert _secs_int(223) == 223
+    assert _secs_int("12.5") == 12, "小数字符串:裸 int() 会 ValueError"
+    assert _secs_int(None) == 0 and _secs_int("") == 0
+    assert _secs_int({"a": 1}) == 0, "错类型退 0,不外抛"
+    assert _secs_int("n/a") == 0
+    # 端到端:畸形 elapsed_s 不再崩渲染,仍出卡片
+    prog = _render_fork_card({"kind": "progress", "phase": "上机", "status": "running",
+                              "elapsed_s": "12.5", "total_s": "1440", "n_cases": 32},
+                             now=time.time())
+    assert "12s/1440s" in prog
+
+
+def test_no_duplicate_method_definitions_in_ink_components():
+    """机器门(2026-07-20 ink 自审):类内同名方法重复定义 → Python 静默丢弃前者。
+
+    实证:IstInkApp 曾把 append_transcript_info/set_background_status 各定义两次,
+    且两份 append 行为已漂移(死份单空格无 dim、活份双空格+dim)——照死份读代码会得到
+    错误结论。肉眼极难发现(相隔 1600 行),故上 AST 门。property/setter 对是合法同名,
+    按有无装饰器排除。"""
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "main" / "ist_core" / "ink"
+    dupes = []
+    for py in root.rglob("*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            seen: dict[str, int] = {}
+            for item in node.body:
+                if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if item.decorator_list:      # @property / @x.setter 合法同名
+                    continue
+                if item.name in seen:
+                    dupes.append(
+                        f"{py.name}::{node.name}.{item.name} "
+                        f"(:{seen[item.name]} 被 :{item.lineno} 静默覆盖)")
+                seen[item.name] = item.lineno
+    assert not dupes, "类内重复方法定义(前者被静默丢弃):\n" + "\n".join(dupes)

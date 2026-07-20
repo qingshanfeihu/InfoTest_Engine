@@ -868,6 +868,40 @@ ctrl+c abort · ctrl+d exit · / commands · ↑↓ history
 
 **待命态**：基线干净、无触发。转静默观察，等 leader 开批通知。**开批后首要靶＝五项未测挂账**（Z1 题面来源泄原始文件名 / Z3 diagnose 状态行 s₀ 黑话 / Z5·D28 cap 面板各轮判断英文截断 / Z6 cap 轮次数字不一致 / Z8 机读 token 泄选项与等价方法）——#55 真实脑图放量批若含预期冲突面板、cap 轮次封顶面板、等价方法面板，即为这五项首次实弹场。
 
+**销项/更正（同日稍后）**：① 模型 `deepseek-v4-pro` 经 leader 核 environment＝**有意状态**（IST_MODEL/IST_FLASH 均 deepseek-v4 档），非该拦项，确认请求销。② 路径断词 watch-item **销**——宽 pane 帧不复现，坐实窄 pane cosmetic 非渲染缺陷。③ **寻址事实（已转 TUI-Eng 存档）**：`--surface <裸数字>` 报 `Surface index not found`；`--surface surface:20`（ref）与 `--surface <UUID>` **均通**。`cmux --help` 宣称支持 index，对 surface 实测不成立。
+
+---
+
+## B 存量救回 · B-1a（surface UUID `A71F0314-…D545C` · PID 85405 · 99 列 · workspace IST-B1 · 2026-07-20）
+
+**批型**：B 存量救回（非新域放量）——7 个旧案换环境重调 + 9 条残余路径。B-1a = @103 跑 517027 / 600113，**两案均为带历史轮次的续跑案**。
+**本批盯点（leader 给定 + 我的批型推论）**：
+1. **Z5/Z6 最前**（我的推论经 leader 认可）：续跑案带历史轮次进来，最可能撞 **cap 轮次封顶面板**——Z5＝各轮判断英文句+截断（`pyATS Errored (protocol-hard signal...`），Z6＝「重编 N 次」vs「已重编 M 轮」数字不一致。两项挂账三批未触发，本批首次实弹机会。
+2. **Z8**（机读 token 泄选项/等价方法，如 `captured_relation`/`CAPTURE_COMPARE(relation_same)`）——换环境等价方案面板上大概率露头。
+3. **Z1 全证**：需预期冲突/双方记载格式面板才算数；无触发则如实标「未测」，不虚报覆盖。
+4. **NEW·被问已消解问题（#62 实弹证据）**：五案带旧 needs_decision——**若面板问出用户已裁决过的题**，逐字摘录（用户视角＝「我答过了怎么又问」，前身 599838 落盘失败同族痛点）。
+5. **NEW·footer 新桶**：挂起应显「欠定」、死床应入「其他」，显示错即报。
+6. **NEW·换环境可懂性**（我提，leader 认可，从 B-1b 起）：旧案历史轮次/旧环境信息进题面时，naive 用户能否分清「这案以前在别的床跑过、现在换了环境」。
+
+### 基线首读（B-1a 起批前 · 空闲态）· 未触发上报
+屏幕原文（逐字，全屏；99 列宽 pane）：
+```
+  InfoTest Engine v1.0.5b1
+  deepseek-v4-pro · /Users/jiangyongze/Library/CloudStorage/SynologyDrive-macbook/Project/InfoTest_
+Engine
+  输入自然语言描述测试分析需求，自动调用工具查阅知识库。
+  /help 查看命令 · /init 初始化项目 · /model 切换模型
+───────────────────────────────────────────────────────────────────────────────────────────────────
+> 输入消息（/ 触发补全）
+───────────────────────────────────────────────────────────────────────────────────────────────────
+↑ 0 · ↓ 0 tokens · deepseek-v4-pro · ¥0.0000
+ctrl+c abort · ctrl+d exit · / commands · ↑↓ history
+```
+**判定：三类均未触发。** ①全中文引导语，naive 用户知道该干什么；②无 ask 面板（N.A.）；③无 traceback/乱码/崩溃。
+**基线读数**：计数器零位（`↑0 ↓0 tokens · ¥0.0000`）、无 EngineRun/prep 行——**批尚未下发**（Test-Eng 未键入编译命令），此帧为纯空闲起点。宽 pane 下路径仍折行（99 列 < 完整路径长度），同 cosmetic 已销项、不再跟。
+**唯一留存 mild**：底栏 `ctrl+c abort · ctrl+d exit · / commands · ↑↓ history` 全英文（#59 同族，mild 不单报）。
+**转入观察循环**，等编译命令下发 → prep → 编写 → 上机 → 归因 → **面板（主战场）**。
+
 
 
 

@@ -5,7 +5,7 @@
 
 **修订记录**：2026-07-20 ① 节整节重写（team-lead 授权）——原草文的「三态状态机」方案作废，改为「台账向事实流对齐 + 推广既有回执样板」，依据是 code review 新取证（见 §①）。同日 ②-A / ③-A 升级为**可直接采纳的条文草稿**（含挂点 §号、条文正文、守门测试锚），②-A 另据 E2 全库普查新增不变量⑶。②-B / ③-B 维持 memo 态未动。同日再补 §24 附「出处标记词体系」（team-lead 裁决②③落条：配对置信强档 + 第五 population 档名）。
 
-**本轮新增证据的归属**：`config.py:83` 硬编码 build 兜底、`bed.py:518-520` 探针取实测值——**我本次亲读确认**；「全库 1110/1110 条 `build==568`、零真值」的统计数字来自 **team-lead 盘面复验**（我未自行普查），条文引用时按此归属。
+**本轮新增证据的归属**：`config.py:83` 硬编码 build 兜底、`bed.py:518-528` 探针取实测值——**我本次亲读确认**；「全库 1110/1110 条 `build==568`、零真值」的统计数字来自 **team-lead 盘面复验**（我未自行普查），条文引用时按此归属。
 
 ---
 
@@ -18,21 +18,21 @@
 | claim 落盘：同 case 多 claim 按 `claim_kind` 合并 | `verifiability_tool.py:142-161`（`_land_needs_decision`） |
 | 同 kind 重落＝**整条替换**（先 filter 掉旧的再 append） | `verifiability_tool.py:160-161` |
 | claim 被问询消费：台账是**锚**，问题文本由它派生 | `questions.py:3, 177-180` |
-| 交付门读 `ev==needs_decision` 事实判收口 | `report_gate.py:54-58` |
-| resume 重开：非欠定类/无 claims → 不重开 | `nodes.py:387-424` |
+| 交付门读 `ev==needs_decision` 事实判收口 | `report_gate.py:53-60` |
+| resume 重开：非欠定类/无 claims → 不重开 | `nodes.py:395-432` |
 | **无 resolved/refuted 状态位，通用删除路径缺位** | grep `main/ist_core/**/*.py`：除 :160 同 kind 覆盖外，通用路径**零处**标记 claim 失效 |
 
 **code review 补充取证（2026-07-20，本轮新增，改变了修法方向）**：
 
 | 事实 | 锚点 |
 |---|---|
-| ⭐**回执样板已存在**：证据被接受后剔除同命令 stale claims、全空则**删整个文件** | `emit_xlsx_tool.py:698-712` |
-| ⭐**回执语义已存在于事实流侧**：交付门按 `question_id` 配对判未答（有回执） | `report_gate.py:57-60` |
+| ⭐**回执样板已存在**：证据被接受后剔除同命令 stale claims、全空则**删整个文件** | `emit_xlsx_tool.py:744-760` |
+| ⭐**回执语义已存在于事实流侧**：交付门按 `question_id` 配对判未答（有回执） | `report_gate.py:53-60` |
 | 而问询层读**台账原件**组题（无回执）→ **双账不同源** | `questions.py:177-180, 190-198` |
-| 第二生产者绕过 `_land_needs_decision`、自实现合并、裸写 | `emit_xlsx_tool.py:747, 831, 758, 841` |
-| 消费侧零写回：读台账复制锚 → 只写 `user_decision.json` | `verifiability_tool.py:448-491` |
-| stale claim 三处反噬：resume 重开 / 题面 / `_mech_only` 活锁复发 | `nodes.py:411-413`、`questions.py:190-198`、`verifiability_tool.py:470-472` |
-| claims 随案存档跨批回喂（清理只删 manifest/last_run） | `nodes.py:3105-3125` |
+| 第二生产者绕过 `_land_needs_decision`、自实现合并、裸写 | `emit_xlsx_tool.py:784, 858`（**裸写已于 1df53152 修**，改走 `_land_claims`:56 原子写） |
+| 消费侧零写回：读台账复制锚 → 只写 `user_decision.json` | `verifiability_tool.py:453-494` |
+| stale claim 三处反噬：resume 重开 / 题面 / `_mech_only` 活锁复发 | `nodes.py:419-421`、`questions.py:189-197`、`verifiability_tool.py:474-476` |
+| claims 随案存档跨批回喂（清理只删 manifest/last_run） | `nodes.py:3107-3130` |
 
 **后果（#54 实证）**：SSL 003 的 YES claim 与 teardown claim **两条均误报**，但台账无失效期、无设备回写通道 → 归因链把 stale claim 当 ground truth，绕了一层弯路才由 `dev_run_case` 设备真错（全角逗号 → `get_parameter` 拆参失败 → importKey TypeError）收敛。教训见 `team4_calib_batch54.md:97`、长期记忆 `[[needs-decision-emit-claims-can-be-false-positive]]`。
 
@@ -44,31 +44,32 @@
 >
 > **一、权威序（不变，v1 唯一保留项）**：`device error（上机实测） > gate claim（编译期静态判据）`。gate claim 是**假设**不是事实——`(18) 审计器权威` 的推论：被审计假设不得反向压过审计机制。归因链正确姿势＝读机读账拿 claim → claim 须经 device run 验证 → device error 才是终判（`[[needs-decision-emit-claims-can-be-false-positive]]`，#54 SSL 003 两误报实证）。
 >
-> **二、台账向事实流对齐（治「消费无回执」）**：交付门已按 `question_id` 配对判未答（`report_gate.py:57-60`），**该配对即回执**。故 claim 落盘时记其 `question_id`；问询层组题（`questions.py:190-198`）与 resume 重开判据（`nodes.py:411-413`）**改读「有无已配对 decision」，不再读「claims 是否非空」**。事实流是唯一真理源（INV-1），台账降为**投影**——不新增第二套生命周期状态。
+> **二、台账向事实流对齐（治「消费无回执」）**：交付门已按 `question_id` 配对判未答（`report_gate.py:53-60`），**该配对即回执**。故 claim 落盘时记其 `question_id`；问询层组题（`questions.py:189-197`）与 resume 重开判据（`nodes.py:419-421`）**改读「有无已配对 decision」，不再读「claims 是否非空」**。事实流是唯一真理源（INV-1），台账降为**投影**——不新增第二套生命周期状态。
 >
-> **三、推广既有失效样板（治「stale 不消失」）**：`emit_xlsx_tool.py:698-712` 已实现正确形态——**证伪即回执**：证据被接受 → 剔除同命令 stale claims → 全空则删文件。把它从 command_existence 一处**提升为通用能力**（落进 `_land_needs_decision` 同址的 `_retract_claims(autoid, predicate)`），供三类触发调用：①门本轮未复现该 claim（重编后自然消解）；②device error 定位到不同源根因（设备证伪）；③用户裁决已覆盖该 claim。
+> **三、推广既有失效样板（治「stale 不消失」）**：`emit_xlsx_tool.py:744-760` 已实现正确形态——**证伪即回执**：证据被接受 → 剔除同命令 stale claims → 全空则删文件。把它从 command_existence 一处**提升为通用能力**（落进 `_land_needs_decision` 同址的 `_retract_claims(autoid, predicate)`），供三类触发调用：①门本轮未复现该 claim（重编后自然消解）；②device error 定位到不同源根因（设备证伪）；③用户裁决已覆盖该 claim。
 >
 > **四、不做的事**：不自动改卷；不据证伪反推修法（worker 判断面）；claim 仍是**呈报不硬拒**形态（沿 D5/S6，DESIGN:717/742）；台账不承载语义判断——它只是「门说过什么 + 有没有被回执」的机读投影。
 
 ### 与现形态的迁移说明（v2）
 
 - **兼容**：`claims[]` 结构与 `claim_kind` 键**完全不变**；新增 `question_id` 可选字段（旧账无此键 → 退现语义，零迁移）。相比 v1 少一个 `state` 字段与全部状态迁移逻辑。
-- **改动面（比 v1 小）**：①`_land_needs_decision` 记 `question_id`；②抽 `_retract_claims` 通用函数（内容＝把 `emit_xlsx_tool.py:698-712` 挪出来）；③`questions.py` / `nodes.py:411-413` 两处判据改读事实流配对；④三个 retract 触发点接线。**`report_gate.py` 不动**——它本来就读事实流、口径正确，v1 曾误列为改动面。
-- **风险（比 v1 低）**：不触及交付收口门（v1 的主要风险源已消失）。剩余风险在 ②：判据从「claims 非空」换到「事实流配对」属闸门语义变更，按 `[[gate-change-verify-design-intent]]` 需先画状态生命周期（本节即草图）＋机器守门测试；须覆盖「同案二次欠定」形态（`report_gate.py:55-57` 记的 yzg 668 族根因即此）。
-- **前置依赖**：P0-1（台账损坏静默清空 + 非原子写，`emit_xlsx_tool.py:735-741/757-758`）已派批前修；本条款的「两出口整体改走 `_land_needs_decision` 统一合并语义」属行为面变更，**排在 #62 评审之后**（team-lead 2026-07-20 分诊）。
+- **改动面（比 v1 小）**：①`_land_needs_decision` 记 `question_id`；②抽 `_retract_claims` 通用函数（内容＝把 `emit_xlsx_tool.py:744-760` 挪出来）；③`questions.py` / `nodes.py:419-421` 两处判据改读事实流配对；④三个 retract 触发点接线。**`report_gate.py` 不动**——它本来就读事实流、口径正确，v1 曾误列为改动面。
+- **风险（比 v1 低）**：不触及交付收口门（v1 的主要风险源已消失）。剩余风险在 ②：判据从「claims 非空」换到「事实流配对」属闸门语义变更，按 `[[gate-change-verify-design-intent]]` 需先画状态生命周期（本节即草图）＋机器守门测试；须覆盖「同案二次欠定」形态（`report_gate.py:53-60` 记的 yzg 668 族根因即此）。
+- **前置依赖（已解除）**：P0-1（台账损坏静默清空 + 非原子写）与 P1-5（假承诺文本）**已于 commit `1df53152` 修复**——`_read_claims_ledger`（`emit_xlsx_tool.py:33`，损坏时 fail-loud 不覆写）+ `_land_claims`（`:56`，改走 `_write_json_atomic`）+ 承诺文本条件化（`ledger_landed` 真值决定措辞）+ `verifiability_tool.py:267` 补落账返回检查。**本 memo 中对这四点的「现存缺陷」表述均为修前状态，读时按已修理解。**
+- **仍待办（归本条款）**：「两出口整体改走 `_land_needs_decision` 统一合并语义」属行为面变更，**排在 #62 评审之后**（team-lead 2026-07-20 分诊）；批前修已在 `_land_claims` docstring 内显式标注该项不在本件范围。
 
 ### 挂 #62 的位阶复核项（code review 转入，不批前动）
 
 | 项 | 锚点 | Design 定性 |
 |---|---|---|
-| `dev_help:` attestation 无条件接受 | `emit_xlsx_tool.py:625-626` | L_model 对自身产物自证充当质量门，撞 (47) 红线（grade 之死/DS-2）；位阶应为 L_oracle（探针回执落盘）或降呈报不放行 |
-| `forbidden_mechanism` 硬拒且不落 claim | `emit_xlsx_tool.py:328-350`（判据 `domain_grammar.py:110-114` 词表命中意图**原文**） | **#54 两误报最直系兄弟**：内容相关判断落 emit 硬拒位阶（塌缩进 L_struct）＋ 不落账＝reject-and-strand 无台账，用户面无题可问，双违 (47) |
+| `dev_help:` attestation 无条件接受 | `emit_xlsx_tool.py:673-674` | L_model 对自身产物自证充当质量门，撞 (47) 红线（grade 之死/DS-2）；位阶应为 L_oracle（探针回执落盘）或降呈报不放行 |
+| `forbidden_mechanism` 硬拒且不落 claim | `emit_xlsx_tool.py:376-398`（判据 `domain_grammar.py:110-114` 词表命中意图**原文**） | **#54 两误报最直系兄弟**：内容相关判断落 emit 硬拒位阶（塌缩进 L_struct）＋ 不落账＝reject-and-strand 无台账，用户面无题可问，双违 (47) |
 
 两者均属**门策略变更（用户可见行为）**，随 #62 一并呈用户裁决。
 
 ### 批中观察点（不预修，实弹取证）
 
-P1-6 stale claims 跨批回喂（`nodes.py:3105-3125`）：B-1 五案全是带旧 `needs_decision.json` 的续跑案，必然实弹经过。观察靶＝**用户是否被问到已消解的问题**（撞 R5 验收标准①「问人的必须是真问题」，DESIGN:690），证据直接喂本条款。
+P1-6 stale claims 跨批回喂（`nodes.py:3107-3130`）：B-1 五案全是带旧 `needs_decision.json` 的续跑案，必然实弹经过。观察靶＝**用户是否被问到已消解的问题**（撞 R5 验收标准①「问人的必须是真问题」，DESIGN:690），证据直接喂本条款。
 
 ---
 
@@ -80,8 +81,8 @@ DESIGN 全文 grep `surfacing|known_issue|nodes_<version>`：**零命中**——
 
 | 实现 | 锚点 | commit |
 |---|---|---|
-| 父查浮现子节点 known_issue 标签（治「知识可达但不浮现」） | `footprint_lookup.py:99, 128-131` | 1e0e0298 |
-| known_issue 双 schema 渲染（老 `{issue_id,title}` / 新观察式 `{fact_key,content}`） | `footprint_lookup.py:82-93, 215-217` | 1e0e0298 |
+| 父查浮现子节点 known_issue 标签（治「知识可达但不浮现」） | `footprint_lookup.py:99, 133-136` | 1e0e0298 |
+| known_issue 双 schema 渲染（老 `{issue_id,title}` / 新观察式 `{fact_key,content}`） | `footprint_lookup.py:82-93, 220-222` | 1e0e0298 |
 | 版本子目录不存在 → 回退默认 `nodes/`（Fix A） | `index.py:392-400` | 09373283 |
 | 载入完整性守卫：JSON 损坏＝永久跳过、OSError＝瞬态计数（Fix B） | `index.py:105-125` | 09373283 |
 
@@ -93,7 +94,7 @@ DESIGN 全文 grep `surfacing|known_issue|nodes_<version>`：**零命中**——
 >
 > **⑴ 检索不得静默降级**。版本分区等可选特性缺位时**回退默认树**而非返空（`index.py:392-400`）；载入失败必须区分**永久**（JSON 损坏 → 跳过并告警）与**瞬态**（OSError，如云盘 online-only/sync-lag → 计数、可重试），**不得把两者都吞成「无此节点」**（`index.py:105-125`）。判据锚 `[[signal-licenses-only-what-measured]]`：**零产出 ≠ 结构排除**——查无只授权「本次没查到」，不授权「该事实不存在」。
 >
-> **⑵ 知识可达 ⇒ 可浮现**。父节点查询必须浮现子节点的 known_issue 标签＋指针（`footprint_lookup.py:99, 128-131`），否则树形组织本身成为知识屏障——知识在库里却读不回，等价于没有。渲染器须兼容自愈环产出的**观察式 schema**（uncertain 观察由 `_ingest_uncertain_observations` 自动入库，渲成空＝自愈环断在最后一米，`footprint_lookup.py:82-93, 215-217`）。
+> **⑵ 知识可达 ⇒ 可浮现**。父节点查询必须浮现子节点的 known_issue 标签＋指针（`footprint_lookup.py:99, 133-136`），否则树形组织本身成为知识屏障——知识在库里却读不回，等价于没有。渲染器须兼容自愈环产出的**观察式 schema**（uncertain 观察由 `_ingest_uncertain_observations` 自动入库，渲成空＝自愈环断在最后一米，`footprint_lookup.py:82-93, 220-222`）。
 >
 > **⑶ 作用域标注不得强于其证据**（2026-07-20 新增，E2 全库普查驱动）。节点上的版本/床作用域锚（`device_run.build` 等）若取自**配置兜底**而非探针实测，必须显式标注来源（`build_source: "config_fallback"`），渲染层**不得**将其呈现为已验证作用域。实证：全库 **1110/1110** 条 `build==568` 全部来自 `config.py:83` 硬编码兜底、**零真值**（设备实测为 585，来自 `bed.py:518-528` 探针）——一个会静默生效的硬编码默认值，让 K 锚在无人察觉时长期失真。这是⑴的**标注维**：⑴管「查不到别装作不存在」，⑶管「不知道别装作知道」。
 >
@@ -136,7 +137,19 @@ DESIGN 全文 grep `surfacing|known_issue|nodes_<version>`：**零命中**——
 
 **裁决②落条（配对置信·强档）**：`extra_candidates` 派生的 uncertain 条目打 `pairing_provenance: "heuristic"`，且**不参与 R2 自动升格**——需显式确认方可升格。理由同⑶：启发式得来的配对不得呈现为已确认的观察；而升格是**不可逆的知识强度提升**（uncertain→verified 后不再降级，`merger.py:427-430` 反向不覆盖），对不可逆动作取保守档是正确侧。
 
-> **⚠行号时效声明（2026-07-20 复核发现）**：本 memo 全部 `file:line` 锚点记于 HEAD `1e0e0298` 的工作树。此后 Py-Eng 的批前修已改动 `merger.py` / `footprint_lookup.py` / `verifiability_tool.py` / `emit_xlsx_tool.py` 等文件（本条锚点即因此从 `362-370` 重定位到 `427-430`）。**条文采纳前须按当时工作树重新定位所有锚点**；语义结论不受影响（我复核了升级分支语义未变），受影响的只是行号。
+> **✅锚点已重扫（2026-07-20，基线 HEAD `cc1213e5`）**：批前修三分域 commit（docs `1aa9285f` / engine `1df53152` / ink `cc1213e5`）落定后，全部 36 条锚点按**语义特征 grep 逐条重定位**（非行号平移）。**语义结论全部成立**，详见本节下方「重扫结论」。此后若再有合入，锚点需再扫。
+
+#### 锚点重扫结论（2026-07-20，基线 `cc1213e5`）
+
+**漂移**：36 条中 **17 条漂移或改写**（其中 2 条因批前修重构而整条改写，非单纯行号平移）、19 条不变。最大漂移 `emit_xlsx_tool.py` **+46～48 行**（批前修在文件头部插入 `_read_claims_ledger`/`_land_claims` 两个函数），其次 `nodes.py` +8、`footprint_lookup.py` +5、`verifiability_tool.py` +2～5。`index.py` / `config.py` / `bed.py` / `domain_grammar.py` / `batch_tools.py` / `merger.py` 升格分支 / 全部 docs 锚点（DESIGN:870、THEORY:1494-1503 等）**零漂移**。已全部就地更新。
+
+**语义变化（重扫的真正目的）——四条，均已在正文对应处标注**：
+1. **P0-1 已修**：损坏台账现 fail-loud 不覆写（`emit_xlsx_tool.py:33`）、落盘改原子写（`:56`）。memo 内该缺陷的描述为**修前状态**。
+2. **P1-5 已修**：承诺文本按 `ledger_landed` 条件化；`verifiability_tool.py:267` 补落账返回检查。
+3. **gap② S2 已落且与 Design 裁决一致**：新增 `merger.command_words()` 实现「命令词序列完全相等、**不剥动词**」——即我裁决⑴的原意；实现注释明确写了不可与 `_behavior_feature_head` 混用的理由（混用会把 `show ssl certificate` 与 `ssl certificate` 判等）。另有 `_attach_device_run()`，语义为 **device_run 覆盖非累积**（只留最近一次上机实证）。
+4. **`_append_decision_rule` 仍无升格分支**（`merger.py:407-418`，同 `fact_key` 直接 `return "skip"`）→ **我的条件甲（R2 须同时给 decision_rules 补演化端）与缺口①「该 section 无演化端」的结论未被本批修改动，仍然成立。**
+
+**⭐核心论据完好**：#62 v2 赖以立论的失效样板（证据接受 → 剔 stale → 空则删文件）在重构后**语义原样保留**，仅位置从 `:698-712` 移至 `:744-760`。
 
 **已有守门测试**（本节⑴⑵已有覆盖，采纳后可直接引为条文测试锚）：`tests/ist_core/memory/test_footprint_reliability.py`（#58 Fix A/B）、`tests/ist_core/tools/test_footprint_known_issue_surfacing.py`（#61 浮现+双 schema）。**⑶ 无覆盖**——需新增（建议：断言 `build_source` 缺失或为 fallback 时渲染层不输出版本作用域断言）。
 
@@ -156,7 +169,7 @@ DESIGN 全文 grep `surfacing|known_issue|nodes_<version>`：**零命中**——
 
 ## ③ §16.4 ①A 两处欠记补注（草文）
 
-**先行结论：条文与测试语义一致，无矛盾。** DESIGN §16.4（`DESIGN_v8_engine.md:870`）「另增两条件」＝ THEORY (15) 补注的 ⒈⒉（`THEORY_k_state_machine.md:1494-1503`）；⒊「broken 不吸收」是既有语义（测试 `test_broken_composition_breaks_idempotency` 覆盖，锚 commit b3ce3b4b）。测试文件标题「三条件」＝⒈⒉新增＋⒊既有的合称，非条文遗漏。判定纯函数 `nodes.py:913`，调用点 `nodes.py:1076`。
+**先行结论：条文与测试语义一致，无矛盾。** DESIGN §16.4（`DESIGN_v8_engine.md:870`）「另增两条件」＝ THEORY (15) 补注的 ⒈⒉（`THEORY_k_state_machine.md:1494-1503`）；⒊「broken 不吸收」是既有语义（测试 `test_broken_composition_breaks_idempotency` 覆盖，锚 commit b3ce3b4b）。测试文件标题「三条件」＝⒈⒉新增＋⒊既有的合称，非条文遗漏。判定纯函数 `nodes.py:921`，调用点 `nodes.py:1084`。
 
 ### ③-A 缺字段保守吸收——**条文欠记，建议补注**
 

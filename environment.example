@@ -103,6 +103,13 @@ IST_POSTGRES_PASSWORD=ultra_agent
 IST_POSTGRES_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
 
 # =============================================================================
+# 五（补）、Redis（可选，跨进程共享缓存 / 事件队列）
+# =============================================================================
+# TraceCollector / PgAuditSink / DialogQueue / SessionManager / Langfuse score 缓存均使用。
+# 未设置时各组件降级为进程内内存（单进程模式零影响，多进程模式丢失跨进程能力）。
+# IST_REDIS_URL=redis://localhost:6379/0
+
+# =============================================================================
 # 五（续）、Langfuse LLM 可观测性（可选，自建实例）
 # =============================================================================
 # 三键缺一则自动跳过，不影响主流程
@@ -110,7 +117,7 @@ IST_POSTGRES_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
 # LANGFUSE_SECRET_KEY=sk-lf-...
 # LANGFUSE_HOST=http://your-langfuse-server:3000
 # LANGFUSE_BASE_URL=http://your-langfuse-server:3000   # 兼容别名
-# IST_LANGFUSE_ENABLED=0   # 强制关闭（默认 1）
+# IST_LANGFUSE_ENABLED=0   # 0=关闭, 1或不设置=启用（默认启用）
 
 
 # =============================================================================

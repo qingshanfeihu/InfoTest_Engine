@@ -402,6 +402,18 @@ async def submit_rating(body: dict, session_id: str = "", token: str = ""):
                 },
             )
 
+        # 异步上报到 Langfuse Score（后台线程，不阻塞响应）
+        try:
+            from main.ist_core.sinks.langfuse_sink import submit_langfuse_score
+            submit_langfuse_score(
+                run_id=run_id,
+                name="user-rating",
+                value=float(score),
+                comment=comment,
+            )
+        except Exception:
+            pass
+
         return {"ok": True, "score": score}
     except Exception as exc:
         logger.error("submit_rating 失败: %s", exc)

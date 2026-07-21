@@ -128,6 +128,26 @@ async def astream_to_bus(
 
     final_state: dict[str, Any] = {}
     try:
+        # Langfuse 可观测性：在 graph.astream_events 之前注入 handler，
+        # 确保外层图的 on_chain_start(name=LangGraph) 也能携带 user/session。
+        try:
+            from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks, build_trace_attributes
+            _cfg = config or {}
+            _cbl = _cfg.get("configurable") or {}
+            if _cbl.get("auth_session_id"):
+                _lf_entry = "wecom_smart"
+            elif _cbl.get("wx_user_id"):
+                _lf_entry = "wecom"
+            else:
+                _lf_entry = "tui"
+            _lf_attrs = build_trace_attributes(config, entry=_lf_entry)
+            if _lf_attrs:
+                _cbs = list(_cfg.get("callbacks") or [])
+                inject_langfuse_callbacks(_cbs, cache_run_id=_cbl.get("run_id", ""), **_lf_attrs)
+                config = {**_cfg, "callbacks": _cbs}
+        except Exception:
+            pass
+
         _agen = graph.astream_events(initial_state, config=config, version="v2")
         # 死挂 / 内容静默兜底交给 langchain-openai 内置的底层 stream_chunk_timeout(默认 120s,
         # env LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S):它在 SSE parsed-chunk 层计时,SDK 内部消费

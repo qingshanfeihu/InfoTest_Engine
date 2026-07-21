@@ -166,6 +166,26 @@ def run_single(
 
     # 主循环连接韧性：心跳 + 外层连接重试（治长跑遇 APIConnectionError 整轮崩、0 产出）。
     from main.ist_core.resilience import Heartbeat, run_with_resilience, set_active_heartbeat
+
+    # Langfuse 可观测性：在 graph.invoke 之前注入 handler，
+    # 确保外层图的 on_chain_start(name=LangGraph) 也能携带 user/session。
+    try:
+        from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks, build_trace_attributes
+        _cbl = config.get("configurable") or {}
+        if _cbl.get("auth_session_id"):
+            _lf_entry = "wecom_smart"
+        elif _cbl.get("wx_user_id"):
+            _lf_entry = "wecom"
+        else:
+            _lf_entry = "tui"
+        _lf_attrs = build_trace_attributes(config, entry=_lf_entry)
+        if _lf_attrs:
+            _cbs = list(config.get("callbacks") or [])
+            inject_langfuse_callbacks(_cbs, cache_run_id=_cbl.get("run_id", ""), **_lf_attrs)
+            config["callbacks"] = _cbs
+    except Exception:
+        pass
+
     with Heartbeat() as hb:
         hb.set_note(f"thread={thread_id} task={task_type}")
         set_active_heartbeat(hb)  # 让主 agent tool_call 能刷新 note（当前阶段可见）

@@ -508,7 +508,6 @@ class IstInkApp:
         # 评分系统状态
         self._rating_run_id: str = ""
         self._rating_waiting: bool = False
-        self._rating_comment_mode: bool = False
         self._pending_rating_run_id: str = ""  # 待显示的评分run_id（等待流式输出结束）
         
         self._ai_stream_idx: int = -1
@@ -865,19 +864,18 @@ class IstInkApp:
 
         输出格式：
         ── 请对本次对话服务进行评分 ──
-        [0] 0分  [1] 1分  [2] 2分  [3] 3分  [4] 4分  [5] 5分  [6] 自定义评价
+        [0] 0分  [1] 1分  [2] 2分  [3] 3分  [4] 4分  [5] 5分
         输入数字选择评分（不阻塞对话，可继续输入其他内容）
         """
         self._rating_run_id = run_id
         self._rating_waiting = True
-        self._rating_comment_mode = False
 
         self._transcript.append_message("")
         self._transcript.append_message(
             "\x1b[36m── 请对本次对话服务进行评分 ──\x1b[0m"
         )
         self._transcript.append_message(
-            "\x1b[2m[0] 0分  [1] 1分  [2] 2分  [3] 3分  [4] 4分  [5] 5分  [6] 自定义评价\x1b[0m"
+            "\x1b[2m[0] 0分  [1] 1分  [2] 2分  [3] 3分  [4] 4分  [5] 5分\x1b[0m"
         )
         self._transcript.append_message(
             "\x1b[2m输入数字选择评分（不阻塞对话，可继续输入其他内容）\x1b[0m"
@@ -896,25 +894,10 @@ class IstInkApp:
         if not text:
             return False
 
-        # 检查是否是评分数字 0-6
-        if text in ("0", "1", "2", "3", "4", "5", "6"):
-            if text == "6":
-                # 进入自定义评价模式
-                self._rating_comment_mode = True
-                self._transcript.append_message(
-                    "\x1b[36m请输入自定义评价内容（输入后按回车提交）：\x1b[0m"
-                )
-                self._app.render()
-                return True
-            else:
-                # 直接提交评分
-                score = int(text)
-                self._submit_rating(score, "")
-                return True
-
-        # 自定义评价模式：提交评价
-        if self._rating_comment_mode:
-            self._submit_rating(5, text)
+        # 检查是否是评分数字 0-5
+        if text in ("0", "1", "2", "3", "4", "5"):
+            score = int(text)
+            self._submit_rating(score, "")
             return True
 
         # 不是评分输入，交给正常对话流程
@@ -934,7 +917,6 @@ class IstInkApp:
                 "\x1b[31m✗ 评分提交失败：缺少认证信息\x1b[0m"
             )
             self._rating_waiting = False
-            self._rating_comment_mode = False
             self._app.render()
             return
 
@@ -982,7 +964,6 @@ class IstInkApp:
             )
 
         self._rating_waiting = False
-        self._rating_comment_mode = False
         self._rating_run_id = ""
         self._app.render()
 
@@ -1636,7 +1617,6 @@ class IstInkApp:
         elif snapshot.status == "running" and (not prev or prev.status != "running"):
             # 新对话开始：清除评分状态
             self._rating_waiting = False
-            self._rating_comment_mode = False
             self._rating_run_id = ""
             self._pending_rating_run_id = ""
 

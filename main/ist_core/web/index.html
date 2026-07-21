@@ -11,11 +11,24 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 #loginPage { display: flex; align-items: center; justify-content: center; height: 100vh; }
 .login-box { background: #24283b; border: 1px solid #414868; border-radius: 8px; padding: 2rem; width: 320px; }
 .login-box h2 { margin-bottom: 1.5rem; color: #7aa2f7; font-size: 1.1rem; font-family: monospace; }
-.login-box input { width: 100%; padding: 0.6rem; margin-bottom: 0.8rem; background: #1a1b26; border: 1px solid #414868; border-radius: 4px; color: #c0caf5; font-family: monospace; }
+.login-box input { width: 100%; padding: 0.6rem; margin-bottom: 0.8rem; background: #1a1b26; border: 1px solid #414868; border-radius: 4px; color: #c0caf5; font-family: monospace; box-sizing: border-box; }
 .login-box input:focus { outline: none; border-color: #7aa2f7; }
 .login-box button { width: 100%; padding: 0.6rem; background: #7aa2f7; color: #1a1b26; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; }
 .login-box button:hover { background: #89b4fa; }
 .login-error { color: #f7768e; font-size: 0.8rem; margin-top: 0.5rem; }
+.login-links { text-align: center; margin-top: 0.8rem; }
+.login-links a { color: #7aa2f7; text-decoration: none; font-size: 0.85rem; }
+.login-links a:hover { text-decoration: underline; }
+.login-box input[type="password"],
+.login-box input[type="text"] { width: 100%; padding: 0.6rem 2rem 0.6rem 0.6rem; margin-bottom: 0.8rem; background: #1a1b26; border: 1px solid #414868; border-radius: 4px; color: #c0caf5; font-family: monospace; box-sizing: border-box; }
+.pwd-container { display: flex; align-items: center; gap: 6px; margin-bottom: 0.8rem; }
+.login-box .pwd-container input[type="password"],
+.login-box .pwd-container input[type="text"] { flex: 1; width: auto; margin-bottom: 0; padding-right: 0.6rem; }
+.login-box .pwd-toggle { width: auto; flex-shrink: 0; background: none; border: 1px solid #414868; border-radius: 4px; color: #565f89; cursor: pointer; font-size: 1rem; padding: 0.55rem; line-height: 1; }
+.login-box .pwd-toggle:hover { color: #7aa2f7; border-color: #7aa2f7; }
+#termPage { display: none; height: 100vh; flex-direction: column; }
+#toolbar { padding: 4px 8px; background: #24283b; border-bottom: 1px solid #414868; display: flex; align-items: center; gap: 8px; }
+#toolbar .upload-btn { background: #414868; border: none; color: #c0caf5; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
 
 /* 主布局：左侧栏 + 右侧终端 */
 #termPage { display: none; height: 100vh; flex-direction: row; }
@@ -71,6 +84,9 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 }
 #toolbar .upload-btn:hover { background: #565f89; }
 #toolbar .status { color: #9ece6a; font-size: 0.8rem; }
+#toolbar { position: relative; }
+#downloadPanel { display:none; position:absolute; top:100%; left:80px; background:#24283b; border:1px solid #414868; border-radius:6px; padding:8px; min-width:300px; max-height:400px; overflow-y:auto; z-index:10; box-shadow:0 4px 12px rgba(0,0,0,0.4); }
+#downloadPanel .dl-item { display:flex; justify-content:space-between; align-items:center; padding:4px 6px; border-radius:3px; cursor:pointer; font-size:0.82rem; color:#c0caf5; }
 #toolbar .toggle-sidebar {
   background: none; border: none; color: #565f89; cursor: pointer;
   font-size: 1rem; padding: 2px 6px;
@@ -88,6 +104,11 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 #downloadPanel .dl-item:hover { background:#414868; }
 #downloadPanel .dl-size { color:#565f89; font-size:0.75rem; margin-left:12px; }
 #downloadPanel .dl-empty { color:#565f89; font-size:0.82rem; padding:4px; }
+#downloadPanel .dl-dir { padding:4px 6px; border-radius:3px; cursor:pointer; font-size:0.82rem; color:#7aa2f7; user-select:none; }
+#downloadPanel .dl-dir:hover { background:#414868; }
+#downloadPanel .dl-dir .arrow { display:inline-block; width:12px; font-size:0.7rem; color:#565f89; }
+#downloadPanel .dl-children { padding-left:16px; display:none; }
+#downloadPanel .dl-children.open { display:block; }
 #downloadPanel .dl-dir { cursor:pointer; user-select:none; }
 #downloadPanel .dl-dir-header {
   display:flex; align-items:center; gap:4px; padding:4px 6px; border-radius:3px;
@@ -105,6 +126,30 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 #downloadPanel .dl-file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #downloadPanel .dl-file-size { color:#565f89; font-size:0.75rem; margin-left:12px; white-space:nowrap; }
 #terminal { flex: 1; }
+/* 用户管理面板 */
+#userMgmtBtn { display: none; }
+#userMgmtPanel { display:none; position:absolute; top:100%; right:8px; background:#24283b; border:1px solid #414868; border-radius:6px; padding:12px; min-width:320px; max-height:500px; overflow-y:auto; z-index:10; box-shadow:0 4px 12px rgba(0,0,0,0.4); }
+#userMgmtPanel h3 { color:#7aa2f7; font-size:0.9rem; margin-bottom:10px; font-family:monospace; }
+.user-item { display:flex; justify-content:space-between; align-items:center; padding:8px; border-radius:4px; margin-bottom:4px; background:#1a1b26; }
+.user-item:hover { background:#2f3347; }
+.user-info { flex:1; }
+.user-info .name { color:#c0caf5; font-size:0.85rem; font-weight:600; }
+.user-info .role { color:#565f89; font-size:0.75rem; margin-left:6px; }
+.user-actions { display:flex; gap:4px; }
+.user-actions button { background:#414868; border:none; color:#c0caf5; padding:4px 8px; border-radius:3px; cursor:pointer; font-size:0.75rem; }
+.user-actions button:hover { background:#565f89; }
+.user-actions button.danger { background:#f7768e33; color:#f7768e; }
+.user-actions button.danger:hover { background:#f7768e55; }
+#userMgmtPanel .close-btn { position:absolute; top:8px; right:8px; background:none; border:none; color:#565f89; cursor:pointer; font-size:1rem; }
+#userMgmtPanel .close-btn:hover { color:#c0caf5; }
+/* 重置密码弹窗 */
+.reset-pwd-form { margin-top:8px; padding:8px; background:#2f3347; border-radius:4px; }
+.reset-pwd-form input { width:100%; padding:6px; margin-bottom:6px; background:#1a1b26; border:1px solid #414868; border-radius:3px; color:#c0caf5; font-size:0.8rem; box-sizing:border-box; }
+.reset-pwd-form input:focus { outline:none; border-color:#7aa2f7; }
+.reset-pwd-form .btn-row { display:flex; gap:6px; }
+.reset-pwd-form button { flex:1; padding:6px; border:none; border-radius:3px; cursor:pointer; font-size:0.8rem; }
+.reset-pwd-form .btn-save { background:#7aa2f7; color:#1a1b26; }
+.reset-pwd-form .btn-cancel { background:#414868; color:#c0caf5; }
 
 /* 【屏蔽切换对话功能】重命名输入
 .conv-rename-input {
@@ -118,6 +163,35 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 <body>
 <div id="loginPage">
   <div class="login-box">
+    <h2>InfoTest Engine v1.0.4</h2>
+    <div id="loginForm">
+      <input type="text" id="username" placeholder="用户名" autocomplete="off">
+      <div class="pwd-container">
+        <input type="password" id="password" placeholder="密码">
+        <button type="button" class="pwd-toggle" onclick="togglePassword('password', this)">👁</button>
+      </div>
+      <button onclick="doLogin()">登录</button>
+      <div class="login-error" id="loginError"></div>
+      <div class="login-links">
+        <a href="#" onclick="showCreateUser()">创建新用户</a>
+      </div>
+    </div>
+    <div id="createUserForm" style="display:none">
+      <input type="text" id="newUsername" placeholder="用户名 (3-20字符)" autocomplete="off">
+      <div class="pwd-container">
+        <input type="password" id="newPassword" placeholder="密码 (至少6位)">
+        <button type="button" class="pwd-toggle" onclick="togglePassword('newPassword', this)">👁</button>
+      </div>
+      <select id="newRole">
+        <option value="reviewer">reviewer (只读)</option>
+        <option value="admin">admin (管理员)</option>
+      </select>
+      <button onclick="doCreateUser()">创建用户</button>
+      <div class="login-error" id="createUserError"></div>
+      <div class="login-links">
+        <a href="#" onclick="showLogin()">返回登录</a>
+      </div>
+    </div>
     <h2>InfoTest Engine v1.0.5</h2>
     <input type="text" id="username" placeholder="用户名" autocomplete="off">
     <input type="password" id="password" placeholder="密码">
@@ -126,6 +200,21 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
   </div>
 </div>
 <div id="termPage">
+  <div id="toolbar">
+    <input type="file" id="fileInput" hidden>
+    <button class="upload-btn" onclick="document.getElementById('fileInput').click()">📎 上传文件</button>
+    <button class="upload-btn" id="downloadBtn" onclick="showDownloads()">📥 下载<span id="dlBadge" style="display:none;background:#f7768e;color:#1a1b26;border-radius:8px;padding:0 5px;margin-left:4px;font-size:0.75rem;font-weight:bold;"></span></button>
+    <button class="upload-btn" id="userMgmtBtn" onclick="showUserMgmt()">👥 用户管理</button>
+    <span class="status" id="uploadStatus"></span>
+    <span class="status" id="currentUser" style="color:#7aa2f7;"></span>
+    <div id="downloadPanel"></div>
+    <div id="userMgmtPanel">
+      <button class="close-btn" onclick="hideUserMgmt()">✕</button>
+      <h3>👥 用户管理</h3>
+      <div id="userList"></div>
+    </div>
+  </div>
+  <div id="terminal"></div>
   <!-- 【屏蔽切换对话功能】左侧对话历史侧边栏
   <div id="sidebar">
     <div id="sidebarHeader">
@@ -162,6 +251,8 @@ let conversationId = '';
 let ws = null;
 let term = null;
 let fitAddon = null;
+let currentUser = '';
+let currentRole = '';
 
 // ------------------------------------------------------------------
 // 登录
@@ -178,14 +269,89 @@ async function doLogin() {
     }
     const d = await r.json();
     token = d.token;
+    currentUser = d.username;
+    currentRole = d.role;
     sessionId = d.session_id || '';
     conversationId = d.conversation_id || '';
     document.getElementById('loginPage').style.display = 'none';
     document.getElementById('termPage').style.display = 'flex';
+    // 显示当前用户
+    document.getElementById('currentUser').textContent = `👤 ${currentUser} (${currentRole})`;
+    // 只有 admin 用户显示用户管理按钮
+    const mgmtBtn = document.getElementById('userMgmtBtn');
+    if (currentUser === 'admin') {
+      mgmtBtn.style.display = 'inline-block';
+    } else {
+      mgmtBtn.style.display = 'none';
+    }
     initTerminal();
     // 【屏蔽切换对话功能】不再加载历史对话列表
     // loadConversations();
   } catch(e) { document.getElementById('loginError').textContent = '连接失败'; }
+}
+
+function showCreateUser() {
+  document.getElementById('loginForm').style.display = 'none';
+  document.getElementById('createUserForm').style.display = 'block';
+  document.getElementById('createUserError').textContent = '';
+}
+
+function showLogin() {
+  document.getElementById('loginForm').style.display = 'block';
+  document.getElementById('createUserForm').style.display = 'none';
+  document.getElementById('loginError').textContent = '';
+}
+
+function togglePassword(inputId, btn) {
+  const input = document.getElementById(inputId);
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁';
+  }
+}
+
+async function doCreateUser() {
+  const username = document.getElementById('newUsername').value.trim();
+  const password = document.getElementById('newPassword').value;
+  const role = document.getElementById('newRole').value;
+  const errEl = document.getElementById('createUserError');
+
+  if (!username || !password) {
+    errEl.textContent = '请填写用户名和密码';
+    return;
+  }
+
+  if (password.length < 6) {
+    errEl.textContent = '密码至少6个字符';
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/users/create', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password, role})
+    });
+    const d = await r.json();
+    if (r.ok) {
+      errEl.style.color = '#9ece6a';
+      errEl.textContent = '✓ ' + (d.message || '创建成功，请登录');
+      // 清空表单
+      document.getElementById('newUsername').value = '';
+      document.getElementById('newPassword').value = '';
+      // 3秒后自动跳转到登录
+      setTimeout(showLogin, 2000);
+    } else {
+      errEl.style.color = '#f7768e';
+      errEl.textContent = d.detail || '创建失败';
+    }
+  } catch(e) {
+    errEl.style.color = '#f7768e';
+    errEl.textContent = '网络错误: ' + e.message;
+  }
 }
 
 // ------------------------------------------------------------------
@@ -390,6 +556,9 @@ document.getElementById('fileInput')?.addEventListener('change', async (e) => {
     if (d.path) {
       const shown = d.filename || file.name;
       document.getElementById('uploadStatus').textContent = '✓ ' + shown;
+      // 带外上传信号：发结构化 JSON（type:"upload"），由 web_server 包成 OSC
+      // 序列传给 TUI 的 ink 解析器识别为 UploadEvent。文件名走结构化字段而非
+      // 混进键盘输入，agent 100% 可靠定位，无需下游正则猜测。
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({type:'upload', filename: shown}));
     } else {
       document.getElementById('uploadStatus').textContent = '上传失败';
@@ -432,6 +601,7 @@ document.getElementById('password')?.addEventListener('keydown', (e) => { if (e.
 // ------------------------------------------------------------------
 let _pendingDownloads = 0;
 
+// agent 生成新文件时（OSC 7002）：累加角标 + 弹一条状态。若下载面板正开着则即时刷新。
 function onNewOutputFile(name) {
   _pendingDownloads += 1;
   const badge = document.getElementById('dlBadge');
@@ -444,6 +614,7 @@ function onNewOutputFile(name) {
 async function showDownloads() {
   const panel = document.getElementById('downloadPanel');
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+  // 打开即清空角标
   _pendingDownloads = 0;
   const badge = document.getElementById('dlBadge');
   if (badge) { badge.style.display = 'none'; }
@@ -461,7 +632,47 @@ async function refreshDownloads() {
       panel.innerHTML = '<div class="dl-empty">暂无输出文件</div>';
       return;
     }
+    // 用 DOM API 构建，文件名走 textContent / 事件绑定，杜绝 XSS
     panel.innerHTML = '';
+    renderFileTree(d.files, panel, '');
+  } catch(e) { panel.innerHTML = '<div class="dl-empty">加载失败</div>'; }
+}
+
+function renderFileTree(items, container, basePath) {
+  items.forEach(item => {
+    if (item.type === 'dir') {
+      // 目录项
+      const dirEl = document.createElement('div');
+      dirEl.className = 'dl-dir';
+      const arrow = document.createElement('span');
+      arrow.className = 'arrow';
+      arrow.textContent = '▶';
+      dirEl.appendChild(arrow);
+      dirEl.appendChild(document.createTextNode(' 📁 ' + item.name));
+
+      const childContainer = document.createElement('div');
+      childContainer.className = 'dl-children';
+
+      dirEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = childContainer.classList.contains('open');
+        childContainer.classList.toggle('open');
+        arrow.textContent = isOpen ? '▶' : '▼';
+      });
+
+      container.appendChild(dirEl);
+      container.appendChild(childContainer);
+
+      // 递归渲染子目录
+      if (item.children && item.children.length > 0) {
+        renderFileTree(item.children, childContainer, basePath + item.name + '/');
+      }
+    } else {
+      // 文件项
+      const size = item.size < 1024 ? item.size + 'B' : (item.size/1024).toFixed(1) + 'KB';
+      const fileEl = document.createElement('div');
+      fileEl.className = 'dl-item';
+      fileEl.textContent = '📄 ' + item.name;
     renderTree(panel, d.files);
   } catch(e) { panel.innerHTML = '<div class="dl-empty">加载失败</div>'; }
 }
@@ -508,18 +719,20 @@ function renderTree(container, nodes) {
       nameEl.className = 'dl-file-name';
       nameEl.textContent = node.name;
       const sizeEl = document.createElement('span');
-      sizeEl.className = 'dl-file-size';
-      sizeEl.textContent = formatSize(node.size);
-      row.appendChild(nameEl);
-      row.appendChild(sizeEl);
-      row.addEventListener('click', () => doDownload(node.path));
-      container.appendChild(row);
+      sizeEl.className = 'dl-size';
+      sizeEl.textContent = size;
+      fileEl.appendChild(sizeEl);
+      fileEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        doDownload(basePath + item.name);
+      });
+      container.appendChild(fileEl);
     }
   });
 }
 
-function doDownload(name) {
-  window.open('/api/download?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(name), '_blank');
+function doDownload(path) {
+  window.open('/api/download?token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(path), '_blank');
   document.getElementById('downloadPanel').style.display = 'none';
 }
 
@@ -528,7 +741,146 @@ document.addEventListener('click', (e) => {
   if (panel && !panel.contains(e.target) && !e.target.textContent.includes('下载')) {
     panel.style.display = 'none';
   }
+  const userPanel = document.getElementById('userMgmtPanel');
+  if (userPanel && !userPanel.contains(e.target) && !e.target.textContent.includes('用户管理')) {
+    userPanel.style.display = 'none';
+  }
 });
+
+// 用户管理功能
+function showUserMgmt() {
+  const panel = document.getElementById('userMgmtPanel');
+  if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  loadUsers();
+}
+
+function hideUserMgmt() {
+  document.getElementById('userMgmtPanel').style.display = 'none';
+}
+
+async function loadUsers() {
+  const list = document.getElementById('userList');
+  list.innerHTML = '<div class="dl-empty">加载中...</div>';
+  try {
+    const r = await fetch('/api/users?token=' + encodeURIComponent(token));
+    if (!r.ok) { list.innerHTML = '<div class="dl-empty">加载失败</div>'; return; }
+    const d = await r.json();
+    const users = d.users || [];
+    list.innerHTML = '';
+    users.forEach(u => {
+      const item = document.createElement('div');
+      item.className = 'user-item';
+      const info = document.createElement('div');
+      info.className = 'user-info';
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = u.username;
+      const role = document.createElement('span');
+      role.className = 'role';
+      role.textContent = `(${u.role})`;
+      info.appendChild(name);
+      info.appendChild(role);
+      item.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'user-actions';
+
+      const resetBtn = document.createElement('button');
+      resetBtn.textContent = '🔑 重置密码';
+      resetBtn.onclick = () => showResetPwdForm(u.username, item);
+
+      actions.appendChild(resetBtn);
+
+      // 不能删除自己
+      if (u.username !== currentUser) {
+        const delBtn = document.createElement('button');
+        delBtn.className = 'danger';
+        delBtn.textContent = '🗑 删除';
+        delBtn.onclick = () => deleteUser(u.username);
+        actions.appendChild(delBtn);
+      }
+
+      item.appendChild(actions);
+      list.appendChild(item);
+    });
+  } catch(e) { list.innerHTML = '<div class="dl-empty">加载失败: ' + e.message + '</div>'; }
+}
+
+function showResetPwdForm(username, parentEl) {
+  // 移除已存在的表单
+  const existing = parentEl.querySelector('.reset-pwd-form');
+  if (existing) { existing.remove(); return; }
+
+  const form = document.createElement('div');
+  form.className = 'reset-pwd-form';
+
+  const input = document.createElement('input');
+  input.type = 'password';
+  input.placeholder = '新密码 (至少6位)';
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'btn-row';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn-save';
+  saveBtn.textContent = '保存';
+  saveBtn.onclick = () => resetPassword(username, input.value);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-cancel';
+  cancelBtn.textContent = '取消';
+  cancelBtn.onclick = () => form.remove();
+
+  btnRow.appendChild(saveBtn);
+  btnRow.appendChild(cancelBtn);
+  form.appendChild(input);
+  form.appendChild(btnRow);
+  parentEl.appendChild(form);
+  input.focus();
+}
+
+async function resetPassword(username, newPassword) {
+  if (!newPassword || newPassword.length < 6) {
+    alert('密码至少6个字符');
+    return;
+  }
+  try {
+    const r = await fetch('/api/users/reset-password?token=' + encodeURIComponent(token), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password: newPassword})
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alert('密码重置成功');
+      loadUsers();
+    } else {
+      alert(d.detail || '重置失败');
+    }
+  } catch(e) {
+    alert('网络错误: ' + e.message);
+  }
+}
+
+async function deleteUser(username) {
+  if (!confirm(`确定要删除用户 ${username} 吗？`)) return;
+  try {
+    const r = await fetch('/api/users/delete?token=' + encodeURIComponent(token), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username})
+    });
+    const d = await r.json();
+    if (r.ok) {
+      loadUsers();
+    } else {
+      alert(d.detail || '删除失败');
+    }
+  } catch(e) {
+    alert('网络错误: ' + e.message);
+  }
+}
 </script>
 </body>
 </html>

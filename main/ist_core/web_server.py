@@ -221,17 +221,33 @@ async def upload(file: UploadFile = File(...), token: str = ""):
 _OUTPUTS = _PROJECT_ROOT / "workspace" / "outputs"
 
 
+def _build_file_tree(path: Path, max_depth: int = 3) -> list:
+    """递归构建目录树结构。"""
+    items = []
+    try:
+        for f in sorted(path.iterdir()):
+            # 跳过隐藏文件（.gitkeep 等占位/元数据）
+            if f.name.startswith("."):
+                continue
+            if f.is_file():
+                items.append({"name": f.name, "size": f.stat().st_size, "type": "file"})
+            elif f.is_dir() and max_depth > 0:
+                children = _build_file_tree(f, max_depth - 1)
+                # 只显示非空目录
+                if children:
+                    items.append({"name": f.name, "type": "dir", "children": children})
+    except PermissionError:
+        pass
+    return items
+
+
 @app.get("/api/files")
 async def list_files(token: str = ""):
     if not _resolve_session(token):
         raise HTTPException(401, "未登录")
     if not _OUTPUTS.is_dir():
         return {"files": []}
-    files = []
-    for f in sorted(_OUTPUTS.iterdir()):
-        # 跳过隐藏文件（.gitkeep 等占位/元数据），不作为可下载产物列出
-        if f.is_file() and not f.name.startswith("."):
-            files.append({"name": f.name, "size": f.stat().st_size})
+    files = _build_file_tree(_OUTPUTS)
     return {"files": files}
 
 
@@ -239,14 +255,26 @@ async def list_files(token: str = ""):
 async def download_file(token: str = "", name: str = ""):
     if not _resolve_session(token):
         raise HTTPException(401, "未登录")
-    if not name or "/" in name or "\\" in name or ".." in name:
+    # 支持路径（如 "目录名/file.xlsx"），但必须安全
+    if not name or ".." in name:
         raise HTTPException(400, "非法文件名")
-    target = (_OUTPUTS / name).resolve()
-    if not str(target).startswith(str(_OUTPUTS.resolve()) + os.sep):
+    # 统一路径分隔符
+    safe_name = name.replace("\\", "/")
+    # 检查路径分量不包含隐藏文件
+    parts = safe_name.split("/")
+    for part in parts:
+        if part.startswith(".") or not part:
+            raise HTTPException(400, "非法文件名")
+    target = (_OUTPUTS / safe_name).resolve()
+    # 安全校验：确保路径在 _OUTPUTS 范围内
+    outputs_resolved = _OUTPUTS.resolve()
+    if not str(target).startswith(str(outputs_resolved) + os.sep) and target != outputs_resolved:
         raise HTTPException(403, "路径越权")
     if not target.is_file():
         raise HTTPException(404, "文件不存在")
-    return FileResponse(target, filename=name)
+    # 返回文件名（不含目录路径）
+    filename = Path(safe_name).name
+    return FileResponse(target, filename=filename)
 
 
 def _set_winsize(fd: int, cols: int, rows: int):

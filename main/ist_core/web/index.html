@@ -22,11 +22,16 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 #toolbar .upload-btn:hover { background: #565f89; }
 #toolbar .status { color: #9ece6a; font-size: 0.8rem; }
 #toolbar { position: relative; }
-#downloadPanel { display:none; position:absolute; top:100%; left:80px; background:#24283b; border:1px solid #414868; border-radius:6px; padding:8px; min-width:240px; max-height:300px; overflow-y:auto; z-index:10; box-shadow:0 4px 12px rgba(0,0,0,0.4); }
+#downloadPanel { display:none; position:absolute; top:100%; left:80px; background:#24283b; border:1px solid #414868; border-radius:6px; padding:8px; min-width:300px; max-height:400px; overflow-y:auto; z-index:10; box-shadow:0 4px 12px rgba(0,0,0,0.4); }
 #downloadPanel .dl-item { display:flex; justify-content:space-between; align-items:center; padding:4px 6px; border-radius:3px; cursor:pointer; font-size:0.82rem; color:#c0caf5; }
 #downloadPanel .dl-item:hover { background:#414868; }
 #downloadPanel .dl-size { color:#565f89; font-size:0.75rem; margin-left:12px; }
 #downloadPanel .dl-empty { color:#565f89; font-size:0.82rem; padding:4px; }
+#downloadPanel .dl-dir { padding:4px 6px; border-radius:3px; cursor:pointer; font-size:0.82rem; color:#7aa2f7; user-select:none; }
+#downloadPanel .dl-dir:hover { background:#414868; }
+#downloadPanel .dl-dir .arrow { display:inline-block; width:12px; font-size:0.7rem; color:#565f89; }
+#downloadPanel .dl-children { padding-left:16px; display:none; }
+#downloadPanel .dl-children.open { display:block; }
 #terminal { flex: 1; }
 </style>
 </head>
@@ -213,23 +218,60 @@ async function refreshDownloads() {
     }
     // 用 DOM API 构建，文件名走 textContent / 事件绑定，杜绝 XSS
     panel.innerHTML = '';
-    d.files.forEach(f => {
-      const size = f.size < 1024 ? f.size + 'B' : (f.size/1024).toFixed(1) + 'KB';
-      const item = document.createElement('div');
-      item.className = 'dl-item';
-      item.textContent = f.name;
-      const sizeEl = document.createElement('span');
-      sizeEl.className = 'dl-size';
-      sizeEl.textContent = size;
-      item.appendChild(sizeEl);
-      item.addEventListener('click', () => doDownload(f.name));
-      panel.appendChild(item);
-    });
+    renderFileTree(d.files, panel, '');
   } catch(e) { panel.innerHTML = '<div class="dl-empty">加载失败</div>'; }
 }
 
-function doDownload(name) {
-  window.open('/api/download?token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(name), '_blank');
+function renderFileTree(items, container, basePath) {
+  items.forEach(item => {
+    if (item.type === 'dir') {
+      // 目录项
+      const dirEl = document.createElement('div');
+      dirEl.className = 'dl-dir';
+      const arrow = document.createElement('span');
+      arrow.className = 'arrow';
+      arrow.textContent = '▶';
+      dirEl.appendChild(arrow);
+      dirEl.appendChild(document.createTextNode(' 📁 ' + item.name));
+
+      const childContainer = document.createElement('div');
+      childContainer.className = 'dl-children';
+
+      dirEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = childContainer.classList.contains('open');
+        childContainer.classList.toggle('open');
+        arrow.textContent = isOpen ? '▶' : '▼';
+      });
+
+      container.appendChild(dirEl);
+      container.appendChild(childContainer);
+
+      // 递归渲染子目录
+      if (item.children && item.children.length > 0) {
+        renderFileTree(item.children, childContainer, basePath + item.name + '/');
+      }
+    } else {
+      // 文件项
+      const size = item.size < 1024 ? item.size + 'B' : (item.size/1024).toFixed(1) + 'KB';
+      const fileEl = document.createElement('div');
+      fileEl.className = 'dl-item';
+      fileEl.textContent = '📄 ' + item.name;
+      const sizeEl = document.createElement('span');
+      sizeEl.className = 'dl-size';
+      sizeEl.textContent = size;
+      fileEl.appendChild(sizeEl);
+      fileEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        doDownload(basePath + item.name);
+      });
+      container.appendChild(fileEl);
+    }
+  });
+}
+
+function doDownload(path) {
+  window.open('/api/download?token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(path), '_blank');
   document.getElementById('downloadPanel').style.display = 'none';
 }
 

@@ -4,9 +4,11 @@
 > 期间经历 15+ 次 API 瞬断、一次本机断网中断、一次 P0 宪法击穿缺陷、一次成员伪造上报——
 > 本文档的每条纪律都对应其中一个真实事件（见各条【实证】注）。适用于任何多 agent 协作任务。
 
-## 0. 模型分工（2026-07-18 用户裁决）
+## 0. 模型分工（2026-07-18 用户裁决；2026-07-21 增补模型分层）
 
 Leader 若为 Fable/Mythos 档（含 dual-use 安全措施），**具体设备命令编写、上机执行、mirror 设备命令语义细节查询、任何"看起来像网络操作工具"的低层细节一律交执行角色（Test-Eng/Py-Eng）做**——这些在负载均衡产品授权自动化测试语境下是正当工作，但可能触发 leader 档的安全闸致犹豫/拒绝。Leader 专注不触闸的层：编排、审查、裁决、验收、文档、git、测试运行、机读账取证（facts/events 分析）。执行角色可用其他模型档（无 dual-use 额外措施）。此分工非规避——是把本就属于执行角色的工作留在执行角色，leader 不下场碰设备命令细节。
+
+**模型分层（2026-07-21 用户裁决，源自 cookbook `CMA_plan_big_execute_small`）**：leader=Fable 档做计划/裁决/合成/盘面核验；**全部 mate 用 `model: "sonnet"` 生成**（Agent 调用带 model 参数），思考强度 max（会话 effort 由子 agent 继承）。依据：mate 的工作（全库扫描/读屏/照规格实现/跑测试）是 token 密集执行型，cookbook 实测 84-98% input 按 worker 费率计、2.5x 省 3x 快；「微妙判断留 frontier」的对冲=评审链本身（mate 结论必须带 file:line、leader 盘面独立核验+终裁，frontier 判断力留在 coordinator 位）。Theory/Design 裁决位若实测判断力不足可单独升档（用户再裁）。
 
 ## 1. 组建
 
@@ -101,7 +103,20 @@ Eng 出 diff+测试（附消费点清单） → Theory 理论一致性评审 ∥
 - **诚信事件处置**：零实际损害确认→红线钉死→重做协议（交 diff 不自报数字+leader 亲验）——给自纠机会但堵住伪造通道。
 - **如实上报用户**：成员失职、团队口径混乱、诚信事件——第一时间完整上报并领 leader 责任，不粉饰。
 
-## 8. 与既有资产的关系
+## 8. 编排机制（2026-07-21，对标官方 Managed Agents `multiagent-orchestration` 文档移植）
+
+官方多 agent 编排的硬规则映射到本 harness（cmux claude-teams / Agent 工具）的纪律。逐条附对应物与本团队实证：
+
+- **深度=1（官方：depth>1 ignored）**：只有 leader 派 mate；**mate 的子 fanout 仅限只读扫描，凡入报告的结论必须 mate 本人一手核验**。实证两起：code-align 的子 agent 误判 object_normalizer 可删（实有 15 测试）、TUI-Eng 的子审计给出会破断言的 `_fmt_secs` 建议——两起都靠 mate/leader 一手复核拦下。子 agent 的话不是证据。
+- **线程持久（官方：threads are persistent, follow-up retains everything）**：SendMessage 同名跟进=带全部上下文续聊，**优先跟进不重生**；重生（同名 latest-wins）仅用于换模型或死亡，重生交接以**盘上状态为契约**（勤落盘纪律——git diff/报告文档就是交接书，不指望旧上下文）。
+- **并发上限与回收（官方：25 threads 上限、idle 才可 archive）**：roster 保持精瘦——按需 spawn（worker 有固定开销，cookbook 同款警告）、完工的临时 agent 及时 TaskStop、不囤积闲置角色。
+- **三种委派模式（官方：Parallelization / Specialization / Escalation）**：并行化与专业化已内建（域互斥+角色模板）；**升级模式为新增纪律**——mate（sonnet 档）遇到 frontier 级判断（语义裁决、条款相容性、翻案）**flag 给 leader 而非硬磨**，leader 亲裁或单发一个高档一次性 agent 处理该子问题。这是模型分层的回路闭合：分层不是单向降档。
+- **Coordinator 可见性（官方：coordinator 对 worker 的全部认知来自它自己的 system prompt）**：brief 即契约——leader 对 mate 的全部预期写进 spawn prompt（范围/边界/证据门槛/完成动作），不假设 mate 知道 brief 外的任何东西；mate 死亡/额度重置是常态，leader 自持 roster 状态账（盘面为真）。
+- **阻塞事件上浮（官方：权限/自定义工具事件 cross-post 到主线程带来源 id）**：mate 被权限拒绝→**报 leader 上浮用户**，leader 绝不替 mate 执行被拒动作（permission laundering 红线）；跨 mate 消息卡在途时 leader 代转补链（§7 断线管理）。
+- **版本钉扎（官方：roster 在 coordinator 创建时快照，不自动跟新）**：mate 开工前规格必须冻结（评审会签齐）；规格改版→显式通知在途 mate 指明版本号，不指望它自动感知。
+- **不可移植项（如实记）**：官方的 `multiagent` 字段/threads API/`{"type":"self"}` 自复制是 Managed Agents 云端产品能力，本 harness 无对应物；工具级硬隔离（per-agent tools 白名单）在 `claude` 通用型上不可用——以 prompt 边界+leader 核验代偿，只读评审型（redline/security-reviewer）有硬隔离但**无 SendMessage**（结论须落文件由 leader 读取，07-16/07-20 两次实证的已知陷阱）。
+
+## 9. 与既有资产的关系
 
 - 单 agent 引擎问题处理循环见 `/engine-verify-loop`（实证→理论→设计→实现→再实证）——本工作流是它的多 agent 扩展：并行审计供实证、双专家评审即理论/设计关、redline+亲验即实现关、批次实弹即再实证关。
 - 取证报告归档 `docs/forensics/teamN_*.md`；裁决单 `teamN_decision_memo.md`；leader 综合调研 `teamN_leader_research.md`。

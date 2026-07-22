@@ -32,7 +32,7 @@ def writeback(state: dict) -> dict:
             led.data["audit"]["notes"].append({"autoid": aid, "event": "precedent_writeback_fail"})
         try:
             from main.ist_core.tools.knowledge.footprint_writeback import compile_footprint_writeback
-            pv = f"workspace/outputs/{aid}/case.provenance.json"
+            pv = str(sh.outputs_root() / aid / "case.provenance.json")
             compile_footprint_writeback.func(autoid=aid, provenance_path=pv,
                                              on_device_passed=True)
             wrote += 1

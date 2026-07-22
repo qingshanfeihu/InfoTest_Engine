@@ -1,12 +1,12 @@
 """IST-Core Web Terminal server.
 
-xterm.js 前端 + WebSocket PTY 后端：
-- / GET：xterm.js 终端页面（含登录 + 文件上传/下载按钮）
-- /api/login POST：验证用户（PG-backed SessionManager）
-- /api/upload POST：文件上传到沙箱
-- /api/files GET：列出 workspace/outputs/ 下可下载文件
-- /api/download GET：下载 workspace/outputs/ 中的文件
-- /ws/terminal WebSocket：PTY 桥接（spawn TUI 子进程）
+xterm.js frontend + WebSocket PTY backend:
+- / GET: xterm.js terminal page (login + file upload/download)
+- /api/login POST: PG-backed SessionManager auth
+- /api/upload POST: file upload to remote server
+- /api/files GET: list remote output files
+- /api/download GET: download from remote server
+- /ws/terminal WebSocket: PTY bridge (spawn TUI subprocess)
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def _emit_langfuse_auth_trace(
     metadata: dict | None = None,
     tags: list[str] | None = None,
 ) -> None:
-    """往 Langfuse 写一条认证事件 trace（静默失败，不影响主流程）。"""
+    """Write an auth event trace to Langfuse (silent failure)."""
     try:
         from main.ist_core.sinks.langfuse_sink import get_langfuse_client
         client = get_langfuse_client()
@@ -69,9 +69,8 @@ def _emit_langfuse_auth_trace(
         pass
 
 
-
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_SANDBOX = _PROJECT_ROOT / "workspace" / "inputs"
+_WORKSPACE = _PROJECT_ROOT / "workspace"
 _WEB_DIR = Path(__file__).resolve().parent / "web"
 _ALLOWED = {
     ".conf", ".cfg", ".ini", ".yaml", ".yml", ".xml", ".log",
@@ -81,7 +80,7 @@ _ALLOWED = {
 
 app = FastAPI(title="IST-Core Web Terminal")
 
-# SessionManager 单例（延迟初始化）
+# SessionManager singleton (lazy init)
 _session_mgr = None
 
 
@@ -94,23 +93,19 @@ def _get_session_mgr():
 
 
 def _validate_request(session_id: str, jwt_token: str) -> dict | None:
-    """校验请求：返回 {"username", "role", "session_id"} 或 None。"""
+    """Validate request: returns {"username", "role", "session_id"} or None."""
     if not session_id or not jwt_token:
         return None
     return _get_session_mgr().validate_session(session_id, jwt_token)
 
 
 def get_auth_token(username: str, session_id: str) -> str | None:
-    """根据 username 和 session_id 获取 jwt_token。
-
-    用于评分系统等内部组件调用 API 时获取认证 token。
-    """
+    """Get jwt_token by username and session_id (for internal API calls)."""
     from main.ist_core.auth.db import pg_cursor
     from datetime import datetime, timezone
 
     try:
         with pg_cursor() as cur:
-            # 先通过 username 获取 user_id (UUID)
             cur.execute(
                 """SELECT id FROM ist_audit.users WHERE username = %s""",
                 (username,),
@@ -119,8 +114,6 @@ def get_auth_token(username: str, session_id: str) -> str | None:
             if not user_row:
                 return None
             user_id = user_row["id"]
-
-            # 再通过 user_id 和 session_id 获取 jwt_token
             cur.execute(
                 """SELECT jwt_token, expires_at, is_valid
                    FROM ist_audit.sessions
@@ -130,48 +123,26 @@ def get_auth_token(username: str, session_id: str) -> str | None:
             row = cur.fetchone()
             if not row:
                 return None
-            # 检查是否过期
             if row["expires_at"] < datetime.now(timezone.utc):
                 return None
             return row.get("jwt_token", "")
     except Exception as exc:
-        logger.debug("get_auth_token 失败: %s", exc)
+        logger.debug("get_auth_token failed: %s", exc)
         return None
 
 
-# 登录失败限流（按客户端 IP，滑动窗口）
+# Login rate limiting (per client IP, sliding window)
 _login_attempts: dict[str, list[float]] = {}
 _LOGIN_MAX_FAILURES = int(os.environ.get("IST_WEB_LOGIN_MAX_FAILURES", "5"))
 _LOGIN_WINDOW_SEC = int(os.environ.get("IST_WEB_LOGIN_WINDOW_SEC", "300"))
 
-# 上传体积上限
+# Upload size limit
 _MAX_UPLOAD_BYTES = int(os.environ.get("IST_WEB_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 
-# RBAC：仅这些角色可写（上传）。reviewer 只读。
+# RBAC: only these roles can write (upload). reviewer is read-only.
 _WRITE_ROLES = {r.strip() for r in os.environ.get("IST_WEB_WRITE_ROLES", "admin,superadmin").split(",") if r.strip()}
 
-def _load_users_raw() -> list[dict]:
-    """加载完整用户列表（包括禁用的用户）。"""
-    if not _USERS_FILE.exists():
-        return []
-    try:
-        data = json.loads(_USERS_FILE.read_text(encoding="utf-8"))
-        return data.get("users", [])
-    except Exception:
-        return []
-
-
-def _save_users(users: list[dict]) -> None:
-    """保存用户列表到文件。"""
-    data = {"users": users}
-    _USERS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-def _verify_password(user: dict, password: str) -> bool:
-    """恒定时间校验密码。
-
-# 受信代理 IP 列表（逗号分隔）；为空则不信任任何 proxy header。
-# 例: IST_TRUSTED_PROXIES="127.0.0.1,10.0.0.0/8"
+# Trusted proxy IP list (comma-separated)
 _TRUSTED_PROXIES: list[str] = [
     p.strip() for p in os.environ.get("IST_TRUSTED_PROXIES", "").split(",") if p.strip()
 ]
@@ -183,7 +154,6 @@ def _client_ip(request: Request | None) -> str:
     direct = request.client.host or "unknown"
     if not _TRUSTED_PROXIES:
         return direct
-    # 只有直连 IP 在受信列表内时，才读取 proxy header
     try:
         direct_ip = ipaddress.ip_address(direct)
     except ValueError:
@@ -193,7 +163,6 @@ def _client_ip(request: Request | None) -> str:
     )
     if not trusted:
         return direct
-    # 优先 X-Real-IP，其次 X-Forwarded-For 取最左（原始客户端）
     real_ip = request.headers.get("x-real-ip")
     if real_ip:
         return real_ip.strip()
@@ -204,7 +173,7 @@ def _client_ip(request: Request | None) -> str:
 
 
 def _rate_limited(ip: str) -> bool:
-    """滑动窗口：窗口内失败次数达上限即拒。"""
+    """Sliding window: reject if failures exceed threshold."""
     now = time.monotonic()
     attempts = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW_SEC]
     _login_attempts[ip] = attempts
@@ -216,28 +185,32 @@ def _record_failure(ip: str) -> None:
 
 
 def _ensure_env() -> None:
-    """加载项目根目录 environment 文件。"""
+    """Load environment file from project root."""
     try:
         from dotenv import load_dotenv
         env_path = _PROJECT_ROOT / "environment"
         if env_path.exists():
             load_dotenv(env_path, override=False)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
+
+# ------------------------------------------------------------------
+# Auth API
+# ------------------------------------------------------------------
 
 @app.post("/api/login")
 async def login(body: dict, request: Request):
     ip = _client_ip(request)
     if _rate_limited(ip):
         logger.warning("login rate-limited for ip=%s", ip)
-        raise HTTPException(status_code=429, detail="登录尝试过多，请稍后再试")
+        raise HTTPException(status_code=429, detail="登录尝试过多,请稍后再试")
     username = body.get("username", "")
     password = body.get("password", "")
     if not username or not password:
         raise HTTPException(status_code=400, detail="用户名和密码不能为空")
 
-    # 从 PG 查找用户
+    # Query user from PG
     from main.ist_core.auth.db import pg_cursor
     from main.ist_core.auth.password import verify_password
     try:
@@ -249,7 +222,7 @@ async def login(body: dict, request: Request):
             )
             user = cur.fetchone()
     except Exception as exc:
-        logger.error("login DB 查询失败: %s", exc)
+        logger.error("login DB query failed: %s", exc)
         raise HTTPException(status_code=500, detail="服务暂时不可用")
 
     if not user:
@@ -294,31 +267,32 @@ async def login(body: dict, request: Request):
                                   metadata={"source_ip": ip}, tags=["auth", "web"])
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-    # 创建会话（PG + Redis）
+    # Create session (PG + Redis)
     role = user.get("role", "reviewer")
-    token = _new_session(username, role)
+    try:
+        session_id, jwt_token = _get_session_mgr().create_session(username, role, channel="web")
+    except Exception as exc:
+        logger.error("login create_session failed: %s", exc)
+        raise HTTPException(status_code=500, detail="会话创建失败")
 
-    # 登录时确保用户目录存在（远程）
+    # Ensure local + remote user directories exist
+    try:
+        (_WORKSPACE / "inputs" / username).mkdir(parents=True, exist_ok=True)
+        (_WORKSPACE / "outputs" / username).mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        logger.warning("ensure local workspace dirs error: %s", e)
     try:
         remote_fs.ensure_dir(f"inputs/{username}")
         remote_fs.ensure_dir(f"outputs/{username}")
     except Exception as e:
         logger.warning("ensure remote dirs error: %s", e)
 
-    logger.info("login ok user=%r role=%s ip=%s", username, role, ip)
-    return {"token": token, "username": username, "role": role}
-    try:
-        session_id, jwt_token = _get_session_mgr().create_session(username, role, channel="web")
-    except Exception as exc:
-        logger.error("login create_session 失败: %s", exc)
-        raise HTTPException(status_code=500, detail="会话创建失败")
-
-    # 创建默认对话（关联到 auth session）
+    # Create default conversation
     conv = None
     try:
         conv = _get_session_mgr().create_conversation(username, session_id=session_id)
     except Exception as exc:
-        logger.debug("login create_conversation 失败: %s", exc)
+        logger.debug("login create_conversation failed: %s", exc)
 
     logger.info("login ok user=%r role=%s session=%s ip=%s", username, role, session_id, ip)
     get_default_bus().emit(
@@ -357,112 +331,80 @@ async def logout(body: dict):
                                       output_data={"result": "success"},
                                       tags=["auth", "web"])
         except Exception as exc:
-            logger.debug("logout invalidate 失败: %s", exc)
+            logger.debug("logout invalidate failed: %s", exc)
     return {"ok": True}
 
 
+# ------------------------------------------------------------------
+# User management API (PG-backed)
+# ------------------------------------------------------------------
+
 @app.get("/api/users")
-async def list_users(token: str = ""):
-    """获取用户列表（仅 admin 用户）。"""
-    sess = _resolve_session(token)
+async def list_users(session_id: str = "", token: str = ""):
+    """List users (admin only)."""
+    sess = _validate_request(session_id, token)
     if not sess:
         raise HTTPException(401, "未登录")
-    if sess.get("username") != "admin":
-        raise HTTPException(403, "需要管理员权限")
-    users = _load_users_raw()
-    return {"users": [{"username": u["username"], "role": u.get("role", "reviewer"), "enabled": u.get("enabled", True)} for u in users]}
+    if sess.get("role") != "superadmin":
+        raise HTTPException(403, "需要超级管理员权限")
+    from main.ist_core.auth.db import pg_cursor
+    try:
+        with pg_cursor() as cur:
+            cur.execute(
+                "SELECT username, role FROM ist_audit.users WHERE account_status = 'normal' ORDER BY username"
+            )
+            rows = cur.fetchall()
+        return {"users": [{"username": r["username"], "role": r["role"], "enabled": True} for r in rows]}
+    except Exception as exc:
+        logger.error("list_users failed: %s", exc)
+        raise HTTPException(500, "查询失败")
 
 
 @app.post("/api/users/create")
-async def create_user(body: dict, request: Request):
-    """创建用户（无需登录，任何人都可以创建）。"""
-    ip = _client_ip(request)
-    username = body.get("username", "").strip()
-    password = body.get("password", "").strip()
-    role = body.get("role", "reviewer").strip()
-
-    # 验证用户名
-    import re
-    if not re.match(r'^[a-zA-Z0-9_]{3,20}$', username):
-        raise HTTPException(400, "用户名只能包含字母数字下划线，3-20字符")
-
-    # 验证密码
-    if len(password) < 6:
-        raise HTTPException(400, "密码至少6个字符")
-
-    # 验证角色
-    if role not in ("admin", "reviewer"):
-        raise HTTPException(400, "角色必须是 admin 或 reviewer")
-
-    # 加载现有用户
-    users = _load_users_raw()
-
-    # 检查是否已存在
-    if any(u["username"] == username for u in users):
-        raise HTTPException(409, "用户已存在")
-
-    # 生成密码哈希
-    password_hash = hash_password(password)
-
-    # 添加用户
-    users.append({
-        "username": username,
-        "password_hash": password_hash,
-        "enabled": True,
-        "role": role
-    })
-
-    # 保存用户
-    _save_users(users)
-
-    # 创建目录（远程）
-    try:
-        remote_fs.ensure_dir(f"inputs/{username}")
-        remote_fs.ensure_dir(f"outputs/{username}")
-    except Exception as e:
-        logger.warning("create remote dirs error: %s", e)
-
-    logger.info("user created: %r role=%s ip=%s", username, role, ip)
-    return {"ok": True, "message": "用户创建成功", "username": username, "role": role}
+async def create_user(body: dict):
+    """注册功能暂不可用."""
+    raise HTTPException(501, "注册功能暂不可用,请联系管理员")
 
 
 @app.post("/api/users/delete")
-async def delete_user(body: dict, token: str = ""):
-    """删除用户（仅 admin 用户）。"""
-    sess = _resolve_session(token)
+async def delete_user(body: dict, session_id: str = "", token: str = ""):
+    """Delete user (admin only)."""
+    sess = _validate_request(session_id, token)
     if not sess:
         raise HTTPException(401, "未登录")
-    if sess.get("username") != "admin":
-        raise HTTPException(403, "需要管理员权限")
+    if sess.get("role") != "superadmin":
+        raise HTTPException(403, "需要超级管理员权限")
 
     username = body.get("username", "").strip()
     if not username:
         raise HTTPException(400, "用户名不能为空")
-
-    # 不能删除自己
     if username == sess["username"]:
         raise HTTPException(400, "不能删除自己")
 
-    # 加载现有用户
-    users = _load_users_raw()
+    from main.ist_core.auth.db import pg_cursor
+    try:
+        with pg_cursor() as cur:
+            cur.execute("DELETE FROM ist_audit.users WHERE username = %s", (username,))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "用户不存在")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("delete_user DB error: %s", exc)
+        raise HTTPException(500, "删除失败")
 
-    # 查找用户
-    user_index = None
-    for i, u in enumerate(users):
-        if u["username"] == username:
-            user_index = i
-            break
+    # Clean up local workspace directories
+    import shutil
+    for subdir in ("inputs", "outputs"):
+        local_dir = _WORKSPACE / subdir / username
+        if local_dir.is_dir():
+            try:
+                shutil.rmtree(local_dir)
+                logger.info("deleted local dir: workspace/%s/%s", subdir, username)
+            except Exception as e:
+                logger.warning("delete local %s dir error: %s", subdir, e)
 
-    if user_index is None:
-        raise HTTPException(404, "用户不存在")
-
-    # 删除用户
-    users.pop(user_index)
-
-    # 保存用户
-    _save_users(users)
-
-    # 删除用户目录（远程）
+    # Clean up remote directories
     try:
         remote_fs.delete_dir(f"inputs/{username}")
         logger.info("deleted remote inputs dir: inputs/%s", username)
@@ -475,17 +417,17 @@ async def delete_user(body: dict, token: str = ""):
         logger.warning("delete remote outputs dir error: %s", e)
 
     logger.info("user deleted: %r by %s", username, sess["username"])
-    return {"ok": True, "message": "用户删除成功"}
+    return {"ok": True, "message": "User deleted"}
 
 
 @app.post("/api/users/reset-password")
-async def reset_user_password(body: dict, token: str = ""):
-    """重置用户密码（仅 admin 用户）。"""
-    sess = _resolve_session(token)
+async def reset_user_password(body: dict, session_id: str = "", token: str = ""):
+    """Reset user password (admin only)."""
+    sess = _validate_request(session_id, token)
     if not sess:
         raise HTTPException(401, "未登录")
-    if sess.get("username") != "admin":
-        raise HTTPException(403, "需要管理员权限")
+    if sess.get("role") != "superadmin":
+        raise HTTPException(403, "需要超级管理员权限")
 
     username = body.get("username", "").strip()
     new_password = body.get("password", "").strip()
@@ -495,38 +437,40 @@ async def reset_user_password(body: dict, token: str = ""):
     if len(new_password) < 6:
         raise HTTPException(400, "密码至少6个字符")
 
-    # 加载现有用户
-    users = _load_users_raw()
-
-    # 查找用户
-    target_user = None
-    for u in users:
-        if u["username"] == username:
-            target_user = u
-            break
-
-    if target_user is None:
-        raise HTTPException(404, "用户不存在")
-
-    # 重置密码
-    target_user["password_hash"] = hash_password(new_password)
-
-    # 保存用户
-    _save_users(users)
+    from main.ist_core.auth.db import pg_cursor
+    from main.ist_core.auth.password import hash_password
+    new_hash = hash_password(new_password)
+    try:
+        with pg_cursor() as cur:
+            cur.execute(
+                "UPDATE ist_audit.users SET password_hash = %s WHERE username = %s",
+                (new_hash, username),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(404, "用户不存在")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("reset_password DB error: %s", exc)
+        raise HTTPException(500, "密码重置失败")
 
     logger.info("password reset: %r by %s", username, sess["username"])
-    return {"ok": True, "message": f"用户 {username} 密码已重置"}
+    return {"ok": True, "message": f"Password reset for user {username}"}
 
+
+# ------------------------------------------------------------------
+# Chat rating API
+# ------------------------------------------------------------------
 
 @app.post("/api/chat/rating/submit")
 async def submit_rating(body: dict, session_id: str = "", token: str = ""):
-    """提交对话评分。
+    """Submit chat rating.
 
-    业务逻辑：
-    - 校验 score 在 0~5 区间
-    - UPSERT 写入 sys_chat_rating：存在则更新，不存在插入
-    - 异步更新 sys_dialog_chat.rating 冗余字段
-    - 写入审计日志 audit_log，event_kind=chat_rating_submit
+    Business logic:
+    - Validate score in 0~5 range
+    - UPSERT into sys_chat_rating
+    - Async update sys_dialog_chat.rating
+    - Write audit log
     """
     sess = _validate_request(session_id, token)
     if not sess:
@@ -591,7 +535,6 @@ async def submit_rating(body: dict, session_id: str = "", token: str = ""):
                 },
             )
 
-        # 异步上报到 Langfuse Score（后台线程，不阻塞响应）
         try:
             from main.ist_core.sinks.langfuse_sink import submit_langfuse_score
             submit_langfuse_score(
@@ -605,16 +548,13 @@ async def submit_rating(body: dict, session_id: str = "", token: str = ""):
 
         return {"ok": True, "score": score}
     except Exception as exc:
-        logger.error("submit_rating 失败: %s", exc)
+        logger.error("submit_rating failed: %s", exc)
         raise HTTPException(500, "评分提交失败")
 
 
 @app.get("/api/chat/rating/get")
 async def get_rating(session_id: str = "", token: str = "", conversation_id: str = "", run_id: str = ""):
-    """查询单轮对话评分。
-
-    返回：分数 + 评价内容，无记录返回空。
-    """
+    """Query single chat rating."""
     sess = _validate_request(session_id, token)
     if not sess:
         raise HTTPException(status_code=401, detail="未登录")
@@ -647,9 +587,13 @@ async def get_rating(session_id: str = "", token: str = "", conversation_id: str
             "created_at": row.get("created_at").isoformat() if row.get("created_at") else None,
         }
     except Exception as exc:
-        logger.error("get_rating 失败: %s", exc)
+        logger.error("get_rating failed: %s", exc)
         raise HTTPException(500, "评分查询失败")
 
+
+# ------------------------------------------------------------------
+# File API (remote_fs)
+# ------------------------------------------------------------------
 
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), session_id: str = "", token: str = ""):
@@ -659,17 +603,11 @@ async def upload(file: UploadFile = File(...), session_id: str = "", token: str 
     if sess.get("role") not in _WRITE_ROLES:
         raise HTTPException(status_code=403, detail="无上传权限")
 
-    # 获取 username，创建用户专属目录
     username = sess.get("username", "")
     if not username:
         raise HTTPException(400, "无法获取用户名")
-    user_sandbox = _SANDBOX / username
-    user_sandbox.mkdir(parents=True, exist_ok=True)
 
-    # 所有用户都上传到自己的目录
-    username = sess["username"]
-
-    # 仅取 basename，剥离任何目录分量 → 防 ../../ 路径遍历
+    # Sanitize filename
     raw_name = file.filename or "upload"
     safe_name = os.path.basename(raw_name.replace("\\", "/"))
     if not safe_name or safe_name in (".", ".."):
@@ -678,25 +616,7 @@ async def upload(file: UploadFile = File(...), session_id: str = "", token: str 
     if suffix not in _ALLOWED:
         raise HTTPException(400, "不支持的文件类型")
 
-    dest = (user_sandbox / safe_name).resolve()
-    # 双保险：解析后必须仍在用户目录内
-    if not str(dest).startswith(str(user_sandbox.resolve()) + os.sep):
-        raise HTTPException(400, "非法文件名")
-
-    # 流式写入并强制体积上限，超限即删除半成品
-    written = 0
-    with open(dest, "wb") as f:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            written += len(chunk)
-            if written > _MAX_UPLOAD_BYTES:
-                f.close()
-                dest.unlink(missing_ok=True)
-                raise HTTPException(413, "文件过大")
-            f.write(chunk)
-    # 先保存到临时文件，再上传到远程
+    # Stream to temp file, then save locally + upload to remote
     import tempfile
     tmp_path = None
     try:
@@ -712,74 +632,31 @@ async def upload(file: UploadFile = File(...), session_id: str = "", token: str 
                     raise HTTPException(413, "文件过大")
                 tmp.write(chunk)
 
-        # 上传到远程服务器
+        # Save to local workspace/inputs/{username}/
+        local_dir = _WORKSPACE / "inputs" / username
+        local_dir.mkdir(parents=True, exist_ok=True)
+        local_dest = local_dir / safe_name
+        import shutil
+        shutil.copy2(tmp_path, local_dest)
+
+        # Upload to remote server
         remote_rel = f"inputs/{username}/{safe_name}"
         remote_fs.upload_file(tmp_path, remote_rel)
 
         return {"path": remote_rel, "filename": safe_name}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("upload error: %s", exc)
+        raise HTTPException(500, "上传失败")
     finally:
-        # 清理临时文件
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
 
-_OUTPUTS = _PROJECT_ROOT / "workspace" / "outputs"
-
-
-def _build_file_tree(path: Path, max_depth: int = 3) -> list:
-    """递归构建目录树结构。"""
-    items = []
-    try:
-        for f in sorted(path.iterdir()):
-            # 跳过隐藏文件（.gitkeep 等占位/元数据）
-            if f.name.startswith("."):
-                continue
-            if f.is_file():
-                items.append({"name": f.name, "size": f.stat().st_size, "type": "file"})
-            elif f.is_dir() and max_depth > 0:
-                children = _build_file_tree(f, max_depth - 1)
-                items.append({"name": f.name, "type": "dir", "children": children})
-    except PermissionError:
-        pass
-    return items
-
-
-def _get_user_outputs_dir(session_id: str, token: str) -> Path:
-    """获取用户专属 outputs 目录，校验登录状态。"""
-    sess = _validate_request(session_id, token)
-    if not sess:
-        raise HTTPException(401, "未登录")
-    username = sess.get("username", "")
-    if not username:
-        raise HTTPException(400, "无法获取用户名")
-    user_dir = _OUTPUTS / username
-    user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir
-
-
-def _build_file_tree(base: Path, current: Path) -> list[dict]:
-    """递归构建目录树。"""
-    entries: list[dict] = []
-    try:
-        items = sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-    except OSError:
-        return entries
-    for item in items:
-        if item.name.startswith("."):
-            continue
-        rel = str(item.relative_to(base)).replace("\\", "/")
-        if item.is_dir():
-            children = _build_file_tree(base, item)
-            if children:
-                entries.append({"name": item.name, "path": rel, "type": "dir", "children": children})
-        else:
-            entries.append({"name": item.name, "path": rel, "type": "file", "size": item.stat().st_size})
-    return entries
-
-
 @app.get("/api/files")
-async def list_files(token: str = ""):
-    sess = _resolve_session(token)
+async def list_files(session_id: str = "", token: str = ""):
+    sess = _validate_request(session_id, token)
     if not sess:
         raise HTTPException(401, "未登录")
 
@@ -787,81 +664,64 @@ async def list_files(token: str = ""):
 
     try:
         if username == "admin":
-            # admin 用户看到所有文件
             files = remote_fs.list_dir_tree("outputs")
         else:
-            # 普通用户只看到自己的目录
             files = remote_fs.list_dir_tree(f"outputs/{username}")
     except Exception as e:
         logger.error("list files error: %s", e)
         return {"files": []}
 
     return {"files": files}
-async def list_files(session_id: str = "", token: str = ""):
-    user_dir = _get_user_outputs_dir(session_id, token)
-    tree = _build_file_tree(user_dir, user_dir)
-    return {"files": tree}
 
 
 @app.get("/api/download")
-async def download_file(token: str = "", name: str = ""):
-    sess = _resolve_session(token)
+async def download_file(session_id: str = "", token: str = "", name: str = ""):
+    sess = _validate_request(session_id, token)
     if not sess:
         raise HTTPException(401, "未登录")
 
-    username = sess["username"]
+    username = sess.get("username", "")
+    if not username:
+        raise HTTPException(400, "无法获取用户名")
 
-    # 支持路径（如 "目录名/file.xlsx"），但必须安全
-    if not name or ".." in name:
-async def download_file(session_id: str = "", token: str = "", name: str = ""):
-    user_dir = _get_user_outputs_dir(session_id, token)
     if not name or ".." in name:
         raise HTTPException(400, "非法文件名")
-    # 统一路径分隔符
-    safe_name = name.replace("\\", "/")
-    # 检查路径分量不包含隐藏文件
-    parts = safe_name.split("/")
-    for part in parts:
-        if part.startswith(".") or not part:
-            raise HTTPException(400, "非法文件名")
+    name = name.replace("\\", "/")
 
-    # 根据用户决定可下载的路径
-    if username == "admin":
-        remote_rel = f"outputs/{safe_name}"
-    else:
-        # 普通用户只能下载自己目录下的文件
-        remote_rel = f"outputs/{username}/{safe_name}"
+    # Path security: normal users can only download from their own directory
+    if username != "admin":
+        if not name.startswith(f"{username}/") and name != username:
+            raise HTTPException(403, "路径越权")
 
+    # Download from remote to temp file, then serve
+    import tempfile
+    suffix = Path(name).suffix
+    tmp_path = None
     try:
-        # 先下载到临时文件，再返回
-        import tempfile
-        suffix = Path(safe_name).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp_path = tmp.name
-        remote_fs.download_file(remote_rel, tmp_path)
-        filename = Path(safe_name).name
+        remote_fs.download_file(f"outputs/{name}", tmp_path)
+        filename = Path(name).name
         return FileResponse(tmp_path, filename=filename)
     except FileNotFoundError:
-    # 统一用 / 分隔，拒绝 Windows 反斜杠绕过
-    name = name.replace("\\", "/")
-    target = (user_dir / name).resolve()
-    # 双保险：解析后必须仍在用户目录内
-    if not str(target).startswith(str(user_dir.resolve()) + os.sep) and target != user_dir.resolve():
-        raise HTTPException(403, "路径越权")
-    if not target.is_file():
         raise HTTPException(404, "文件不存在")
-    return FileResponse(target, filename=target.name)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("download error: %s", e)
         raise HTTPException(500, "下载失败")
 
+
+# ------------------------------------------------------------------
+# PTY helpers
+# ------------------------------------------------------------------
 
 def _set_winsize(fd: int, cols: int, rows: int):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
 # ------------------------------------------------------------------
-# 对话管理 API
+# Conversation management API
 # ------------------------------------------------------------------
 
 @app.get("/api/conversations")
@@ -966,9 +826,13 @@ async def get_conversation_context(conversation_id: str, session_id: str = "", t
     }
 
 
+# ------------------------------------------------------------------
+# WebSocket PTY bridge
+# ------------------------------------------------------------------
+
 @app.websocket("/ws/terminal")
 async def ws_terminal(websocket: WebSocket):
-    """WebSocket PTY 桥接：spawn TUI 子进程，双向转发。"""
+    """WebSocket PTY bridge: spawn TUI subprocess, bidirectional forwarding."""
     await websocket.accept()
 
     auth = await websocket.receive_json()
@@ -983,7 +847,7 @@ async def ws_terminal(websocket: WebSocket):
     conversation_id = auth.get("conversation_id", session_id)
 
     if not _get_session_mgr().is_conversation_active(username, conversation_id):
-        await websocket.send_json({"type": "error", "msg": "该对话已关闭，无法发起新推理"})
+        await websocket.send_json({"type": "error", "msg": "该对话已关闭,无法发起新推理"})
         await websocket.close()
         return
 
@@ -1004,8 +868,8 @@ async def ws_terminal(websocket: WebSocket):
     env["LANG"] = env.get("LANG", "en_US.UTF-8")
     env["PYTHONIOENCODING"] = "utf-8"
     env["IST_SSH_USER"] = username
-    env["IST_AUTH_SESSION_ID"] = session_id         # auth session_id，审计日志用
-    env["IST_CONVERSATION_ID"] = conversation_id    # thread_id = {username}_{conversation_id}，审计日志用
+    env["IST_AUTH_SESSION_ID"] = session_id
+    env["IST_CONVERSATION_ID"] = conversation_id
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-u", "-m", "main.ist_core.tui.cli",
@@ -1016,7 +880,6 @@ async def ws_terminal(websocket: WebSocket):
 
     loop = asyncio.get_event_loop()
 
-    
     async def pty_to_ws():
         while True:
             try:
@@ -1027,7 +890,6 @@ async def ws_terminal(websocket: WebSocket):
                 break
             await websocket.send_bytes(data)
 
-    
     async def ws_to_pty():
         try:
             while True:
@@ -1036,7 +898,6 @@ async def ws_terminal(websocket: WebSocket):
                     if "bytes" in msg and msg["bytes"]:
                         os.write(master_fd, msg["bytes"])
                     elif "text" in msg and msg["text"]:
-                        
                         try:
                             d = json.loads(msg["text"])
                             if d.get("type") == "resize":
@@ -1046,10 +907,6 @@ async def ws_terminal(websocket: WebSocket):
                             elif d.get("type") == "input":
                                 os.write(master_fd, d["data"].encode("utf-8"))
                             elif d.get("type") == "upload":
-                                # 带外上传信号：文件名 base64 后包成自定义 OSC 序列
-                                # ESC ] 7001 ; <base64> BEL，由 TUI 的 ink 解析器
-                                # 识别为 UploadEvent。不混进键盘输入文本流，杜绝下游
-                                # 用正则在自由文本里猜文件名。
                                 fname = (d.get("filename") or "").strip()
                                 if fname:
                                     b64 = base64.b64encode(
@@ -1062,7 +919,6 @@ async def ws_terminal(websocket: WebSocket):
                                 if new_conv_id:
                                     result = _get_session_mgr().activate_conversation(username, new_conv_id)
                                     if result:
-                                        # 通过 OSC 7003 序列通知 TUI 切换上下文
                                         b64 = base64.b64encode(new_conv_id.encode("utf-8")).decode("ascii")
                                         osc = f"\x1b]7003;{b64}\x07"
                                         os.write(master_fd, osc.encode("ascii"))
@@ -1093,9 +949,7 @@ async def ws_terminal(websocket: WebSocket):
     finally:
         pty_task.cancel()
         ws_task.cancel()
-        # 等被取消的任务真正收尾，避免后台残留 / fd 竞争
         await asyncio.gather(pty_task, ws_task, return_exceptions=True)
-        # 显式终止子进程，防止卡死的 TUI 变僵尸 + 泄漏 master_fd
         if proc.returncode is None:
             try:
                 proc.terminate()
@@ -1119,11 +973,9 @@ async def index():
 
 def serve(host: str = "127.0.0.1", port: int = 8080):
     import uvicorn
-    import os
-    # 将实际端口写入环境变量，供其他组件（如评分系统）读取
     os.environ["IST_WEB_HOST"] = host
     os.environ["IST_WEB_PORT"] = str(port)
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -1135,13 +987,12 @@ def serve(host: str = "127.0.0.1", port: int = 8080):
         ensure_schema()
     except Exception as exc:
         logger.warning("auth schema init failed: %s", exc)
-    # 订阅 PgAuditSink 到默认 bus（捕获登录/登出等非 agent-run 事件）
     try:
         from main.ist_core.events import get_default_bus
         from main.ist_core.sinks.pg_sink import PgAuditSink
         get_default_bus().subscribe(PgAuditSink())
     except Exception as exc:
-        logger.debug("PgAuditSink 注册到默认 bus 失败: %s", exc)
+        logger.debug("PgAuditSink registration failed: %s", exc)
     logger.info("IST-Core Web Terminal on %s:%d", host, port)
     uvicorn.run(app, host=host, port=port, log_level="info")
 

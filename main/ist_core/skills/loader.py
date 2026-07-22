@@ -977,10 +977,24 @@ def _invoke_fork_streamed(runnable: Any, rendered_body: str, label: str, *,
     inp = {"messages": [HumanMessage(content=rendered_body)]}
     cfg: dict = {"callbacks": [tally if tally is not None else _ForkUsageTally()]}   # fork usage 唯一采集点
     cfg = {"callbacks": [_ForkUsageTally()]}   # fork usage 唯一采集点(每次 LLM 调用即时计)
-    # Langfuse LLM 可观测性：monkey-patch CallbackHandler 直接注入 trace 属性。
+    # Langfuse LLM 可观测性：从环境变量读取认证上下文（bridge.py 已设），
+    # 使 fork 子 agent trace 也能携带 user/session/conversation。
     try:
+        import os as _os
         from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks, build_trace_attributes
-        _lf_attrs = build_trace_attributes(None, skill=skill_name, fork_id=fork_id)
+        _fork_cbl: dict = {}
+        _u = _os.environ.get("IST_SSH_USER", "").strip()
+        if _u: _fork_cbl["auth_user"] = _u
+        _sid = _os.environ.get("IST_AUTH_SESSION_ID", "").strip()
+        if _sid: _fork_cbl["auth_session_id"] = _sid
+        _cid = _os.environ.get("IST_CONVERSATION_ID", "").strip()
+        if _cid: _fork_cbl["auth_conversation_id"] = _cid
+        _tid = _os.environ.get("IST_THREAD_ID", "").strip()
+        if _tid: _fork_cbl["thread_id"] = _tid
+        _lf_attrs = build_trace_attributes(
+            {"configurable": _fork_cbl} if _fork_cbl else None,
+            skill=skill_name, fork_id=fork_id,
+        )
         inject_langfuse_callbacks(cfg["callbacks"], **_lf_attrs)
     except Exception:
         pass

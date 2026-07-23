@@ -494,6 +494,26 @@ _NEG_DEFECT_RE = re.compile(
     r"(不是|不算|并非|算不上|没有|不认为是?|别提|不要提|先不提|非)\s*(产品)?\s*(缺陷|产品问题|bug)",
     re.IGNORECASE)
 
+# H-06:局部否定——关键词前紧邻「不/别/勿/没/未(+要/能/可…)」则不构成该意图
+# (「不接受单跑」≠ downgrade;「不要挂起」短句≠ suspend;「不继续」≠ proceed)。
+_LOCAL_NEG_RE = re.compile(r"(不|别|勿|没|未)(要|能|可|该|应|再|先)?$")
+
+
+def _has_positive_intent(a: str, words: tuple[str, ...]) -> bool:
+    """关键词命中且无局部否定。对标 _defect_intent 否定门,覆盖挂起/停止/降级等裸 in。"""
+    s = str(a or "")
+    for w in words:
+        start = 0
+        while True:
+            i = s.find(w, start)
+            if i < 0:
+                break
+            head = s[max(0, i - 4):i]
+            if not _LOCAL_NEG_RE.search(head):
+                return True
+            start = i + len(w)
+    return False
+
 
 # 条件/时序标记(中文语法结构词,非领域词):出现在缺陷词**之前的同一子句内**=
 # 该缺陷词挂在前置条件下,不是当场确认
@@ -534,7 +554,8 @@ def answer_token(kind: str, a: str) -> str:
     - cap:纠正词(预期/断言/手册…)→ correct(原文落账,裁决语义交下游消费);
       继续词 → continue;停修词 → stop;其余 → correct(原文即信息,不虚假授权轮次)。
     特权词只在短指令里生效(≤8 字):长句里的「挂起/停止」多为叙述
-    (「不要挂起,按手册来」),按题面语义走、原文全程保留在 decision 里。"""
+    (「不要挂起,按手册来」),按题面语义走、原文全程保留在 decision 里。
+    H-06:挂起/停止/降级/接受单跑/继续等一律走 _has_positive_intent,否定句不反转。"""
     # F-Py-5①(裁点2·Design 裁 minimal):whitespace-only 答案 → suspend(与 empty 的 nodes ask
     # 消费 `if not a:` auto-suspend 一致)。修唯一真可达 bug:whitespace " " 因 `not " "`==False
     # 绕上游 `if not a:` 到本函数、旧落末尾 correct 兜底=静默降级(把没答当纠正决策)。suspended
@@ -545,52 +566,52 @@ def answer_token(kind: str, a: str) -> str:
     short = len(a) <= 8
     if kind == "suspended":
         # 先于特权判定:「保持挂起」是本题面的常规选项,不是特权触发
-        if "恢复" in a:
+        if _has_positive_intent(a, ("恢复",)):
             return "resume"
-        return "stop" if ("停止" in a and short) else "keep"
-    if "挂起" in a and (short or a.startswith("挂起")):
+        return "stop" if (_has_positive_intent(a, ("停止",)) and short) else "keep"
+    if _has_positive_intent(a, ("挂起",)) and (short or a.startswith("挂起")):
         return "suspend"
-    if "停止" in a and (short or a.startswith("停止")):
+    if _has_positive_intent(a, ("停止",)) and (short or a.startswith("停止")):
         return "stop"
     if kind in ("panel", "cap", "env", "bed", "contra") and _defect_intent(a):
         return "defect"
     if kind == "panel":
-        if "确认" in a or "按此" in a:
+        if _has_positive_intent(a, ("确认", "按此")):
             return "confirm"
         return "correct"
     if kind == "cap":
-        if any(w in a for w in ("预期", "断言", "改成", "应为", "手册", "改用", "期望")):
+        if _has_positive_intent(a, ("预期", "断言", "改成", "应为", "手册", "改用", "期望")):
             return "correct"
-        if any(w in a for w in ("继续", "再修", "再试", "接着")):
+        if _has_positive_intent(a, ("继续", "再修", "再试", "接着")):
             return "continue"
-        if any(w in a for w in ("别修", "不修", "不要修", "放弃", "算了")):
+        if _has_positive_intent(a, ("别修", "不修", "不要修", "放弃", "算了")):
             return "stop"
         return "correct"
     if kind == "env":
-        return "stop" if "确认环境" in a else "retry"
+        return "stop" if _has_positive_intent(a, ("确认环境",)) else "retry"
     if kind == "bed":
-        if "降级" in a:
+        if _has_positive_intent(a, ("降级",)):
             return "downgrade"
-        if "重编" in a or "补自清" in a or "补清理" in a:
+        if _has_positive_intent(a, ("重编", "补自清", "补清理")):
             return "reflow_tau"
-        if "已处理" in a or "复跑" in a or "已清" in a:
+        if _has_positive_intent(a, ("已处理", "复跑", "已清")):
             return "retry"
         return "suspend"   # 不明确=默认挂起到下批(床治理是外部动作,宁等勿猜)
     if kind == "contra":
-        if "降级" in a or "接受单跑" in a:
+        if _has_positive_intent(a, ("降级", "接受单跑")):
             return "downgrade"
         return "reorder"
     if kind == "deesc":
         # B-1 de-escalate 恢复问询:三子类共用一套自由文本判据(引擎侧精确 token 优先
         # 命中,这里只兜 Other 自由输入)。缺陷意图判据复用 _defect_intent(否定/条件
         # 句门同 panel/cap/env/bed/contra,617 型「不是缺陷,先重编」不误判)。
-        if any(w in a for w in ("工程故障", "引擎缺口", "引擎问题", "呈报故障")):
+        if _has_positive_intent(a, ("工程故障", "引擎缺口", "引擎问题", "呈报故障")):
             return "deesc_engineering_fault"
         if _defect_intent(a):
             return "defect"
-        if any(w in a for w in ("换床", "换环境", "换设备", "换测试床")):
+        if _has_positive_intent(a, ("换床", "换环境", "换设备", "换测试床")):
             return "deesc_reswitch"
-        if any(w in a for w in ("重编", "重新编写", "重试", "再试", "再编")):
+        if _has_positive_intent(a, ("重编", "重新编写", "重试", "再试", "再编")):
             return "deesc_retry"
         return "deesc_keep"   # 不明确=默认保持(宁等勿猜,同 bed 题面 fallback 哲学)
     return "correct"

@@ -124,6 +124,7 @@ def test_bed_closure_failed_fact_surfaces_next_batch(rec_env, monkeypatch):
     from main.ist_core.compile_engine_v8 import bed as B
     F.append_facts(rec_env["facts"], [
         {"ev": "bed_closure_failed", "aid": "", "host": "h",
+         "run_id": "bc:b1:0:1",
          "reason": "post-batch bed convergence crashed"}])
     monkeypatch.setattr(N.B, "bed_unrestored", lambda root, host: [])
     monkeypatch.setattr(N.B, "bed_check", lambda *a, **k: {
@@ -136,6 +137,33 @@ def test_bed_closure_failed_fact_surfaces_next_batch(rec_env, monkeypatch):
     assert out["phase_status"] == "ok"
     kinds = [f.get("kind") for f in (captured.get("report") or {}).get("findings", [])]
     assert "bed_closure_failed" in kinds
+    # H-11:答完落 bedclosure:{run_id},下批不再重问
+    fs = F.load_facts(rec_env["facts"])
+    assert any(f.get("ev") == "decision" and f.get("question_id") == "bedclosure:bc:b1:0:1"
+               for f in fs)
+
+
+def test_bed_closure_answered_not_reasked_H11(rec_env, monkeypatch):
+    """H-11:已有 bedclosure:{run_id} decision 时,陈年 bed_closure_failed 不再 needs_ask。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    F.append_facts(rec_env["facts"], [
+        {"ev": "bed_closure_failed", "aid": "", "host": "h", "run_id": "bc:old:1",
+         "reason": "crashed"},
+        {"ev": "decision", "aid": "", "question_id": "bedclosure:bc:old:1",
+         "answer": "继续"},
+    ])
+    monkeypatch.setattr(N.B, "bed_unrestored", lambda root, host: [])
+    monkeypatch.setattr(N.B, "bed_check", lambda *a, **k: {
+        "host": "h", "probes": {}, "findings": [], "needs_ask": False,
+        "anchor": {"status": "match", "device": "x"}, "ours_unrestored": []})
+    monkeypatch.setattr(N.B, "bed_snapshot", lambda fn: {})
+    captured = {}
+    monkeypatch.setattr(N, "interrupt", lambda payload: captured.update(payload) or {"decision": "继续"})
+    out = N.bed_gate(rec_env["state"])
+    assert out["phase_status"] == "ok"
+    assert not captured  # 未 interrupt
+    kinds = [f.get("kind") for f in (captured.get("report") or {}).get("findings", [])]
+    assert "bed_closure_failed" not in kinds
 
 
 # ── B-1:run() 陈旧 last_run.json 新鲜度门(旧 pass 不得背书未上机的新卷面) ──────

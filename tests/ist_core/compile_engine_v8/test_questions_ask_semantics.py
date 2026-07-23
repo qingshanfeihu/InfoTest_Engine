@@ -128,6 +128,20 @@ def test_answer_token_privilege_and_kind_defaults_unchanged():
     assert answer_token("contra", "再排一次") == "reorder"
 
 
+def test_answer_token_local_negation_H06():
+    """H-06:局部否定不得语义反转——「不接受单跑」≠ downgrade;短句「不要挂起」≠ suspend。"""
+    assert answer_token("contra", "不接受单跑") == "reorder"
+    assert answer_token("contra", "不接受单跑") != "downgrade"
+    assert answer_token("panel", "不要挂起") == "correct"   # ≤8 字但否定→不走特权
+    assert answer_token("panel", "不要停止") == "correct"
+    # 「别再修」旧裸 in 命中「再修」→continue;否定门后掉 correct 兜底(不再反转授权)
+    assert answer_token("cap", "别再修了") == "correct"
+    assert answer_token("cap", "别再修了") != "continue"
+    assert answer_token("cap", "别修了,放弃") == "stop"
+    assert answer_token("bed", "不降级,挂着等清床") == "suspend"
+    assert answer_token("suspended", "先别恢复") == "keep"
+
+
 # ── ③ cap/env 面板补「确认产品缺陷」选项(语义同 panel 面板既有缺陷臂) ─────────
 
 def test_cap_panel_offers_defect_exit():
@@ -485,3 +499,20 @@ def test_side_cn_and_ask_strip_control_chars_display_only():
                   "retrieval_receipt": [], "hypothesis": "h",
                   "ask": "该以\t哪一方为准?"}})
     assert "\t" not in q["question"]
+
+
+def test_bed_gate_proceed_rejects_negated_continue_H12():
+    """H-12:bed_gate「不继续」不得 proceed——旧 `"继续" in v` 意图反转。"""
+    import main.ist_core.compile_engine_v8.engine_tool as ET
+    orig = ET._panel
+    try:
+        for ans, expect in (("继续", "proceed"), ("proceed", "proceed"),
+                            ("不继续", "不继续"), ("先别继续,我去清床", "先别继续,我去清床"),
+                            ("继续吧风险自担", "proceed")):
+            ET._panel = lambda qs, a=ans: {"decision": a}
+            out = ET._bridge({"kind": "bed_gate", "report": {
+                "anchor": {"status": "match", "device": "x.y"},
+                "findings": [{"kind": "segments"}], "cleanup": {}}})
+            assert out == {"decision": expect}, (ans, out)
+    finally:
+        ET._panel = orig

@@ -253,14 +253,19 @@ def bed_gate(state: dict) -> dict:
     # 上批床态收敛失败(bed_closure_failed,INV-11 式② 坑#12)=床离场态未知——
     # 本批体检即使探针干净也要向用户呈报一次(残留可能在探针投影集外)
     _fs_boot = sh.load_facts(state)
+    # H-11:配对键=bedclosure:{run_id};closing 入账必带 run_id,本节点答完写同键
+    # decision。旧实现 interrupt 只落 question_id="bed_gate",且 bed_closure_failed
+    # 无 run_id→配对键恒 "bedclosure:"→每批续跑拦路重问同一陈年告警。
     _closure_fails = [f for f in _fs_boot if f.get("ev") == "bed_closure_failed"
+                      and str(f.get("run_id") or "")
                       and not any(g.get("ev") == "decision"
-                                  and str(g.get("question_id")) == f"bedclosure:{f.get('run_id') or ''}"
+                                  and str(g.get("question_id")) == f"bedclosure:{f.get('run_id')}"
                                   for g in _fs_boot)]
     if _closure_fails:
         rep["findings"] = list(rep.get("findings") or []) + [{
             "kind": "bed_closure_failed", "probe_failed": False,
-            "detail": "上批批后床态收敛中途失败,床离场状态未知(残留可能在探针投影集之外)"}]
+            "detail": "上批批后床态收敛中途失败,床离场状态未知(残留可能在探针投影集之外)",
+            "closure_run_ids": [str(f.get("run_id")) for f in _closure_fails]}]
         rep["needs_ask"] = True
     device_build = str((rep.get("anchor") or {}).get("device") or "")
     updates = {"bed_host": host, "device_build": device_build}
@@ -313,8 +318,17 @@ def bed_gate(state: dict) -> dict:
                         "skipped": clean["skipped"]},
             "ours_unrestored": rep.get("ours_unrestored")}})
         decision = str((ans or {}).get("decision") or "")
-        sh.append(state, [{"ev": "decision", "aid": "", "question_id": "bed_gate",
-                           "answer": decision}])
+        # H-11:床闸主 decision 仍用 bed_gate(M-01 跨批幂等另案);同时为每个未消
+        # bed_closure_failed 落 bedclosure:{run_id},下批配对命中不再重问陈年告警。
+        _dec_facts = [{"ev": "decision", "aid": "", "question_id": "bed_gate",
+                       "answer": decision}]
+        for _cf in _closure_fails:
+            _dec_facts.append({
+                "ev": "decision", "aid": "",
+                "question_id": f"bedclosure:{_cf.get('run_id')}",
+                "answer": decision,
+            })
+        sh.append(state, _dec_facts)
         if decision not in ("proceed", "继续"):
             sh.emit(f"床态体检未放行(用户裁决:{decision or '停止'})")
             return {"phase_status": "bed_blocked", **updates}
@@ -2472,11 +2486,11 @@ def ask_contradiction(state: dict) -> dict:
             # D28:cap 证据行(无 hist 时)源改 user_note(中文 fail 叙述+趋势),不用 fix_direction
             # (英文 LLM-facing,直灌用户面=D1/D9 泄漏);user_note 空→空串→题面证据行自然省略。
             item["evidence"] = str((atts[-1] if atts else {}).get("user_note") or "")[:300]
-            qids[aid] = f"cap:{aid}:{vw['cases'][aid]['rounds']}"
+            qids[aid] = sh.cap_qid(aid, mine)
         elif kind == "env":
             atts = [f for f in mine if f.get("ev") == "attribution"]
             item["evidence"] = str((atts[-1] if atts else {}).get("evidence") or "")[:300]
-            qids[aid] = f"env:{aid}:{int((atts[-1] if atts else {}).get('round') or 0)}"
+            qids[aid] = sh.env_qid(aid, mine)
         elif kind == "bed":
             diags = [f for f in mine if f.get("ev") == "diagnosis"]
             d = diags[-1] if diags else {}
@@ -3071,8 +3085,13 @@ def closing(state: dict) -> dict:
         # 模式必须入账;下批 bed_gate 读到该事实转 needs_ask(床态未知)
         logger.warning("批后床态收敛失败", exc_info=True)
         try:
+            # H-11:run_id 是下批 bedclosure: 配对键的唯一锚——无它则键恒空串,
+            # decision 永配对不上。
+            _bc_rid = (f"bc:{state.get('out_name') or 'batch'}:"
+                       f"{int(state.get('vol_seq') or 0)}:{int(time.time())}")
             sh.append(state, [{"ev": "bed_closure_failed", "aid": "",
                                "host": str(state.get("bed_host") or ""),
+                               "run_id": _bc_rid,
                                "reason": "post-batch bed convergence crashed; bed state unknown"}])
             sh.emit("⚠ 批后床态收敛失败——床态未知,已入账(下批体检将呈报)")
         except Exception:  # noqa: BLE001

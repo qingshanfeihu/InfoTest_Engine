@@ -84,27 +84,55 @@ def emit_summary(state: dict, summary: dict) -> None:
         logger.debug("engine summary emit 失败", exc_info=True)
 
 
+# cap 资源问询的解决态 token——suspend 只是暂泊,不消费「再次询问」承诺(H-09)。
+_CAP_RESOLVING = frozenset({"continue", "stop", "correct", "defect"})
+
+
+def cap_qid(aid: str, mine: list[dict]) -> str:
+    """cap 问询 qid=decision-count 判别子(与 deesc_qid/_needs_decision_qid 同范式)。
+
+    H-09:旧 `cap:{aid}:{rounds}` 在挂起占用该 qid 后 rounds 冻结→decision 已在→
+    恢复后永不再问,题面「重跑同参数时会再次询问」被打破。按已有 cap decision
+    数编号,每次重问拿新 qid,幂等键不撞。"""
+    seq = sum(1 for d in mine if d.get("ev") == "decision"
+              and str(d.get("question_id", "")).startswith(f"cap:{aid}:")) + 1
+    return f"cap:{aid}:{seq}"
+
+
 def cap_waiting(fs: list[dict], vw: dict) -> list[str]:
-    """轮次封顶待授权案:cap_reached 事实存在且该轮 cap 问题未获 decision(§11.7 资源问询)。
+    """轮次封顶待授权案:最新 cap_reached 之后尚无解决态 decision(§11.7 资源问询)。
 
     H-03:与 panel_waiting/env_confirm_waiting 同款 settled 排除——终态/挂起/升级/
     可交付案不再出 cap 题。旧实现不看 vw:用户另题答 stop 落 user_stop 终态后
     cap_waiting 仍每批命中出 cap 题,非交互 auto-suspend 再落 suspended 事实,
     case_status 里 _is_suspended 先于终态判定 → failed_terminal 被翻成 suspended,
-    用户止损终局被安全件静默推翻。"""
+    用户止损终局被安全件静默推翻。
+
+    H-09:判「已答」只认解决态 token(continue/stop/correct/defect);suspend 不消
+    题——案仍 suspended 时由 H-03 排除;resume 后同参再问(新 qid=cap_qid)。"""
     out = []
+    latest_cap: dict[str, dict] = {}
     for f in fs:
-        if f.get("ev") != "cap_reached":
-            continue
-        aid, rnd = str(f.get("aid")), int(f.get("round") or 0)
+        if f.get("ev") == "cap_reached":
+            latest_cap[str(f.get("aid"))] = f
+    for aid in latest_cap:
         c = vw["cases"].get(aid)
         if not c or c["status"] in (V.S_DELIVERABLE, V.S_TERMINAL, V.S_SUSPENDED,
                                     V.S_ESCALATED):
             continue
-        qid = f"cap:{aid}:{rnd}"
-        if not any(d.get("ev") == "decision" and d.get("question_id") == qid for d in fs):
-            if aid not in out:
-                out.append(aid)
+        mine = [f for f in fs if str(f.get("aid")) == aid]
+        # 事实序:该案最后一条 cap_reached 的下标(load 后 dict 非同一对象,不用 `is`)
+        pos = max((i for i, f in enumerate(mine) if f.get("ev") == "cap_reached"),
+                  default=-1)
+        resolved = any(
+            i > pos and f.get("ev") == "decision"
+            and str(f.get("question_id", "")).startswith(f"cap:{aid}:")
+            and (str(f.get("token") or "") in _CAP_RESOLVING
+                 or (not f.get("token") and any(
+                     w in str(f.get("answer", "")) for w in ("继续", "停止", "缺陷"))))
+            for i, f in enumerate(mine))
+        if not resolved and aid not in out:
+            out.append(aid)
     return out
 
 
@@ -124,10 +152,22 @@ def granted_rounds(fs: list[dict], aid: str) -> int:
     return n
 
 
+def env_qid(aid: str, mine: list[dict]) -> str:
+    """env 确认问询 qid=decision-count 判别子(H-01;与 deesc_qid 同范式)。
+
+    旧 `env:{aid}:{rounds_used}`:retry 不重编→rounds 不推进→再判 env_blocked 时
+    qid 同前→「已答」永不重问;decision 幂等键同 qid,强行再问也被吞。"""
+    seq = sum(1 for d in mine if d.get("ev") == "decision"
+              and str(d.get("question_id", "")).startswith(f"env:{aid}:")) + 1
+    return f"env:{aid}:{seq}"
+
+
 def env_confirm_waiting(fs: list[dict], vw: dict) -> list[str]:
     """归因器自判 env_blocked 待用户确认的案(§11.7:止损归用户,引擎无单方终结权)。
 
-    最新归因为 env_blocked 且非用户来源、且该判断未获 decision → 进 ask 边。"""
+    最新归因为 env_blocked 且非用户来源、且该判断之后尚无 env decision → 进 ask。
+    H-01:按事实序「最新 env_blocked 之后有无 env decision」判已答,不绑 round——
+    retry 后再堵可重问(新 qid=env_qid)。"""
     out = []
     for aid, c in vw["cases"].items():
         if c["status"] in (V.S_DELIVERABLE, V.S_TERMINAL, V.S_SUSPENDED, V.S_ESCALATED):
@@ -138,8 +178,14 @@ def env_confirm_waiting(fs: list[dict], vw: dict) -> list[str]:
             continue
         if V._user_sourced(atts[-1]):
             continue
-        qid = f"env:{aid}:{int(atts[-1].get('round') or 0)}"
-        if not any(d.get("ev") == "decision" and d.get("question_id") == qid for d in mine):
+        # 最新归因即 env_blocked(上面已断言)——取其在 mine 中最后出现下标
+        pos = max((i for i, f in enumerate(mine) if f.get("ev") == "attribution"),
+                  default=-1)
+        answered = any(
+            i > pos and f.get("ev") == "decision"
+            and str(f.get("question_id", "")).startswith(f"env:{aid}:")
+            for i, f in enumerate(mine))
+        if not answered:
             out.append(aid)
     return out
 

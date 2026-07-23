@@ -122,3 +122,68 @@ def test_cap_waiting_excludes_settled_H03(tmp_path, monkeypatch):
     assert sh.ask_targets({}, fs, vw)["cap"] == [A1]
     # 对照(防过修):终态案的 cap_reached 不再进 ask 等待集 → 不占 n_ask_contradiction
     assert sh.counts_update({}, fs)["n_ask_contradiction"] == 1
+
+
+# ── H-01:env qid decision-count——retry 后再堵可重问 ───────────────────────────
+
+def test_env_reblock_after_retry_asks_again_H01(tmp_path, monkeypatch):
+    """H-01 红绿:答 retry 后再判 env_blocked → 必须以新 qid 重问。
+    旧 round 判别子:retry 不重编→round 不变→同 qid「已答」永不再问。"""
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    A = "203600000000000401"
+    fs = [
+        {"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+        {"ev": "verdict", "aid": A, "result": "broken", "broken_subtype": "blocked",
+         "run_id": "r1", "ctx": "subset", "artifact": "a1", "volume": "v1",
+         "signatures": []},
+        {"ev": "attribution", "aid": A, "layer": "E", "disposition": "env_blocked",
+         "round": 0, "run_id": "r1", "mechanical": True},
+        {"ev": "decision", "aid": A, "question_id": f"env:{A}:1",
+         "answer": "环境已恢复", "token": "retry"},
+        {"ev": "attribution", "aid": A, "layer": "E", "disposition": "rerun_isolated",
+         "round": 1, "run_id": "u1"},
+        # 复跑后再堵——最新归因又是 env_blocked
+        {"ev": "attribution", "aid": A, "layer": "E", "disposition": "env_blocked",
+         "round": 1, "run_id": "r2", "mechanical": True},
+    ]
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": [{"autoid": A}]})
+    vw = sh.view({}, fs)
+    assert A in sh.env_confirm_waiting(fs, vw)
+    assert sh.env_qid(A, fs) == f"env:{A}:2"   # 已有 1 条 env decision → 下一题 :2
+    # 对照:第一次堵、尚未答 → 待问且 qid=:1
+    assert A in sh.env_confirm_waiting(fs[:3], sh.view({}, fs[:3]))
+    assert sh.env_qid(A, fs[:3]) == f"env:{A}:1"
+
+
+def test_cap_suspend_then_resume_reasks_H09(tmp_path, monkeypatch):
+    """H-09 红绿:cap 题答挂起占用旧 round-qid 后,resume 须再问(新 decision-count qid)。
+    suspend 不消费资源问询;题面承诺「重跑同参数时会再次询问」。"""
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    A = "203600000000000402"
+    fs = [
+        {"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+        {"ev": "verdict", "aid": A, "result": "fail", "run_id": "r1",
+         "ctx": "subset", "artifact": "a1", "volume": "v1", "signatures": []},
+        {"ev": "attribution", "aid": A, "layer": "V", "disposition": "reflow",
+         "round": 1, "run_id": "r1"},
+        {"ev": "cap_reached", "aid": A, "round": 3},
+        {"ev": "decision", "aid": A, "question_id": f"cap:{A}:1",
+         "answer": "挂起", "token": "suspend"},
+        {"ev": "suspended", "aid": A, "reason": f"auto:cap:{A}:1"},
+        # resume 后不再 suspended
+        {"ev": "decision", "aid": A, "question_id": f"resume:{A}:2",
+         "answer": "恢复", "token": "resume"},
+        {"ev": "resumed", "aid": A},
+    ]
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": [{"autoid": A}]})
+    vw = sh.view({}, fs)
+    assert A in sh.cap_waiting(fs, vw)
+    # 仅既有 cap: decision 计数(resume 题不占 cap 序号)→ 下一题 :2
+    assert sh.cap_qid(A, [f for f in fs if str(f.get("aid")) == A]) == f"cap:{A}:2"
+    # 对照:仍挂起时 H-03 排除
+    fs_susp = fs[:6]
+    assert A not in sh.cap_waiting(fs_susp, sh.view({}, fs_susp))
+    # continue 解决态后不再问
+    fs_ok = fs[:4] + [{"ev": "decision", "aid": A, "question_id": f"cap:{A}:1",
+                       "answer": "继续", "token": "continue"}]
+    assert A not in sh.cap_waiting(fs_ok, sh.view({}, fs_ok))

@@ -529,6 +529,8 @@ async def ws_terminal(websocket: WebSocket):
     env["LANG"] = env.get("LANG", "en_US.UTF-8")
     env["PYTHONIOENCODING"] = "utf-8"
     env["IST_SSH_USER"] = username
+    env["IST_OUTPUT_SUBDIR"] = username  # 限制 agent 只能写入自己的输出目录
+    env["IST_REMOTE_OUTPUT"] = "1"  # Web UI 模式：输出同步到远程服务器
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-u", "-m", "main.ist_core.tui.cli",

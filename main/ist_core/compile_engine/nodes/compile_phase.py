@@ -46,7 +46,7 @@ def prep(state: dict) -> dict:
     # dispatched 回收为 pending 重派;盘上已有产出的按 produced 落账(事实优先)。
     orphans = led.in_state(L.S_DISPATCHED)
     for aid in orphans:
-        xp = sh.outputs_root() / aid / "case.xlsx"
+        xp = sh.outputs_root() / out_name / aid / "case.xlsx"
         if xp.is_file():
             led.transition(aid, L.S_PRODUCED, produced_mtime=xp.stat().st_mtime,
                            last_detail="orphan-recovered(盘上有产出)")
@@ -78,6 +78,7 @@ def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
     rounds_used = int(case_led.get("rounds_used") or 0)
     envelope = {
         "autoid": aid,
+        "out_name": out_name,
         "manifest_path": state.get("manifest_ref", ""),
         "product_version": state.get("product_version", ""),
         "round": rounds_used + 1,
@@ -86,7 +87,7 @@ def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
     adv = sh.outputs_root() / out_name / "advisory.md"
     if adv.is_file():
         envelope["advisory_path"] = str(adv.relative_to(sh.project_root()))
-    ud = sh.outputs_root() / aid / "user_decision.json"
+    ud = sh.outputs_root() / out_name / aid / "user_decision.json"
     if ud.is_file():
         envelope["user_decision_path"] = str(ud.relative_to(sh.project_root()))
     parts = [json.dumps(envelope, ensure_ascii=False)]
@@ -111,7 +112,7 @@ def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
             dc = str(e.get("device_context") or "")[:6000]
             parts.append(head + (f"\n定向:{fd[:800]}" if fd else "")
                          + f"\n设备回显:\n```\n{dc}\n```")
-        hist_dir = sh.outputs_root() / aid / "history"
+        hist_dir = sh.outputs_root() / out_name / aid / "history"
         prev = sorted(hist_dir.glob("case.r*.xlsx")) if hist_dir.is_dir() else []
         if prev:
             listing = "\n".join(f"- {p.relative_to(sh.project_root())}" for p in prev)
@@ -124,21 +125,21 @@ def _build_brief(aid: str, state: dict, case_led: dict, out_name: str) -> str:
 
 
 def _dispatch_one(executor, aid: str, brief: str, t0: float,
-                  effort: str = "") -> tuple[str, str]:
+                  effort: str = "", out_name: str = "") -> tuple[str, str]:
     """派单个 worker,按盘上事实+机读尾块判终态。返回 (终态, 详情)。
 
     effort（可选,空|max）：升级重编的最后一次(rounds_used 已达上限前一步)传 max,把
     思考深度顶满——对标用户「最后一次跑把 thinking 强度改 max」。
     """
     out = executor.call("compile-worker", brief, tag=f"engine:{aid[-6:]}", effort=effort)
-    xlsx = sh.outputs_root() / aid / "case.xlsx"
+    xlsx = sh.outputs_root() / out_name / aid / "case.xlsx"
     fresh = xlsx.is_file() and xlsx.stat().st_mtime >= t0 - 1
     m = _TAIL_RE.search(out or "")
     tail = m.group(1) if m else ""
     if fresh:
         return L.S_PRODUCED, "盘上产出(新鲜)"
     if tail == "needs_user_decision" or "NEEDS_USER_DECISION" in (out or "")[-2000:]:
-        nd = sh.outputs_root() / aid / "needs_decision.json"
+        nd = sh.outputs_root() / out_name / aid / "needs_decision.json"
         if nd.is_file():
             return L.S_PENDING_DECISION, "欠定(台账在盘)"
         return L.S_ESCALATED, "报欠定但无台账"
@@ -175,7 +176,7 @@ def worker_fanout(state: dict) -> dict:
             eff = "max" if int(c.get("rounds_used") or 0) >= max_rounds - 1 else ""
             with limiter:
                 final, detail = _dispatch_one(
-                    executor, aid, _build_brief(aid, state, c, out_name), t0, effort=eff)
+                    executor, aid, _build_brief(aid, state, c, out_name), t0, effort=eff, out_name=out_name)
             c["rounds_used"] = int(c.get("rounds_used") or 0) + 1
             if final == L.S_PRODUCED:
                 # 机械探针(grade 出主路后的第二道闸):suspect 信号带反馈重做
@@ -192,7 +193,7 @@ def worker_fanout(state: dict) -> dict:
                     continue
             break
         led.transition(aid, final,
-                       produced_mtime=(sh.outputs_root() / aid / "case.xlsx").stat().st_mtime
+                       produced_mtime=(sh.outputs_root() / out_name / aid / "case.xlsx").stat().st_mtime
                        if final == L.S_PRODUCED else None,
                        last_detail=detail)
         sh.emit_tick(led, state, "worker_fanout")   # 每 case 落账即刷引擎卡
@@ -222,15 +223,16 @@ def ask_decision(state: dict) -> dict:
     if not pend:
         return {"phase_status": "nothing_to_do", **sh.counts_update(led)}
 
+    out_name = str(state.get("out_name") or "")
     from main.ist_core.tools.device.verifiability_tool import compile_user_decision
 
     # 幂等前段(重跑安全):台账缺失→escalate;已有决策文件→直接落定
-    ledgers = load_ledgers(sh.outputs_root(), pend)
+    ledgers = load_ledgers(sh.outputs_root(), pend, out_name)
     for aid in list(pend):
         if aid not in ledgers:
             led.transition(aid, L.S_ESCALATED, last_detail="欠定无台账")
             pend.remove(aid)
-        elif (sh.outputs_root() / aid / "user_decision.json").is_file():
+        elif (sh.outputs_root() / out_name / aid / "user_decision.json").is_file():
             led.transition(aid, L.S_PENDING, redispatch_reason="user_decision")
             pend.remove(aid)
             ledgers.pop(aid, None)

@@ -111,12 +111,12 @@ class EngineLedger:
     def lock_pass(self, autoid: str, xlsx_mtime: float) -> None:
         self.transition(autoid, S_PASSED, passed_mtime_lock=xlsx_mtime)
 
-    def verify_pass_locks(self, outputs_root: Path) -> list[str]:
+    def verify_pass_locks(self, outputs_root: Path, out_name: str = "") -> list[str]:
         """merge 前复核:每个 passed case 的卷面 mtime 必须等于锁定值。返回被篡改清单。"""
         tampered = []
         for aid in self.in_state(S_PASSED):
             lock = self.case(aid).get("passed_mtime_lock")
-            xp = outputs_root / aid / "case.xlsx"
+            xp = outputs_root / out_name / aid / "case.xlsx" if out_name else outputs_root / aid / "case.xlsx"
             if lock is None or not xp.is_file():
                 continue
             if abs(xp.stat().st_mtime - float(lock)) > 1e-6:

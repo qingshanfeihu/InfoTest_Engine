@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -62,6 +63,9 @@ def compile_engine_run(mindmap_path: str, product_version: str,
     name = (out_name or "").strip() or Path(mindmap_path).stem
     db = root / "runtime" / "compile_engine_checkpoints.db"
     db.parent.mkdir(parents=True, exist_ok=True)
+
+    # 设置环境变量，让工具函数知道 out_name
+    os.environ["IST_COMPILE_OUT_NAME"] = name
 
     from langgraph.checkpoint.sqlite import SqliteSaver
     from langgraph.types import Command

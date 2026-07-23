@@ -10,8 +10,8 @@ from main.ist_core.compile_engine import ledger as L
 from main.ist_core.compile_engine.nodes import _shared as sh
 
 
-def _archive_round_config(aid: str, round_used: int) -> None:
-    """重编覆盖前把本轮失败的 case.xlsx 归档到 outputs/<aid>/history/case.r{N}.xlsx。
+def _archive_round_config(aid: str, round_used: int, out_name: str = "") -> None:
+    """重编覆盖前把本轮失败的 case.xlsx 归档到 outputs/<out_name>/<aid>/history/case.r{N}.xlsx。
 
     每轮 worker 覆盖同一 case.xlsx,前几次配置会丢——升级末轮 worker 靠这些归档卷对比
     前几次到底怎么写错的(_build_brief 引用路径,worker fs_read 逐卷比对)。round_used=本轮
@@ -19,10 +19,10 @@ def _archive_round_config(aid: str, round_used: int) -> None:
     """
     try:
         import shutil
-        src = sh.outputs_root() / aid / "case.xlsx"
+        src = sh.outputs_root() / out_name / aid / "case.xlsx"
         if not src.is_file():
             return
-        hist = sh.outputs_root() / aid / "history"
+        hist = sh.outputs_root() / out_name / aid / "history"
         hist.mkdir(parents=True, exist_ok=True)
         dst = hist / f"case.r{max(1, int(round_used))}.xlsx"
         if not dst.is_file() or dst.stat().st_mtime < src.stat().st_mtime:
@@ -38,15 +38,14 @@ def merge(state: dict) -> dict:
     pass 卷面锁复核在前(E3 机器门):任何 LOCKED_PASS 卷 mtime 变了 → tampered,拒合并。
     """
     led = sh.load_ledger(state)
-    tampered = led.verify_pass_locks(sh.outputs_root())
+    out_name = str(state.get("out_name") or "")
+    tampered = led.verify_pass_locks(sh.outputs_root(), out_name)
     if tampered:
         led.data["audit"]["notes"].append({"event": "tampered", "autoids": tampered})
         led.save()
         return {"phase_status": "error",
                 "error": f"pass 卷面被改动: {[a[-6:] for a in tampered]}——拒绝合并交付",
                 **sh.counts_update(led)}
-
-    out_name = str(state.get("out_name"))
     round_no = int(state.get("round") or 0)
     fails = led.in_state(L.S_FAILED_ACTIVE)
     produced = led.in_state(L.S_PRODUCED)
@@ -87,6 +86,7 @@ def run_digest(state: dict) -> dict:
     现有 last_run,不重复烧设备轮。device_busy 退避 3×120s。
     """
     led = sh.load_ledger(state)
+    out_name = str(state.get("out_name") or "engine")
     xlsx = sh.project_root() / str(state.get("merged_xlsx_ref") or "")
     if not xlsx.is_file():
         return {"phase_status": "error", "error": "无合并卷可上机", **sh.counts_update(led)}
@@ -130,7 +130,7 @@ def run_digest(state: dict) -> dict:
         led.case(aid).setdefault("verdict_history", []).append(v)
         if v == "pass":
             if st != L.S_PASSED:
-                xp = sh.outputs_root() / aid / "case.xlsx"
+                xp = sh.outputs_root() / out_name / aid / "case.xlsx"
                 led.lock_pass(aid, xp.stat().st_mtime if xp.is_file() else 0.0)
         elif st == L.S_PASSED:
             # LOCKED_PASS 在后续轮被判 fail:卷面没动(锁复核过)→ **运行时欠定**
@@ -158,6 +158,7 @@ def attribute(state: dict) -> dict:
     fails = led.in_state(L.S_FAILED_ACTIVE)
     if not fails:
         return {"phase_status": "nothing_to_do", **sh.counts_update(led)}
+    out_name = str(state.get("out_name") or "engine")
     last_run = sh.project_root() / str(state.get("last_run_ref") or "")
     data = sh.read_json(last_run, [])
     items = {str(it.get("autoid")): it for it in (data if isinstance(data, list) else [])
@@ -201,7 +202,7 @@ def attribute(state: dict) -> dict:
                        "layer": str(_a.get("layer") or ""),
                        "disposition": str(_a.get("disposition") or "")})
         # 冻结(digest 已判连续同签名)→ 终态
-        frozen = (sh.outputs_root() / aid / ".frozen.json").is_file()
+        frozen = (sh.outputs_root() / out_name / aid / ".frozen.json").is_file()
         if attr:
             c["attribution"] = attr
         disp = str((attr or {}).get("disposition") or "")
@@ -225,7 +226,7 @@ def attribute(state: dict) -> dict:
         elif disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
             led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
         elif (disp == "reflow" or layer == "G") and int(c.get("rounds_used") or 0) < max_rounds:
-            _archive_round_config(aid, int(c.get("rounds_used") or 0))  # 覆盖前留本轮失败配置
+            _archive_round_config(aid, int(c.get("rounds_used") or 0), out_name)  # 覆盖前留本轮失败配置
             c["evidence_excerpt"] = ctx[:4000]
             c["redispatch_reason"] = "verify_fail"
             led.transition(aid, L.S_PENDING)
@@ -247,7 +248,7 @@ def attribute(state: dict) -> dict:
         briefs = [{"key": aid, "brief": json.dumps({
             "autoid": aid, "last_run_path": str(state.get("last_run_ref")),
             "xlsx_path": str(state.get("merged_xlsx_ref")),   # submit_attribution 按它定位落盘文件,别让 fork 推断
-            "provenance_path": f"workspace/outputs/{aid}/case.provenance.json",
+            "provenance_path": f"workspace/outputs/{out_name}/{aid}/case.provenance.json",
         }, ensure_ascii=False)} for aid in need_fork]
         sh.emit(f"归因:{len(need_fork)} 个用例")
         compile_fanout.func(skill="compile-attributor", briefs_json=briefs,
@@ -274,7 +275,7 @@ def attribute(state: dict) -> dict:
             if disp in ("frozen", "product_defect", "env_blocked", "defect_candidate"):
                 led.transition(aid, L.S_FAILED_TERMINAL, last_detail=disp)
             elif disp in ("reflow", "fixed"):
-                _archive_round_config(aid, int(c.get("rounds_used") or 0))  # 覆盖前留本轮失败配置
+                _archive_round_config(aid, int(c.get("rounds_used") or 0), out_name)  # 覆盖前留本轮失败配置
                 c["evidence_excerpt"] = str(items2.get(aid, {}).get("device_context") or "")[:4000]
                 c["redispatch_reason"] = "verify_fail"
                 led.transition(aid, L.S_PENDING)

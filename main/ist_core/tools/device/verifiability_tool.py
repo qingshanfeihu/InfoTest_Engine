@@ -13,10 +13,27 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from pathlib import Path
 
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
+
+
+def _get_out_name() -> str:
+    """获取当前编译任务的 out_name（从环境变量）。"""
+    return os.environ.get("IST_COMPILE_OUT_NAME", "").strip()
+
+
+def _autoid_path(autoid: str, *parts: str) -> Path:
+    """构建 autoid 目录路径：outputs/<out_name>/<autoid>/..."""
+    root = Path(__file__).resolve().parents[4]
+    out_name = _get_out_name()
+    if out_name:
+        return root / "workspace" / "outputs" / out_name / autoid / parts[0] if parts else root / "workspace" / "outputs" / out_name / autoid
+    else:
+        return root / "workspace" / "outputs" / autoid / parts[0] if parts else root / "workspace" / "outputs" / autoid
 
 
 @tool(parse_docstring=True)
@@ -79,9 +96,7 @@ def compile_check_verifiability(autoid: str, algo: str, n_requests: int, n_pools
     # claim_kind 合并。ordering_sensitive 标记有序轨迹类 claim——它们的改法必须
     # 显式处理顺序语义的去留。
     try:
-        from pathlib import Path
-        root = Path(__file__).resolve().parents[4]
-        outd = root / "workspace" / "outputs" / (autoid or "").strip()
+        outd = _autoid_path((autoid or "").strip())
         outd.mkdir(parents=True, exist_ok=True)
         nd_path = outd / "needs_decision.json"
         data: dict = {"autoid": (autoid or "").strip(), "claims": []}
@@ -161,7 +176,7 @@ def compile_user_decision(autoid: str, decision: str, assertion_form: str = "",
                 "(问题或答案里带上该用例的 autoid 或尾 6 位),拿到答案再落决策。"
                 "用户没批过的决定不能落盘。")
 
-    outd = root / "workspace" / "outputs" / aid
+    outd = _autoid_path(aid)
     outd.mkdir(parents=True, exist_ok=True)
 
     claims: list[dict] = []

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re as _re
 import threading
 from pathlib import Path
@@ -21,6 +22,21 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
+
+
+def _get_out_name() -> str:
+    """获取当前编译任务的 out_name（从环境变量）。"""
+    return os.environ.get("IST_COMPILE_OUT_NAME", "").strip()
+
+
+def _autoid_path(autoid: str, *parts: str) -> Path:
+    """构建 autoid 目录路径：outputs/<out_name>/<autoid>/..."""
+    root = Path(__file__).resolve().parents[4]
+    out_name = _get_out_name()
+    if out_name:
+        return root / "workspace" / "outputs" / out_name / autoid / parts[0] if parts else root / "workspace" / "outputs" / out_name / autoid
+    else:
+        return root / "workspace" / "outputs" / autoid / parts[0] if parts else root / "workspace" / "outputs" / autoid
 
 _MIRROR = Path(__file__).resolve().parents[4] / "knowledge" / "framework" / "mirror"
 _INTENT_INDEX_PATH = (
@@ -446,7 +462,7 @@ def compile_writeback(autoid: str, last_run_path: str, intent_path: str = "") ->
     # 未净化时 aid="../.." 可写穿沙箱(安全评审高危项:工具进程内直写不经 file_tools 四闸)。
     if not _re.fullmatch(r"[A-Za-z0-9_.\-]+", aid) or ".." in aid:
         return f"error: autoid 非法(只允许字母数字._-,禁 ..): {aid!r}"
-    src_dir = root / "workspace" / "outputs" / aid
+    src_dir = _autoid_path(aid)
     xp = src_dir / "case.xlsx"
     if not xp.is_file():
         return f"error: {aid} 的 case.xlsx 不存在"

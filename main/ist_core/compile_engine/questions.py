@@ -23,11 +23,11 @@ FORM_BY_KIND = {
 }
 
 
-def load_ledgers(outputs_root: Path, autoids: list[str]) -> dict[str, dict]:
+def load_ledgers(outputs_root: Path, autoids: list[str], out_name: str = "") -> dict[str, dict]:
     """读各 case 的 needs_decision.json 台账原件(缺失的跳过,不猜)。"""
     out: dict[str, dict] = {}
     for aid in autoids:
-        p = outputs_root / aid / "needs_decision.json"
+        p = outputs_root / out_name / aid / "needs_decision.json" if out_name else outputs_root / aid / "needs_decision.json"
         if p.is_file():
             try:
                 out[aid] = json.loads(p.read_text(encoding="utf-8"))

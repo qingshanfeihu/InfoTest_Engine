@@ -23,6 +23,21 @@ from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
+
+def _get_out_name() -> str:
+    """获取当前编译任务的 out_name（从环境变量）。"""
+    return os.environ.get("IST_COMPILE_OUT_NAME", "").strip()
+
+
+def _autoid_path(autoid: str, *parts: str) -> Path:
+    """构建 autoid 目录路径：outputs/<out_name>/<autoid>/..."""
+    root = Path(__file__).resolve().parents[4]
+    out_name = _get_out_name()
+    if out_name:
+        return root / "workspace" / "outputs" / out_name / autoid / parts[0] if parts else root / "workspace" / "outputs" / out_name / autoid
+    else:
+        return root / "workspace" / "outputs" / autoid / parts[0] if parts else root / "workspace" / "outputs" / autoid
+
 # 框架执行契约(死知识):test_xlsx.py 是**延迟执行模型**——最后一个 case 走 `if last_case`
 # 收尾分支,只 parser_case_id 记录、**不执行步骤**。所以 xlsx 末尾必须垫一个哨兵 case,
 # 让真实 case 都不是最后一个、走正常执行路径。哨兵自己当 last_case 不执行,无副作用。
@@ -567,7 +582,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
             数组通道没有这层暴露面。
         blocks: **最优先**。语义组合子的原生数组,5 种 kind——CONFIG(cmds 命令列表,每条一个元素)/ OBSERVE_ASSERT(host+cmd+asserts 断言列表,op 取 found、not_found、abs_found)/ CAPTURE_COMPARE(host+capture_cmd+relation 取 same 或 differs,寄存器自动分配)/ OBSERVE_ONLY(host+cmd)/ SLEEP(seconds)。你只做语义决策,捕获比较三步式、寄存器、E-F-H 列由工具展开——悬空断言、字面反斜杠n、未定义寄存器在这个语言下写不出来。传 blocks 时 provenance 按组合子粒度一对一(数量相等),展开由工具同步。
         steps: 备选。步骤 dict 的原生数组(不是 JSON 字符串),每元素含 E/F/G 与可选 H/I/desc;需要 blocks 表达不了的形态时才用。
-        steps_path: 备选文件通道。workspace 内 JSON 文件路径(如 workspace/outputs/<autoid>/steps.json,
+        steps_path: 备选文件通道。workspace 内 JSON 文件路径(如 workspace/outputs/<out_name>/<autoid>/steps.json,
             内容为步骤数组——workspace 只有 outputs/ 子目录可写);steps 数组反复拖尾/超长时,
             先 fs_write 落文件再传路径,绕开参数序列化。
         override_frozen_reason: 该 case 被上机跨轮对照冻结(连续两轮同签名 fail=同法已证无效)时
@@ -579,7 +594,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
             correct-by-construction）；v1 默认 False 行为不变。违反结构约束直接打回带原因。
         provenance: 首选原生对象通道,必传。三层 Provenance IR(dict,含 steps 数组,每步标 layer 取 G/E/V 之一,source 含 kind 与 ref)——它是审批免重检索、上机四层归因、PASS 写回知识库的唯一依据,缺失则拒绝产出。字符串通道经供应商序列化实证拖尾失败,对象通道没有这层暴露面。
         provenance_json: 兼容通道,同上但为 JSON 字符串,优先用 provenance。
-        provenance_path: 备选文件通道(workspace 内 JSON 文件路径,如 workspace/outputs/<autoid>/prov.json)。
+        provenance_path: 备选文件通道(workspace 内 JSON 文件路径,如 workspace/outputs/<out_name>/<autoid>/prov.json)。
             provenance 原生对象反复被供应商吞掉/null 化时,先 fs_write 落文件再传路径。
         expected_save_variant: 仅配置保存/持久化类用例传（memory|file|all|net）。脑图要求"执行
             write all 后..."就传 "all"。持久化门据此校验你用的保存命令没被换族(write all 不能写成
@@ -677,7 +692,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                     "首选 blocks 语义组合子(原生数组);组合子表达不了的形态用 steps 原生数组。")
             if _streak >= 2:
                 _msg += ("\n→ 已连续空载荷:别原样重试。先 fs_write 把步骤数组写到 "
-                         f"workspace/outputs/{autoid}/steps.json,再传 steps_path=该路径"
+                         f"{_autoid_path(autoid, 'steps.json')},再传 steps_path=该路径"
                          "——文件通道不经过参数序列化,吞不掉。")
             if _streak >= 3:
                 _msg += (f"\n⚠ 已连续 {_streak} 次空载荷。若 steps_path 也传不进,停止重试,"
@@ -699,7 +714,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                    + (f"\n结尾: {tail}" if tail else ""))
             if streak >= 2:
                 msg += ("\n→ 换通道:改传 steps 原生数组(不是 JSON 字符串),"
-                        "或先 fs_write 把步骤数组写到 workspace/outputs/<autoid>/steps.json"
+                        "或先 fs_write 把步骤数组写到 workspace/outputs/<out_name>/<autoid>/steps.json"
                         " 再传 steps_path(workspace 只有 outputs/ 可写)——"
                         "都没有字符串拖尾这层暴露面。")
             if streak >= 3:
@@ -716,7 +731,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     # 文本止损指引曾被实证绕过(直接 ad-hoc 重编),此门把「是否换法」变成必答题;
     # 声明后记入冻结历史并放行(换法自由保留)。
     try:
-        _fz_path = Path(__file__).resolve().parents[4] / "workspace" / "outputs" / autoid / ".frozen.json"
+        _fz_path = _autoid_path(autoid, ".frozen.json")
         if _fz_path.is_file():
             _ov = (override_frozen_reason or "").strip()
             if not _ov:
@@ -748,7 +763,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     # 降级成参与统计,用户从未批准)。orchestrator 带决策重派前把 user_decision.json 写进
     # outputs/<autoid>/,此处对产物机械核对;文件不存在=无决策约束,零行为变化。
     try:
-        _ud_path = Path(__file__).resolve().parents[4] / "workspace" / "outputs" / autoid / "user_decision.json"
+        _ud_path = _autoid_path(autoid, "user_decision.json")
         if _ud_path.is_file():
             _ud = json.loads(_ud_path.read_text(encoding="utf-8"))
             _form = str(_ud.get("expected_assertion_form") or "").strip()
@@ -943,11 +958,17 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
         return f"error: {info}"
 
     # 末尾垫哨兵(框架延迟执行契约,见 _build_sentinel)
-    sub = (out_name or autoid).strip().replace("/", "_")
-    fir = FileIR(feature=sub, author="IST-Core-agent", init_rows=init_rows,
+    # 优先从环境变量读取 out_name（V6引擎设置），保持与 _autoid_path 一致
+    # 路径：workspace/outputs/<out_name>/<autoid>/case.xlsx
+    env_out_name = os.environ.get("IST_COMPILE_OUT_NAME", "").strip()
+    base_dir = (env_out_name or out_name or "").strip().replace("/", "_")
+    fir = FileIR(feature=autoid, author="IST-Core-agent", init_rows=init_rows,
                  cases=[case, _build_sentinel()], module="ist_smoke")
     root = Path(__file__).resolve().parents[4]
-    out = root / "workspace" / "outputs" / sub / "case.xlsx"
+    if base_dir:
+        out = root / "workspace" / "outputs" / base_dir / autoid / "case.xlsx"
+    else:
+        out = root / "workspace" / "outputs" / autoid / "case.xlsx"
     try:
         stats = emit_xlsx(fir, out)
     except Exception as e:  # noqa: BLE001
@@ -1042,7 +1063,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
     """把**多个 case 合并成一个 xlsx**(每脑图一个 excel 的打包工具)。
 
     **首选用法(main-orchestrated):只传 ``autoids``。** 各 worker 已用 compile_emit 把 case
-    落到 workspace/outputs/<autoid>/case.xlsx,本工具自己从这些成品 xlsx **回读 steps** 合并——
+    落到 workspace/outputs/<out_name>/<autoid>/case.xlsx,本工具自己从这些成品 xlsx **回读 steps** 合并——
     你**不用、也不该**自己提供 steps/init(那些数据 worker 早写进 xlsx 了,你手里没有、凑也凑不全)。
     传 autoid 列表即可。``cases_json`` 仅 V6 引擎 closing 节点内部用(gate-free 归档通道),手工编排别走它。
 
@@ -1062,7 +1083,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
 
     Args:
         autoids: **首选传这个**。autoid 列表(JSON 数组字符串如 ["203...","203..."],或逗号分隔)。
-            工具对每个 autoid 读 workspace/outputs/<autoid>/case.xlsx、用 _load_case_rows 回读
+            工具对每个 autoid 读 workspace/outputs/<out_name>/<autoid>/case.xlsx、用 _load_case_rows 回读
             steps(init 作为首个 APV_0 步已含其中)合并。传了 autoids 就忽略 cases_json。
         cases_json: (V6 引擎 closing 内部用)JSON 数组字符串,每项 case dict 含键:autoid、
             steps(每步 {E,F,G,H?,I?,desc?},至少一个 check_point)、init(可空)、title(可选)。
@@ -1092,7 +1113,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         stale_grade: list[str] = []
         for aid in aid_list:
             aid = str(aid).strip()
-            xp = root / "workspace" / "outputs" / aid / "case.xlsx"
+            xp = _autoid_path(aid, "case.xlsx")
             if not xp.is_file():
                 return f"error: autoid {aid} 的 case.xlsx 不存在({xp});该 case 可能没编译成功,先补编/重派 worker"
             # lint 凭证机械门(A 层):每个 case 必须在**当前这份** case.xlsx 上过 emit 的全部
@@ -1135,7 +1156,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         from main.ist_core.tools.device.structural_gate import lint_xlsx_case
         lint_bad: list[str] = []
         for aid in aid_list:
-            xp = root / "workspace" / "outputs" / str(aid).strip() / "case.xlsx"
+            xp = _autoid_path(str(aid).strip(), "case.xlsx")
             lr = lint_xlsx_case(xp)
             if not lr.ok:
                 lint_bad.append(f"{aid}: " + "; ".join(f"[{it.code}]" for it in lr.violations))
@@ -1237,7 +1258,9 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
                  if shared else [])
 
     # 末尾垫哨兵(框架延迟执行契约)——前 N 个真 case 全执行
-    sub = (out_name or case_irs[0].autoid).strip().replace("/", "_")
+    # 优先从环境变量读取 out_name（V6引擎设置），保持与 _autoid_path 一致
+    env_out_name = os.environ.get("IST_COMPILE_OUT_NAME", "").strip()
+    sub = (env_out_name or out_name or case_irs[0].autoid).strip().replace("/", "_")
     fir = FileIR(feature=sub, author="IST-Core-agent", init_rows=init_rows,
                  cases=[*case_irs, _build_sentinel()], module="ist_smoke")
     root = Path(__file__).resolve().parents[4]

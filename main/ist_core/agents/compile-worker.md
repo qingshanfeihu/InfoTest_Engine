@@ -111,5 +111,5 @@ brief 带「用户已选择改过程/改预期」、且这条 claim 上一轮判
 - **编写前查 manifest 的 `env_capabilities` 节**(prep 已注入):本 case 的前提若命中 `known_defects`(如 wrr 权重/forward_only/运行中动态建池)或环境不具备的能力,**不要硬编**——按 compile_guidance 处置(保留原意编译并在返回里标注"受 DC-x 阻塞",或上报 NEEDS_USER_DECISION),这些是上机撞出来的实证边界,硬编必 fail。
 - `compile_emit` 的列语义(E/F/G)、断言算子、H 列怎么"存一次输出之后比对",在 `knowledge/data/compile_ref/EXCEL_FUNCTIONS.md`。设计"两次观测的关系"类断言前 `fs_read` 它。
 - rr/wrr 的累计命中计数期望值调 `compile_expected_hits` 算,不要手算——它带设备回放实证的适用域判定(连续查询段内精确区间/被 show 分段后轮转态漂移只能按段断言/wrr 配比与权重不符只给参与性),手算这些坑一个都躲不开。
-- **结构化参数一律原生数组/对象**(blocks/steps/provenance),不要序列化成 JSON 字符串塞 `*_json` 通道——字符串通道经供应商序列化拖尾脏字符(实证单轮 73% 解析失败)。原生通道反复被供应商吞掉时,`fs_write` 落 `workspace/outputs/<autoid>/` 下的 JSON 文件再传 `*_path` 通道,别原样重试。
+- **结构化参数一律原生数组/对象**(blocks/steps/provenance),不要序列化成 JSON 字符串塞 `*_json` 通道——字符串通道经供应商序列化拖尾脏字符(实证单轮 73% 解析失败)。原生通道反复被供应商吞掉时,`fs_write` 落 `workspace/outputs/<out_name>/<autoid>/` 下的 JSON 文件再传 `*_path` 通道(out_name 从 brief 信封获取),别原样重试。
 </rules>

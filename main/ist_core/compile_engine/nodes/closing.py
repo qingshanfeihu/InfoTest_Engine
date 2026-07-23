@@ -19,6 +19,7 @@ def writeback(state: dict) -> dict:
     """真 PASS 双写回:先例库(compile_writeback)+ footprint G 段(device_verified
     第二权威源自动挂,支柱2a)。失败只记不阻断。"""
     led = sh.load_ledger(state)
+    out_name = str(state.get("out_name") or "engine")
     passed = led.in_state(L.S_PASSED)
     if not passed:
         return {"phase_status": "nothing_to_do", **sh.counts_update(led)}
@@ -32,14 +33,14 @@ def writeback(state: dict) -> dict:
             led.data["audit"]["notes"].append({"autoid": aid, "event": "precedent_writeback_fail"})
         try:
             from main.ist_core.tools.knowledge.footprint_writeback import compile_footprint_writeback
-            pv = f"workspace/outputs/{aid}/case.provenance.json"
+            pv = f"workspace/outputs/{out_name}/{aid}/case.provenance.json"
             compile_footprint_writeback.func(autoid=aid, provenance_path=pv,
                                              on_device_passed=True)
             wrote += 1
         except Exception:  # noqa: BLE001
             led.data["audit"]["notes"].append({"autoid": aid, "event": "footprint_writeback_fail"})
         try:
-            _promote_behavior_candidates(aid, led)
+            _promote_behavior_candidates(aid, led, out_name)
         except Exception:  # noqa: BLE001
             led.data["audit"]["notes"].append({"autoid": aid, "event": "behavior_promote_fail"})
     led.save()
@@ -48,14 +49,14 @@ def writeback(state: dict) -> dict:
     return {"phase_status": "ok", **sh.counts_update(led)}
 
 
-def _promote_behavior_candidates(aid: str, led) -> None:
+def _promote_behavior_candidates(aid: str, led, out_name: str = "") -> None:
     """行为候选晋升(V6 支柱2b 两段闸第二段):case 真 PASS 才把候选转
     RawFact(behavior)+device_evidence 入库——merger 的 device_verified 门再校验
     「观测命令真实出现在该 PASS 卷面」。fail/awaiting 的候选永不到这里。
     ``FOOTPRINT_BEHAVIOR_WRITEBACK=0`` 关。"""
     if not sh.env_flag("FOOTPRINT_BEHAVIOR_WRITEBACK"):
         return
-    cand_path = sh.outputs_root() / aid / "behavior_candidates.json"
+    cand_path = sh.outputs_root() / out_name / aid / "behavior_candidates.json"
     cands = sh.read_json(cand_path, []) or []
     if not cands:
         return
@@ -187,6 +188,32 @@ def report(state: dict) -> dict:
     sh.emit(f"报告:{_oc} 通过 {n_pass}/{n_total}"
             + (" · " + fin_summary if fin_summary else ""))
     sh.emit_tick(led, state, "report")
+
+    # Web UI 模式：同步到远程服务器（用户目录下）并清理本地
+    if os.environ.get("IST_REMOTE_OUTPUT"):
+        try:
+            from ... import remote_sync, remote_fs
+            import shutil
+            # 获取当前用户
+            username = os.environ.get("IST_SSH_USER", "default")
+            # 确保远程用户目录存在
+            remote_fs.ensure_dir(f"outputs/{username}")
+            # 同步主目录
+            out_dir = sh.outputs_root() / out_name
+            n_total = 0
+            if out_dir.exists():
+                n = remote_sync.sync_dir_to_user(out_dir, username)
+                n_total += n
+            # 同步失败子集目录（{out_name}_fails_r*）
+            for fails_dir in sh.outputs_root().glob(f"{out_name}_fails_r*"):
+                if fails_dir.is_dir():
+                    n = remote_sync.sync_dir_to_user(fails_dir, username)
+                    n_total += n
+            sh.emit(f"已同步 {n_total} 个文件到远程服务器 outputs/{username}/")
+            # 本地保留文件，不删除（用户要求）
+        except Exception as e:
+            sh.emit(f"远程同步失败: {e}")
+
     return {"phase_status": "ok",
             "report_ref": str(rp.relative_to(sh.project_root())),
             **sh.counts_update(led)}
@@ -264,7 +291,7 @@ def _archive_unsuccessful(led, out_name: str) -> str | None:
     from main.ist_core.tools.device.emit_xlsx_tool import compile_emit_merged
     cases = []
     for aid in aids:
-        xp = sh.outputs_root() / aid / "case.xlsx"
+        xp = sh.outputs_root() / out_name / aid / "case.xlsx"
         if not xp.is_file():
             continue
         try:
@@ -350,14 +377,14 @@ def _write_unsuccessful_md(led, state, rep: dict, out_name: str) -> str | None:
         out.append(f"- 描述: {mc.get('title', '') or '(无)'}")
         for si in (mc.get("step_intents") or []):
             out.append(f"  - 过程: {si.get('desc', '')} → 预期: {si.get('expected', '') or '(未写)'}")
-        prov = sh.read_json(sh.outputs_root() / aid / "case.provenance.json", {})
+        prov = sh.read_json(sh.outputs_root() / out_name / aid / "case.provenance.json", {})
         out.append("\n### 自动化用例(编译产物)")
         for stp in (prov.get("steps") or []):
             src = stp.get("source") or {}
             ref = (":" + src.get("ref")) if src.get("ref") else ""
             out.append(f"  - `{stp.get('E', '')}`/`{stp.get('F', '')}`: {stp.get('G', '')} "
                        f"[{stp.get('layer', '')}·{src.get('kind', '')}{ref}]")
-        ud = sh.read_json(sh.outputs_root() / aid / "user_decision.json", {})
+        ud = sh.read_json(sh.outputs_root() / out_name / aid / "user_decision.json", {})
         if ud:
             out.append(f"\n### ⚙ ask_user 改动: **{ud.get('decision', '')}** · 断言形态="
                        f"{ud.get('expected_assertion_form', '') or '—'}"
@@ -453,7 +480,7 @@ def _cleanup_temp(led, out_name: str) -> int:
     root = sh.outputs_root()
     n = 0
     for aid in list(led.data["cases"].keys()):
-        d = root / aid
+        d = root / out_name / aid
         if d.is_dir():
             shutil.rmtree(d, ignore_errors=True)
             n += 1

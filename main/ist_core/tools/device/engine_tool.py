@@ -53,13 +53,13 @@ def compile_engine_run(mindmap_path: str, product_version: str,
     面板问用户);被打断后重调本工具(同 out_name)自动从断点续跑,不重复烧设备轮。
 
     Args:
-        mindmap_path: 脑图 txt 路径(如 workspace/inputs/automatic_case/dongkl.txt)。
+        mindmap_path: 脑图 txt 路径(如 workspace/inputs/{username}/dongkl.txt)。
         product_version: 产品版本(如 10.5)——worker 查哪个手册的依据,没有就先问用户。
-        out_name: 批名(产物目录 workspace/outputs/<out_name>/);省略取脑图文件名。
+        out_name: 批名(产物目录 workspace/outputs/{username}/<out_name>/);省略取脑图文件名。
         max_rounds: 上机-重编循环上限(默认 3;到顶如实报告剩余)。
 
     Returns:
-        结果摘要(完整报告落盘 delivery_report.md);机读全量在 workspace/outputs/<out_name>/engine_report.json。
+        结果摘要(完整报告落盘 delivery_report.md);机读全量在 workspace/outputs/{username}/<out_name>/engine_report.json。
     """
     root = Path(__file__).resolve().parents[4]
     name = (out_name or "").strip() or Path(mindmap_path).stem

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from main.knowledge_paths import user_output_dir
+from main.knowledge_paths import user_output_dir, WORKSPACE_INPUTS
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +134,15 @@ def compile_prep(mindmap_path: str, out_name: str = "") -> str:
         if not Path(mindmap_path).is_absolute():
             root = Path(__file__).resolve().parents[4]
             cands += [root / mindmap_path]
+            fname = Path(mindmap_path).name
+            # 回退：扫描 inputs/ 下所有用户目录（username 可能与 env 不一致）
+            if WORKSPACE_INPUTS.is_dir():
+                for d in sorted(WORKSPACE_INPUTS.iterdir()):
+                    if d.is_dir() and not d.name.startswith("."):
+                        cands += [d / fname]
+                        rel = Path(mindmap_path)
+                        if rel.parts[:1] == ("inputs",) and len(rel.parts) >= 2:
+                            cands += [d / rel.parts[1]]
         p = next((c for c in cands if c.is_file()), None)
     if p is None or not Path(p).is_file():
         return f"error: 脑图文件不存在: {mindmap_path}"

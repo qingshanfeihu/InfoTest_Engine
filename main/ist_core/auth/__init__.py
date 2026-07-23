@@ -6,7 +6,7 @@
 - password: hash_password, verify_password, verify_password_legacy
 - jwt_handler: create_access_token, decode_access_token
 - session_manager: SessionManager
-- token_aggregator: aggregate_daily_tokens
+- token_aggregator: aggregate_daily_tokens（已禁用，langfuse 替代）
 """
 
 from main.ist_core.auth.db import ensure_schema, get_pg_connection, pg_cursor
@@ -14,7 +14,6 @@ from main.ist_core.auth.jwt_handler import create_access_token, decode_access_to
 from main.ist_core.auth.models import Session, User
 from main.ist_core.auth.password import hash_password, verify_password, verify_password_legacy
 from main.ist_core.auth.session_manager import SessionManager
-from main.ist_core.auth.token_aggregator import aggregate_daily_tokens
 
 __all__ = [
     "get_pg_connection",
@@ -28,5 +27,4 @@ __all__ = [
     "create_access_token",
     "decode_access_token",
     "SessionManager",
-    "aggregate_daily_tokens",
 ]

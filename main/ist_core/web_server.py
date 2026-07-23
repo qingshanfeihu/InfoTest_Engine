@@ -989,12 +989,13 @@ def serve(host: str = "127.0.0.1", port: int = 8080):
         ensure_schema()
     except Exception as exc:
         logger.warning("auth schema init failed: %s", exc)
-    try:
-        from main.ist_core.events import get_default_bus
-        from main.ist_core.sinks.pg_sink import PgAuditSink
-        get_default_bus().subscribe(PgAuditSink())
-    except Exception as exc:
-        logger.debug("PgAuditSink registration failed: %s", exc)
+    # PgAuditSink 已禁用（2026-07-23，langfuse 替代）
+    # try:
+    #     from main.ist_core.events import get_default_bus
+    #     from main.ist_core.sinks.pg_sink import PgAuditSink
+    #     get_default_bus().subscribe(PgAuditSink())
+    # except Exception as exc:
+    #     logger.debug("PgAuditSink registration failed: %s", exc)
     logger.info("IST-Core Web Terminal on %s:%d", host, port)
     uvicorn.run(app, host=host, port=port, log_level="info")
 

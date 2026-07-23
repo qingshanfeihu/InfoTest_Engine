@@ -1423,11 +1423,12 @@ class IstInkApp:
             jsonl_sink = JsonlFileSink(log_dir=_project_root / "runtime" / "logs")
             self._jsonl_sink = jsonl_sink
             extra = [jsonl_sink]
-            try:
-                from main.ist_core.sinks.pg_sink import PgAuditSink
-                extra.append(PgAuditSink())
-            except Exception:
-                pass
+            # PgAuditSink 已禁用（2026-07-23，langfuse 替代）
+            # try:
+            #     from main.ist_core.sinks.pg_sink import PgAuditSink
+            #     extra.append(PgAuditSink())
+            # except Exception:
+            #     pass
             self._bridge = GraphBridge(
                 graph_factory=self._build_graph,
                 post=self._on_snapshot,

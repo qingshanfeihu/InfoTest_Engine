@@ -950,11 +950,10 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     base_dir = (compile_out_name() or out_name or "").strip().replace("/", "_")
     fir = FileIR(feature=autoid, author="IST-Core-agent", init_rows=init_rows,
                  cases=[case, _build_sentinel()], module="ist_smoke")
-    from main.knowledge_paths import WORKSPACE_OUTPUTS
     if base_dir:
-        out = WORKSPACE_OUTPUTS / base_dir / autoid / "case.xlsx"
+        out = user_output_dir() / base_dir / autoid / "case.xlsx"
     else:
-        out = WORKSPACE_OUTPUTS / autoid / "case.xlsx"
+        out = user_output_dir() / autoid / "case.xlsx"
     try:
         stats = emit_xlsx(fir, out)
     except Exception as e:  # noqa: BLE001

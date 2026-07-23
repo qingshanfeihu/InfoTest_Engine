@@ -97,12 +97,11 @@ WORKSPACE_DEFECTS = WORKSPACE_ROOT / "defects"
 # ── workspace 路径解析函数（单一事实源，消除 5+ 处重复定义）──────────────────
 
 def current_username() -> str:
-    """当前用户标识：IST_SSH_USER > IST_USERNAME > 'default'。
+    """当前用户标识：IST_SSH_USER > 'default'。
 
     用于 workspace/outputs/ 下的用户隔离子目录。
     """
     return (os.environ.get("IST_SSH_USER", "").strip()
-            or os.environ.get("IST_USERNAME", "").strip()
             or "default")
 
 
@@ -122,16 +121,16 @@ def compile_out_name() -> str:
 
 
 def autoid_output_path(autoid: str, *parts: str) -> Path:
-    """autoid 目录路径: workspace/outputs/{out_name}/{autoid}/...
+    """autoid 目录路径: workspace/outputs/{username}/{out_name}/{autoid}/...
 
     out_name 从 compile_out_name() 读取；未设置时省略 out_name 层。
-    注意：此路径不含 username 层（与 compile_emit 写路径一致），与 user_output_dir() 不同。
+    路径含 username 层（与 user_output_dir() / outputs_root() 一致）。
     """
-    base = WORKSPACE_OUTPUTS
+    base = user_output_dir()          # workspace/outputs/{username}/
     name = compile_out_name()
     if name:
-        base = base / name
-    base = base / autoid
+        base = base / name            # workspace/outputs/{username}/{out_name}/
+    base = base / autoid              # workspace/outputs/{username}/{out_name}/{autoid}/
     return base / parts[0] if parts else base
 
 

@@ -27,20 +27,8 @@ logger = logging.getLogger(__name__)
 
 
 def _trigger_token_aggregation() -> None:
-    """每个 run 结束后后台聚合当天 token。（ON CONFLICT upsert，幂等、低开销）"""
-    try:
-        from datetime import date, datetime, timezone
-        from main.ist_core.auth.token_aggregator import aggregate_daily_tokens
-
-        today = datetime.now(timezone.utc).date()
-        threading.Thread(
-            target=aggregate_daily_tokens,
-            args=(today,),
-            name="token-agg",
-            daemon=True,
-        ).start()
-    except Exception:
-        logger.debug("token 自动聚合触发失败", exc_info=True)
+    """token 聚合已禁用（2026-07-23，langfuse 替代）。"""
+    pass
 
 
 _KIND_MAP: dict[str, str] = {
@@ -302,12 +290,12 @@ def stream_and_collect(
             "conversation_id": _conversation_id,
             "thread_id": _thread_id,
         })
-    # 自动注册 PgAuditSink（第四个 Sink：CLI / JSONL / LangSmith / Audit）
-    try:
-        from main.ist_core.sinks.pg_sink import PgAuditSink
-        bus.subscribe(PgAuditSink())
-    except Exception as exc:
-        logger.debug("PgAuditSink 注册失败（审计日志禁用）: %s", exc)
+    # PgAuditSink 已禁用（2026-07-23，langfuse 替代）
+    # try:
+    #     from main.ist_core.sinks.pg_sink import PgAuditSink
+    #     bus.subscribe(PgAuditSink())
+    # except Exception as exc:
+    #     logger.debug("PgAuditSink 注册失败（审计日志禁用）: %s", exc)
     # 自动注册 DialogueCollector（第五个 Sink：对话业务持久存储）
     if _session_user and _session_id and _conversation_id:
         try:
@@ -320,12 +308,12 @@ def stream_and_collect(
             bus.subscribe(dialog_collector)
         except Exception as exc:
             logger.debug("DialogueCollector 注册失败: %s", exc)
-    # 自动注册 TraceCollector（对话轮次 trace 聚合写入）
-    try:
-        from main.ist_core.sinks.trace_collector import TraceCollector
-        bus.subscribe(TraceCollector())
-    except Exception as exc:
-        logger.debug("TraceCollector 注册失败: %s", exc)
+    # TraceCollector 已禁用（2026-07-23，langfuse 替代）
+    # try:
+    #     from main.ist_core.sinks.trace_collector import TraceCollector
+    #     bus.subscribe(TraceCollector())
+    # except Exception as exc:
+    #     logger.debug("TraceCollector 注册失败: %s", exc)
 
     try:
         return asyncio.run(astream_to_bus(graph, initial_state, config=config, bus=bus))

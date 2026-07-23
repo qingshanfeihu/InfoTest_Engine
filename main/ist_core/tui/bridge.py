@@ -191,12 +191,12 @@ class GraphBridge:
                     logger.error("DialogueCollector 注册失败: %s", exc)
                     pass
 
-            # 注册 TraceCollector（对话轮次 trace 聚合写入）
-            try:
-                from main.ist_core.sinks.trace_collector import TraceCollector
-                bus.subscribe(TraceCollector())
-            except Exception as exc:
-                logger.debug("TraceCollector 注册失败: %s", exc)
+            # TraceCollector 已禁用（2026-07-23，langfuse 替代）
+            # try:
+            #     from main.ist_core.sinks.trace_collector import TraceCollector
+            #     bus.subscribe(TraceCollector())
+            # except Exception as exc:
+            #     logger.debug("TraceCollector 注册失败: %s", exc)
 
             coro = astream_to_bus(graph, payload, config=config, bus=bus)
             self._task = loop.create_task(coro)

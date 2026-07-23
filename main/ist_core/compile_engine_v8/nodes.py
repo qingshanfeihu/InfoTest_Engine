@@ -3400,6 +3400,13 @@ def closing(state: dict) -> dict:
                 sh.emit("⚠ 未通过卷 xlsx 未能产出——收口将按交付物缺失降级")
         deliver_files.append("unsuccessful_cases.md")
         leaks = RD.leak_scan(dmd) + RD.leak_scan(umd)
+        # M-18:defect_candidates.md 同属用户面,须进泄漏扫描(旧只扫 dmd+umd)
+        _dcmd = mdir / "defect_candidates.md"
+        if _dcmd.is_file():
+            try:
+                leaks = leaks + RD.leak_scan(_dcmd.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                pass
         if leaks:
             logger.warning("报告术语泄漏(渲染门):%s", sorted(set(leaks))[:8])
         # 首次渲染时 footer 可能已按旧默认声称 xlsx——把旗标写回 engine_report 并

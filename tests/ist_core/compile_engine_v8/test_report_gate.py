@@ -274,6 +274,7 @@ def test_recount_matches_case_status_all_lifecycle_branches_D31():
     SUS_T, TERM, AWAIT = "203600000000000013", "203600000000000014", "203600000000000015"
     SUS_R, REDEC = "203600000000000016", "203600000000000017"
     DBLK, DBLK_R = "203600000000000018", "203600000000000019"
+    ENG = "203600000000000020"   # M-16:engineering_fault 终局臂
 
     def base(aid):   # authored + delivery pass(卷/指纹一致 v1)
         return [{"ev": "authored", "aid": aid, "round": 1, "artifact": aid + ":a"},
@@ -289,6 +290,8 @@ def test_recount_matches_case_status_all_lifecycle_branches_D31():
     fs += base(SUS_T) + [{"ev": "suspended", "aid": SUS_T, "reason": "q"}]       # suspended 终态
     fs += base(TERM) + [{"ev": "attribution", "aid": TERM, "round": 99,
                          "disposition": "defect_candidate"}]                     # 终局裁决(round99 三处置之一)
+    fs += base(ENG) + [{"ev": "attribution", "aid": ENG, "round": 99,
+                        "disposition": "engineering_fault", "evidence": "engine_auto"}]  # M-16
     fs += base(AWAIT) + [{"ev": "needs_decision", "aid": AWAIT,
                           "question_id": "nd:x:1:k"}]                             # 单次未答呈报
     fs += base(REDEC) + [                                                        # 二次欠定 qid 配对(G5 首犯分叉点)
@@ -305,7 +308,7 @@ def test_recount_matches_case_status_all_lifecycle_branches_D31():
                             "ctx": "delivery", "result": "pass",
                             "artifact": DBLK_R + ":b", "volume": "v1",
                             "signatures": []}])
-    all_aids = [CLEAN, ESC_R, ESC_T, SUS_R, SUS_T, TERM, AWAIT, REDEC, DBLK, DBLK_R]
+    all_aids = [CLEAN, ESC_R, ESC_T, SUS_R, SUS_T, TERM, ENG, AWAIT, REDEC, DBLK, DBLK_R]
     fs += [{"ev": "merged", "aid": "", "volume": "v1", "ctx": "delivery", "members": all_aids}]
     manifest = {"source": "t.txt", "cases": [{"autoid": a} for a in all_aids]}
 
@@ -316,6 +319,8 @@ def test_recount_matches_case_status_all_lifecycle_branches_D31():
     # 双重断言:除两路等价,再钉 ground-truth——防两路同错都绿(解除态 escalated/suspended + clean 可交付)
     assert rc == {CLEAN, ESC_R, SUS_R, DBLK_R}, \
         f"ground-truth 不符:期望 clean+两类解除+封堵重编复验,实得 {sorted(rc)}"
+    # M-16:engineering_fault 两路都排除(不在 deliverable)
+    assert ENG not in rc and bv["cases"][ENG]["status"] == V.S_TERMINAL
 
 
 def test_g3_tau_crash_fail_closed_M13(engine_env, monkeypatch):

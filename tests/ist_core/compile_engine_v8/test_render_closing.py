@@ -595,3 +595,33 @@ def test_archive_fail_enters_missing_and_rerender_M09_M10(engine_env, monkeypatc
     assert "交付不完整" in dmd
     assert "xlsx 未能产出" in dmd
     assert "`unsuccessful_cases.xlsx`+`unsuccessful_cases.md`" not in dmd
+
+
+def test_defect_trail_auto_cap_not_user_ruling_M17():
+    """M-17:deesc 自动 round=99 不得渲染成「用户裁决」。"""
+    md = RD.render_defect_candidates_md([{
+        "autoid": A, "title": "案A", "status": "failed_terminal",
+        "user_confirmed": False, "claims": [], "latest_claim": "cap",
+        "form": {}, "disposition_trail": [
+            {"round": 1, "disposition": "reflow", "by_user": False},
+            {"round": 99, "disposition": "defect_candidate", "by_user": False},
+        ],
+    }], {"source": "t.txt", "cases": [{"autoid": A, "title": "案A"}]})
+    assert "引擎自动裁决" in md
+    assert "用户裁决 缺陷候选" not in md
+    # 对照:真用户裁决
+    md2 = RD.render_defect_candidates_md([{
+        "autoid": A, "title": "案A", "status": "failed_terminal",
+        "user_confirmed": True, "claims": [], "form": {},
+        "disposition_trail": [
+            {"round": 99, "disposition": "defect_candidate", "by_user": True},
+        ],
+    }], {"source": "t.txt", "cases": [{"autoid": A, "title": "案A"}]})
+    assert "用户裁决" in md2
+
+
+def test_disp_cn_covers_expectation_suspect_and_transient_M18():
+    """M-18:DISP_CN 补词条,避免英文 token 上报告。"""
+    assert "expectation_suspect" in RD.DISP_CN
+    assert "transient" in RD.DISP_CN
+    assert RD.DISP_CN["transient"].isascii() is False or "偶发" in RD.DISP_CN["transient"]

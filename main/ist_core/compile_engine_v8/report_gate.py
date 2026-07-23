@@ -51,7 +51,8 @@ def recount_deliverable(fs: list[dict], manifest: dict) -> dict:
         if last_susp >= 0 and last_resume < last_susp:
             continue
         if any(f.get("ev") == "attribution" and int(f.get("round") or 0) == 99
-               and f.get("disposition") in ("env_blocked", "defect_candidate", "user_stop")
+               and f.get("disposition") in ("env_blocked", "defect_candidate", "user_stop",
+                                            "engineering_fault")
                for f in mine):
             continue
         # 未答呈报压过交付——按 question_id 配对(H2,独立重算,不复用 views.case_status:

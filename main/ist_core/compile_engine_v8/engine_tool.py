@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re as _re
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -20,7 +21,28 @@ logger = logging.getLogger(__name__)
 _MAX_INTERRUPT_ROUNDS = 12
 
 
-import re as _re
+def _finalize_engine_result(res, name: str, *, interrupt_rounds: int = 0) -> str:
+    """interrupt 循环结束后的收口文案(H-21:超轮次仍挂起不得读陈旧报告谎报完成)。"""
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    if isinstance(res, dict) and "__interrupt__" in res:
+        return (f"error: compile engine still waiting for user answers after "
+                f"{interrupt_rounds or _MAX_INTERRUPT_ROUNDS} interrupt rounds — "
+                f"checkpoint saved; re-call with the same arguments to continue answering.")
+    rp = sh.outputs_root() / name / "engine_report.json"
+    if not rp.is_file():
+        return (f"error: engine finished without a report "
+                f"(state keys: {sorted((res or {}).keys())[:12]})")
+    rep = json.loads(rp.read_text(encoding="utf-8"))
+    t = rep.get("totals", {})
+    lines = [
+        f"compile engine (v8) done: {rep.get('outcome')}",
+        f"cases {t.get('cases', 0)}: deliverable {t.get('deliverable', 0)}"
+        + (f", labels {json.dumps({k: v for k, v in t.items() if k not in ('cases', 'deliverable') and v}, ensure_ascii=False)}"
+           if any(v for k, v in t.items() if k not in ("cases", "deliverable")) else ""),
+        f"full report (on disk): workspace/outputs/{name}/delivery_report.md",
+        f"facts ledger: {rep.get('refs', {}).get('facts')}",
+    ]
+    return "\n".join(lines)
 
 
 def _panel(questions: list[dict]) -> dict:
@@ -226,22 +248,9 @@ def compile_engine_run(mindmap_path: str, product_version: str,
                 payload = res["__interrupt__"][0].value
                 res = g.invoke(Command(resume=_bridge(payload)), cfg)
                 rounds += 1
+            # H-21:超轮次后若仍挂在 interrupt,不得读盘上陈旧 engine_report 谎报完成
+            return _finalize_engine_result(res, name, interrupt_rounds=rounds)
     except Exception as exc:  # noqa: BLE001
         logger.exception("V8 引擎异常")
         return (f"error: compile engine aborted — {type(exc).__name__}: {exc}\n"
                 f"Progress is saved (checkpoint + facts); re-call with the same arguments to resume.")
-
-    rp = sh.outputs_root() / name / "engine_report.json"
-    if not rp.is_file():
-        return f"error: engine finished without a report (state keys: {sorted((res or {}).keys())[:12]})"
-    rep = json.loads(rp.read_text(encoding="utf-8"))
-    t = rep.get("totals", {})
-    lines = [
-        f"compile engine (v8) done: {rep.get('outcome')}",
-        f"cases {t.get('cases', 0)}: deliverable {t.get('deliverable', 0)}"
-        + (f", labels {json.dumps({k: v for k, v in t.items() if k not in ('cases', 'deliverable') and v}, ensure_ascii=False)}"
-           if any(v for k, v in t.items() if k not in ("cases", "deliverable")) else ""),
-        f"full report (on disk): workspace/outputs/{name}/delivery_report.md",
-        f"facts ledger: {rep.get('refs', {}).get('facts')}",
-    ]
-    return "\n".join(lines)

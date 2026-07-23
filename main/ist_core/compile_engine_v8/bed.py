@@ -572,6 +572,12 @@ def bed_check(probe_fn: Callable[[str], str], cfg_build: str, *,
     annotate_maintenance(report["findings"], maintenance_tokens(root, host))
     foreign = [f for f in report["findings"] if f["kind"] != "build_anchor"
                and not f.get("maintenance_explained")]
-    if foreign and not ours:
-        report["needs_ask"] = True          # 非己方残留:只报不清
+    # H-13:旧 `foreign and not ours` 在 snapshot_only 纯 added 历史账「留账不动手」
+    # (R073)使 ours 恒非空后,永久关掉 INV-9 呈报。判定时剔除 snapshot_only 账项——
+    # 它们不构成自动恢复资格,也不该静默掉其它通道的非己方残留;可恢复面的
+    # ours 仍走自动恢复(INV-9),不在此臂强制 ask。
+    so = snapshot_only_channels()
+    effective_ours = [o for o in (ours or []) if str(o.get("kind")) not in so]
+    if foreign and not effective_ours:
+        report["needs_ask"] = True
     return report

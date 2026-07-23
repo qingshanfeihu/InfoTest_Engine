@@ -579,3 +579,70 @@ def test_cleanup_recheck_preserves_mirror_and_closure_H10(tmp_path, monkeypatch)
     fs = F.load_facts(facts_file)
     assert any(f.get("question_id") == "bedclosure:bc:h10:1" for f in fs
                if f.get("ev") == "decision")
+
+
+def test_foreign_asks_even_when_ours_nonempty_H13(tmp_path):
+    """H-13:ours 恒非空(snapshot_only 留账)不得关掉 foreign 残留的 needs_ask。"""
+    from main.ist_core.compile_engine_v8.bed import snapshot_only_channels
+    so = sorted(snapshot_only_channels())[0]
+    bed_record(tmp_path, "h", "created", so, "hist:so1",
+               payload={"added": ["port9 1.1.1.1 255.255.255.0"], "removed": [],
+                        "commands": []})
+    extra = {"show segment name": "segment: rogue_seg  status: active"}
+    rep = bed_check(_probe(DEV_585, extra), CFG, root=tmp_path, host="h")
+    assert rep["ours_unrestored"], "ours 应非空(留账未复原)"
+    assert any(f.get("kind") == "segments" for f in rep["findings"])
+    assert rep["needs_ask"] is True
+
+
+def test_llm_restore_reprobe_rejects_unclean_H14(tmp_path, monkeypatch):
+    """H-14:LLM 恢复执行 echo 无错但目标 added 行仍在 → 不得标 restored,进 stuck 问询。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    import main.ist_core.compile_engine_v8.mirror_anchor as MA
+
+    facts_file = tmp_path / "facts.jsonl"
+    facts_file.write_text("", encoding="utf-8")
+    # 己方未复原:segments 账,无预存 commands → 走 LLM 后备
+    bed_record(tmp_path, "h", "created", "segments", "seg:rogue",
+               batch="b1",
+               payload={"added": ["segment: rogue_seg  status: active"],
+                        "removed": [], "commands": []})
+    snap_lines = {"segments": {"lines": ["segment: rogue_seg  status: active"]}}
+    monkeypatch.setattr(N.B, "bed_unrestored",
+                        lambda *a, **k: [{
+                            "kind": "segments", "id": "seg:rogue",
+                            "payload": {"added": ["segment: rogue_seg  status: active"],
+                                        "removed": [], "commands": []}}])
+    monkeypatch.setattr(N.B, "restore_via_llm",
+                        lambda d, fn: ["no segment rogue_seg"])
+    monkeypatch.setattr(N.B, "entity_gate",
+                        lambda cmds, d: (list(cmds), []))
+    monkeypatch.setattr(N, "_exec_fn", lambda c: "status: success")
+    monkeypatch.setattr(N.B, "_probe_failed", lambda t: False)
+    # 复探快照:added 行仍在
+    monkeypatch.setattr(N.B, "bed_snapshot", lambda fn: snap_lines)
+    monkeypatch.setattr(N.B, "bed_check", lambda *a, **k: {
+        "host": "h", "probes": {}, "findings": [], "needs_ask": False,
+        "anchor": {"status": "match", "device": "x"}, "ours_unrestored": []})
+    monkeypatch.setattr(MA, "check_sync", lambda _e: {"status": "match"})
+    monkeypatch.setattr(sh, "outputs_root", lambda: tmp_path / "outputs")
+    monkeypatch.setattr(sh, "facts_path", lambda s: facts_file)
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": []})
+    monkeypatch.setattr(sh, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sh, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(sh, "counts_update", lambda *a, **k: {})
+    captured = {}
+    monkeypatch.setattr(N, "interrupt",
+                        lambda p: captured.update(p) or {"decision": "继续"})
+    recorded = []
+    monkeypatch.setattr(N.B, "bed_record",
+                        lambda *a, **k: recorded.append(k.get("ev") or a[2] if len(a) > 2 else k))
+    # bed_record signature: (root, host, ev, kind, ident, ...)
+    def spy_record(root, host, ev, kind, ident, **kw):
+        recorded.append(ev)
+    monkeypatch.setattr(N.B, "bed_record", spy_record)
+    N.bed_gate({"out_name": "b1"})
+    assert "restored" not in recorded
+    kinds = [f.get("kind") for f in (captured.get("report") or {}).get("findings", [])]
+    assert any(f.get("ledger_stuck") for f in (captured.get("report") or {}).get("findings", []))

@@ -244,8 +244,15 @@ def remedy_text(queue: list[dict], mine: list[dict], panel: dict | None = None) 
         head = queue[0]
         act = ACTION_CN.get(str(head.get("action")), str(head.get("action")))
         line = f"**修复方案**:{act}"
-        if head.get("direction"):
-            line += f"。方向:{_ellip(head['direction'], 160)}"   # 辅助:超长明示省略
+        # H-20:direction 常为 LLM-facing 英文(fix_direction / 硬编码英文串),
+        # 直灌 delivery_report=D1/D9 泄漏。仅中文占比达标的方向进用户面;英文跳过
+        # (action 人话已足够;direction 仍在 queue 供 briefs/worker 按引用消费)。
+        _dir = str(head.get("direction") or "").strip()
+        if _dir:
+            from main.ist_core.compile_engine_v8.questions import (
+                chinese_ratio, _ENGLISH_LEAK_RATIO)
+            if chinese_ratio(_dir) >= _ENGLISH_LEAK_RATIO:
+                line += f"。方向:{_ellip(_dir, 160)}"
         rest = [ACTION_CN.get(str(q.get("action")), "") for q in queue[1:]]
         if any(rest):
             line += f"。若仍未通过,后续依次:{'、'.join(r for r in rest if r)}"

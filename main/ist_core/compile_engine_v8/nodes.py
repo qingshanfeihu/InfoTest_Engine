@@ -204,11 +204,23 @@ def bed_gate(state: dict) -> dict:
                 sh.emit(f"床账接力:跳过基线面纯新增账项(不自动删接口地址),"
                         f"{item.get('kind')}:{item.get('id')} 留账")
                 continue
+            via_llm = False
             if not cmds and (pl.get("added") or pl.get("removed")):
                 d = {str(item.get("kind")): {"added": pl.get("added") or [],
                                              "removed": pl.get("removed") or []}}
+                # H-14:LLM 后备须双门(entity_gate + 执行后复探)
                 cmds, _rej = B.entity_gate(B.restore_via_llm(d, _bed_llm_fn), d)
+                via_llm = True
             ok = bool(cmds) and all(not B._probe_failed(_exec_fn(c)) for c in cmds)
+            if ok and via_llm:
+                # 执行后复探:echo 无错≠漂移清零。payload.added 是「不该在的行」——
+                # 复探快照里若仍在,不得标 restored(下批机械回放会谎报已验证)。
+                _kind = str(item.get("kind") or "")
+                _alines = set((B.bed_snapshot(_probe_fn).get(_kind) or {}).get("lines") or [])
+                if any(str(x) in _alines for x in (pl.get("added") or [])):
+                    ok = False
+                    sh.emit(f"床账接力:LLM 恢复执行后复探未清零"
+                            f"({item.get('kind')}:{item.get('id')}),进问询")
             if ok:
                 B.bed_record(sh.project_root(), host, "restored",
                              str(item.get("kind")), str(item.get("id")),
@@ -216,7 +228,7 @@ def bed_gate(state: dict) -> dict:
                              payload={"commands": cmds})
                 sh.emit(f"床账接力:上批未复原产物已恢复({item.get('kind')}:{item.get('id')})")
             else:
-                # 尝试穷尽(生成失败/执行被拒)→进呈报——interface 类漂移不在
+                # 尝试穷尽(生成失败/执行被拒/复探未清)→进呈报——interface 类漂移不在
                 # bed_check 残留判定内,静默留账=账永不清也永不问(回归审查 R-9)
                 stuck_ledger.append({"kind": str(item.get("kind")),
                                      "id": str(item.get("id")),

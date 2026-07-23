@@ -532,3 +532,23 @@ def test_ask_headers_unique_by_six_digit_tail_H05():
     h2 = build_ask_question({"autoid": A2, "kind": "cap", "title": "", "rounds": 3})["header"]
     assert h1 != h2 and A1[-6:] in h1 and A2[-6:] in h2
     assert len(h1) <= 12 and len(h2) <= 12
+
+
+def test_finalize_still_interrupt_not_stale_done_H21(tmp_path, monkeypatch):
+    """H-21:仍挂 interrupt 时即使盘上有陈旧 engine_report 也不得谎报 done。"""
+    import main.ist_core.compile_engine_v8.engine_tool as ET
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    out = tmp_path / "outputs" / "b_stale"
+    out.mkdir(parents=True)
+    (out / "engine_report.json").write_text(
+        '{"outcome":"all_pass","totals":{"cases":1,"deliverable":1},"refs":{}}',
+        encoding="utf-8")
+    monkeypatch.setattr(sh, "outputs_root", lambda: tmp_path / "outputs")
+    msg = ET._finalize_engine_result({"__interrupt__": [object()]}, "b_stale",
+                                     interrupt_rounds=12)
+    assert msg.startswith("error:")
+    assert "still waiting" in msg
+    assert "all_pass" not in msg
+    # 对照:无 interrupt 才读报告
+    ok = ET._finalize_engine_result({"phase_status": "ok"}, "b_stale")
+    assert "done: all_pass" in ok

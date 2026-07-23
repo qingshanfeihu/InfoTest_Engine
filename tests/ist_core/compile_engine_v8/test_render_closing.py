@@ -538,3 +538,16 @@ def test_p1_11_closing_tick_fires_before_manifest_delete(engine_env, monkeypatch
     N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
     assert seen.get("manifest_on_disk") is True   # tick 在删 manifest 之前(P1-11 修的核心)
     assert seen.get("total") == 2                  # 真值(两案),非 0/0
+
+
+def test_remedy_text_skips_english_direction_H20():
+    """H-20:英文 direction 不进用户面;中文方向保留。"""
+    en_q = [{"action": "vary_form",
+             "direction": "same approach proven ineffective twice; change the form"}]
+    out = RD.remedy_text(en_q, [], None)
+    assert "修复方案" in out
+    assert "proven ineffective" not in out
+    assert "方向:" not in out
+    cn_q = [{"action": "recompile_directed", "direction": "按捕获关系改预期断言后重编"}]
+    out2 = RD.remedy_text(cn_q, [], None)
+    assert "按捕获关系改预期断言后重编" in out2

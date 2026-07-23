@@ -182,7 +182,14 @@ def _bridge(payload: dict) -> dict:
             q["_key"] = str(q.get("_autoid") or q.get("header") or "")
         return _panel(qs)
     if kind == "ask_contradiction":
-        qs = [_contradiction_question(c) for c in (payload.get("cases") or [])]
+        # M-22:顶层 common_causes 下灌到每案(nodes 已挂 case 键;桥接兜底防漏挂)
+        ccs = list(payload.get("common_causes") or [])
+        cases = list(payload.get("cases") or [])
+        if ccs:
+            for c in cases:
+                if isinstance(c, dict) and not c.get("common_causes"):
+                    c["common_causes"] = ccs
+        qs = [_contradiction_question(c) for c in cases]
         raw = _panel(qs)
         if raw.get("_non_interactive"):
             return raw

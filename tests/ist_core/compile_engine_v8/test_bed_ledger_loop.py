@@ -259,6 +259,17 @@ def test_evidence_suspect_gate_detects_misattribution(rig, monkeypatch):
     assert N._evidence_suspect({"device_context": "no dig here"}, "a1") is None  # 单侧空
 
 
+def test_evidence_suspect_at_host_non_dig_m21(rig, monkeypatch):
+    """M-21:@host/IP 通用形态——非 dig 取证错位也要检出。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    monkeypatch.setattr(N, "_load_case_rows", lambda aid: [
+        {"E": "test_env", "F": "routera", "G": "curl @172.16.34.70/status"}])
+    rec_bad = {"device_context": "client hit @172.16.34.71/status\nHTTP/1.1 200"}
+    s = N._evidence_suspect(rec_bad, "a1")
+    assert s and "172.16.34.71" in s["evidence_targets"]
+    assert "172.16.34.70" in s["sheet_targets"]
+
+
 def test_heartbeat_begin_case_semantic_line():
     """#66:进度序号首选框架语义行 begin case(路径行被排除后仍有信号)。"""
     import re

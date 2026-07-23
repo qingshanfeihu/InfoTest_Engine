@@ -289,6 +289,21 @@ def test_uncertain_led_axis_and_attribution_observations(tmp_path, monkeypatch):
     assert cands[0]["observe_cmd"] == "show sdns host status"
     assert "Timeout=0 条目跨超时存活" in cands[0]["content"]
 
+    # M-20:引擎自撰/缺 run_id/h_s0 前筛不得入 uncertain
+    fs_eng = [
+        {"ev": "verdict", "aid": aid, "run_id": "r1", "result": "fail",
+         "ctx": "delivery", "artifact": "a1", "volume": "v", "signatures": []},
+        {"ev": "attribution", "aid": aid, "round": 1, "run_id": "r1", "layer": "E",
+         "h_position": "h_s0", "provenance": "engine_auto:g6_prescreen",
+         "disposition": "rerun_isolated", "evidence": "s0 polluter basis"},
+        {"ev": "attribution", "aid": aid, "round": 99, "layer": "engine",
+         "run_id": "auto_cap:x", "disposition": "defect_candidate",
+         "evidence": "engine_auto_cap:no_output"},
+        {"ev": "attribution", "aid": aid, "round": 2, "layer": "V",
+         "disposition": "reflow", "evidence": "no run_id should reject"},
+    ]
+    assert N._attribution_observations(fs_eng, aid) == []
+
     # 无 check_point 的卷面=无锚,如实 no-op(不猜锚)
     monkeypatch.setattr(N, "_load_case_rows", lambda a: [
         {"E": "APV_0", "F": "cmds_config", "G": "sdns on"}])

@@ -202,17 +202,21 @@ def transient_recur(facts: list[dict], aid: str) -> bool:
                for f in fs[last_transient_i + 1:])
 
 
-def contradictions(facts: list[dict], aid: str) -> int:
+def contradictions(facts: list[dict], aid: str, artifact: str | None = None) -> int:
     """矛盾计数(第三条 ask 边的输入):同一卷面上「先 pass 后 fail@delivery」的次数。
 
     两种翻转形态都计(V8 验收实证):①pass@subset → fail@delivery(单跑过/整卷挂,互扰);
     ②pass@delivery → fail@delivery(已交付态被后续终验反证——668015 形态,非确定互扰)。
     卷面变更(重编)重置窗口——新卷面从零计(旧矛盾史仍在流里可查)。
+    M-19:传 artifact 时只计该卷面窗口——贴 S_CONTRADICTED 标签必须跟当前卷面,
+    终身累计会把 art1 的矛盾贴到 art2 上(「单独能过、整卷挂」对 art2 成假话)。
     """
     n = 0
     passed_artifacts: set[str] = set()
     for f in _facts_of(facts, aid, "verdict"):
         art = str(f.get("artifact"))
+        if artifact is not None and art != artifact:
+            continue
         if f.get("result") == "pass":
             passed_artifacts.add(art)
         elif f.get("ctx") == CTX_DELIVERY and f.get("result") == "fail":
@@ -336,6 +340,7 @@ def deesc_auto_resolution(facts: list[dict], aid: str, new_escalated: dict) -> l
                 # 同案第二次自动封顶/用户终局裁决被静默吞。
                 {"ev": "attribution", "aid": aid, "round": 99, "layer": "engine",
                  "run_id": f"auto_cap:{aid}:{sub}:{_n}",
+                 "provenance": "engine_auto:deesc_cap",
                  "disposition": "defect_candidate",
                  "fix_direction": (f"escalation round-cap reached ({_n}x {sub}) — "
                                    "engine exhausted its recovery attempts for this case "
@@ -353,6 +358,7 @@ def deesc_auto_resolution(facts: list[dict], aid: str, new_escalated: dict) -> l
                  "note": "auto: same underdetermined claim recurred after a recovery attempt"},
                 {"ev": "attribution", "aid": aid, "round": 99, "layer": "engine",
                  "run_id": f"auto_eng:{aid}:{len(prior_esc) + 1}",
+                 "provenance": "engine_auto:deesc_eng",
                  "disposition": "engineering_fault",
                  "fix_direction": ("no landing channel for this claim kind — the same claim "
                                    "recurred verbatim after one recovery attempt; this is an "

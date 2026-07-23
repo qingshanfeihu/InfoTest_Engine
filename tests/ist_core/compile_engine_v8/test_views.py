@@ -38,6 +38,20 @@ def test_contradiction_label_yzg_shape():
     assert case_status(fs, A, "art1", "vol1") == S_CONTRADICTED
 
 
+def test_contradicted_resets_on_new_artifact_m19():
+    """M-19:S_CONTRADICTED 跟当前卷面——art1 矛盾史不得贴到 art2。"""
+    fs = [_authored(),
+          _v("r1", "subset", "pass"), _v("r2", "delivery", "fail"),
+          _authored("art2", 2),
+          _v("r3", "delivery", "fail", art="art2")]  # art2 仅 fail@delivery,无先 pass
+    assert case_status(fs, A, "art2", "vol1") == S_FAILED
+    assert case_status(fs, A, "art1", "vol1") == S_CONTRADICTED
+    # batch_view 计数也按当前 artifact
+    view = batch_view(fs, {"cases": [{"autoid": A}]})
+    assert view["cases"][A]["status"] == S_FAILED
+    assert view["cases"][A]["contradictions"] == 0
+
+
 def test_awaiting_user_until_decision():
     fs = [{"ev": "needs_decision", "aid": A, "question_id": "q1"}]
     assert case_status(fs, A, "", "") == S_AWAITING_USER

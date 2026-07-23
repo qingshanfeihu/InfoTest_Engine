@@ -81,6 +81,9 @@ def test_contradiction_counter_and_reset_on_recompile():
     assert contradictions(facts2, A) == 3  # 全史仍可查
     only_new = [f for f in facts2 if f.get("artifact") == "art2"]
     assert contradictions(only_new, A) == 1
+    # M-19:传 artifact= 与手工过滤同口径
+    assert contradictions(facts2, A, artifact="art2") == 1
+    assert contradictions(facts2, A, artifact="art1") == 2
 
 
 # ── frozen:按 aid 派生,与路径无关(#7 根治);换卷面即解冻 ─────────────────────

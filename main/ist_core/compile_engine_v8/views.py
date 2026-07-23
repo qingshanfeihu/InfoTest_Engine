@@ -136,7 +136,7 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
             return S_PENDING
     if F.deliverable(mine, aid, current_artifact, current_volume):
         return S_DELIVERABLE
-    # 标签跟**当前卷面**走(重编即重置标签;矛盾计数保全史供 ask 策略)
+    # 标签跟**当前卷面**走(重编即重置标签;矛盾计数按当前 artifact 窗口——M-19)
     last = F.latest_verdict(mine, aid, artifact=current_artifact) if current_artifact else None
     if last:
         if last.get("result") == "pass":
@@ -152,7 +152,8 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
             if sub == "blocked":
                 return S_BROKEN_BLOCKED
             return S_BROKEN
-        if last.get("ctx") == F.CTX_DELIVERY and F.contradictions(mine, aid) > 0:
+        if (last.get("ctx") == F.CTX_DELIVERY
+                and F.contradictions(mine, aid, artifact=current_artifact) > 0):
             return S_CONTRADICTED
         return S_FAILED
     if F.rounds_used(mine, aid) > 0:
@@ -185,7 +186,7 @@ def batch_view(fs: list[dict], manifest: dict) -> dict:
         out["cases"][aid] = {
             "status": st, "artifact": artifact,
             "rounds": F.rounds_used(mine, aid),
-            "contradictions": F.contradictions(mine, aid),
+            "contradictions": F.contradictions(mine, aid, artifact=artifact or None),
             "frozen": F.frozen(mine, aid, artifact or None),
             "transient_recur": F.transient_recur(mine, aid),
         }

@@ -158,6 +158,7 @@ FORM_BY_KIND = {
     "distribution": "dist", "weight_ratio": "dist",
     "new_member_last": "member", "absolute_position": "member", "rotation_order": "member",
     "new_member_participates": "member",
+    "sequence_periodicity": "member",  # M-24:缺项曾默认 dist,与「顺序语义保留」同句互斥
     "relation_same": "captured_relation", "relation_diff": "captured_relation",
     "cross_client_landing": "captured_relation",
 }
@@ -170,7 +171,7 @@ _FORM_CN = {"dist": "分组分布/比例区间", "member": "成员位次比对",
 # 模板套在非采样类欠定上=误导选项);关系类/落点类不靠加样本解决,不入此集。
 _SAMPLING_KINDS = frozenset({
     "distribution", "weight_ratio", "new_member_last", "absolute_position",
-    "rotation_order", "new_member_participates"})
+    "rotation_order", "new_member_participates", "sequence_periodicity"})
 
 
 def load_ledgers(outputs_root: Path, autoids: list[str]) -> dict[str, dict]:
@@ -235,7 +236,11 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
             # 真因——真因是跨 shape 采信碰撞。)
             q_text = (f"用例 {aid}(尾号 {aid[-6:]}) 要验证:{tp}。\n问题:{obs}。"
                       + (f"\n等价方法:{proc}" + (f"({preserves})" if preserves else "") + "。"
-                         if proc else ""))
+                         if proc else "")
+                      # M-24:三元组分支也曾丢 ordering 显式句——与 validate_questions
+                      # 「顺序语义」不变量互斥;生成器与门必须同口径
+                      + ("\n本主张含顺序语义——采纳须保留能证明顺序的验证形态。"
+                         if ordering else ""))
             opts, tok = [], {}
             if proc:
                 # F-TUI-2(采纳 label 截断→固定短语,防御纵深):旧 `采纳「{proc[:60]}」` ①mid-word
@@ -245,11 +250,15 @@ def build_questions(ledgers: dict[str, dict]) -> list[dict]:
                 # 碰撞、非本项——该案面板压根没展示、W3 本就命中;本项作独立健壮性改进保留。)
                 lbl = "采纳该等价方案(方法见题面)"
                 opts.append({"label": lbl,
-                             "description": "采纳题面给的等价验证方法来重编(引擎按它编写;和原方法的差异会在交付报告声明)。对你的用例:用能在这个床上跑的等价办法验证同样的行为。"})
+                             "description": ("采纳题面给的等价验证方法来重编(引擎按它编写;和原方法的差异会在交付报告声明)。"
+                                             + ("顺序语义保留(产物须能证明顺序)。" if ordering else "")
+                                             + "对你的用例:用能在这个床上跑的等价办法验证同样的行为。")})
                 tok[lbl] = "改过程"
             lbl_other = "我给别的等价方案"
             opts.append({"label": lbl_other,
-                         "description": "在下面自定义输入里给出你的等价方案,原文原样交引擎去编。对你的用例:你来指定用什么等价办法。"})
+                         "description": ("在下面自定义输入里给出你的等价方案,原文原样交引擎去编。"
+                                         + ("⚠ 若放弃顺序语义须在方案里写明。" if ordering else "")
+                                         + "对你的用例:你来指定用什么等价办法。")})
             tok[lbl_other] = "改预期"
             lbl_susp = "挂起,如实报告"
             opts.append({"label": lbl_susp,
@@ -712,6 +721,19 @@ def _s0_dispute_note(c: dict) -> str:
     return seg
 
 
+def _common_causes_note(c: dict) -> str:
+    """M-22:批级同因聚类进题面(§18.6 坑#8——曾只塞 interrupt 顶层键零消费)。"""
+    ccs = c.get("common_causes") or []
+    if not ccs:
+        return ""
+    parts = []
+    for cc in ccs[:3]:
+        key = str(cc.get("key") or "")[:80]
+        aids = "、".join(str(a) for a in (cc.get("aids") or [])[:6])
+        parts.append(f"{key}(尾号 {aids})" if aids else key)
+    return f"批内同因聚类:{'；'.join(parts)}。" if parts else ""
+
+
 def build_ask_question(c: dict) -> dict:
     """问询目标 → 面板一题(§11.11 构件六:题面渲染自案情事实,自然中文,零内部术语)。
     片4:题面携「已试修法」清单(队列空证明的用户可见半——问到你不是因为没试,
@@ -734,6 +756,7 @@ def build_ask_question(c: dict) -> dict:
     tried = [str(x) for x in (c.get("tried") or []) if x]
     if tried and kind in ("cap", "env", "bed", "contra"):
         who += f"[引擎已试:{ '、'.join(tried[:3]) }]"
+    _cc = _common_causes_note(c)
     if kind == "panel":
         p = c.get("panel") or {}
         _sd, _k = [], 0
@@ -754,6 +777,7 @@ def build_ask_question(c: dict) -> dict:
              + f"情况梳理:{_rstrip_stop(clip_text(str(p.get('hypothesis') or ''), 300))}。"
              + _display_clean(str(p.get("ask") or "该以哪一方为准?"))
              + ("(该用例重编轮次已用尽,你的答案同时决定是否继续)" if c.get("cap_reached") else "")
+             + (_cc if _cc else "")
              + " 若都不对,选 Other 直接写出正确的意图/预期。")
         q = _annotate_autoids(q)   # D26:hypothesis/sides 里 LLM 撰写的裸别案 autoid 追尾号(幂等,不碰 who)
         # token=correct(非 confirm):中性化后 hypothesis 不再提方向,"confirm=按呈报理解 Z 编"
@@ -775,6 +799,7 @@ def build_ask_question(c: dict) -> dict:
                 (f"(引擎判断:{clip_text(str(c.get('evidence') or ''), 160)})"
                  if c.get("evidence") else ""))
              + (f"。{note}" if note else "")
+             + (_cc if _cc else "")
              + "。如何处理?")
         dc_note = (f"(在案第 {'、'.join(str(r) for r in dc_rounds)} 轮曾判疑似产品缺陷,见上)"
                    if dc_rounds else "")
@@ -796,6 +821,7 @@ def build_ask_question(c: dict) -> dict:
              # F-Py-2 原文引用豁免),不再裸「依据:{英文}」直灌。
              + (f"(设备回显原文:『{_echo_quote(c.get('evidence'))}』)" if c.get("evidence") else "")
              + (f"。各轮判断:{hist}" if hist else "")
+             + (_cc if _cc else "")
              + "。确认是环境问题吗?")
         return {"question": q, "header": f"环境{aid[-6:]}",
                 "options": [
@@ -815,7 +841,8 @@ def build_ask_question(c: dict) -> dict:
             _mt = _mt[:60] + ("…" if len(_mt) > 60 else "")     # 省略点:硬截加「…」留痕(不无痕截断)
             q = (f"{who} 的卷面自身含网络层配置写而无案尾恢复步"
                  + (f"(缺恢复:{_mt})" if c.get("missing_tau") else "")
-                 + "——每次执行都会重新污染共享床(复跑只会再拆一次,不是出路)。如何处置?")
+                 + "——每次执行都会重新污染共享床(复跑只会再拆一次,不是出路)。"
+                 + (_cc if _cc else "") + "如何处置?")
             return {"question": q, "header": f"缺清理{aid[-6:]}",
                     "options": [
                         {"label": "重编补自清", "description":
@@ -847,7 +874,7 @@ def build_ask_question(c: dict) -> dict:
         q = (f"{who} 被批级配对判为疑似测试床状态污染"
              # D28:bed evidence=受害者设备回显原文,标「设备回显原文」verbatim(_echo_quote,原文引用豁免)。
              + (f"(设备回显原文:『{_echo_quote(c.get('evidence'))}』)" if c.get("evidence") else "")
-             + "。" + _strength + _grp_note + "如何处置?")
+             + "。" + _strength + _grp_note + (_cc if _cc else "") + "如何处置?")
         return {"question": q, "header": f"床态{aid[-6:]}",
                 "options": [
                     {"label": "挂起到下批", "description": "把测试床整理好后下批再续跑这个用例(重跑同参数会问你要不要恢复)。对你的用例:等床清理好、下批再跑。"},
@@ -861,6 +888,7 @@ def build_ask_question(c: dict) -> dict:
         q = (f"{who} 上批被挂起。"
              + (f"本题代表 {len(_g2) + 1} 个同因挂起用例(另含尾号 {'、'.join(_g2[:8])})"
                 f",答案应用到全部。" if _g2 else "")
+             + (_cc if _cc else "")
              + "本批如何处理?")
         return {"question": q, "header": f"挂起{aid[-6:]}",
                 "options": [
@@ -875,6 +903,7 @@ def build_ask_question(c: dict) -> dict:
          + (f";既往选择:{c.get('prior_choices')}" if c.get("prior_choices") else "")
          + ")"
          + (f"。{note}" if note else "")
+         + (_cc if _cc else "")
          + ",如何处置?")
     return {"question": q, "header": f"矛盾{aid[-6:]}",
             "options": [

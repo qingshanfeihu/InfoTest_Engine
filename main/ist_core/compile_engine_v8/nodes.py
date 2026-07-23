@@ -528,8 +528,9 @@ def author(state: dict) -> dict:
         if aid in panel_wait:
             continue   # ought-欠定呈报未获答案:重编等用户确认(路由先经 ask 边,此为保险)
         mine = [f for f in fs if f.get("aid") == aid]
-        if vw["cases"][aid]["status"] in (V.S_FAILED, V.S_CONTRADICTED,
-                                          V.S_BROKEN_ERRORED):
+        capped = F.rounds_used(mine, aid) >= max_rounds + sh.granted_rounds(fs, aid)
+        st = vw["cases"][aid]["status"]
+        if st in (V.S_FAILED, V.S_CONTRADICTED, V.S_BROKEN_ERRORED):
             if F.contradictions(mine, aid) >= 2:
                 continue                      # 归 ask_contradiction 边
             att = [f for f in mine if f.get("ev") == "attribution"]
@@ -538,10 +539,16 @@ def author(state: dict) -> dict:
                 continue   # rerun_isolated/transient 由 merge 复跑;env_blocked 走确认问询
             # 轮次封顶 ≠ 终态(§11.7 三权分立:资源权归用户):记 cap_reached 进资源问询,
             # 用户授权(granted_rounds)后封顶上移继续;引擎无单方终结权
-            if F.rounds_used(mine, aid) >= max_rounds + sh.granted_rounds(fs, aid):
+            if capped:
                 sh.append(state, [{"ev": "cap_reached", "aid": aid,
                                    "round": F.rounds_used(mine, aid)}])
                 continue
+        elif st == V.S_PENDING and capped:
+            # M-07: emit_invalid 打回的 PENDING 也曾绕过封顶——反复「过 emit 不过
+            # merge 预检」每圈烧 fork、不问人,靠 recursion_limit 终结
+            sh.append(state, [{"ev": "cap_reached", "aid": aid,
+                               "round": F.rounds_used(mine, aid)}])
+            continue
         todo.append(aid)
     if not todo:
         return {"phase_status": "nothing_to_do", **sh.counts_update(state)}
@@ -886,26 +893,29 @@ def ask_decision(state: dict) -> dict:
         _rep = str(q.get("_autoid", ""))
         q["folded_members"] = list(fold.get(_rep, [_rep]))
     # 题面入账(run11 体检#6:问了什么必须入账;oracle 残差 (16) 对称应用到问询侧)。
-    # 折叠组:每成员一条 ask_shown,非代表标 folded_into(账目完整,答案可回放归属)
-    shown: list[dict] = []
-    for q in qs:
-        rep = str(q.get("_autoid", ""))
-        for member in fold.get(rep, [rep]):
-            rec = {"ev": "ask_shown", "aid": member,
-                   "question_id": _qid_by_aid.get(member, ""),
-                   "question": str(q.get("question", ""))[:300],
-                   "options": [o.get("label") for o in q.get("options", [])],
-                   "gather": True}
-            if member != rep:
-                rec["folded_into"] = rep
-            shown.append(rec)
-    if shown:
-        sh.append(state, shown)
+    # 折叠组:每成员一条 ask_shown,非代表标 folded_into(账目完整,答案可回放归属)。
+    # M-06:只对实际 interrupt 的 batch 入账——旧实现先全量 ask_shown 再只问前 32 题,
+    # >32 题成「账上已问、实际未问」。
     answers: dict[str, str] = {}
     for i in range(0, len(qs), 4):
         if i // 4 >= _MAX_ASK_ROUNDS:
             break
-        ans = interrupt({"kind": "ask_decision", "questions": qs[i:i + 4]})
+        batch = qs[i:i + 4]
+        shown: list[dict] = []
+        for q in batch:
+            rep = str(q.get("_autoid", ""))
+            for member in fold.get(rep, [rep]):
+                rec = {"ev": "ask_shown", "aid": member,
+                       "question_id": _qid_by_aid.get(member, ""),
+                       "question": str(q.get("question", ""))[:300],
+                       "options": [o.get("label") for o in q.get("options", [])],
+                       "gather": True}
+                if member != rep:
+                    rec["folded_into"] = rep
+                shown.append(rec)
+        if shown:
+            sh.append(state, shown)
+        ans = interrupt({"kind": "ask_decision", "questions": batch})
         if isinstance(ans, dict):
             answers.update({str(k): str(v) for k, v in ans.items()})
     for rep in sorted(fold):
@@ -1667,21 +1677,31 @@ def _rollback_one(aid: str) -> list[str]:
 
 
 _DIG_HEAD_RE = re.compile(r"<<>> DiG [^\n]*?@(\S+)")
+_AT_HOST_RE = re.compile(r"@((?:\d{1,3}\.){3}\d{1,3}|\S+)")
 _SHEET_DIG_RE = re.compile(r"dig\s+@(\S+)")
+
+
+def _exec_targets(text: str) -> set[str]:
+    """执行目标抽取(M-21:dig 头 + @host/IP 通用形态;R076/I2 不止 dig)。"""
+    s = str(text or "")
+    return set(_DIG_HEAD_RE.findall(s)) | set(_AT_HOST_RE.findall(s))
 
 
 def _evidence_suspect(rec: dict, aid: str) -> dict | None:
     """归属一致性门(I2/(27) 域内展开,机械):取证附件中的执行目标 vs 卷面对应步
     ——框架触发端会话按 case 切文件存在延迟输出跨界竞态(#67 实证:dig 超时 10s
     的输出落进邻案文件,归因孔拿邻案证据讲灵异故事)。两侧都非空且不相交=证据
-    疑似错位;引擎自己发现自己的证据坏了,如实声明而非让孔猜。"""
+    疑似错位;引擎自己发现自己的证据坏了,如实声明而非让孔猜。
+    M-21:目标抽取扩至 @host/IP,非 dig 取证错位不再静默通过。"""
     try:
         ctx = str(rec.get("device_context") or "")
-        ev_targets = set(_DIG_HEAD_RE.findall(ctx))
+        ev_targets = _exec_targets(ctx)
         rows = _load_case_rows(aid)
-        sheet_targets = set()
+        sheet_targets: set[str] = set()
         for r in rows:
-            sheet_targets.update(_SHEET_DIG_RE.findall(str(r.get("G") or "")))
+            g = str(r.get("G") or "")
+            sheet_targets.update(_SHEET_DIG_RE.findall(g))
+            sheet_targets.update(_AT_HOST_RE.findall(g))
         if ev_targets and sheet_targets and not (ev_targets & sheet_targets):
             return {"evidence_targets": sorted(ev_targets),
                     "sheet_targets": sorted(sheet_targets)}
@@ -1876,6 +1896,7 @@ def attribute(state: dict) -> dict:
                  "run_id": str(last.get("run_id") or ""),
                  "layer": "E", "disposition": "rerun_isolated",
                  "h_position": "h_s0",
+                 "provenance": "engine_auto:g6_prescreen",  # M-20:非设备观察
                  "fix_direction": _g6_fix_direction(_es, polluters),
                  "evidence": basis}]
         if pre_facts:
@@ -1988,6 +2009,10 @@ def attribute(state: dict) -> dict:
         aid = str(rec.get("autoid") or "")
         att = rec.get("_attribution")
         if aid in todo and isinstance(att, dict):
+            # M-02:与 ask_panel 同口径新鲜度——超时 fork 迟到写入的陈旧 _attribution
+            # 不得盖章本轮 run_id(submit_attribution 落 ts)
+            if float(att.get("ts") or 0) < t0 - 1:
+                continue
             mine = [f for f in fs if f.get("aid") == aid]
             last = F.latest_verdict(mine, aid)
             fact = {"ev": "attribution", "aid": aid,
@@ -2544,10 +2569,14 @@ def ask_contradiction(state: dict) -> dict:
         mine = [f for f in fs if f.get("aid") == aid]
         # 队列空证明(片4,§11.7「队列非空禁 ask」的题面侧):已试修法清单+当前队列。
         # 队列非空却进 ask 边=路由缺陷,如实告警(fail-open 照常问,人比闸权威)
+        # M-23:self_cleanup 单独在队头是 contra/cap 设计态(互扰消解推论置头),
+        # 不算「应先自愈却问人」——旧 warning 结构性误报淹没真异常
         _q = RM.derive_queue(fs, vw, aid, _maxr, sh.granted_rounds(fs, aid))
         if _q and kind in ("cap", "env", "bed", "contra"):
-            logger.warning("ask 目标 %s(%s) 的导出修法队列非空(%s)——路由应先自愈",
-                           aid[-6:], kind, [x.get("action") for x in _q])
+            _acts = {str(x.get("action") or "") for x in _q}
+            if not (kind in ("cap", "contra") and _acts <= {"self_cleanup"}):
+                logger.warning("ask 目标 %s(%s) 的导出修法队列非空(%s)——路由应先自愈",
+                               aid[-6:], kind, [x.get("action") for x in _q])
         item = {"autoid": aid, "kind": kind,
                 "title": titles.get(aid, ""),
                 "rounds": vw["cases"][aid]["rounds"],
@@ -2642,6 +2671,11 @@ def ask_contradiction(state: dict) -> dict:
     _cc_note = [{"key": str(c.get("key"))[:120],
                  "aids": [str(a)[-6:] for a in (c.get("aids") or [])]}
                 for c in _ccs[-3:]]
+    # M-22:共因摘要挂到每题 case 载荷——_bridge/build_ask_question 消费进题面
+    # (§18.6 坑#8:曾只塞 interrupt payload 顶层键、桥接零读)
+    if _cc_note:
+        for it in payload:
+            it["common_causes"] = _cc_note
     # 共因合题(run14 实弹修:11 案同因曾呈 11 题分 3 页——「回答一次」的机械保证):
     # bed/suspended 各自按 (诊断依据, 污染者集) 分组,同组只出组长一题,答案广播组员。
     # H-04:分组键含 kind——旧实现 bed 与 suspended 同键合组,组长答 retry 广播后
@@ -2926,6 +2960,8 @@ def _attribution_observations(fs: list[dict], aid: str) -> list[dict]:
     - verbatim 证据在:evidence 非空且 ≠"user"(用户裁决记账不是设备观察);
     - 源窗口 ok:该归因对应的 verdict 是 pass/fail(broken/not_run 轮的"观察"
       骑在失真窗口上,(43) 吸收态不产观察)。
+    - M-20:缺 run_id 拒(deesc 自动裁决旁路曾 fail-open);layer=engine /
+      provenance 以 engine_auto 开头 / h_s0 前筛行拒——引擎推断不得冒充设备观察。
     锚命令=失败断言的来源观测步(crash-gate 保证 check_point 前必有不带 H 的观测步;
     取最后一个 check_point 前最近者)。卷面读不出/无断言=无锚,如实 no-op——
     行为知识必须挂真实观测命令(merger 门),猜锚=知识挂错节点误导检索。
@@ -2952,7 +2988,15 @@ def _attribution_observations(fs: list[dict], aid: str) -> list[dict]:
         ev = str(att.get("evidence") or "")
         if not ev or ev == "user":
             continue
-        v = verdicts.get(str(att.get("run_id") or ""))
+        run_id = str(att.get("run_id") or "")
+        if not run_id:
+            continue  # M-20:缺 run_id 拒(旧 fail-open 让自动裁决入 uncertain)
+        layer = str(att.get("layer") or "")
+        prov = str(att.get("provenance") or "")
+        if (layer == "engine" or prov.startswith("engine_auto")
+                or str(att.get("h_position") or "").startswith("h_s0")):
+            continue  # M-20:引擎自撰/前筛非设备观察
+        v = verdicts.get(run_id)
         if v is not None and v.get("result") not in ("pass", "fail"):
             continue
         dc = att.get("defect_candidate")
@@ -3254,14 +3298,17 @@ def closing(state: dict) -> dict:
         sh.emit(f"污染者交付门:{len(_blocked)} 案 pass 但卷面缺案尾清理"
                 + (f"(含 {len(_g3_crashed)} 案门崩溃 fail-closed)" if _g3_crashed else "")
                 + "——不入交付卷(重编补自清后可交付)")
-    mf = [f for f in fs if f.get("ev") == "merged"]
+    mf = [f for f in fs if f.get("ev") == "merged" and f.get("ctx") != F.CTX_SUBSET]
     moved = list(mf[-1].get("moved_tail") or []) if mf else []
     coexist = list(mf[-1].get("coexist_violations") or []) if mf else []
     # 缺陷候选单(P0 C20):在删 last_run 之前汇总——表单已随 attribute 收账进事实流,
     # 此处从 facts 投影(与报告同一 fold,渲染零 LLM);在途批(老 run 收账无表单字段)
-    # 从盘上 last_run.json 回读兜底(532862 型续跑收口)
+    # 优先读 state["last_run_ref"](M-12:子集跑后硬读 mdir/last_run.json 会偏到交付卷旁路)
     _lr_recs: dict[str, dict] = {}
-    for _rec in (sh.read_json(mdir / "last_run.json", []) or []):
+    _lr_path = sh.project_root() / str(state.get("last_run_ref") or "")
+    if not _lr_path.is_file():
+        _lr_path = mdir / "last_run.json"
+    for _rec in (sh.read_json(_lr_path, []) or []):
         if isinstance(_rec, dict) and _rec.get("autoid"):
             _lr_recs[str(_rec["autoid"])] = _rec
     dc_entries = _collect_defect_candidates(fs, vw, sh.manifest(state), last_run=_lr_recs)

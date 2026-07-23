@@ -235,6 +235,22 @@ def test_remedy_text_determinate_branches(mine, expect):
     assert RD.leak_scan(out) == []
 
 
+def test_escalated_empty_auto_suspend_not_user_ruling_H19():
+    """H-19:未答 deesc(空 answer + suspend)不得渲染成「已按你的裁决「」处理」。"""
+    from main.ist_core.compile_engine_v8.views import _is_escalated
+    mine = [
+        {"ev": "escalated", "aid": A, "reason": "no output", "subclass": "no_output"},
+        {"ev": "decision", "aid": A, "question_id": f"deesc:{A}:1",
+         "answer": "", "token": "suspend",
+         "note": "auto-suspended: no answer"},
+    ]
+    assert _is_escalated(mine)
+    out = RD.remedy_text([], mine, None)
+    assert "已按你的裁决" not in out
+    assert "呈报恢复问询" in out or "未答复" in out
+    assert RD.leak_scan(out) == []
+
+
 def test_yzg_golden_replay_renders_leak_free():
     """金标准回放:yzg 真机验收事实流 → 渲染稳定且零泄漏。"""
     fs = F.load_facts(FIX / "yzg_facts.jsonl")

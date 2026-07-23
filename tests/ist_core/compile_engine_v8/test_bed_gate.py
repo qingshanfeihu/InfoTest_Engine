@@ -527,3 +527,55 @@ def test_c1_digit_free_residue_not_whitewashed(tmp_path):
     f = next(f for f in rep["findings"] if f["kind"] == "segments")
     assert not f.get("maintenance_explained")
     assert rep["needs_ask"] is True
+
+
+def test_cleanup_recheck_preserves_mirror_and_closure_H10(tmp_path, monkeypatch):
+    """H-10:清理复检不得蒸发 mirror_sync/bed_closure_failed——旧整体重赋值会让用户看不到。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    from main.ist_core.compile_engine_v8 import facts as F
+    import main.ist_core.compile_engine_v8.mirror_anchor as MA
+
+    facts_file = tmp_path / "facts.jsonl"
+    facts_file.write_text("", encoding="utf-8")
+    F.append_facts(facts_file, [
+        {"ev": "bed_closure_failed", "aid": "", "host": "h", "run_id": "bc:h10:1",
+         "reason": "crashed"}])
+    calls = {"n": 0}
+    residue = [{"kind": "segments", "detail": "leftover", "probe_failed": False}]
+
+    def fake_check(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"host": "h", "probes": {}, "findings": list(residue),
+                    "needs_ask": True, "anchor": {"status": "match", "device": "x"},
+                    "ours_unrestored": []}
+        return {"host": "h", "probes": {}, "findings": [], "needs_ask": False,
+                "anchor": {"status": "match", "device": "x"}, "ours_unrestored": []}
+
+    monkeypatch.setattr(N.B, "bed_check", fake_check)
+    monkeypatch.setattr(N.B, "bed_unrestored", lambda *a, **k: [])
+    monkeypatch.setattr(N.B, "bed_snapshot", lambda fn: {})
+    monkeypatch.setattr(N.B, "bed_cleanup",
+                        lambda *a, **k: {"cleaned": [{"kind": "segments"}],
+                                         "failed": [], "skipped": []})
+    monkeypatch.setattr(MA, "check_sync",
+                        lambda _e: {"status": "mismatch", "diffs": ["lib/x.py"]})
+    monkeypatch.setattr(sh, "outputs_root", lambda: tmp_path / "outputs")
+    monkeypatch.setattr(sh, "facts_path", lambda s: facts_file)
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": []})
+    monkeypatch.setattr(sh, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sh, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(sh, "counts_update", lambda *a, **k: {})
+    captured = {}
+    monkeypatch.setattr(N, "interrupt",
+                        lambda p: captured.update(p) or {"decision": "继续"})
+    out = N.bed_gate({"out_name": "b1"})
+    assert out["phase_status"] == "ok"
+    assert calls["n"] == 2  # 初检 + 复检
+    kinds = [f.get("kind") for f in (captured.get("report") or {}).get("findings", [])]
+    assert "mirror_sync" in kinds
+    assert "bed_closure_failed" in kinds
+    fs = F.load_facts(facts_file)
+    assert any(f.get("question_id") == "bedclosure:bc:h10:1" for f in fs
+               if f.get("ev") == "decision")

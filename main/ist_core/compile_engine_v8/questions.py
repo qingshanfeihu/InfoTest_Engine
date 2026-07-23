@@ -576,8 +576,8 @@ def answer_token(kind: str, a: str) -> str:
     if kind in ("panel", "cap", "env", "bed", "contra") and _defect_intent(a):
         return "defect"
     if kind == "panel":
-        if _has_positive_intent(a, ("确认", "按此")):
-            return "confirm"
+        # H-07:panel 已中性化(选项无 confirm);自由输入「确认/按此」旧归 confirm
+        # 会经 _try_adopt 跨批机械采信中性 hypothesis,污染 K_ought——一律走 correct。
         return "correct"
     if kind == "cap":
         if _has_positive_intent(a, ("预期", "断言", "改成", "应为", "手册", "改用", "期望")):
@@ -755,7 +755,7 @@ def build_ask_question(c: dict) -> dict:
         # 失去所指;用户选的那一侧 label 即裁决方向,走 correct("ruling 覆盖 Z、意图最高权威",
         # briefs.py)——同时与 answer_token 的 panel 兜底(非缺陷/非确认→correct)一致,
         # 裸串/token 两路殊途同归,不生歧义(成对机制补齐,§18.15-B/(46))。
-        return {"question": q, "header": f"裁决{aid[-4:]}",
+        return {"question": q, "header": f"裁决{aid[-6:]}",
                 "options": [
                     {"label": "预期以实机为准", "description": "以实机实际行为为准,改这个用例的预期断言后重编。对你的用例:承认实机对、改用例期望。"},
                     {"label": "确认产品缺陷", "description": "实机行为是产品的问题——记进缺陷候选清单,这个用例按缺陷结案。对你的用例:判定是产品问题、不改用例。"}],
@@ -773,7 +773,7 @@ def build_ask_question(c: dict) -> dict:
              + "。如何处理?")
         dc_note = (f"(在案第 {'、'.join(str(r) for r in dc_rounds)} 轮曾判疑似产品缺陷,见上)"
                    if dc_rounds else "")
-        return {"question": q, "header": f"轮次{aid[-4:]}",
+        return {"question": q, "header": f"轮次{aid[-6:]}",
                 "options": [
                     {"label": "继续,再修 2 轮", "description": "授权引擎再多编两轮试试。对你的用例:再给它两次机会修好。"},
                     {"label": "确认产品缺陷", "description":
@@ -792,7 +792,7 @@ def build_ask_question(c: dict) -> dict:
              + (f"(设备回显原文:『{_echo_quote(c.get('evidence'))}』)" if c.get("evidence") else "")
              + (f"。各轮判断:{hist}" if hist else "")
              + "。确认是环境问题吗?")
-        return {"question": q, "header": f"环境{aid[-4:]}",
+        return {"question": q, "header": f"环境{aid[-6:]}",
                 "options": [
                     {"label": "确认环境问题,停止该案", "description": "按环境阻塞如实报告这个用例。对你的用例:确认是环境挡的、就此如实记。"},
                     {"label": "不认可,隔离复跑", "description": "单独再跑一次验证这个判断。对你的用例:不信是环境问题、再单跑验证一次。"},
@@ -811,7 +811,7 @@ def build_ask_question(c: dict) -> dict:
             q = (f"{who} 的卷面自身含网络层配置写而无案尾恢复步"
                  + (f"(缺恢复:{_mt})" if c.get("missing_tau") else "")
                  + "——每次执行都会重新污染共享床(复跑只会再拆一次,不是出路)。如何处置?")
-            return {"question": q, "header": f"缺清理{aid[-4:]}",
+            return {"question": q, "header": f"缺清理{aid[-6:]}",
                     "options": [
                         {"label": "重编补自清", "description":
                             f"重新编写、在断言后加一步把配置改回去(建议:{tau or '按相反顺序用 no 命令撤配置'})——推荐。对你的用例:让它跑完自己收拾干净。"},
@@ -843,7 +843,7 @@ def build_ask_question(c: dict) -> dict:
              # D28:bed evidence=受害者设备回显原文,标「设备回显原文」verbatim(_echo_quote,原文引用豁免)。
              + (f"(设备回显原文:『{_echo_quote(c.get('evidence'))}』)" if c.get("evidence") else "")
              + "。" + _strength + _grp_note + "如何处置?")
-        return {"question": q, "header": f"床态{aid[-4:]}",
+        return {"question": q, "header": f"床态{aid[-6:]}",
                 "options": [
                     {"label": "挂起到下批", "description": "把测试床整理好后下批再续跑这个用例(重跑同参数会问你要不要恢复)。对你的用例:等床清理好、下批再跑。"},
                     {"label": "床已处理,复跑验证", "description": "你已清掉残留——引擎复跑一次验证。对你的用例:床清好了、再跑一次确认。"},
@@ -857,7 +857,7 @@ def build_ask_question(c: dict) -> dict:
              + (f"本题代表 {len(_g2) + 1} 个同因挂起用例(另含尾号 {'、'.join(_g2[:8])})"
                 f",答案应用到全部。" if _g2 else "")
              + "本批如何处理?")
-        return {"question": q, "header": f"挂起{aid[-4:]}",
+        return {"question": q, "header": f"挂起{aid[-6:]}",
                 "options": [
                     {"label": "恢复处理", "description": "回到正常流程继续修。对你的用例:接着修这个用例。"},
                     {"label": "保持挂起", "description": "本批继续不动它。对你的用例:这批先一直放着。"}],
@@ -871,7 +871,7 @@ def build_ask_question(c: dict) -> dict:
          + ")"
          + (f"。{note}" if note else "")
          + ",如何处置?")
-    return {"question": q, "header": f"矛盾{aid[-4:]}",
+    return {"question": q, "header": f"矛盾{aid[-6:]}",
             "options": [
                 {"label": "重排复验", "description": "把用例在卷里的顺序重排后再上机终验一轮(会把互相干扰的用例排到卷末)。对你的用例:换个跑批顺序再验一次,排除用例间互扰。"},
                 {"label": "如实降级", "description": "这个用例不放进交付卷,按未通过如实报告。对你的用例:不硬塞进成品、如实记它没过。"}],

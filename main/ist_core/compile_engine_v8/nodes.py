@@ -306,7 +306,22 @@ def bed_gate(state: dict) -> dict:
                 + (f",无清理引用 {len(clean['skipped'])} 项" if clean["skipped"] else "")
                 + " → 复检")
         if clean["cleaned"]:
+            # H-10:复检只重探设备残留——mirror_sync / bed_closure_failed / ledger_stuck
+            # 是引擎内部发现,bed_check 不会重现;整体重赋值会蒸发它们,干净复检则
+            # 永不 interrupt(用户永远看不到上批告警)。保留并强制 needs_ask。
+            _keep = [f for f in (rep.get("findings") or [])
+                     if f.get("kind") in ("mirror_sync", "bed_closure_failed")
+                     or f.get("ledger_stuck")]
             rep = B.bed_check(_probe_fn, cfg_build, root=sh.project_root(), host=host)
+            if _keep:
+                _seen = {(str(f.get("kind")), str(f.get("detail") or "")[:120])
+                         for f in (rep.get("findings") or [])}
+                for f in _keep:
+                    key = (str(f.get("kind")), str(f.get("detail") or "")[:120])
+                    if key not in _seen:
+                        rep.setdefault("findings", []).append(f)
+                        _seen.add(key)
+                rep["needs_ask"] = True
             sh.append(state, [{"ev": "bed_checked", "aid": "", "host": host,
                                "anchor": rep.get("anchor"), "findings": rep.get("findings"),
                                "run_id": f"bed:recheck:{int(time.time())}"}])
@@ -790,7 +805,8 @@ def ask_decision(state: dict) -> dict:
                                               for lbl in (q.get("_needs_scheme_labels") or [])}
                       for q in qs}
     for q in qs:
-        mem = fold.get(str(q.get("_autoid")), [])
+        rep = str(q.get("_autoid"))
+        mem = fold.get(rep, [])
         if len(mem) > 1:
             tails = "、".join(a[-6:] for a in mem)
             # 折叠后缀机械确定(§18.13 P4:不引入 LLM 组稿——广播的是决策 token,
@@ -799,7 +815,10 @@ def ask_decision(state: dict) -> dict:
             q["question"] = (str(q.get("question", ""))
                              + f"(本题代表同组 {len(mem)} 案:尾号 {tails}——采纳即认可各案"
                              "各自的等价方案,答案广播全组、逐案落盘)")
-            q["header"] = f"欠定·组{len(mem)}案"
+            # H-05:header 必须批内唯一——旧 `欠定·组{N}案` 同规模组撞名,
+            # engine_tool._panel 按 header 正则取答 → B 案拿到 A 案裁决串线。
+            # 代表案尾号做唯一锚(组规模已在题文);≤12 字门仍满足(欠定·+6 尾=9)。
+            q["header"] = f"欠定·{rep[-6:]}"
     # 采纳止损案:题面附完整语境(引擎已止损、不再静默续烧 fork),让用户在有全部信息
     # 下裁决;任一折叠成员触发止损即标代表题、取组内最大圈次。语境随 ask_shown 入账(可回放)。
     if adopt_stalled:
@@ -855,6 +874,40 @@ def ask_decision(state: dict) -> dict:
         a = answers.get(rep, "")
         if not a:
             continue
+        # H-08:挂起/停止是跨面板常驻特权(R049)——欠定通道旧实现无分支:
+        # forbidden_mechanism 答「挂起」→ 静默落改过程;generic 答「挂起」→ 不落死循环重问。
+        # 精确 label 命中优先;未命中再认特权短指令(与 answer_token 同口径)。
+        m = fm_meta.get(rep)
+        tbl = _tok_by_rep.get(rep) or {}
+        decision = next((t for lbl, t in tbl.items() if lbl and (lbl in a or a in lbl)), "")
+        if not decision:
+            _priv = _answer_token("panel", a)
+            if _priv == "suspend":
+                for aid in fold[rep]:
+                    new_facts.append({"ev": "decision", "aid": aid,
+                                      "question_id": _qid_by_aid.get(aid),
+                                      "answer": a, "token": "suspend"})
+                    new_facts.append({"ev": "suspended", "aid": aid,
+                                      "reason": f"user_decision:挂起",
+                                      "question_id": _qid_by_aid.get(aid)})
+                    sh.signal("user_decided", aid)
+                sh.emit(f"…{rep[-6:]} 你的裁决「{a[:24]}」→ 引擎理解为:挂起(常驻特权)")
+                continue
+            if _priv == "stop":
+                for aid in fold[rep]:
+                    new_facts.append({"ev": "decision", "aid": aid,
+                                      "question_id": _qid_by_aid.get(aid),
+                                      "answer": a, "token": "stop"})
+                    new_facts.append({"ev": "user_stop", "aid": aid,
+                                      "question_id": _qid_by_aid.get(aid),
+                                      "answer": a, "token": "stop"})
+                    new_facts.append({"ev": "attribution", "aid": aid, "round": 99,
+                                      "layer": "user", "disposition": "user_stop",
+                                      "fix_direction": f"user decision: {a}",
+                                      "evidence": "user"})
+                    sh.signal("user_decided", aid)
+                sh.emit(f"…{rep[-6:]} 你的裁决「{a[:24]}」→ 引擎理解为:停止该案(常驻特权)")
+                continue
         # F-Py-5②(scheme 通道拒空,与 §18.14 D1 form 门分层——form 门管形态类 assertion_form 空、
         # 此管机制类/实质内容空):选了「需自定义 scheme」option 但无实质 scheme 补充 → 不落 decision、
         # 案 needs_decision 保持未答 → 下批重问(不静默落空「改预期」、不拒丢案;532618 实证:worker
@@ -864,11 +917,8 @@ def ask_decision(state: dict) -> dict:
         if _scheme and scheme_answer_empty(a, _scheme):
             sh.emit(f"…{rep[-6:]} 你选了自定义等价方案但没填具体方案,本轮不落、下批会再问你")
             continue
-        m = fm_meta.get(rep)
-        tbl = _tok_by_rep.get(rep) or {}
         # P3:三元组题先按显式 label→token 映射(label 与 answer 互为子串即命中,
         # 容 TUI 序号/换行加工);失败再走既有 substring 兜底。
-        decision = next((t for lbl, t in tbl.items() if lbl and (lbl in a or a in lbl)), "")
         if not decision:
             decision = next((d for d in ("改过程", "改预期", "改描述") if d in a), "")
         if not decision and (m or tbl):
@@ -2538,8 +2588,10 @@ def ask_contradiction(state: dict) -> dict:
                  "aids": [str(a)[-6:] for a in (c.get("aids") or [])]}
                 for c in _ccs[-3:]]
     # 共因合题(run14 实弹修:11 案同因曾呈 11 题分 3 页——「回答一次」的机械保证):
-    # bed 类目标按 (诊断依据, 污染者集) 分组,同组只出组长一题(题面注明代表案集),
-    # 答案经 _group_leader 广播到组员;非 bed 题不折叠
+    # bed/suspended 各自按 (诊断依据, 污染者集) 分组,同组只出组长一题,答案广播组员。
+    # H-04:分组键含 kind——旧实现 bed 与 suspended 同键合组,组长答 retry 广播后
+    # suspended 组员走 tok=retry 只落 attribution、不落 resumed → `_is_suspended` 不解除,
+    # 下批以新 qid 重问同一批案(既有折叠测试也只锁同 kind)。
     _group_leader: dict[str, str] = {}
     _folded: list[dict] = []
     _bed_groups: dict[tuple, dict] = {}
@@ -2547,13 +2599,13 @@ def ask_contradiction(state: dict) -> dict:
         if it["kind"] not in ("bed", "suspended"):
             _folded.append(it)
             continue
-        # suspended 恢复题同因合并(run15 形态:11 个同因挂起案的恢复问询=一题)——
-        # 分组键同 bed(最新诊断的依据+污染者集;无诊断的挂起案不合并)
+        # suspended 恢复题同因合并(run15 形态:同 kind 同因挂起案的恢复问询=一题)——
+        # 分组键=(kind, 最新诊断依据, 污染者集);无诊断的不合并
         _d = next((f for f in reversed(fs) if f.get("ev") == "diagnosis"
                    and str(f.get("aid")) == it["autoid"]), {})
-        _key = (str(_d.get("basis") or ""),
+        _key = (it["kind"], str(_d.get("basis") or ""),
                 tuple(sorted(str(pp.get("aid")) for pp in (_d.get("polluters") or []))))
-        if _key in _bed_groups and _key != ("", ()):
+        if _key in _bed_groups and _key[1:] != ("", ()):
             leader = _bed_groups[_key]
             leader.setdefault("group_aids", [leader["autoid"]]).append(it["autoid"])
             _group_leader[it["autoid"]] = leader["autoid"]

@@ -217,7 +217,11 @@ def _escalated_remedy_text(mine: list[dict]) -> str:
     sub = _F.escalated_subclass(mine, aid)
     cause = _ESC_SUBCLASS_CN.get(sub, "引擎侧遇到无法自行推进的情况")
     deesc_decs = [f for f in mine if f.get("ev") == "decision"
-                 and str(f.get("question_id", "")).startswith(f"deesc:{aid}:")]
+                 and str(f.get("question_id", "")).startswith(f"deesc:{aid}:")
+                 # H-19:未答自动挂起落 decision{answer:"",token:suspend}——不得渲染成
+                 # 「已按你的裁决「」处理」(非交互批全部 escalated 必走此谎报路径)。
+                 and str(f.get("answer") or "").strip()
+                 and str(f.get("token") or "") != "suspend"]
     if not deesc_decs:
         opts = ("重编/工程故障呈报/保持" if sub == "no_ledger_channel"
                else f"{_ESC_ROUTE_CN.get(sub, '重编')}/缺陷候选/保持")

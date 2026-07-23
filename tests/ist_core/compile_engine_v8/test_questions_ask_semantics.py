@@ -88,7 +88,7 @@ def test_answer_token_whitespace_suspends_not_correct():
     # suspended 类:空白→keep(保持挂起,已正确待答语义)——例外,不归 suspend
     assert answer_token("suspended", "   ") == "keep"
     # 非空实质答案照常映射(guard 只拦纯空白,不误伤纠正/确认/意图词)
-    assert answer_token("panel", "确认") == "confirm"
+    assert answer_token("panel", "确认") == "correct"   # H-07:不再归 confirm
     assert answer_token("cap", "改预期为 X") == "correct"
     assert answer_token("bed", "已处理") == "retry"
     assert answer_token("panel", "这是bug,记缺陷候选") == "defect"
@@ -516,3 +516,19 @@ def test_bed_gate_proceed_rejects_negated_continue_H12():
             assert out == {"decision": expect}, (ans, out)
     finally:
         ET._panel = orig
+
+
+def test_panel_confirm_freeform_is_correct_H07():
+    """H-07:panel 自由输入「确认/按此」不再归 confirm(中性化后无决断内容可采信)。"""
+    assert answer_token("panel", "确认") == "correct"
+    assert answer_token("panel", "按此理解继续") == "correct"
+    assert answer_token("panel", "确认") != "confirm"
+
+
+def test_ask_headers_unique_by_six_digit_tail_H05():
+    """H-05:同批 header 含 6 位尾号——旧 4 位可撞,折叠组也不再用同规模撞名串。"""
+    A1, A2 = "203600000000111111", "203600000000222222"
+    h1 = build_ask_question({"autoid": A1, "kind": "cap", "title": "", "rounds": 3})["header"]
+    h2 = build_ask_question({"autoid": A2, "kind": "cap", "title": "", "rounds": 3})["header"]
+    assert h1 != h2 and A1[-6:] in h1 and A2[-6:] in h2
+    assert len(h1) <= 12 and len(h2) <= 12

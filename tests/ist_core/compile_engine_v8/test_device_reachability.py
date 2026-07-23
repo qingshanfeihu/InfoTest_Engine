@@ -50,26 +50,32 @@ def test_run_refuses_when_device_unreachable(monkeypatch, tmp_path):
 
 
 def test_group_fold_and_broadcast_semantics():
-    """共因合题:同 (basis,污染者集) 折叠为组长题;组员答案沿用组长(广播)。"""
+    """共因合题:同 (kind,basis,污染者集) 折叠为组长题;组员答案沿用组长(广播)。
+    H-04:kind 进键——bed 与 suspended 不得跨 kind 合组。"""
     payload = [
         {"autoid": "A1", "kind": "bed"}, {"autoid": "A2", "kind": "bed"},
+        {"autoid": "S1", "kind": "suspended"},  # 同 basis 但不同 kind
         {"autoid": "B1", "kind": "cap"}]
     diags = {"A1": {"basis": "s0", "polluters": [{"aid": "P"}]},
-             "A2": {"basis": "s0", "polluters": [{"aid": "P"}]}}
+             "A2": {"basis": "s0", "polluters": [{"aid": "P"}]},
+             "S1": {"basis": "s0", "polluters": [{"aid": "P"}]}}
     leader_map, folded, groups = {}, [], {}
     for it in payload:
-        if it["kind"] != "bed":
+        if it["kind"] not in ("bed", "suspended"):
             folded.append(it); continue
         d = diags.get(it["autoid"], {})
-        key = (d.get("basis", ""), tuple(sorted(p["aid"] for p in d.get("polluters", []))))
-        if key in groups and key != ("", ()):
+        key = (it["kind"], d.get("basis", ""),
+               tuple(sorted(p["aid"] for p in d.get("polluters", []))))
+        if key in groups and key[1:] != ("", ()):
             leader = groups[key]
             leader.setdefault("group_aids", [leader["autoid"]]).append(it["autoid"])
             leader_map[it["autoid"]] = leader["autoid"]
         else:
             groups[key] = it
             folded.append(it)
-    assert len(folded) == 2 and leader_map == {"A2": "A1"}
+    # bed 两案合 1 题 + suspended 独立 1 题 + cap 1 题 = 3;A2→A1,S1 不合入 bed
+    assert len(folded) == 3 and leader_map == {"A2": "A1"}
+    assert "S1" not in leader_map
     ans = {"A1": {"answer": "挂起到下批", "token": "suspend"}}
     for m, l in leader_map.items():
         if m not in ans and l in ans:

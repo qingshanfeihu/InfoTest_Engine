@@ -351,3 +351,56 @@ def test_folded_members_on_rep_question(monkeypatch):
     assert sum(len(b) for b in asked) == 1                      # 组一题(代表)
     fm = asked[0][0].get("folded_members")
     assert fm is not None and set(fm) == {A1, A2}              # 代表题带全组成员 aid,恰等
+
+
+def test_ask_decision_suspend_privilege_H08(monkeypatch):
+    """H-08:欠定通道答「挂起」→ 落 suspended,不得静默改过程/死循环重问。"""
+    _mk_case(A1)
+    appended, asked = _drive(monkeypatch, [_pend(A1, 1)], {A1: "挂起"})
+    assert sum(len(b) for b in asked) == 1
+    assert any(f.get("ev") == "suspended" and f.get("aid") == A1 for f in appended)
+    assert any(f.get("ev") == "decision" and f.get("token") == "suspend"
+               for f in appended)
+    assert not (sh.outputs_root() / A1 / "user_decision.json").is_file()
+
+
+def test_ask_decision_stop_privilege_H08(monkeypatch):
+    """H-08:欠定通道答「停止该案」→ user_stop 终态,不得落改过程。"""
+    _mk_case(A1)
+    appended, _ = _drive(monkeypatch, [_pend(A1, 1)], {A1: "停止该案"})
+    assert any(f.get("ev") == "user_stop" and f.get("aid") == A1 for f in appended)
+    assert any(f.get("ev") == "attribution" and f.get("disposition") == "user_stop"
+               for f in appended)
+    assert not (sh.outputs_root() / A1 / "user_decision.json").is_file()
+
+
+def test_fold_headers_unique_across_same_size_groups_H05(monkeypatch):
+    """H-05:两个同规模折叠组 header 必须不同(含代表尾号),防 _panel 串线。"""
+    A3, A4 = "203099999999900201", "203099999999900202"
+
+    def _mk_group(aids, leaf):
+        for a in aids:
+            d = sh.outputs_root() / a
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "needs_decision.json").write_text(json.dumps({
+                "autoid": a, "claims": [{"claim_kind": "forbidden_mechanism",
+                                         "reason": "r", "proposed_equivalent": "eq"}]},
+                ensure_ascii=False), encoding="utf-8")
+            (d / "intent.json").write_text(json.dumps({
+                "title": leaf, "group_path": ["功能", leaf],
+                "forbidden_mechanism": [{"family": "reboot"}]},
+                ensure_ascii=False), encoding="utf-8")
+
+    _mk_group((A1, A2), "配置保存")
+    _mk_group((A3, A4), "会话保持")
+    appended, asked = _drive(
+        monkeypatch,
+        [_pend(a, 1) for a in (A1, A2, A3, A4)],
+        {min(A1, A2): "改过程", min(A3, A4): "改过程"})
+    headers = [q["header"] for batch in asked for q in batch]
+    assert len(headers) == 2
+    assert headers[0] != headers[1]
+    assert all(len(h) <= 12 for h in headers)
+    # 各含代表案 6 位尾号
+    assert any(A1[-6:] in h or A2[-6:] in h for h in headers)
+    assert any(A3[-6:] in h or A4[-6:] in h for h in headers)

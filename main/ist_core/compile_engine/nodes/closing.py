@@ -33,7 +33,8 @@ def writeback(state: dict) -> dict:
             led.data["audit"]["notes"].append({"autoid": aid, "event": "precedent_writeback_fail"})
         try:
             from main.ist_core.tools.knowledge.footprint_writeback import compile_footprint_writeback
-            pv = f"workspace/outputs/{out_name}/{aid}/case.provenance.json"
+            pv = str((sh.outputs_root() / out_name / aid / "case.provenance.json")
+                      .relative_to(sh.project_root()))
             compile_footprint_writeback.func(autoid=aid, provenance_path=pv,
                                              on_device_passed=True)
             wrote += 1
@@ -195,7 +196,7 @@ def report(state: dict) -> dict:
             from ... import remote_sync, remote_fs
             import shutil
             # 获取当前用户
-            username = os.environ.get("IST_SSH_USER", "default")
+            username = sh._current_user()
             # 确保远程用户目录存在
             remote_fs.ensure_dir(f"outputs/{username}")
             # 同步主目录

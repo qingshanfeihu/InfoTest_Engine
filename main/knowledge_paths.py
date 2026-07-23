@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -91,6 +92,50 @@ WORKSPACE_ROOT = PROJECT_ROOT / "workspace"
 WORKSPACE_INPUTS = WORKSPACE_ROOT / "inputs"
 WORKSPACE_OUTPUTS = WORKSPACE_ROOT / "outputs"
 WORKSPACE_DEFECTS = WORKSPACE_ROOT / "defects"
+
+
+# ── workspace 路径解析函数（单一事实源，消除 5+ 处重复定义）──────────────────
+
+def current_username() -> str:
+    """当前用户标识：IST_SSH_USER > IST_USERNAME > 'default'。
+
+    用于 workspace/outputs/ 下的用户隔离子目录。
+    """
+    return (os.environ.get("IST_SSH_USER", "").strip()
+            or os.environ.get("IST_USERNAME", "").strip()
+            or "default")
+
+
+def user_output_dir() -> Path:
+    """用户专属 outputs 目录: workspace/outputs/{username}/（自动创建）。"""
+    d = WORKSPACE_OUTPUTS / current_username()
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def compile_out_name() -> str:
+    """当前编译任务的 out_name（从 IST_COMPILE_OUT_NAME 环境变量）。
+
+    由 compile_engine_run 入口设置，工具层读取。
+    """
+    return os.environ.get("IST_COMPILE_OUT_NAME", "").strip()
+
+
+def autoid_output_path(autoid: str, *parts: str) -> Path:
+    """autoid 目录路径: workspace/outputs/{out_name}/{autoid}/...
+
+    out_name 从 compile_out_name() 读取；未设置时省略 out_name 层。
+    注意：此路径不含 username 层（与 compile_emit 写路径一致），与 user_output_dir() 不同。
+    """
+    base = WORKSPACE_OUTPUTS
+    name = compile_out_name()
+    if name:
+        base = base / name
+    base = base / autoid
+    return base / parts[0] if parts else base
+
+
+# ── auto_env ──────────────────────────────────────────────────────────────────
 
 
 KNOWLEDGE_MINERU = KNOWLEDGE_INTERMEDIATE / "mineru"

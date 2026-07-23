@@ -248,7 +248,8 @@ def attribute(state: dict) -> dict:
         briefs = [{"key": aid, "brief": json.dumps({
             "autoid": aid, "last_run_path": str(state.get("last_run_ref")),
             "xlsx_path": str(state.get("merged_xlsx_ref")),   # submit_attribution 按它定位落盘文件,别让 fork 推断
-            "provenance_path": f"workspace/outputs/{out_name}/{aid}/case.provenance.json",
+            "provenance_path": str((sh.outputs_root() / out_name / aid / "case.provenance.json")
+                                   .relative_to(sh.project_root())),
         }, ensure_ascii=False)} for aid in need_fork]
         sh.emit(f"归因:{len(need_fork)} 个用例")
         compile_fanout.func(skill="compile-attributor", briefs_json=briefs,

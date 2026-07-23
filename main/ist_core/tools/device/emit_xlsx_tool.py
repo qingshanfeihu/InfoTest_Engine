@@ -21,38 +21,10 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
+from main.knowledge_paths import user_output_dir, autoid_output_path, compile_out_name
+
 logger = logging.getLogger(__name__)
 
-
-def _get_out_name() -> str:
-    """获取当前编译任务的 out_name（从环境变量）。"""
-    return os.environ.get("IST_COMPILE_OUT_NAME", "").strip()
-
-
-def _autoid_path(autoid: str, *parts: str) -> Path:
-    """构建 autoid 目录路径：outputs/<out_name>/<autoid>/..."""
-    root = Path(__file__).resolve().parents[4]
-    out_name = _get_out_name()
-    if out_name:
-        return root / "workspace" / "outputs" / out_name / autoid / parts[0] if parts else root / "workspace" / "outputs" / out_name / autoid
-    else:
-        return root / "workspace" / "outputs" / autoid / parts[0] if parts else root / "workspace" / "outputs" / autoid
-
-
-def _get_user_output_dir() -> Path:
-    """获取当前用户专属的 outputs 目录。
-
-    从 IST_SSH_USER 环境变量获取用户名，创建并返回 workspace/outputs/{username}/ 目录。
-    """
-    root = Path(__file__).resolve().parents[4]
-    username = os.environ.get("IST_SSH_USER", "").strip()
-    if not username:
-        username = os.environ.get("IST_USERNAME", "").strip()
-    if not username:
-        username = "default"
-    user_dir = root / "workspace" / "outputs" / username
-    user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir
 
 # 框架执行契约(死知识):test_xlsx.py 是**延迟执行模型**——最后一个 case 走 `if last_case`
 # 收尾分支,只 parser_case_id 记录、**不执行步骤**。所以 xlsx 末尾必须垫一个哨兵 case,
@@ -708,7 +680,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
                     "首选 blocks 语义组合子(原生数组);组合子表达不了的形态用 steps 原生数组。")
             if _streak >= 2:
                 _msg += ("\n→ 已连续空载荷:别原样重试。先 fs_write 把步骤数组写到 "
-                         f"{_autoid_path(autoid, 'steps.json')},再传 steps_path=该路径"
+                         f"{autoid_output_path(autoid, 'steps.json')},再传 steps_path=该路径"
                          "——文件通道不经过参数序列化,吞不掉。")
             if _streak >= 3:
                 _msg += (f"\n⚠ 已连续 {_streak} 次空载荷。若 steps_path 也传不进,停止重试,"
@@ -747,7 +719,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     # 文本止损指引曾被实证绕过(直接 ad-hoc 重编),此门把「是否换法」变成必答题;
     # 声明后记入冻结历史并放行(换法自由保留)。
     try:
-        _fz_path = _autoid_path(autoid, ".frozen.json")
+        _fz_path = autoid_output_path(autoid, ".frozen.json")
         if _fz_path.is_file():
             _ov = (override_frozen_reason or "").strip()
             if not _ov:
@@ -779,7 +751,7 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
     # 降级成参与统计,用户从未批准)。orchestrator 带决策重派前把 user_decision.json 写进
     # outputs/<autoid>/,此处对产物机械核对;文件不存在=无决策约束,零行为变化。
     try:
-        _ud_path = _autoid_path(autoid, "user_decision.json")
+        _ud_path = autoid_output_path(autoid, "user_decision.json")
         if _ud_path.is_file():
             _ud = json.loads(_ud_path.read_text(encoding="utf-8"))
             _form = str(_ud.get("expected_assertion_form") or "").strip()
@@ -974,17 +946,15 @@ def compile_emit(autoid: str, steps_json: str = "", init_commands: str = "",
         return f"error: {info}"
 
     # 末尾垫哨兵(框架延迟执行契约,见 _build_sentinel)
-    # 优先从环境变量读取 out_name（V6引擎设置），保持与 _autoid_path 一致
-    # 路径：workspace/outputs/<out_name>/<autoid>/case.xlsx
-    env_out_name = os.environ.get("IST_COMPILE_OUT_NAME", "").strip()
-    base_dir = (env_out_name or out_name or "").strip().replace("/", "_")
+    # 路径: workspace/outputs/{out_name}/{autoid}/case.xlsx（out_name 来自参数或 IST_COMPILE_OUT_NAME）
+    base_dir = (compile_out_name() or out_name or "").strip().replace("/", "_")
     fir = FileIR(feature=autoid, author="IST-Core-agent", init_rows=init_rows,
                  cases=[case, _build_sentinel()], module="ist_smoke")
-    root = Path(__file__).resolve().parents[4]
+    from main.knowledge_paths import WORKSPACE_OUTPUTS
     if base_dir:
-        out = root / "workspace" / "outputs" / base_dir / autoid / "case.xlsx"
+        out = WORKSPACE_OUTPUTS / base_dir / autoid / "case.xlsx"
     else:
-        out = root / "workspace" / "outputs" / autoid / "case.xlsx"
+        out = WORKSPACE_OUTPUTS / autoid / "case.xlsx"
     try:
         stats = emit_xlsx(fir, out)
     except Exception as e:  # noqa: BLE001
@@ -1129,7 +1099,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         stale_grade: list[str] = []
         for aid in aid_list:
             aid = str(aid).strip()
-            xp = _autoid_path(aid, "case.xlsx")
+            xp = autoid_output_path(aid, "case.xlsx")
             if not xp.is_file():
                 return f"error: autoid {aid} 的 case.xlsx 不存在({xp});该 case 可能没编译成功,先补编/重派 worker"
             # lint 凭证机械门(A 层):每个 case 必须在**当前这份** case.xlsx 上过 emit 的全部
@@ -1172,7 +1142,7 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
         from main.ist_core.tools.device.structural_gate import lint_xlsx_case
         lint_bad: list[str] = []
         for aid in aid_list:
-            xp = _autoid_path(str(aid).strip(), "case.xlsx")
+            xp = autoid_output_path(str(aid).strip(), "case.xlsx")
             lr = lint_xlsx_case(xp)
             if not lr.ok:
                 lint_bad.append(f"{aid}: " + "; ".join(f"[{it.code}]" for it in lr.violations))
@@ -1274,13 +1244,10 @@ def compile_emit_merged(cases_json: str = "", shared_init: str = "", out_name: s
                  if shared else [])
 
     # 末尾垫哨兵(框架延迟执行契约)——前 N 个真 case 全执行
-    # 优先从环境变量读取 out_name（V6引擎设置），保持与 _autoid_path 一致
-    env_out_name = os.environ.get("IST_COMPILE_OUT_NAME", "").strip()
-    sub = (env_out_name or out_name or case_irs[0].autoid).strip().replace("/", "_")
+    sub = (compile_out_name() or out_name or case_irs[0].autoid).strip().replace("/", "_")
     fir = FileIR(feature=sub, author="IST-Core-agent", init_rows=init_rows,
                  cases=[*case_irs, _build_sentinel()], module="ist_smoke")
-    user_dir = _get_user_output_dir()
-    out = user_dir / sub / "case.xlsx"
+    out = user_output_dir() / sub / "case.xlsx"
     try:
         stats = emit_xlsx(fir, out)
     except Exception as e:  # noqa: BLE001

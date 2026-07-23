@@ -15,28 +15,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from main.case_compiler.provenance_ir import RUNTIME_PLACEHOLDER, parse_provenance
+from main.knowledge_paths import user_output_dir
 
 logger = logging.getLogger(__name__)
-
-
-def _get_user_output_dir(project_root: Path) -> Path:
-    """获取当前用户专属的 outputs 目录。
-
-    从 IST_SSH_USER 环境变量获取用户名，创建并返回 workspace/outputs/{username}/ 目录。
-    """
-    username = os.environ.get("IST_SSH_USER", "").strip()
-    if not username:
-        username = os.environ.get("IST_USERNAME", "").strip()
-    if not username:
-        username = "default"
-    user_dir = project_root / "workspace" / "outputs" / username
-    user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir
 
 _DATA_START_ROW = 29
 _SENTINEL_PREFIX = "999999"
@@ -198,7 +183,7 @@ def _sync_provenance(project_root: Path, autoid: str,
 
     按 old_g 精确匹配 check_point 步（draft 写的占位 G 与 xlsx 一致）；命中则改 G + 来源。
     """
-    user_dir = _get_user_output_dir(project_root)
+    user_dir = user_output_dir()
     prov_path = user_dir / autoid / "case.provenance.json"
     if not prov_path.is_file():
         return

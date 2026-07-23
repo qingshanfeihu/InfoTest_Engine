@@ -15,24 +15,11 @@ from typing import Any
 import requests
 from langchain_core.tools import tool
 
+from main.knowledge_paths import user_output_dir
+
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
-
-
-def _get_user_output_dir() -> Path:
-    """获取当前用户专属的 outputs 目录。
-
-    从 IST_SSH_USER 环境变量获取用户名，创建并返回 workspace/outputs/{username}/ 目录。
-    """
-    username = os.environ.get("IST_SSH_USER", "").strip()
-    if not username:
-        username = os.environ.get("IST_USERNAME", "").strip()
-    if not username:
-        username = "default"
-    user_dir = _PROJECT_ROOT / "workspace" / "outputs" / username
-    user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir
 
 _VALID_ACTIONS = frozenset({
     "upload", "upload-folder",
@@ -97,7 +84,7 @@ def _resolve_local_write(raw: str) -> Path:
     text = raw.strip()
     if not text:
         raise FileNotFoundError("local_path is required")
-    user_dir = _get_user_output_dir()
+    user_dir = user_output_dir()
     p = Path(text)
     if not p.is_absolute():
         if text.startswith("workspace/outputs/"):

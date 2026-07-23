@@ -14,7 +14,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
+
+from main.knowledge_paths import user_output_dir
 
 logger = logging.getLogger(__name__)
 
@@ -30,21 +33,6 @@ def _emit_progress(text: str) -> None:
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[4]
-
-def _get_user_output_dir() -> Path:
-    """获取当前用户专属的 outputs 目录。
-
-    从 IST_SSH_USER 环境变量获取用户名，创建并返回 workspace/outputs/{username}/ 目录。
-    """
-    root = _project_root()
-    username = os.environ.get("IST_SSH_USER", "").strip()
-    if not username:
-        username = os.environ.get("IST_USERNAME", "").strip()
-    if not username:
-        username = "default"
-    user_dir = root / "workspace" / "outputs" / username
-    user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir
 
 def _grade_extract_facts(xp: Path, prov: Path) -> dict:
     """确定性预跑 tools/device/grade_extract_script.py 的 extract(xp, prov)，产出机械信号。
@@ -76,8 +64,7 @@ def _grade_extract_facts(xp: Path, prov: Path) -> dict:
 # 阈值 0.20：_intent_similarity 改用覆盖率（包含度 |a∩q|/|a|）后，有相关先例的 case score 都
 # 0.6~1.0（金标准意图被脑图覆盖），无相关先例的才 <0.2——0.20 现在干净地分「有/无相关先例」，不再像
 # Jaccard 时代把真金标准（被脑图长度稀释成 0.16~0.20）误挡在外。无需再为算法类降阈值（那是治标）。env 可调。
-import os as _os
-_PRECEDENT_MIN_SCORE = float(_os.environ.get("IST_PRECEDENT_MIN_SCORE", "0.20"))
+_PRECEDENT_MIN_SCORE = float(os.environ.get("IST_PRECEDENT_MIN_SCORE", "0.20"))
 # 分数走 precedent_best_and_text 的**结构化排序分**(hits[0][0])，不再正则抠显示文本——
 # 旧正则只对齐「意图X」「配置X+意图Y」、漏「相似度X」(config-only 轴误判 0)，且阈值在不同轴语义不一。
 
@@ -128,12 +115,12 @@ def _precedent_block(precedent_text: str) -> str:
 # 缓存，不另建 session 缓存——见评估挑战③）。失败/空命中一律降级，draft 兜底自查，不更差。
 def _footprint_prefetch_enabled() -> bool:
     """运行时读 env（非模块常量）——支持 A/B：同进程内翻 IST_FOOTPRINT_PREFETCH=0/1 即生效。"""
-    return (_os.environ.get("IST_FOOTPRINT_PREFETCH", "1").strip().lower()
+    return (os.environ.get("IST_FOOTPRINT_PREFETCH", "1").strip().lower()
             not in ("0", "false", "off", "no"))
 
 
-_FOOTPRINT_PREFETCH_MAX_QUERIES = int(_os.environ.get("IST_FOOTPRINT_PREFETCH_MAX_QUERIES", "3"))
-_FOOTPRINT_PREFETCH_MAX_CHARS = int(_os.environ.get("IST_FOOTPRINT_PREFETCH_MAX_CHARS", "4000"))
+_FOOTPRINT_PREFETCH_MAX_QUERIES = int(os.environ.get("IST_FOOTPRINT_PREFETCH_MAX_QUERIES", "3"))
+_FOOTPRINT_PREFETCH_MAX_CHARS = int(os.environ.get("IST_FOOTPRINT_PREFETCH_MAX_CHARS", "4000"))
 
 
 def _case_intent_text(case: dict) -> str:
@@ -450,7 +437,7 @@ def _extract_xlsx_path(fork_output: str, autoid: str, since: float = 0.0) -> Pat
     否则视作"本轮 draft 没真产出新文件"（沿用了上一轮旧草稿）→ 返回 None，让上层重试/escalate，
     绝不把旧 buggy 草稿当本轮产物合并进去。
     """
-    user_dir = _get_user_output_dir()
+    user_dir = user_output_dir()
     # 落盘规律固定：out_name 默认 autoid
     cand = user_dir / autoid / "case.xlsx"
     if not cand.is_file():
@@ -642,7 +629,7 @@ def _run_pipeline(mindmap_path: str, product_version: str, out_name: str,
     run_token = _new_run_token()   # dev_probe single-flight 作用域（run 结束清、跨 run 不复用）
     result: dict[str, Any] = {"mindmap": mindmap_path, "out_name": out_name,
                               "phases": [], "errors": []}
-    user_dir = _get_user_output_dir()
+    user_dir = user_output_dir()
     manual_glob = f"cli_{product_version}_Chapter*.md"
 
     # 1. prep（一次）

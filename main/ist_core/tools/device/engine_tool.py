@@ -19,6 +19,8 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
+from main.knowledge_paths import user_output_dir
+
 logger = logging.getLogger(__name__)
 
 _MAX_INTERRUPT_ROUNDS = 8   # ask 分批上限(每批 ≤4 题;防面板异常导致的无限挂起循环)
@@ -76,7 +78,8 @@ def compile_engine_run(mindmap_path: str, product_version: str,
         from main.ist_core.skills.loader import _fork_emit_event
         _fork_emit_event({"event": "run_meta", "run": name, "kind": "engine",
                           "mindmap": str(mindmap_path),
-                          "ledger": f"workspace/outputs/{name}/engine_ledger.json"})
+                          "ledger": str((user_output_dir() / name / "engine_ledger.json")
+                                         .relative_to(root))})
     except Exception:  # noqa: BLE001
         pass
 
@@ -121,7 +124,7 @@ def _run_engine_graph(db, name, mindmap_path, product_version, max_rounds, root)
                     f"进度已保存(checkpoint+台账+已产出卷面),修复后同参数重调本工具续跑。")
 
     # 报告摘要(机读全量在 engine_report.json)
-    rp = root / "workspace" / "outputs" / name / "engine_report.json"
+    rp = user_output_dir() / name / "engine_report.json"
     if not rp.is_file():
         return f"error: 引擎结束但无报告(state={json.dumps(result, ensure_ascii=False, default=str)[:300]})"
     rep = json.loads(rp.read_text(encoding="utf-8"))

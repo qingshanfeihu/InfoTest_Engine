@@ -13,27 +13,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 
 from langchain_core.tools import tool
 
+from main.knowledge_paths import autoid_output_path as _autoid_path, compile_out_name as _get_out_name
+
 logger = logging.getLogger(__name__)
-
-
-def _get_out_name() -> str:
-    """获取当前编译任务的 out_name（从环境变量）。"""
-    return os.environ.get("IST_COMPILE_OUT_NAME", "").strip()
-
-
-def _autoid_path(autoid: str, *parts: str) -> Path:
-    """构建 autoid 目录路径：outputs/<out_name>/<autoid>/..."""
-    root = Path(__file__).resolve().parents[4]
-    out_name = _get_out_name()
-    if out_name:
-        return root / "workspace" / "outputs" / out_name / autoid / parts[0] if parts else root / "workspace" / "outputs" / out_name / autoid
-    else:
-        return root / "workspace" / "outputs" / autoid / parts[0] if parts else root / "workspace" / "outputs" / autoid
 
 
 @tool(parse_docstring=True)

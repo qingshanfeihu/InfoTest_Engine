@@ -8,22 +8,23 @@ import os
 from pathlib import Path
 
 from main.ist_core.compile_engine import ledger as L
+from main.knowledge_paths import (
+    current_username, user_output_dir, PROJECT_ROOT,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def project_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+    return PROJECT_ROOT
 
 
 def _current_user() -> str:
-    return (os.environ.get("IST_SSH_USER", "").strip()
-            or os.environ.get("IST_USERNAME", "").strip()
-            or "default")
+    return current_username()
 
 
 def outputs_root() -> Path:
-    return project_root() / "workspace" / "outputs" / _current_user()
+    return user_output_dir()
 
 
 def load_ledger(state: dict) -> L.EngineLedger:

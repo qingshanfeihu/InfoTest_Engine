@@ -58,27 +58,39 @@ def remote_hashes(remote_exec, apv_src: str = "") -> dict[str, str]:
     return hashes
 
 
-def check_sync(remote_exec) -> dict:
-    """对账:{status: match|mismatch|unknown, diffs, missing_local, missing_remote}。"""
-    loc = local_hashes()
+def check_sync(remote_exec, root: Path | None = None) -> dict:
+    """对账:{status: match|mismatch|unknown, diffs, missing_local, missing_remote}。
+
+    M-14:missing_local=ANCHOR_FILES 在本地不存在的子集——旧实现只 hash 已存在文件,
+    缺文件时仍可对剩余子集判 match,承诺的 missing_local 字段永不计算。
+    """
+    root = root or _mirror_root()
+    missing_local = [rel for rel in ANCHOR_FILES if not (root / rel).is_file()]
+    loc = local_hashes(root)
     if not loc:
-        return {"status": "unknown", "reason": "mirror files missing locally"}
+        return {"status": "unknown", "reason": "mirror files missing locally",
+                "missing_local": missing_local, "missing_remote": [], "diffs": []}
     try:
         rem = remote_hashes(remote_exec)
     except Exception as e:  # noqa: BLE001
         logger.warning("mirror 锚远端探测失败", exc_info=True)
-        return {"status": "unknown", "reason": f"remote unreachable: {e}"[:200]}
+        return {"status": "unknown", "reason": f"remote unreachable: {e}"[:200],
+                "missing_local": missing_local, "missing_remote": [], "diffs": []}
     if not rem:
-        return {"status": "unknown", "reason": "remote returned no hashes"}
+        return {"status": "unknown", "reason": "remote returned no hashes",
+                "missing_local": missing_local, "missing_remote": [], "diffs": []}
     diffs = [rel for rel in ANCHOR_FILES
              if rel in loc and rel in rem and loc[rel] != rem[rel]]
     missing_remote = [rel for rel in loc if rel not in rem]
-    status = "mismatch" if diffs else "match"
-    rep = {"status": status, "diffs": diffs, "missing_remote": missing_remote,
+    # 本地缺锚文件=推导前提不完整,不得报 match(R075)
+    status = "mismatch" if (diffs or missing_local) else "match"
+    rep = {"status": status, "diffs": diffs,
+           "missing_local": missing_local, "missing_remote": missing_remote,
            "checked": sorted(set(loc) & set(rem))}
     try:  # 基线留痕(供离线对照与漂移历史)
-        anchor = _mirror_root() / ".sync_anchor.json"
-        anchor.write_text(json.dumps({"local": loc, "remote": rem, "status": status},
+        anchor = root / ".sync_anchor.json"
+        anchor.write_text(json.dumps({"local": loc, "remote": rem, "status": status,
+                                      "missing_local": missing_local},
                                      ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:  # noqa: BLE001
         logger.warning("锚基线落盘失败(不阻断,漂移历史缺一笔)", exc_info=True)

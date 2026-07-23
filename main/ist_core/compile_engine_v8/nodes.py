@@ -247,15 +247,32 @@ def bed_gate(state: dict) -> dict:
         _sync = MA.check_sync(_jh_exec_fn)
         if _sync.get("status") == "mismatch":
             rep["needs_ask"] = True
+            _bits = []
+            if _sync.get("diffs"):
+                _bits.append("哈希不一致:" + ", ".join(_sync["diffs"]))
+            if _sync.get("missing_local"):
+                _bits.append("本地缺锚:" + ", ".join(_sync["missing_local"]))
+            if _sync.get("missing_remote"):
+                _bits.append("远端缺文件:" + ", ".join(_sync["missing_remote"]))
             rep["findings"] = list(rep.get("findings") or []) + [{
                 "kind": "mirror_sync", "probe_failed": False,
-                "detail": ("盘上框架镜像与真机框架不一致(文件:"
-                           + ", ".join(_sync.get("diffs") or []) + ")——恒真断言门/"
-                           "窗口语义门/τ 责任集的推导前提失效,请确认框架是否升级"
-                           "并更新镜像")}]
-            sh.emit("⚠ mirror 同步锚失配:" + ", ".join(_sync.get("diffs") or []))
+                "detail": ("盘上框架镜像与真机框架不一致("
+                           + ("; ".join(_bits) or "详见机读")
+                           + ")——恒真断言门/窗口语义门/τ 责任集的推导前提失效,"
+                           "请确认框架是否升级并更新镜像")}]
+            sh.emit("⚠ mirror 同步锚失配:" + ("; ".join(_bits) or str(_sync)[:80]))
         elif _sync.get("status") == "unknown":
-            sh.emit(f"mirror 锚未验证({str(_sync.get('reason'))[:60]})——门前提本轮未对账")
+            # M-15:unknown 入 findings(不 needs_ask 拦批)+事实流——「连续未验证」可审计;
+            # 旧实现只 emit 一行流水,下批看不见。
+            _reason = str(_sync.get("reason") or "unspecified")[:200]
+            sh.emit(f"mirror 锚未验证({_reason[:60]})——门前提本轮未对账")
+            rep["findings"] = list(rep.get("findings") or []) + [{
+                "kind": "mirror_sync", "probe_failed": False, "unverified": True,
+                "detail": f"mirror 锚未验证({_reason})——门前提本轮未对账(不拦批)"}]
+            sh.append(state, [{"ev": "mirror_unverified", "aid": "",
+                               "reason": _reason,
+                               "run_id": f"mirror:{state.get('out_name') or 'batch'}:"
+                                         f"{int(time.time())}"}])
     except Exception:  # noqa: BLE001
         logger.warning("mirror 锚对账异常", exc_info=True)
         sh.emit("mirror 锚对账异常——门前提本轮未验证(详见日志)")

@@ -551,3 +551,47 @@ def test_remedy_text_skips_english_direction_H20():
     cn_q = [{"action": "recompile_directed", "direction": "按捕获关系改预期断言后重编"}]
     out2 = RD.remedy_text(cn_q, [], None)
     assert "按捕获关系改预期断言后重编" in out2
+
+
+def test_defect_candidates_write_fail_degrades_M08(engine_env, monkeypatch):
+    """M-08:缺陷单写盘失败 → 撤 report 声称 + outcome 降级 + md 不再提文件。"""
+    env = engine_env
+    _mark_b_deliverable(env)
+    F.append_facts(env["facts"], [_dc_attribution(A, rnd=2)])
+    real_write = type(env["mdir"] / "x").write_text
+
+    def boom(self, *a, **k):
+        if str(self).endswith("defect_candidates.json"):
+            raise OSError("disk full")
+        return real_write(self, *a, **k)
+
+    monkeypatch.setattr("pathlib.Path.write_text", boom)
+    monkeypatch.setattr(sh, "emit_summary", lambda s, d: None)
+    N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
+    rep = json.loads((env["mdir"] / "engine_report.json").read_text(encoding="utf-8"))
+    assert "defect_candidates" not in rep
+    assert rep["outcome"] == "delivery_incomplete"
+    dmd = (env["mdir"] / "delivery_report.md").read_text(encoding="utf-8")
+    assert "defect_candidates.md" not in dmd
+    assert "交付不完整" in dmd
+
+
+def test_archive_fail_enters_missing_and_rerender_M09_M10(engine_env, monkeypatch):
+    """M-09/M-10:有案面却 archive 失败 → missing 降级 + md 重渲明示不完整、不谎称 xlsx。"""
+    env = engine_env
+    _mark_b_deliverable(env)
+    F.append_facts(env["facts"], [_dc_attribution(A, rnd=2)])
+    # 给 A 假案面行,使 archive「应当产出」
+    monkeypatch.setattr(sh, "case_rows",
+                        lambda aid: [{"E": "APV_0", "F": "cmd_config", "G": "x"}]
+                        if aid == A else [])
+    monkeypatch.setattr(N, "_archive_unsuccessful", lambda *a, **k: None)
+    monkeypatch.setattr(sh, "emit_summary", lambda s, d: None)
+    N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
+    rep = json.loads((env["mdir"] / "engine_report.json").read_text(encoding="utf-8"))
+    assert rep["outcome"] == "delivery_incomplete"
+    assert rep.get("unsuccessful_xlsx") is False
+    dmd = (env["mdir"] / "delivery_report.md").read_text(encoding="utf-8")
+    assert "交付不完整" in dmd
+    assert "xlsx 未能产出" in dmd
+    assert "`unsuccessful_cases.xlsx`+`unsuccessful_cases.md`" not in dmd

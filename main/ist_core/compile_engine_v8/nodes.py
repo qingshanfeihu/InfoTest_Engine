@@ -2866,7 +2866,7 @@ def _archive_unsuccessful(aids: list[str], out_name: str) -> str | None:
         compile_emit_merged.func(cases_json=json.dumps(cases, ensure_ascii=False),
                                  out_name=arch)
     except Exception:  # noqa: BLE001
-        logger.debug("未通过卷合并失败", exc_info=True)
+        logger.warning("未通过卷合并失败", exc_info=True)
         return None
     src = sh.outputs_root() / arch / "case.xlsx"
     if not src.is_file():
@@ -2878,6 +2878,7 @@ def _archive_unsuccessful(aids: list[str], out_name: str) -> str | None:
         shutil.rmtree(sh.outputs_root() / arch, ignore_errors=True)
         return str(dst)
     except Exception:  # noqa: BLE001
+        logger.warning("未通过卷挪移失败", exc_info=True)
         return None
 
 
@@ -3197,7 +3198,10 @@ def closing(state: dict) -> dict:
     # 案,pass 也不入交付卷——「每次执行都拆床的卷」交付出去=把污染批发给所有
     # 未来使用者(run12 实测 655203 subset pass 差点带病交付)。呈报式:落
     # delivery_blocked 事实+挪入未通过卷,报告如实声明,非静默剔除。
+    # M-13:门调用崩溃=fail-closed(旧 except continue 把污染案静默送进交付卷)+
+    # gate_disabled 入账(R006③ 可见)。
     _blocked: list[str] = []
+    _g3_crashed: list[str] = []
     for aid in list(deliverable):
         try:
             from main.case_compiler.tau_coverage import check_tau_coverage
@@ -3205,10 +3209,20 @@ def closing(state: dict) -> dict:
             if not _tr.ok:
                 _blocked.append(aid)
         except Exception:  # noqa: BLE001
-            continue
+            logger.warning("G3 τ 门崩溃 %s——fail-closed 封堵交付", aid[-6:],
+                           exc_info=True)
+            _blocked.append(aid)
+            _g3_crashed.append(aid)
+    if _g3_crashed:
+        sh.append(state, [{"ev": "gate_disabled", "aid": "", "gate": "g3_tau",
+                           "reason": (f"check_tau_coverage crashed for "
+                                      f"{len(_g3_crashed)} case(s) — fail-closed "
+                                      f"(refuse delivery rather than ship unvetted)"),
+                           "aids": sorted(_g3_crashed)[:20]}])
     if _blocked:
         sh.append(state, [{"ev": "delivery_blocked", "aid": a,
-                           "reason": "missing in-case teardown for network-layer writes",
+                           "reason": ("g3_tau_gate_crashed" if a in _g3_crashed else
+                                      "missing in-case teardown for network-layer writes"),
                            "run_id": f"g3:{a}"} for a in _blocked])
         fs = sh.load_facts(state)
         # H-16:delivery_blocked 事实已进 fold(views.case_status:最后 delivery pass 后被
@@ -3220,8 +3234,9 @@ def closing(state: dict) -> dict:
         for a in _blocked:
             others[a] = vw["cases"][a]
             deliverable.remove(a)
-        sh.emit(f"污染者交付门:{len(_blocked)} 案 pass 但卷面缺案尾清理——"
-                f"不入交付卷(重编补自清后可交付)")
+        sh.emit(f"污染者交付门:{len(_blocked)} 案 pass 但卷面缺案尾清理"
+                + (f"(含 {len(_g3_crashed)} 案门崩溃 fail-closed)" if _g3_crashed else "")
+                + "——不入交付卷(重编补自清后可交付)")
     mf = [f for f in fs if f.get("ev") == "merged"]
     moved = list(mf[-1].get("moved_tail") or []) if mf else []
     coexist = list(mf[-1].get("coexist_violations") or []) if mf else []
@@ -3329,6 +3344,7 @@ def closing(state: dict) -> dict:
     deliver_files = ["case.xlsx", "delivery_report.md", "engine_report.json", "facts.jsonl"]
     # 缺陷候选单双文件(P0 C20):json 机读原样、md 人话渲染;进 deliver_files 走
     # 交付对账断言(报告说有=盘上真有)。写在 §11.9 清理与删 last_run 之前。
+    # M-08:写盘失败必须撤 report 声称 + outcome 降级 + 重渲染(F §5.5③ 说了、没有、不降级)。
     if dc_entries:
         try:
             (mdir / "defect_candidates.json").write_text(
@@ -3339,18 +3355,45 @@ def closing(state: dict) -> dict:
             sh.emit(f"缺陷候选单:{len(dc_entries)} 案已汇总(defect_candidates.md,"
                     f"含结构化表单与处置轨迹)")
         except Exception:  # noqa: BLE001
-            # 产出失败不静默:不加入 deliver_files(对账不报缺),但显式告警
             logger.warning("缺陷候选单产出失败", exc_info=True)
-            sh.emit("⚠ 缺陷候选单产出失败——结构化表单仍在 facts.jsonl 可审计")
+            sh.emit("⚠ 缺陷候选单产出失败——结构化表单仍在 facts.jsonl 可审计;"
+                    "报告撤回「已记入」声称并降级收口")
+            report.pop("defect_candidates", None)
+            if str(report.get("outcome") or "").startswith("delivered"):
+                report["outcome"] = "delivery_incomplete"
+            dmd = RD.render_delivery_report(report, fs, m, queues, panels)
+            (mdir / "delivery_report.md").write_text(dmd, encoding="utf-8")
+            try:
+                (mdir / "engine_report.json").write_text(
+                    json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                pass
     if others:
         umd = RD.render_unsuccessful_md(report, fs, m, queues, evidence, panels)
         (mdir / "unsuccessful_cases.md").write_text(umd, encoding="utf-8")
-        if _archive_unsuccessful(sorted(others), out_name):
+        # M-09:有案面可合并却 archive 失败 → 列入 deliver_files 让 missing 对账降级;
+        # 无案面行(测夹具/空壳)不承诺 xlsx。report.unsuccessful_xlsx 供渲染声称对齐盘面。
+        _had_rows = any(sh.case_rows(a) for a in others)
+        _arch_ok = bool(_archive_unsuccessful(sorted(others), out_name)) if _had_rows else False
+        report["unsuccessful_xlsx"] = bool(_arch_ok)
+        if _had_rows:
             deliver_files.append("unsuccessful_cases.xlsx")
+            if not _arch_ok:
+                logger.warning("未通过卷 xlsx 合并/挪移失败——将由交付对账降级")
+                sh.emit("⚠ 未通过卷 xlsx 未能产出——收口将按交付物缺失降级")
         deliver_files.append("unsuccessful_cases.md")
         leaks = RD.leak_scan(dmd) + RD.leak_scan(umd)
         if leaks:
             logger.warning("报告术语泄漏(渲染门):%s", sorted(set(leaks))[:8])
+        # 首次渲染时 footer 可能已按旧默认声称 xlsx——把旗标写回 engine_report 并
+        # 在有旗标变化时重渲(完整重渲在下方 M-10 对账后统一做亦可;此处保证旗标落盘)
+        try:
+            (mdir / "engine_report.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+        dmd = RD.render_delivery_report(report, fs, m, queues, panels)
+        (mdir / "delivery_report.md").write_text(dmd, encoding="utf-8")
 
     # 收尾 footer tick(P1-11 修:必须在下方 §11.9 删 manifest 之前发)——emit_tick 内部
     # view()→batch_view(fs, manifest(state)),manifest 删后 aids=[]→cases={}→counts 全 0
@@ -3428,6 +3471,20 @@ def closing(state: dict) -> dict:
         except Exception:  # noqa: BLE001
             pass
         sh.emit(f"⚠ 交付物缺失({', '.join(missing)})——收口结论降级为交付不完整")
+    # M-10:卷组成/缺失对账翻 outcome 后必须重渲染 delivery_report——旧序先写 md
+    # 再翻 outcome,头行/交付物声称与机读结论永久分叉。
+    if str(report.get("outcome") or "") in ("delivery_incomplete", "report_mismatch"):
+        try:
+            dmd = RD.render_delivery_report(report, fs, m, queues, panels)
+            if g5_issues:
+                # 保留 G5 失配警示条(勿被对账重渲冲掉)
+                dmd = RG.mismatch_banner(g5_issues) + dmd
+            if others:
+                umd = RD.render_unsuccessful_md(report, fs, m, queues, evidence, panels)
+                (mdir / "unsuccessful_cases.md").write_text(umd, encoding="utf-8")
+            (mdir / "delivery_report.md").write_text(dmd, encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            logger.warning("对账降级后重渲染交付报告失败", exc_info=True)
     # F-Py-7 A-加固对账·打戳:所有交付物落盘后记 delivery_stamp_ts + engine_report.json 最后再写
     # 一次(stamp 反映「交付物已全部落盘」时刻——引擎写的交付物 mtime<stamp;手工覆盖在 closing
     # 返回后 mtime>stamp)。下轮 closing START 据此检手工覆盖(见本函数首)。engine_report.json

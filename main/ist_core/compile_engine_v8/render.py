@@ -404,6 +404,14 @@ def render_delivery_report(report: dict, fs: list[dict], manifest: dict,
              "",
              f"本批 {total} 个用例:**{ok} 个通过整卷复验,已入交付卷**"
              + (f";其余 {total - ok} 个的情况逐一说明如下。" if total > ok else "。"), ""]
+    # M-10:outcome 非完整交付时头行必须明示——对账翻 outcome 后靠 closing 重渲染兑现。
+    _oc = str(report.get("outcome") or "")
+    if _oc == "delivery_incomplete":
+        lines.append("- ⚠ **收口结论:交付不完整**——交付物清单与盘面不一致或主卷组成失配,"
+                     "请以 `engine_report.json` 为准,勿把本报告当完整交付凭证")
+    elif _oc == "report_mismatch":
+        lines.append("- ⚠ **收口结论:报告与事实台账不一致**——本批暂不可作为交付依据"
+                     "(详见 `REPORT_MISMATCH.json`)")
     # 未跑成分母:broken 三子态(复跑/重写/env)同属「无结论」,统一不计通过率分母(§④)
     n_broken = (int(t.get("broken") or 0) + int(t.get("broken_errored") or 0)
                 + int(t.get("broken_blocked") or 0))
@@ -449,8 +457,18 @@ def render_delivery_report(report: dict, fs: list[dict], manifest: dict,
             lines.append("")
     _dc = report.get("defect_candidates") or {}
     lines.append("---")
+    _ux = report.get("unsuccessful_xlsx")
+    _uns_claim = ""
+    if bad:
+        if _ux is True:
+            _uns_claim = "、`unsuccessful_cases.xlsx`+`unsuccessful_cases.md`(未通过卷与详报)"
+        elif _ux is False:
+            # M-09:xlsx 未产出时不声称其在交付物里(仅详报 md)
+            _uns_claim = "、`unsuccessful_cases.md`(未通过详报;xlsx 未能产出)"
+        else:
+            _uns_claim = "、`unsuccessful_cases.xlsx`+`unsuccessful_cases.md`(未通过卷与详报)"
     lines.append("交付物:`case.xlsx`(通过卷)"
-                 + ("、`unsuccessful_cases.xlsx`+`unsuccessful_cases.md`(未通过卷与详报)" if bad else "")
+                 + _uns_claim
                  + (f"、`defect_candidates.md`(缺陷候选单,{int(_dc.get('count') or 0)} 案,"
                     f"含结构化表单与处置轨迹)" if _dc else "")
                  + "、`engine_report.json`(机读)。全部过程事实在 `facts.jsonl`,可审计可续跑。")

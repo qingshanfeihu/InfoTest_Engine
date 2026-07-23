@@ -316,3 +316,23 @@ def test_recount_matches_case_status_all_lifecycle_branches_D31():
     # 双重断言:除两路等价,再钉 ground-truth——防两路同错都绿(解除态 escalated/suspended + clean 可交付)
     assert rc == {CLEAN, ESC_R, SUS_R, DBLK_R}, \
         f"ground-truth 不符:期望 clean+两类解除+封堵重编复验,实得 {sorted(rc)}"
+
+
+def test_g3_tau_crash_fail_closed_M13(engine_env, monkeypatch):
+    """M-13:check_tau_coverage 崩溃 → fail-closed 封堵 + gate_disabled 入账,不静默放行。"""
+    def boom(rows):
+        raise RuntimeError("tau parser exploded")
+
+    monkeypatch.setattr("main.case_compiler.tau_coverage.check_tau_coverage", boom)
+    # 两案都走加载(非空行触发门)
+    monkeypatch.setattr(N, "_load_case_rows",
+                        lambda aid: [{"E": "APV_0", "F": "cmd_config", "G": "vlan x"}])
+    monkeypatch.setattr(sh, "emit_summary", lambda s, d: None)
+    N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
+    fs = F.load_facts(engine_env["facts"])
+    assert any(f.get("ev") == "gate_disabled" and f.get("gate") == "g3_tau" for f in fs)
+    blocked = [f for f in fs if f.get("ev") == "delivery_blocked"]
+    assert len(blocked) == 2
+    assert all(f.get("reason") == "g3_tau_gate_crashed" for f in blocked)
+    rep = json.loads((engine_env["mdir"] / "engine_report.json").read_text(encoding="utf-8"))
+    assert rep["totals"]["deliverable"] == 0

@@ -696,8 +696,13 @@ def _s0_dispute_note(c: dict) -> str:
         return ""
     pre = [str(x) for x in (d.get("pre_dirty") or [])][:3]
     post = [str(x) for x in (d.get("post_dirty") or [])][:3]
-    seg = (f"批内诊断分歧:编写侧 {n} 次判「起点被残留污染」,而机械配对在同卷共居案中"
-           "未找到污染者——两者口径不同(后者不查本案自身上轮残留),隔离复跑通过不代表整卷会过")
+    seg = (f"批内诊断分歧:编写侧 {n} 次判「起点被残留污染」,而机械配对"
+           + ("曾命中但因跨床反驳未升格"
+              if str(d.get("mech") or "") == "cross_bed_refuted" else
+              "曾命中但因本案自身执行失败未升格"
+              if str(d.get("mech") or "") == "self_anomaly" else
+              "在同卷共居案中未找到污染者")
+           + "——两者口径不同(后者不查本案自身上轮残留),隔离复跑通过不代表整卷会过")
     if pre:
         seg += f"。复跑前床态快照已见残留(受害者形态):{'、'.join(pre)}"
     elif post:

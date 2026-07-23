@@ -172,9 +172,9 @@ def _bridge(payload: dict) -> dict:
         # H-12:精确认选项 label/proceed——旧 `"继续" in v` 把「不继续」「先别继续」
         # 反转成 proceed(INV-9 床权在用户)。自由输入含继续且无局部否定仍可放行。
         if v in ("继续", "proceed"):
-            return {"decision": "proceed"}
+            return {"decision": "继续"}  # M-01:账上存中文,防「proceed」进用户面 echo
         if "继续" in v and not _re.search(r"(不|别|勿|没|未)(要|能|可|该|应|再|先)?.{0,2}继续", v):
-            return {"decision": "proceed"}
+            return {"decision": "继续"}
         return {"decision": v or "停止"}
     if kind == "ask_decision":
         qs = list(payload.get("questions") or [])

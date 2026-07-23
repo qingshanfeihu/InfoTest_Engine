@@ -93,6 +93,12 @@ def idem_key(f: dict) -> tuple:
         # 无 run_id 的旧形态退回轮键
         rid = str(f.get("run_id") or "")
         return (ev, aid, rid) if rid else (ev, aid, int(f.get("round") or 0))
+    if ev == "escalated":
+        # M-05:同因重复升级若无 run_id,内容键把第二次吞掉 → attempts 轴永=1、
+        # deesc_auto_resolution「完整轨迹」不成立。有 run_id 按次区分;旧账无则退内容键。
+        rid = str(f.get("run_id") or "")
+        if rid:
+            return (ev, aid, rid)
     if ev == "decision":
         return (ev, aid, str(f.get("question_id") or f.get("question", ""))[:120])
     if ev in ("writeback", "rollback"):
@@ -322,12 +328,16 @@ def deesc_auto_resolution(facts: list[dict], aid: str, new_escalated: dict) -> l
     if sub in (ESC_NO_OUTPUT, ESC_NOT_EXECUTED):
         prior = escalation_attempts(facts, aid, sub)
         if prior + 1 >= DEESC_ROUND_CAP:
+            _n = prior + 1
             return [
                 {"ev": "de_escalated", "aid": aid,
-                 "note": f"auto: round-cap reached ({prior + 1}x {sub})"},
+                 "note": f"auto: round-cap reached ({_n}x {sub})"},
+                # M-05:round=99 归因必带 run_id——否则幂等键退化 (attribution,aid,99),
+                # 同案第二次自动封顶/用户终局裁决被静默吞。
                 {"ev": "attribution", "aid": aid, "round": 99, "layer": "engine",
+                 "run_id": f"auto_cap:{aid}:{sub}:{_n}",
                  "disposition": "defect_candidate",
-                 "fix_direction": (f"escalation round-cap reached ({prior + 1}x {sub}) — "
+                 "fix_direction": (f"escalation round-cap reached ({_n}x {sub}) — "
                                    "engine exhausted its recovery attempts for this case "
                                    "without producing new evidence"),
                  "evidence": f"engine_auto_cap:{sub}"},
@@ -342,6 +352,7 @@ def deesc_auto_resolution(facts: list[dict], aid: str, new_escalated: dict) -> l
                 {"ev": "de_escalated", "aid": aid,
                  "note": "auto: same underdetermined claim recurred after a recovery attempt"},
                 {"ev": "attribution", "aid": aid, "round": 99, "layer": "engine",
+                 "run_id": f"auto_eng:{aid}:{len(prior_esc) + 1}",
                  "disposition": "engineering_fault",
                  "fix_direction": ("no landing channel for this claim kind — the same claim "
                                    "recurred verbatim after one recovery attempt; this is an "

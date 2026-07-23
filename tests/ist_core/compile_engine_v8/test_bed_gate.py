@@ -646,3 +646,40 @@ def test_llm_restore_reprobe_rejects_unclean_H14(tmp_path, monkeypatch):
     assert "restored" not in recorded
     kinds = [f.get("kind") for f in (captured.get("report") or {}).get("findings", [])]
     assert any(f.get("ledger_stuck") for f in (captured.get("report") or {}).get("findings", []))
+
+
+def test_bed_gate_decision_qid_unique_across_batches_M01(tmp_path, monkeypatch):
+    """M-01:第二批 bed_gate 裁决不得被固定 qid=bed_gate 静默丢账;答案存中文「继续」。"""
+    from main.ist_core.compile_engine_v8 import nodes as N
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    import main.ist_core.compile_engine_v8.mirror_anchor as MA
+    import main.ist_core.compile_engine_v8.facts as F
+
+    facts_file = tmp_path / "facts.jsonl"
+    # 上批已答过一次(旧固定键形态也算进 seq 前缀匹配)
+    facts_file.write_text(
+        '{"ev":"decision","aid":"","question_id":"bed_gate:b1:1","answer":"继续"}\n',
+        encoding="utf-8")
+    monkeypatch.setattr(N.B, "bed_check", lambda *a, **k: {
+        "host": "h", "probes": {}, "findings": [{"kind": "segments", "detail": "x"}],
+        "needs_ask": True, "anchor": {"status": "match", "device": "x"},
+        "ours_unrestored": []})
+    monkeypatch.setattr(N.B, "bed_snapshot", lambda fn: {})
+    monkeypatch.setattr(N.B, "bed_cleanup",
+                        lambda *a, **k: {"cleaned": [], "failed": [], "skipped": ["segments"]})
+    monkeypatch.setattr(MA, "check_sync", lambda _e: {"status": "match"})
+    monkeypatch.setattr(sh, "outputs_root", lambda: tmp_path / "outputs")
+    monkeypatch.setattr(sh, "facts_path", lambda s: facts_file)
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": []})
+    monkeypatch.setattr(sh, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sh, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(sh, "counts_update", lambda *a, **k: {})
+    monkeypatch.setattr(N, "interrupt", lambda p: {"decision": "继续"})
+    N.bed_gate({"out_name": "b1"})
+    fs = F.load_facts(facts_file)
+    bed_decs = [f for f in fs if f.get("ev") == "decision"
+                and str(f.get("question_id") or "").startswith("bed_gate")]
+    assert len(bed_decs) == 2, bed_decs
+    assert bed_decs[-1]["question_id"] == "bed_gate:b1:2"
+    assert bed_decs[-1]["answer"] == "继续"
+    assert "proceed" not in str(bed_decs[-1].get("answer"))

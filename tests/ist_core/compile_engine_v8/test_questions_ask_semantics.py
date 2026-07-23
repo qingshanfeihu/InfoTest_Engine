@@ -502,13 +502,14 @@ def test_side_cn_and_ask_strip_control_chars_display_only():
 
 
 def test_bed_gate_proceed_rejects_negated_continue_H12():
-    """H-12:bed_gate「不继续」不得 proceed——旧 `"继续" in v` 意图反转。"""
+    """H-12:bed_gate「不继续」不得 proceed——旧 `"继续" in v` 意图反转。
+    M-01:放行答案账上存中文「继续」(不再写英文 proceed 进用户面 echo)。"""
     import main.ist_core.compile_engine_v8.engine_tool as ET
     orig = ET._panel
     try:
-        for ans, expect in (("继续", "proceed"), ("proceed", "proceed"),
+        for ans, expect in (("继续", "继续"), ("proceed", "继续"),
                             ("不继续", "不继续"), ("先别继续,我去清床", "先别继续,我去清床"),
-                            ("继续吧风险自担", "proceed")):
+                            ("继续吧风险自担", "继续")):
             ET._panel = lambda qs, a=ans: {"decision": a}
             out = ET._bridge({"kind": "bed_gate", "report": {
                 "anchor": {"status": "match", "device": "x.y"},
@@ -552,3 +553,25 @@ def test_finalize_still_interrupt_not_stale_done_H21(tmp_path, monkeypatch):
     # 对照:无 interrupt 才读报告
     ok = ET._finalize_engine_result({"phase_status": "ok"}, "b_stale")
     assert "done: all_pass" in ok
+
+
+def test_s0_dispute_note_mech_veto_not_no_polluter_M04():
+    """M-04:配对命中后被否决时题面不得谎称「未找到污染者」。"""
+    q = build_ask_question({"autoid": A, "kind": "contra", "contradictions": 2,
+                            "s0_dispute": {"count": 1, "mech": "cross_bed_refuted"}})
+    assert "跨床反驳" in q["question"]
+    assert "未找到污染者" not in q["question"]
+    q2 = build_ask_question({"autoid": A, "kind": "contra", "contradictions": 2,
+                             "s0_dispute": {"count": 1, "mech": "self_anomaly"}})
+    assert "自身执行失败" in q2["question"]
+    assert "未找到污染者" not in q2["question"]
+
+
+def test_s0_dispute_run_ids_drive_count_M03():
+    """M-03:count=去重 run_id 数——同 volume:aid 塌缩键会使 N 恒为 1。"""
+    # 纯投影契约:两个不同 run_id → count 2(与 nodes 投影公式同构)
+    rids = {"diag:dsp:run1:aid", "diag:dsp:run2:aid"}
+    assert len(rids) == 2
+    q = build_ask_question({"autoid": A, "kind": "contra", "contradictions": 2,
+                            "s0_dispute": {"count": len(rids), "mech": "no_polluter"}})
+    assert "2 次判" in q["question"]

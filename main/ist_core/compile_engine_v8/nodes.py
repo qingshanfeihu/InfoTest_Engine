@@ -345,15 +345,20 @@ def bed_gate(state: dict) -> dict:
                         "skipped": clean["skipped"]},
             "ours_unrestored": rep.get("ours_unrestored")}})
         decision = str((ans or {}).get("decision") or "")
-        # H-11:床闸主 decision 仍用 bed_gate(M-01 跨批幂等另案);同时为每个未消
-        # bed_closure_failed 落 bedclosure:{run_id},下批配对命中不再重问陈年告警。
-        _dec_facts = [{"ev": "decision", "aid": "", "question_id": "bed_gate",
-                       "answer": decision}]
+        # M-01:qid 按批序号递增——固定 "bed_gate" 使第二批同 host 裁决被幂等键静默丢账。
+        # H-11:同时为每个未消 bed_closure_failed 落 bedclosure:{run_id}。
+        _bed_seq = sum(1 for f in _fs_boot if f.get("ev") == "decision"
+                       and str(f.get("question_id") or "").startswith("bed_gate"))
+        _bed_qid = f"bed_gate:{state.get('out_name') or 'batch'}:{_bed_seq + 1}"
+        # 用户面存中文「继续」(bridge 已归一);兼容旧 proceed 机读。
+        _ans_store = ("继续" if decision in ("proceed", "继续") else decision)
+        _dec_facts = [{"ev": "decision", "aid": "", "question_id": _bed_qid,
+                       "answer": _ans_store}]
         for _cf in _closure_fails:
             _dec_facts.append({
                 "ev": "decision", "aid": "",
                 "question_id": f"bedclosure:{_cf.get('run_id')}",
-                "answer": decision,
+                "answer": _ans_store,
             })
         sh.append(state, _dec_facts)
         if decision not in ("proceed", "继续"):
@@ -605,6 +610,10 @@ def author(state: dict) -> dict:
             esc_fact = {"ev": "escalated", "aid": aid, "reason": detail[:200],
                        "subclass": (kind.split(":", 1)[1] if ":" in kind
                                     else F.ESC_NO_OUTPUT)}
+            # M-05:attempts 轴身份——同 subclass 第 N 次升级必须有独立 run_id,
+            # 否则内容键把第二次吞掉,封顶计数永不到 2。
+            _sub = str(esc_fact["subclass"])
+            esc_fact["run_id"] = f"esc:{aid}:{_sub}:{F.escalation_attempts(fs, aid, _sub) + 1}"
             new_facts.append(esc_fact)
             # 先试后判/round-cap 机械触发(B-1,facts.deesc_auto_resolution):
             # no_output 第二次同子类升级、或 no_ledger_channel 同 claim 复现,直接
@@ -914,6 +923,7 @@ def ask_decision(state: dict) -> dict:
                                       "question_id": _qid_by_aid.get(aid),
                                       "answer": a, "token": "stop"})
                     new_facts.append({"ev": "attribution", "aid": aid, "round": 99,
+                                      "run_id": f"user:stop:{_qid_by_aid.get(aid)}",
                                       "layer": "user", "disposition": "user_stop",
                                       "fix_direction": f"user decision: {a}",
                                       "evidence": "user"})
@@ -1432,6 +1442,10 @@ def reconcile(state: dict) -> dict:
                        "reason": f"case did not execute for {streak} consecutive "
                                  "runs (broken/not_run) across reruns/reflows — "
                                  "rerun cannot help, needs human attention"}
+            # M-05:同 author 段——第 N 次 not_executed 升级带独立 run_id
+            esc_fact["run_id"] = (
+                f"esc:{v['aid']}:{F.ESC_NOT_EXECUTED}:"
+                f"{F.escalation_attempts(_mine_v, v['aid'], F.ESC_NOT_EXECUTED) + 1}")
             esc_facts.append(esc_fact)
             # 同 author 段:第二次同子类升级直接封顶,不再问第三次(不无限循环)
             esc_facts.extend(F.deesc_auto_resolution(_mine_v, v["aid"], esc_fact))
@@ -2411,14 +2425,18 @@ def diagnose(state: dict) -> dict:
                for f in mine):
             continue   # G6 前筛已判(同一 fail 裁决),结论同构——不重复落账(词干聚类照算)
         h_pos, polluters, basis = _s0_pair(aid, comp, _prof, sig)
+        # M-04:配对命中后被否决 ≠「未找到污染者」——分轨记 veto,勿一律标 no_polluter。
+        _s0_veto = ""
         if h_pos == "h_s0" and _cross_bed_refuted(mine, last):
             h_pos, polluters, basis = "", [], ""   # 跨床反驳:s₀ 不成立
+            _s0_veto = "cross_bed_refuted"
         # 自身执行失败证据 → 不判 s₀(问询前提校验/echo-grounding 负门,与 G6 前筛
         # 1052 的 anomaly 保护一致):失败机理在受害者自己的序列,不是床污染。此前
         # diagnose 主体只有跨床反驳、缺此门,是 G6 未覆盖案的 s₀ 误判缺口
         if h_pos == "h_s0" and (_recs.get(aid) or {}).get("anomaly_lines"):
             sh.emit(f"…{aid[-6:]} 疑似前序用例影响,但本案自身执行也失败——继续深入分析")
             h_pos, polluters, basis = "", [], ""
+            _s0_veto = "self_anomaly"
         if not h_pos:
             att = [f for f in mine if f.get("ev") == "attribution"]
             cand_h = str((att[-1] if att else {}).get("h_position") or "")
@@ -2431,10 +2449,14 @@ def diagnose(state: dict) -> dict:
                 sh.emit(f"…{aid[-6:]} 疑似受前序用例影响但未证实(未定位到具体来源)——继续深入分析")
                 # N2′ 分歧记账(2026-07-16):不升格判定本身是「fork 假设 vs 机械配对」
                 # 的分歧事实——落账供 contra/cap 题面呈语境(用户不再盲判),不改判定
-                # (test_attributor_s0_not_upgraded… 锁住的语义不动);幂等键=run_id
+                # (test_attributor_s0_not_upgraded… 锁住的语义不动);
+                # M-03:run_id 带 verdict run 序(同 #74-⑤),否则 count 恒塌缩为 1。
+                # M-04:否决路径标真实否决因,真无污染者才标 no_polluter。
                 new_facts.append({"ev": "s0_dispute", "aid": aid,
-                                  "run_id": f"diag:{volume}:{aid}",
-                                  "fork_h": "h_s0", "mech": "no_polluter"})
+                                  "run_id": _g6_diag_key(last, volume, aid).replace(
+                                      "diag:pre:", "diag:dsp:", 1),
+                                  "fork_h": "h_s0",
+                                  "mech": _s0_veto or "no_polluter"})
                 cand_h = ""
             h_pos = cand_h
             basis = "fork candidate (no batch-level counter-evidence)" if h_pos else ""
@@ -2535,7 +2557,11 @@ def ask_contradiction(state: dict) -> dict:
             # 床态快照 pre_dirty/post_dirty 有数据源后同键补入,渲染自动生效
             _dsp = [f for f in mine if f.get("ev") == "s0_dispute"]
             if _dsp:
-                item["s0_dispute"] = {"count": len({str(f.get("run_id")) for f in _dsp})}
+                item["s0_dispute"] = {
+                    "count": len({str(f.get("run_id")) for f in _dsp}),
+                    # M-04:最新分歧的机械侧标签进题面(no_polluter / cross_bed_refuted / …)
+                    "mech": str((_dsp[-1].get("mech") or "")),
+                }
         if kind == "panel":
             panel, prnd = _latest_panel(mine, aid)
             item["panel"] = {k: panel.get(k) for k in
@@ -2698,10 +2724,12 @@ def ask_contradiction(state: dict) -> dict:
                 new_facts.append({"ev": "user_stop", "aid": aid, "question_id": qid,
                                   "answer": a, "token": tok})
             new_facts.append({"ev": "attribution", "aid": aid, "round": 99, **acc,
+                              "run_id": f"user:{tok}:{qid}",
                               "fix_direction": f"user decision: {a}", "evidence": "user"})
         elif tok == "defect":
             # 用户确认产品缺陷=唯一合法非 excel 结果(§11.7 telos);走缺陷候选单
             new_facts.append({"ev": "attribution", "aid": aid, "round": 99,
+                              "run_id": f"user:defect:{qid}",
                               "layer": "product_defect", "disposition": "defect_candidate",
                               "fix_direction": f"user confirmed product defect: {a}",
                               "evidence": "user"})
@@ -2757,6 +2785,7 @@ def ask_contradiction(state: dict) -> dict:
                               "fix_direction": f"user confirmed product defect: {a}",
                               "evidence": "user"})
             new_facts.append({"ev": "attribution", "aid": aid, "round": 99,
+                              "run_id": f"user:deesc_defect:{qid}",
                               "layer": "product_defect", "disposition": "defect_candidate",
                               "fix_direction": f"user confirmed product defect "
                                                 f"(escalated case): {a}", "evidence": "user"})
@@ -2768,6 +2797,7 @@ def ask_contradiction(state: dict) -> dict:
                               "fix_direction": f"user reported engineering fault: {a}",
                               "evidence": "user"})
             new_facts.append({"ev": "attribution", "aid": aid, "round": 99,
+                              "run_id": f"user:deesc_eng:{qid}",
                               "layer": "engine", "disposition": "engineering_fault",
                               "fix_direction": f"user-reported engine gap "
                                                 f"(no landing channel): {a}",

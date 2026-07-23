@@ -384,3 +384,45 @@ def test_reconcile_run_id_replay_stable_inv10_H15(tmp_path, monkeypatch):
     N.reconcile(dict(state, vol_seq=2))   # 新一轮(新 merge)→ 新 run_id,不误去重
     fs3 = [_json.loads(l) for l in facts_p.read_text().splitlines() if l.strip()]
     assert len([f for f in fs3 if f["ev"] == "verdict"]) == 2
+
+
+# ── M-05:escalated / round=99 归因幂等键带 run_id ────────────────────────────────
+
+def test_escalated_attempts_not_swallowed_M05(tmp_path):
+    """M-05:同因二次升级若无 run_id 会被内容键吞掉 → attempts 恒 1、封顶轨迹残缺。"""
+    from main.ist_core.compile_engine_v8.facts import (
+        append_facts, load_facts, escalation_attempts, deesc_auto_resolution,
+        ESC_NO_OUTPUT, DEESC_ROUND_CAP, idem_key)
+    p = tmp_path / "facts.jsonl"
+    aid = A
+    e1 = {"ev": "escalated", "aid": aid, "reason": "no output",
+          "subclass": ESC_NO_OUTPUT, "run_id": f"esc:{aid}:{ESC_NO_OUTPUT}:1"}
+    e2 = {"ev": "escalated", "aid": aid, "reason": "no output",
+          "subclass": ESC_NO_OUTPUT, "run_id": f"esc:{aid}:{ESC_NO_OUTPUT}:2"}
+    assert idem_key(e1) != idem_key(e2)
+    assert append_facts(p, [e1]) == 1
+    assert append_facts(p, [e2]) == 1
+    fs = load_facts(p)
+    assert escalation_attempts(fs, aid, ESC_NO_OUTPUT) == 2
+    # 第二次升级触发封顶归因也必须带 run_id(否则 (attribution,aid,99) 塌缩)
+    extra = deesc_auto_resolution([e1], aid, e2)
+    assert DEESC_ROUND_CAP == 2
+    att = [f for f in extra if f.get("ev") == "attribution"]
+    assert att and att[0].get("run_id") and att[0]["disposition"] == "defect_candidate"
+    # 对照:无 run_id 的旧形态同内容键碰撞
+    bare = {"ev": "escalated", "aid": aid, "reason": "no output",
+            "subclass": ESC_NO_OUTPUT}
+    assert idem_key(bare) == idem_key(dict(bare))
+
+
+def test_round99_attribution_run_id_distinct_M05():
+    """M-05:两条 round=99 归因靠 run_id 区分,不再退化为 (attribution,aid,99)。"""
+    from main.ist_core.compile_engine_v8.facts import idem_key
+    a = {"ev": "attribution", "aid": A, "round": 99, "layer": "user",
+         "disposition": "user_stop", "run_id": "user:stop:q1"}
+    b = {"ev": "attribution", "aid": A, "round": 99, "layer": "user",
+         "disposition": "user_stop", "run_id": "user:stop:q2"}
+    assert idem_key(a) != idem_key(b)
+    legacy = {"ev": "attribution", "aid": A, "round": 99, "layer": "user",
+              "disposition": "user_stop"}
+    assert idem_key(legacy) == ("attribution", A, 99)

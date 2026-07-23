@@ -19,7 +19,7 @@ def test_footer_projection_complete_no_state_dropped():
     counts = {s: 1 for s in statuses}          # 每态各 1 个 case
     buckets = sh._footer_bucket_counts(counts)
     assert sum(buckets.values()) == len(statuses), (
-        f"footer 投影丢态:Σ九桶={sum(buckets.values())} ≠ 状态数={len(statuses)};"
+        f"footer 投影丢态:Σ桶={sum(buckets.values())} ≠ 状态数={len(statuses)};"
         f"未投影的状态会在 footer 凭空消失(29906 broken 三态坑型)。buckets={buckets}")
 
 

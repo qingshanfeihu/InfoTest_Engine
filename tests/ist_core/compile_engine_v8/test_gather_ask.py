@@ -191,6 +191,27 @@ def test_gather_fires_despite_persistent_broken(rig):
     # ③ 101 pass 案没被 103 的子集复跑卷 churn 降级(卷指纹隔离)
     assert not any(f.get("ev") == "awaiting_user_unasked" and str(f.get("aid")) == AIDS[1]
                    for f in fs), "102 被静默吞(收口前未问)"
+    # T-3:deesc 通道真消费——ask_shown/decision qid 对齐;「保持」不产 de_escalated
+    deesc_panels = [p for p in panels if p.get("kind") == "ask_contradiction"
+                    and any(c.get("kind") == "deesc" for c in (p.get("cases") or []))]
+    assert deesc_panels, "deesc 恢复问询从未呈报"
+    shown = [f for f in fs if f.get("ev") == "ask_shown" and str(f.get("aid")) == AIDS[2]
+             and str(f.get("kind") or "") == "deesc"]
+    assert shown, "deesc ask_shown 未入账"
+    qid = str(shown[0].get("question_id") or "")
+    assert qid.startswith(f"deesc:{AIDS[2]}:"), f"deesc qid 形态错:{qid}"
+    decs = [f for f in fs if f.get("ev") == "decision" and str(f.get("aid")) == AIDS[2]
+            and str(f.get("question_id") or "").startswith(f"deesc:{AIDS[2]}:")]
+    assert decs and str(decs[-1].get("token")) == "deesc_keep", decs
+    assert not any(f.get("ev") == "de_escalated" and str(f.get("aid")) == AIDS[2]
+                   for f in fs), "答「保持」不得产 de_escalated"
+    from main.ist_core.compile_engine_v8.views import _is_escalated, case_status, S_ESCALATED
+    mine103 = [f for f in fs if str(f.get("aid")) == AIDS[2]]
+    assert _is_escalated(mine103), "保持后案须仍 escalated"
+    # 视图层:裸 batch 仍 escalated(deesc 待答投影在 sh.view 才翻 awaiting)
+    art = str(next((f.get("artifact") for f in reversed(mine103)
+                    if f.get("ev") == "authored"), "") or "")
+    assert case_status(fs, AIDS[2], art, "") == S_ESCALATED
 
 
 def _fork_undecided_forever(rig, orig):

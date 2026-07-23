@@ -1127,6 +1127,58 @@ def _delivery_verify_skippable(vw: dict, comp: list[str], volume: str,
 
 
 # --------------------------------------------------------------- [mech] merge
+def fold_common_cause_cases(
+        payload: list[dict],
+        diag_of=None,
+) -> tuple[list[dict], dict[str, str]]:
+    """共因合题(T-2 生产入口):bed/suspended 按 (kind, basis, polluters) 折叠。
+
+    返回 (folded_payload, member→leader)。非 bed/suspended 原样入 folded。
+    H-04:kind 进键——bed 与 suspended 不得跨 kind 合组。
+    diag_of(aid) → {"basis": str, "polluters": [{"aid": ...}, ...]};缺省空诊断不合并。
+    """
+    lookup = diag_of or (lambda _aid: {})
+    group_leader: dict[str, str] = {}
+    folded: list[dict] = []
+    groups: dict[tuple, dict] = {}
+    for it in payload:
+        if it.get("kind") not in ("bed", "suspended"):
+            folded.append(it)
+            continue
+        d = lookup(str(it.get("autoid") or "")) or {}
+        key = (it["kind"], str(d.get("basis") or ""),
+               tuple(sorted(str(pp.get("aid")) for pp in (d.get("polluters") or []))))
+        if key in groups and key[1:] != ("", ()):
+            leader = groups[key]
+            leader.setdefault("group_aids", [leader["autoid"]]).append(it["autoid"])
+            group_leader[it["autoid"]] = leader["autoid"]
+        else:
+            groups[key] = it
+            folded.append(it)
+    return folded, group_leader
+
+
+def s0_parked_for(fs: list[dict], aid: str, bed_host: str = "") -> bool:
+    """s₀ 停车位谓词(生产 merge 与测试共用;禁复刻自测)。
+
+    复跑处方 ∧ 最新 h_s0 诊断 ∧ 床锚同床(或缺锚保守同床) ∧ 无用户 retry 覆盖。
+    """
+    att = [f for f in fs if f.get("aid") == aid and f.get("ev") == "attribution"]
+    if not (att and str(att[-1].get("disposition")) in ("rerun_isolated", "transient")):
+        return False
+    if _user_retry_after_s0(fs, aid):
+        return False
+    diag = [f for f in fs if f.get("aid") == aid and f.get("ev") == "diagnosis"]
+    if not (diag and str(diag[-1].get("h_position", "")).startswith("h_s0")):
+        return False
+    d_bed = str(diag[-1].get("bed") or "")
+    cur_bed = str(bed_host or "")
+    if d_bed and cur_bed and d_bed != cur_bed:
+        return False
+    return True
+
+
+# --------------------------------------------------------------- [mech] merge
 def merge(state: dict) -> dict:
     """组卷:确定语境(全部非终态案就绪=delivery,否则 subset)+ 通道①排序 + ④共存检查
     + 卷组成指纹 + merged 事实。开工先回收 fork 超时后迟到落盘的合格卷(run18)。"""
@@ -1143,21 +1195,7 @@ def merge(state: dict) -> dict:
         无对象(卷面没错),入卷只会无限重跑同一失败(实测 livelock)。停在未通过卷,
         叙事说清「床治理后下批续跑」;L3 落地后此位自动清空。
         用户 retry 晚于最新 h_s0 诊断 → 不停车((36) 写权律,run12 实弹修复)。"""
-        att = [f for f in fs if f.get("aid") == aid and f.get("ev") == "attribution"]
-        if not (att and str(att[-1].get("disposition")) in ("rerun_isolated", "transient")):
-            return False
-        if _user_retry_after_s0(fs, aid):
-            return False
-        diag = [f for f in fs if f.get("aid") == aid and f.get("ev") == "diagnosis"]
-        if not (diag and str(diag[-1].get("h_position", "")).startswith("h_s0")):
-            return False
-        # 床锚(run15 实弹修):s₀ 是床状态属性——诊断锚定的床≠当前床(换床)时
-        # 诊断失效不停车;旧账无 bed 字段=保守视为同床(停车照旧)
-        d_bed = str(diag[-1].get("bed") or "")
-        cur_bed = str(state.get("bed_host") or "")
-        if d_bed and cur_bed and d_bed != cur_bed:
-            return False
-        return True
+        return s0_parked_for(fs, aid, str(state.get("bed_host") or ""))
 
     # F1(§18.11):expectation_suspect 案带 ask_panel 在等人源裁决——与 author 的
     # panel_wait 排除对称,不得被 merge 当「就绪案」误纳进 delivery 卷(它 case_status
@@ -2681,26 +2719,13 @@ def ask_contradiction(state: dict) -> dict:
     # H-04:分组键含 kind——旧实现 bed 与 suspended 同键合组,组长答 retry 广播后
     # suspended 组员走 tok=retry 只落 attribution、不落 resumed → `_is_suspended` 不解除,
     # 下批以新 qid 重问同一批案(既有折叠测试也只锁同 kind)。
-    _group_leader: dict[str, str] = {}
-    _folded: list[dict] = []
-    _bed_groups: dict[tuple, dict] = {}
-    for it in payload:
-        if it["kind"] not in ("bed", "suspended"):
-            _folded.append(it)
-            continue
-        # suspended 恢复题同因合并(run15 形态:同 kind 同因挂起案的恢复问询=一题)——
-        # 分组键=(kind, 最新诊断依据, 污染者集);无诊断的不合并
+    def _diag_of(aid: str) -> dict:
         _d = next((f for f in reversed(fs) if f.get("ev") == "diagnosis"
-                   and str(f.get("aid")) == it["autoid"]), {})
-        _key = (it["kind"], str(_d.get("basis") or ""),
-                tuple(sorted(str(pp.get("aid")) for pp in (_d.get("polluters") or []))))
-        if _key in _bed_groups and _key[1:] != ("", ()):
-            leader = _bed_groups[_key]
-            leader.setdefault("group_aids", [leader["autoid"]]).append(it["autoid"])
-            _group_leader[it["autoid"]] = leader["autoid"]
-        else:
-            _bed_groups[_key] = it
-            _folded.append(it)
+                   and str(f.get("aid")) == aid), {})
+        return {"basis": str(_d.get("basis") or ""),
+                "polluters": list(_d.get("polluters") or [])}
+
+    _folded, _group_leader = fold_common_cause_cases(payload, _diag_of)
     if _group_leader:
         sh.emit(f"共因合题:{len(payload) - len(_folded)} 题并入代表题"
                 f"(同诊断依据+同污染者集),答案将广播")

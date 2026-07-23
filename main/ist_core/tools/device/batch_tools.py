@@ -825,21 +825,7 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
             # (30) 承载链第零层(run14 实弹修):批内出现 fail 时探设备可达性——
             # 不可达=fail 全是设备失联的下游症状,非案缺陷非床污染,全部降 broken
             # (device_unreachable);禁 s₀ 配对在死设备批上批量误诊(11 案实证)
-            if any(r["verdict"] == "fail" for r in out):
-                _reach = _probe_device_reachable()
-                if _reach is False:
-                    for r in out:
-                        if r["verdict"] != "pass":
-                            r["verdict"] = "broken"
-                            r["device_unreachable"] = True
-                            # pyATS Blocked 子类(§④):设备不可达 → env 呈报(复跑救不了
-                            # 死设备)。覆盖此前可能打的 errored(承载链第零层优先)。
-                            r["broken_subtype"] = "blocked"
-                            r["broken_reason"] = (
-                                "device unreachable (ping 100% loss from jumphost) — "
-                                "this failure is a downstream symptom of device loss, "
-                                "not a case defect nor bed pollution; restore the "
-                                "device, then resume")
+            _apply_device_unreachable_demotion(out)
             # 文件级崩溃可见性：有 unknown（某 case 把整份 pytest 搞崩、后续全不跑）→ 取框架 task 日志
             # 的 traceback 附到 unknown 上，让 agent 看到“崩在哪一行/什么异常”，而非只看到一堆无解释的 unknown。
             if task_id and any(r["verdict"] == "unknown" for r in out):
@@ -852,6 +838,31 @@ def dev_run_batch(xlsx_path: str, autoids_json: list | str = "", module: str = "
         return json.dumps({"error": f"batch on-device run exception: {exc}", "partial": out}, ensure_ascii=False)
 
     return json.dumps(out, ensure_ascii=False)
+
+
+def _apply_device_unreachable_demotion(out: list, probe=None) -> list:
+    """(30) 可达性降级——生产 digest 与测试共用(T-1:禁复刻自测)。
+
+    批内有 fail 且探测明确不可达 → 非 pass 全降 broken(device_unreachable/blocked)。
+    探测未知(None)/可达(True) 不改判。原地改 out 并返回同一列表。
+    """
+    if not any(r.get("verdict") == "fail" for r in out):
+        return out
+    _reach = (probe or _probe_device_reachable)()
+    if _reach is False:
+        for r in out:
+            if r.get("verdict") != "pass":
+                r["verdict"] = "broken"
+                r["device_unreachable"] = True
+                # pyATS Blocked 子类(§④):设备不可达 → env 呈报(复跑救不了
+                # 死设备)。覆盖此前可能打的 errored(承载链第零层优先)。
+                r["broken_subtype"] = "blocked"
+                r["broken_reason"] = (
+                    "device unreachable (ping 100% loss from jumphost) — "
+                    "this failure is a downstream symptom of device loss, "
+                    "not a case defect nor bed pollution; restore the "
+                    "device, then resume")
+    return out
 
 
 def _scan_xlsx_for_check_method(xlsx_path: str, method: str) -> list:

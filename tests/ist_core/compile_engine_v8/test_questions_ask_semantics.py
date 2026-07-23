@@ -575,3 +575,19 @@ def test_s0_dispute_run_ids_drive_count_M03():
     q = build_ask_question({"autoid": A, "kind": "contra", "contradictions": 2,
                             "s0_dispute": {"count": len(rids), "mech": "no_polluter"}})
     assert "2 次判" in q["question"]
+
+
+def test_deesc_panel_and_defect_token_v41():
+    """在册项:deesc 题面三子类选项 + 缺陷意图映射 deesc_defect(非通用 defect)。"""
+    q_out = build_ask_question({"autoid": A, "kind": "deesc", "subclass": "no_output",
+                                "evidence": "wallclock"})
+    assert "矛盾" not in q_out["header"]
+    assert q_out["_tokens"]["重编"] == "deesc_retry"
+    assert q_out["_tokens"]["确认产品缺陷"] == "deesc_defect"
+    assert "保持" in q_out["_tokens"]
+    q_ne = build_ask_question({"autoid": A, "kind": "deesc", "subclass": "not_executed"})
+    assert q_ne["_tokens"]["换床复跑"] == "deesc_reswitch"
+    q_nl = build_ask_question({"autoid": A, "kind": "deesc", "subclass": "no_ledger_channel"})
+    assert q_nl["_tokens"]["工程故障呈报"] == "deesc_engineering_fault"
+    assert answer_token("deesc", "确认产品缺陷") == "deesc_defect"
+    assert answer_token("deesc", "这是产品缺陷") == "deesc_defect"

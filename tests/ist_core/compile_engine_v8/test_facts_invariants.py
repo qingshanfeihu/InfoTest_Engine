@@ -395,21 +395,24 @@ def test_escalated_attempts_not_swallowed_M05(tmp_path):
     """M-05:同因二次升级若无 run_id 会被内容键吞掉 → attempts 恒 1、封顶轨迹残缺。"""
     from main.ist_core.compile_engine_v8.facts import (
         append_facts, load_facts, escalation_attempts, deesc_auto_resolution,
-        ESC_NO_OUTPUT, DEESC_ROUND_CAP, idem_key)
+        deesc_cap_threshold, ESC_NO_OUTPUT, idem_key)
     p = tmp_path / "facts.jsonl"
     aid = A
     e1 = {"ev": "escalated", "aid": aid, "reason": "no output",
           "subclass": ESC_NO_OUTPUT, "run_id": f"esc:{aid}:{ESC_NO_OUTPUT}:1"}
     e2 = {"ev": "escalated", "aid": aid, "reason": "no output",
           "subclass": ESC_NO_OUTPUT, "run_id": f"esc:{aid}:{ESC_NO_OUTPUT}:2"}
+    e3 = {"ev": "escalated", "aid": aid, "reason": "no output",
+          "subclass": ESC_NO_OUTPUT, "run_id": f"esc:{aid}:{ESC_NO_OUTPUT}:3"}
     assert idem_key(e1) != idem_key(e2)
     assert append_facts(p, [e1]) == 1
     assert append_facts(p, [e2]) == 1
     fs = load_facts(p)
     assert escalation_attempts(fs, aid, ESC_NO_OUTPUT) == 2
-    # 第二次升级触发封顶归因也必须带 run_id(否则 (attribution,aid,99) 塌缩)
-    extra = deesc_auto_resolution([e1], aid, e2)
-    assert DEESC_ROUND_CAP == 2
+    # v4.1:默认阈值=max_rounds+granted=3;第 2 次不封,第 3 次封顶且带 run_id
+    assert deesc_cap_threshold() == 3
+    assert deesc_auto_resolution([e1], aid, e2) == []
+    extra = deesc_auto_resolution([e1, e2], aid, e3)
     att = [f for f in extra if f.get("ev") == "attribution"]
     assert att and att[0].get("run_id") and att[0]["disposition"] == "defect_candidate"
     # 对照:无 run_id 的旧形态同内容键碰撞

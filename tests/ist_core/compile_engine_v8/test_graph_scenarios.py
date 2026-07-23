@@ -107,7 +107,10 @@ def rig(tmp_path, monkeypatch):
                 if str(r.get("autoid")) == aid:
                     r["_attribution"] = {"layer": "V", "disposition": "reflow",
                                          "fix_direction": "adjust expectation",
-                                         "evidence": f"echo for {aid}"}
+                                         "evidence": f"echo for {aid}",
+                                         # M-02 收账新鲜度闸:真 submit_attribution 恒落 ts
+                                         # (fail_attribution.py:342),假体同步补
+                                         "ts": time.time()}
             lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         return "VERDICT: V/reflow"
     monkeypatch.setattr(N, "_FORK_OVERRIDE", fake_fork)

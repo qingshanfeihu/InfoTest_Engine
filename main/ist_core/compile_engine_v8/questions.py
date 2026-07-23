@@ -617,7 +617,7 @@ def answer_token(kind: str, a: str) -> str:
         if _has_positive_intent(a, ("工程故障", "引擎缺口", "引擎问题", "呈报故障")):
             return "deesc_engineering_fault"
         if _defect_intent(a):
-            return "defect"
+            return "deesc_defect"
         if _has_positive_intent(a, ("换床", "换环境", "换设备", "换测试床")):
             return "deesc_reswitch"
         if _has_positive_intent(a, ("重编", "重新编写", "重试", "再试", "再编")):
@@ -895,6 +895,55 @@ def build_ask_question(c: dict) -> dict:
                     {"label": "恢复处理", "description": "回到正常流程继续修。对你的用例:接着修这个用例。"},
                     {"label": "保持挂起", "description": "本批继续不动它。对你的用例:这批先一直放着。"}],
                 "_tokens": {"恢复处理": "resume", "保持挂起": "keep"},
+                "_key": aid}
+    if kind == "deesc":
+        # v4.1 三子类选项集(spec §2.1);勿落 contra 兜底——文案/token 全错。
+        sub = str(c.get("subclass") or "")
+        ev = clip_text(str(c.get("evidence") or ""), 200)
+        _why = (f"(依据:『{ev}』)" if ev else "")
+        if sub == "not_executed":
+            q = (f"{who} 有卷但连续未跑成{_why}——卷面本身可能没问题,更像床/环境挡路。"
+                 + (_cc if _cc else "") + "如何恢复?")
+            return {"question": q, "header": f"恢复{aid[-6:]}",
+                    "options": [
+                        {"label": "换床复跑", "description":
+                            "换测试床/清床后再跑同一卷(不重编)。对你的用例:卷先留着、换环境再验。"},
+                        {"label": "确认产品缺陷", "description":
+                            "实机/产品侧问题——记进缺陷候选清单结案。对你的用例:按产品缺陷收口。"},
+                        {"label": "保持", "description":
+                            "本批先不动;同床同版本续跑不再问。对你的用例:这批先放着。"}],
+                    "_tokens": {"换床复跑": "deesc_reswitch", "确认产品缺陷": "deesc_defect",
+                                "保持": "deesc_keep"},
+                    "_key": aid}
+        if sub == "no_ledger_channel":
+            q = (f"{who} 判欠定却无落账通道{_why}——可能是编写漏调可验性工具,也可能是"
+                 "本类欠定引擎缺口。建议先重编试一次;仍同 claim 再撞再报工程故障。"
+                 + (_cc if _cc else "") + "如何处置?")
+            return {"question": q, "header": f"恢复{aid[-6:]}",
+                    "options": [
+                        {"label": "重编(先试)", "description":
+                            "再派编写赌漏调工具(因①可自愈)。对你的用例:先重写一轮看是否能落账。"},
+                        {"label": "工程故障呈报", "description":
+                            "确认是引擎缺口(因②)——记工程故障、不进产品缺陷卷。对你的用例:上报引擎缺口。"},
+                        {"label": "保持", "description":
+                            "本批先不动;同床同版本续跑不再问。对你的用例:这批先放着。"}],
+                    "_tokens": {"重编(先试)": "deesc_retry",
+                                "工程故障呈报": "deesc_engineering_fault",
+                                "保持": "deesc_keep"},
+                    "_key": aid}
+        # no_output 与未知子类:重编 / 确认产品缺陷 / 保持
+        q = (f"{who} 编写轮无产出(空转或墙钟超时){_why}——可重派编写,或确认产品侧无解。"
+             + (_cc if _cc else "") + "如何恢复?")
+        return {"question": q, "header": f"恢复{aid[-6:]}",
+                "options": [
+                    {"label": "重编", "description":
+                        "换并发/墙钟再派编写。对你的用例:再写一轮。"},
+                    {"label": "确认产品缺陷", "description":
+                        "实机/产品侧问题——记进缺陷候选清单结案。对你的用例:按产品缺陷收口。"},
+                    {"label": "保持", "description":
+                        "本批先不动;同床同版本续跑不再问。对你的用例:这批先放着。"}],
+                "_tokens": {"重编": "deesc_retry", "确认产品缺陷": "deesc_defect",
+                            "保持": "deesc_keep"},
                 "_key": aid}
     note = _s0_dispute_note(c)
     q = (f"{who} 单独验证通过、整卷复验第 {c.get('contradictions')} 次失败"

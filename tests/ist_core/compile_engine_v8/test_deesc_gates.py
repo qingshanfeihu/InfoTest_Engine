@@ -74,21 +74,29 @@ def test_gate3_deesc_waiting_blocks_all_settled():
     assert not all_settled(vw2)
 
 
-# ── 4+12: 第二次同子类升级封顶(attempts 轴) ──────────────────────────────────
+# ── 4+12: 同子类升级达 max_rounds+granted 封顶(attempts 轴,v4.1) ───────────────
 
-def test_gate4_and_12_second_no_output_caps_to_defect_candidate():
+def test_gate4_and_12_no_output_caps_at_max_rounds_plus_granted():
     e1 = _esc(A, F.ESC_NO_OUTPUT, 1)
     e2 = _esc(A, F.ESC_NO_OUTPUT, 2)
+    e3 = _esc(A, F.ESC_NO_OUTPUT, 3)
     assert F.escalation_attempts([e1], A, F.ESC_NO_OUTPUT) == 1
-    extra = F.deesc_auto_resolution([e1], A, e2)
+    assert F.deesc_cap_threshold(max_rounds=3, granted=0) == 3
+    # 默认 max_rounds=3:第 2 次尚不封顶
+    assert F.deesc_auto_resolution([e1], A, e2) == []
+    # 第 3 次同子类 → 缺陷候选
+    extra = F.deesc_auto_resolution([e1, e2], A, e3)
     assert any(f.get("ev") == "de_escalated" for f in extra)
     att = [f for f in extra if f.get("ev") == "attribution"]
     assert att and att[0]["disposition"] == "defect_candidate"
-    assert F.DEESC_ROUND_CAP == 2
-    # gate12:attempts 轴——第三次仍封顶(不靠 rounds_used)
-    e3 = _esc(A, F.ESC_NO_OUTPUT, 3)
-    extra3 = F.deesc_auto_resolution([e1, e2], A, e3)
-    assert any(f.get("disposition") == "defect_candidate" for f in extra3)
+    assert "threshold=3" in str(att[0].get("fix_direction") or "")
+    # gate12:attempts 轴——显式 max_rounds=2 时第 2 次即封(不靠 rounds_used)
+    extra2 = F.deesc_auto_resolution([e1], A, e2, max_rounds=2, granted=0)
+    assert any(f.get("disposition") == "defect_candidate" for f in extra2)
+    # granted 抬阈值:max_rounds=2 + granted=1 → 第 3 次才封
+    assert F.deesc_auto_resolution([e1], A, e2, max_rounds=2, granted=1) == []
+    extra_g = F.deesc_auto_resolution([e1, e2], A, e3, max_rounds=2, granted=1)
+    assert any(f.get("disposition") == "defect_candidate" for f in extra_g)
 
 
 # ── 5: 报告去向行——未封顶可重编;封顶缺陷候选;无「可续跑」对无通道 ────────────
@@ -132,6 +140,29 @@ def test_gate7_keep_converges_until_bed_changes():
     # 换床 → 可重问
     state2 = {**state, "bed_host": "105"}
     assert A in sh.deesc_recovery_waiting(state2, fs, vw)
+
+
+def test_gate7b_non_keep_then_new_escalation_reasks():
+    """非保持后新升级回合必须再问——旧逻辑按全史末条≠keep 永久跳过(沉默死局)。"""
+    state = {"bed_host": "103", "device_build": "10.5.0"}
+    claim1 = "worker declared underdetermined: kind A"
+    claim2 = "worker declared underdetermined: kind B"  # 不同 claim
+    fs = [
+        _esc(A, F.ESC_NO_LEDGER_CHANNEL, 1, reason=claim1),
+        {"ev": "decision", "aid": A, "question_id": f"deesc:{A}:1",
+         "answer": "重编", "token": "deesc_retry"},
+        {"ev": "de_escalated", "aid": A, "question_id": f"deesc:{A}:1"},
+        _esc(A, F.ESC_NO_LEDGER_CHANNEL, 2, reason=claim2),
+    ]
+    vw = batch_view(fs, {"cases": [{"autoid": A}]})
+    assert A in sh.deesc_recovery_waiting(state, fs, vw)
+    # 同升级回合内已答非保持 → 不重问
+    fs_same = fs + [
+        {"ev": "decision", "aid": A, "question_id": f"deesc:{A}:2",
+         "answer": "工程故障", "token": "deesc_engineering_fault"},
+    ]
+    # 工程故障会再写 de_escalated+attribution;即便仍 escalated 视图,本回合已决
+    assert A not in sh.deesc_recovery_waiting(state, fs_same, vw)
 
 
 # ── 8: reason 改写不影响子类分治 ────────────────────────────────────────────

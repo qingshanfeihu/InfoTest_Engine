@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from main.ist_core.compile_engine_v8 import views as V
 from main.ist_core.compile_engine_v8.remedies import derive_queue, tried_actions
@@ -125,7 +126,8 @@ def test_e2e_report_remedy_and_r5_booleans(rig):
                     if str(r.get("autoid")) == aid:
                         r["_attribution"] = {"layer": "V", "disposition": "rerun_isolated",
                                              "h_position": "h_pi",
-                                             "evidence": f"echo for {aid} (fail)"}
+                                             "evidence": f"echo for {aid} (fail)",
+                                             "ts": time.time()}   # M-02 收账闸:真 tool 恒落 ts
                 lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return "VERDICT"
         return orig_fork(skill, brief, tag=tag, effort=effort)

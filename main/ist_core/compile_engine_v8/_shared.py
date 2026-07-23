@@ -270,16 +270,12 @@ def deesc_recovery_waiting(state: dict, fs: list[dict], vw: dict) -> list[str]:
     选案不看派生状态而看 `_is_escalated`——问询一旦落 needs_decision,案的派生状态
     就变 awaiting_user(见 views.case_status),按状态选会把自己刚问出去的案漏掉。
 
-    再问判据(收敛律 §2.6.4,守门测试7):按该案**最后一条 deesc decision** 分流——
-    - 没有:从没问过这轮升级,该问。
-    - 有且 token≠"deesc_keep":重编/换床/缺陷候选/工程故障呈报都对那次升级给了
-      终局(要么带出新一轮 escalated、要么案直接终态化),不重问——重开的问询会
-      拿到 deesc_qid 给的一个新 qid,不会和旧答案的 qid 冲突,但**这次升级**已经
-      有结论了,不该无端再问一遍。
-    - 有且 token=="deesc_keep":判例键(§2.6.4 作用域)没变(同床/同版本族)→ 不重问
-      (同参续跑不重问同判例键);判例键变了(换床/换版本族)→ 可重问——**复用同一个
-      qid 重新问**(不生成新 qid),因为这次升级本身没变,只是当初"保持"的适用范围
-      (那个床/版本族)过期了,用户可能想改主意。
+    再问判据(收敛律 §2.6.4 + 升级回合边界):只看**当前升级回合**(最后一条 escalated
+    **之后**)的 deesc decision——
+    - 本回合尚无 deesc decision:该问(含「答重编→解除→再升级」的新回合——旧逻辑按
+      全史末条 decision≠keep 永久跳过,no_ledger_channel 以不同 claim 再撞会沉默死局)。
+    - 本回合已答且 token≠"deesc_keep":本回合已终局(重编/换床/缺陷/工程故障),不重问。
+    - 本回合已答且 token=="deesc_keep":判例键未变→不重问;判例键变了→可重问。
     """
     out = []
     for aid in vw["cases"]:
@@ -287,12 +283,16 @@ def deesc_recovery_waiting(state: dict, fs: list[dict], vw: dict) -> list[str]:
         if not V._is_escalated(mine):
             continue
         sub = F.escalated_subclass(fs, aid)
-        deesc_decs = [d for d in mine if d.get("ev") == "decision"
-                     and str(d.get("question_id", "")).startswith(f"deesc:{aid}:")]
-        if not deesc_decs:
+        last_esc_i = max((i for i, f in enumerate(mine) if f.get("ev") == "escalated"),
+                         default=-1)
+        deesc_this_round = [
+            f for i, f in enumerate(mine)
+            if i > last_esc_i and f.get("ev") == "decision"
+            and str(f.get("question_id", "")).startswith(f"deesc:{aid}:")]
+        if not deesc_this_round:
             out.append(aid)
             continue
-        last = deesc_decs[-1]
+        last = deesc_this_round[-1]
         if str(last.get("token")) != "deesc_keep":
             continue
         key = _deesc_precedent_key(aid, sub, state)

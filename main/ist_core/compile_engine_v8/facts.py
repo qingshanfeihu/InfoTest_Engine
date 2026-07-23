@@ -236,7 +236,7 @@ def rounds_used(facts: list[dict], aid: str) -> int:
 # 段空转,该走重编)。存量事实无该字段时按 reason 前缀兜底一次。
 ESC_NO_OUTPUT = "no_output"                  # author 段:fork 无产出(墙钟/空转)→ 重编
 ESC_NOT_EXECUTED = "not_executed"            # run 段:有卷但连续未跑成 → 换床复跑
-ESC_NO_LEDGER_CHANNEL = "no_ledger_channel"  # 欠定无落账通道 → 缺陷候选/改描述重编
+ESC_NO_LEDGER_CHANNEL = "no_ledger_channel"  # 欠定无落账通道 → 先试重编、同 claim 复现则工程故障呈报(A6)
 
 _ESC_LEGACY_PREFIX = (
     ("no output from fork", ESC_NO_OUTPUT),
@@ -297,7 +297,13 @@ def recovery_attempts(facts: list[dict], aid: str) -> int:
 # 记账点,天然承载"该案被送进 author/live 但没能正常收尾的次数"——不数 authored 是否
 # 产出,只数升级本身,故按此定义 attempts 轴,不改 rounds_used(它仍是另外 4 处消费点
 # 的权威定义)。
-DEESC_ROUND_CAP = 2   # 第 N 次同子类升级触发封顶(gate 测试#4 字面:"第二次…封顶")
+# v4.1 阈值=max_rounds+granted(与 rounds_used 封顶同哲学,不另立旋钮)——旧硬编码
+# DEESC_ROUND_CAP=2 已废。
+
+
+def deesc_cap_threshold(max_rounds: int = 3, granted: int = 0) -> int:
+    """de-escalate attempts 封顶阈值(v4.1)=max_rounds+granted,至少 1。"""
+    return max(1, int(max_rounds or 3) + int(granted or 0))
 
 
 def escalation_attempts(facts: list[dict], aid: str, subclass: str) -> int:
@@ -308,20 +314,21 @@ def escalation_attempts(facts: list[dict], aid: str, subclass: str) -> int:
               if _fact_subclass(f) == subclass)
 
 
-def deesc_auto_resolution(facts: list[dict], aid: str, new_escalated: dict) -> list[dict]:
+def deesc_auto_resolution(facts: list[dict], aid: str, new_escalated: dict,
+                          *, max_rounds: int = 3, granted: int = 0) -> list[dict]:
     """升级事实即将写入前的自动裁决(先试后判/round-cap 的机械触发,不停下来问人)。
 
     调用方(author/reconcile)在追加一条新 escalated 事实前先过一次本函数:命中则本函数
     返回要**额外一并追加**的 facts(de_escalated 释放信号 + attribution 终判),调用方把
     这些跟在 escalated 事实后面一起写入——案子仍会留下"又升级了一次"的完整轨迹,只是
-    紧接着被引擎自己解除+终判,不会再进 ask 边问第三次。未命中返回 []:原样留给
+    紧接着被引擎自己解除+终判,不会再进 ask 边空转。未命中返回 []:原样留给
     deesc_recovery_waiting/ask_contradiction 走正常问询。
 
     两条独立规则(THEORY §0 A6 三分,leader 收回"no_ledger_channel 统一转缺陷候选"的
     初裁后落地):
-    - no_output / not_executed:**第二次同子类升级**即封顶(不问,直接缺陷候选)——
-      这两类每次尝试都要烧一次完整 fork/上机轮次且失败了不产出任何新证据,继续问
-      只会引出"答重编→仍无产出→再问→再重编"的问-编循环(§2.1)。
+    - no_output / not_executed:同子类升级次数达 **max_rounds+granted**(v4.1)即封顶
+      (不问,直接缺陷候选)——这两类每次尝试都要烧一次完整 fork/上机轮次且失败了不
+      产出任何新证据,继续问只会引出"答重编→仍无产出→再问→再重编"的问-编循环(§2.1)。
     - no_ledger_channel:**同 claim 再次出现**才落"工程故障呈报"(A6 臂,不是缺陷候选)
       ——用一次重编赌"worker 只是忘调 verifiability 工具"(因①,可自愈);若原样复现
       同一条 claim,说明是"这类欠定确实没有落账通道"(因②,引擎缺口),坐实。claim
@@ -331,20 +338,21 @@ def deesc_auto_resolution(facts: list[dict], aid: str, new_escalated: dict) -> l
     sub = _fact_subclass(new_escalated)
     if sub in (ESC_NO_OUTPUT, ESC_NOT_EXECUTED):
         prior = escalation_attempts(facts, aid, sub)
-        if prior + 1 >= DEESC_ROUND_CAP:
+        cap = deesc_cap_threshold(max_rounds, granted)
+        if prior + 1 >= cap:
             _n = prior + 1
             return [
                 {"ev": "de_escalated", "aid": aid,
-                 "note": f"auto: round-cap reached ({_n}x {sub})"},
+                 "note": f"auto: round-cap reached ({_n}x {sub}, threshold={cap})"},
                 # M-05:round=99 归因必带 run_id——否则幂等键退化 (attribution,aid,99),
                 # 同案第二次自动封顶/用户终局裁决被静默吞。
                 {"ev": "attribution", "aid": aid, "round": 99, "layer": "engine",
                  "run_id": f"auto_cap:{aid}:{sub}:{_n}",
                  "provenance": "engine_auto:deesc_cap",
                  "disposition": "defect_candidate",
-                 "fix_direction": (f"escalation round-cap reached ({_n}x {sub}) — "
-                                   "engine exhausted its recovery attempts for this case "
-                                   "without producing new evidence"),
+                 "fix_direction": (f"escalation round-cap reached ({_n}x {sub}, "
+                                   f"threshold={cap}) — engine exhausted its recovery "
+                                   "attempts for this case without producing new evidence"),
                  "evidence": f"engine_auto_cap:{sub}"},
             ]
         return []

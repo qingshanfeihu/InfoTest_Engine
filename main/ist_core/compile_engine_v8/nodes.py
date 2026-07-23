@@ -640,9 +640,11 @@ def author(state: dict) -> dict:
             esc_fact["run_id"] = f"esc:{aid}:{_sub}:{F.escalation_attempts(fs, aid, _sub) + 1}"
             new_facts.append(esc_fact)
             # 先试后判/round-cap 机械触发(B-1,facts.deesc_auto_resolution):
-            # no_output 第二次同子类升级、或 no_ledger_channel 同 claim 复现,直接
-            # 追加解除+终判,不停下来问第三次(不无限循环,守门测试4/11/12)
-            new_facts.extend(F.deesc_auto_resolution(fs, aid, esc_fact))
+            # no_output 同子类升级达 max_rounds+granted、或 no_ledger_channel 同 claim
+            # 复现,直接追加解除+终判,不停下来空转问询(守门测试4/11/12)
+            _mr = int(state.get("max_rounds") or 3)
+            new_facts.extend(F.deesc_auto_resolution(
+                fs, aid, esc_fact, max_rounds=_mr, granted=sh.granted_rounds(fs, aid)))
     sh.append(state, new_facts)
     fs2 = sh.load_facts(state)
     sh.emit_tick(state, "author", fs2)
@@ -1512,8 +1514,11 @@ def reconcile(state: dict) -> dict:
                 f"esc:{v['aid']}:{F.ESC_NOT_EXECUTED}:"
                 f"{F.escalation_attempts(_mine_v, v['aid'], F.ESC_NOT_EXECUTED) + 1}")
             esc_facts.append(esc_fact)
-            # 同 author 段:第二次同子类升级直接封顶,不再问第三次(不无限循环)
-            esc_facts.extend(F.deesc_auto_resolution(_mine_v, v["aid"], esc_fact))
+            # 同 author 段:同子类升级达 max_rounds+granted 直接封顶(v4.1)
+            _mr = int(state.get("max_rounds") or 3)
+            esc_facts.extend(F.deesc_auto_resolution(
+                _mine_v, v["aid"], esc_fact,
+                max_rounds=_mr, granted=sh.granted_rounds(fs2, v["aid"])))
     if esc_facts:
         sh.append(state, esc_facts)
         fs2 = sh.load_facts(state)

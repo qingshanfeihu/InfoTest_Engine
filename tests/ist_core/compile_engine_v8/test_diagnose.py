@@ -8,6 +8,7 @@ fail「occupied」;单案归因给 rerun_isolated(run11 实况,导致重排复�
 from __future__ import annotations
 
 import json
+import time
 
 from tests.ist_core.compile_engine_v8.test_graph_scenarios import (  # noqa: F401
     AIDS, FakeDevice, rig, _run_graph, _report)
@@ -123,7 +124,8 @@ def test_diagnose_s0_blocks_pointless_rerun(rig):
                         r["_attribution"] = {"layer": "V", "disposition": "rerun_isolated",
                                              "h_position": "h_pi",
                                              "fix_direction": "isolate and rerun",
-                                             "evidence": f"echo for {aid} (fail)"}
+                                             "evidence": f"echo for {aid} (fail)",
+                                             "ts": time.time()}   # M-02 收账闸:真 tool 恒落 ts
                 lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return "VERDICT: V/rerun_isolated"
         return orig_fork(skill, brief, tag=tag, effort=effort)
@@ -198,7 +200,8 @@ def test_attributor_s0_not_upgraded_when_mechanical_finds_no_polluter(rig):
                     if str(r.get("autoid")) == aid:
                         r["_attribution"] = {"layer": "V", "disposition": "rerun_isolated",
                                              "h_position": "h_s0",   # fork 判 s₀
-                                             "evidence": f"echo {aid}"}
+                                             "evidence": f"echo {aid}",
+                                             "ts": time.time()}   # M-02 收账闸:真 tool 恒落 ts
                 lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return "VERDICT"
         return orig_fork(skill, brief, tag=tag, effort=effort)
@@ -254,7 +257,8 @@ def test_transient_recovery_final_verify_not_gated(rig):
                                              "disposition": "rerun_isolated",
                                              "h_position": "h_pi",
                                              "fix_direction": "one-off timeout, rerun",
-                                             "evidence": f"echo for {aid} (fail)"}
+                                             "evidence": f"echo for {aid} (fail)",
+                                             "ts": time.time()}   # M-02 收账闸:真 tool 恒落 ts
                 lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return "VERDICT: transient/rerun_isolated"
         return orig_fork(skill, brief, tag=tag, effort=effort)
@@ -304,7 +308,8 @@ def test_diagnose_common_cause_cluster(rig):
                 for r in data:
                     if str(r.get("autoid")) == aid:
                         r["_attribution"] = {"layer": "E", "disposition": "env_blocked",
-                                             "evidence": f"echo for {aid} (fail)"}
+                                             "evidence": f"echo for {aid} (fail)",
+                                             "ts": time.time()}   # M-02 收账闸:真 tool 恒落 ts
                 lrp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return "VERDICT: E/env_blocked"
         return orig_fork(skill, brief, tag=tag, effort=effort)

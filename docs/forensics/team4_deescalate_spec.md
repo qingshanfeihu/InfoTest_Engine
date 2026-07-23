@@ -40,13 +40,13 @@
 
 **子类判据换轴（Theory②必改）**：**不按 `reason` 串匹配**（关键字白名单，措辞一改静默误路由，违准则6/`[[compile-judgment-structural-not-strongdict]]`，且与「有无 xlsx」跨轮打架）。判据取**事实流中该案最后一次失败的阶段**——author 段崩=no_output、run 段崩=not_executed、欠定无台账=no_ledger_channel；`reason` 串与「有无 xlsx」降为人读辅证/交叉校验。**跨轮铁例**（守门测试9）：round1 产卷+round2 fork 空转→最后失败在 author 段→判 **no_output（走重编）**，不因「xlsx 在」误判 not_executed。生产点仍写结构化 `subclass` 字段固化该判定。
 
-**恢复问询（走既有 needs_decision + `deesc:` 专属 qid 前缀，Design 精化丙）**：续跑时对 escalated 案发恢复问询，**不改 all_settled**——在 `case_status` 的 escalated 分支内先判「有未答 `deesc:` 问询→返回 `S_AWAITING_USER`」（awaiting 天然不在 settled 集，判据单源）。`deesc:` 前缀防误伤旧的未答 needs_decision（否则带陈旧欠定的 escalated 案被判 awaiting=livelock，#62 stale claim 同型坑）。选项按三子类分：no_output「重编/缺陷候选/保持」、not_executed「换床复跑/缺陷候选/保持」、no_ledger_channel「缺陷候选/改描述重编/保持」。
+**恢复问询（走既有 needs_decision + `deesc:` 专属 qid 前缀，Design 精化丙）**：续跑时对 escalated 案发恢复问询，**不改 all_settled**——在 `case_status` 的 escalated 分支内先判「有未答 `deesc:` 问询→返回 `S_AWAITING_USER`」（awaiting 天然不在 settled 集，判据单源）。`deesc:` 前缀防误伤旧的未答 needs_decision（否则带陈旧欠定的 escalated 案被判 awaiting=livelock，#62 stale claim 同型坑）。选项按三子类分（v4.1 修正——原行系 v3 残文与 §1 A6 裁决抵触）：no_output「重编/确认产品缺陷/保持」、not_executed「换床复跑/确认产品缺陷/保持」、no_ledger_channel「重编（先试因①）/工程故障呈报（判因②）/保持」。「确认产品缺陷」臂沿用 07-16 cap/env 面板既有缺陷臂语义（用户主张 Ω③，走缺陷单）；no_ledger_channel **无**产品缺陷选项（引擎缺口≠产品缺陷，A6 裁决）。
 
 **de_escalate 事实驱动（Design 精化甲乙，零硬设状态）**：选恢复→写 `de_escalated` 事实 → `_is_escalated` 解除信号集扩为 `{authored, de_escalated}`：
 - no_output：本就无 authored → **自然回落 S_PENDING**（views.py:14 定义即「无 authored」）→ author 选案集自然含它。**零新状态、零硬设、零特判。**
 - not_executed：有 authored/verdict，解除后不自动落「该复跑」——**复跑选案集读 `de_escalated` 事实**（非状态迁移，两子类不同构，分开写）。
 
-**round-cap（Theory+Py-Eng：计数轴落错单位，两子类都失效）**：`rounds_used`=**authored 成功事件**数，而 no_output **与 no_ledger_channel 都不产 authored**→恒0→封顶对最需要它的案永久失效（`nodes.py:653` 自述实证：批3 668族 **7 圈空烧 fork**，auth=0 verd=0）。**同型 A2″ 推论2**（计数落错单位→在最该报警场景恒0，与 upgraded_verified=0/build 1110/1110 同族）。修法=**新增 `attempts` 轴**（该案被送进 author/live 的次数，不问是否产出），**别原地改 rounds_used 定义**（波及 :1318/:1685/:1804/:2526 多消费点）；封顶按 attempts。**round-cap 生效是收敛律成立的前提非并列**（Theory：闸失效→「答重编→仍no-output→再问→再重编」问-编循环，判例键挡同参重问但挡不住每轮"新情况"）。
+**round-cap（Theory+Py-Eng：计数轴落错单位，两子类都失效）**：`rounds_used`=**authored 成功事件**数，而 no_output **与 no_ledger_channel 都不产 authored**→恒0→封顶对最需要它的案永久失效（`nodes.py:653` 自述实证：批3 668族 **7 圈空烧 fork**，auth=0 verd=0）。**同型 A2″ 推论2**（计数落错单位→在最该报警场景恒0，与 upgraded_verified=0/build 1110/1110 同族）。修法=**新增 `attempts` 轴**（该案被送进 author/live 的次数，不问是否产出），**别原地改 rounds_used 定义**（波及 :1318/:1685/:1804/:2526 多消费点）；封顶按 attempts，**阈值复用既有预算公式 `max_rounds + granted`**（同一预算哲学，不新增 env 旋钮；v4.1 裁定）。**round-cap 生效是收敛律成立的前提非并列**（Theory：闸失效→「答重编→仍no-output→再问→再重编」问-编循环，判例键挡同参重问但挡不住每轮"新情况"）。
 
 **收敛律落账（Theory③必改）**：恢复问询是资源权=应然命题（§2.6:112），收敛律适用。用户答「保持」须按**判例键=(autoid, subclass, 版本族/床身份)**写回 K_ought → **同参续跑不重问**（否则违 §2.6.4 同键至多一次）；换床/换版本族=新键**可重问**（A12:279 新真意的正确代价）。
 

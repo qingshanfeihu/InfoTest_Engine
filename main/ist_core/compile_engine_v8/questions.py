@@ -580,6 +580,19 @@ def answer_token(kind: str, a: str) -> str:
         if "降级" in a or "接受单跑" in a:
             return "downgrade"
         return "reorder"
+    if kind == "deesc":
+        # B-1 de-escalate 恢复问询:三子类共用一套自由文本判据(引擎侧精确 token 优先
+        # 命中,这里只兜 Other 自由输入)。缺陷意图判据复用 _defect_intent(否定/条件
+        # 句门同 panel/cap/env/bed/contra,617 型「不是缺陷,先重编」不误判)。
+        if any(w in a for w in ("工程故障", "引擎缺口", "引擎问题", "呈报故障")):
+            return "deesc_engineering_fault"
+        if _defect_intent(a):
+            return "defect"
+        if any(w in a for w in ("换床", "换环境", "换设备", "换测试床")):
+            return "deesc_reswitch"
+        if any(w in a for w in ("重编", "重新编写", "重试", "再试", "再编")):
+            return "deesc_retry"
+        return "deesc_keep"   # 不明确=默认保持(宁等勿猜,同 bed 题面 fallback 哲学)
     return "correct"
 
 

@@ -61,15 +61,20 @@ def _is_escalated(mine: list[dict]) -> bool:
     escalated 的成因是「本轮无产出」(fork 墙钟超时/空转)或「连续未跑成」——两者
     都是关于**当时**的判断。fork 超时后 worker 线程未死、迟到落盘合格卷(run18:
     655233 在 935s 时 emit 成功,凭证有效),或重编产出新卷,都使该判断的前提不再
-    成立;新 authored 事实即解除信号。真·无产出的案不会有 authored,原样升级人工。"""
+    成立;新 authored 事实即解除信号。真·无产出的案不会有 authored,原样升级人工。
+
+    **解除信号集 = {authored, de_escalated}**(2026-07-20 B-1):原来只认 authored,
+    于是 no_output 子类(定义即「从未产出 authored」)永远等不到解除——信号有、驱动无,
+    案卡死在准终态。用户答「恢复」落的 de_escalated 事实是第二个解除信号,案随即
+    自然回落 S_PENDING(无 authored)重进 author,零硬设状态、零新标签。"""
     last_esc = -1
-    last_auth = -1
+    last_release = -1
     for i, f in enumerate(mine):
         if f.get("ev") == "escalated":
             last_esc = i
-        elif f.get("ev") == "authored":
-            last_auth = i
-    return last_esc >= 0 and last_auth < last_esc
+        elif f.get("ev") in ("authored", "de_escalated"):
+            last_release = i
+    return last_esc >= 0 and last_release < last_esc
 
 
 def case_status(fs: list[dict], aid: str, current_artifact: str,
@@ -77,13 +82,26 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
     """单案派生状态(全函数:任何事实组合都落入且仅落入一个标签)。优先级从终到始。"""
     mine = [f for f in fs if str(f.get("aid")) == aid]
     if _is_escalated(mine):
+        # 恢复问询待答 → awaiting:与 suspended/cap/env/bed 同型,这些"待答呈报"类
+        # kind 都不走 needs_decision(那条通道专属 ask_decision/欠定问询),而是各自
+        # 一个 `_waiting()` 判据(deesc_recovery_waiting,状态依赖 state 里的床/版本
+        # 族才能算判例键收敛,views.py 是纯函数不接 state)——本函数不重算它,只留
+        # S_ESCALATED;_shared.view() 在算完本视图后按 deesc_recovery_waiting 的结果
+        # 把其中的 aid 现改成 S_AWAITING_USER(判据单源仍在 deesc_recovery_waiting,
+        # 这里只是它落不进纯函数签名的必要让步)。all_settled 因此零改动:
+        # S_AWAITING_USER 本就不在其稳态集内。
         return S_ESCALATED
     if _is_suspended(mine):
         return S_SUSPENDED
-    # 用户来源终态三种:止损记账(user_stop,2026-07-16 N1a 本体分离)/确认环境
-    # (env_blocked,env 题面停止的如实语义)/确认产品缺陷(defect_candidate 走候选单)
+    # 用户来源终态四种:止损记账(user_stop,2026-07-16 N1a 本体分离)/确认环境
+    # (env_blocked,env 题面停止的如实语义)/确认产品缺陷(defect_candidate 走候选单)/
+    # 工程故障呈报(engineering_fault,B-1 A6 臂——round=99 的哨兵不是"用户真打字"专属,
+    # 而是"终局判定,不再重试"的通用记账信号,de-escalate 自动裁决[deesc_auto_resolution]
+    # 与人工选"工程故障呈报"都落它;disposition 值本身已把两者与产品缺陷分开,不会被
+    # _collect_defect_candidates 的 =="defect_candidate" 精确过滤误收,gate 测试13)
     if any(f.get("ev") == "attribution" and _user_sourced(f)
-           and f.get("disposition") in ("env_blocked", "defect_candidate", "user_stop")
+           and f.get("disposition") in ("env_blocked", "defect_candidate", "user_stop",
+                                        "engineering_fault")
            for f in mine):
         return S_TERMINAL
     # H2(§18.11 横切,2026-07-14):按 question_id 配对——旧谓词「有任意 decision 即
@@ -101,6 +119,21 @@ def case_status(fs: list[dict], aid: str, current_artifact: str,
     if last_auth_i >= 0 and any(f.get("ev") == "emit_invalid"
                                 for f in mine[last_auth_i + 1:]):
         return S_PENDING
+    # delivery_blocked 打回(H-16,与 emit_invalid 同层):最后 delivery pass 之后被 G3
+    # 封堵(卷面缺案尾自清)→ 该 pass 不为交付背书,案回待编写重编补 τ,兑现 emit
+    # 「重编补自清后可交付」(此前 closing 手改 vw 写 "delivery_blocked"——fold 外的
+    # 第 13 状态,下批派生回 S_DELIVERABLE 造成封堵→复活→再封堵 limbo 循环)。
+    # 收敛:重编仍受 rounds_used+granted 封顶;其后有新 delivery pass(重编复验通过)
+    # 或已重编(新 authored,封堵已消费)则本支不再命中,自然回到正常生命周期。
+    last_db_i = max((i for i, f in enumerate(mine)
+                     if f.get("ev") == "delivery_blocked"), default=-1)
+    if last_db_i >= 0:
+        last_dpass_i = max((i for i, f in enumerate(mine)
+                            if f.get("ev") == "verdict"
+                            and f.get("ctx") == F.CTX_DELIVERY
+                            and f.get("result") == "pass"), default=-1)
+        if last_db_i > last_dpass_i and last_db_i > last_auth_i:
+            return S_PENDING
     if F.deliverable(mine, aid, current_artifact, current_volume):
         return S_DELIVERABLE
     # 标签跟**当前卷面**走(重编即重置标签;矛盾计数保全史供 ask 策略)

@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import os
+from collections import Counter
 from pathlib import Path
 
 from main.ist_core.compile_engine_v8 import facts as F
@@ -45,7 +46,22 @@ def manifest(state: dict) -> dict:
 
 
 def view(state: dict, fs: list[dict] | None = None) -> dict:
-    return V.batch_view(fs if fs is not None else load_facts(state), manifest(state))
+    """批视图 + escalated 待答问询的 awaiting 投影(B-1 de-escalate 通道)。
+
+    views.batch_view 是纯函数(不接 state),算不出 deesc 判例键收敛(需要 state 里
+    的当前床/版本族)——那份判断的单一权威在 deesc_recovery_waiting。这里算完
+    batch_view 后,把它认定"该问"的 aid 从 S_ESCALATED 现改成 S_AWAITING_USER
+    (守门测试3:escalated 案有待答恢复问询时 all_settled==False;S_AWAITING_USER
+    本不在 all_settled 的稳态集内,故 all_settled 定义本身零改动)。"""
+    if fs is None:
+        fs = load_facts(state)
+    vw = V.batch_view(fs, manifest(state))
+    for aid in deesc_recovery_waiting(state, fs, vw):
+        c = vw["cases"].get(aid)
+        if c is not None and c["status"] == V.S_ESCALATED:
+            c["status"] = V.S_AWAITING_USER
+    vw["counts"] = dict(Counter(v["status"] for v in vw["cases"].values()))
+    return vw
 
 
 def case_rows(aid: str) -> list[dict]:
@@ -68,13 +84,23 @@ def emit_summary(state: dict, summary: dict) -> None:
         logger.debug("engine summary emit 失败", exc_info=True)
 
 
-def cap_waiting(fs: list[dict]) -> list[str]:
-    """轮次封顶待授权案:cap_reached 事实存在且该轮 cap 问题未获 decision(§11.7 资源问询)。"""
+def cap_waiting(fs: list[dict], vw: dict) -> list[str]:
+    """轮次封顶待授权案:cap_reached 事实存在且该轮 cap 问题未获 decision(§11.7 资源问询)。
+
+    H-03:与 panel_waiting/env_confirm_waiting 同款 settled 排除——终态/挂起/升级/
+    可交付案不再出 cap 题。旧实现不看 vw:用户另题答 stop 落 user_stop 终态后
+    cap_waiting 仍每批命中出 cap 题,非交互 auto-suspend 再落 suspended 事实,
+    case_status 里 _is_suspended 先于终态判定 → failed_terminal 被翻成 suspended,
+    用户止损终局被安全件静默推翻。"""
     out = []
     for f in fs:
         if f.get("ev") != "cap_reached":
             continue
         aid, rnd = str(f.get("aid")), int(f.get("round") or 0)
+        c = vw["cases"].get(aid)
+        if not c or c["status"] in (V.S_DELIVERABLE, V.S_TERMINAL, V.S_SUSPENDED,
+                                    V.S_ESCALATED):
+            continue
         qid = f"cap:{aid}:{rnd}"
         if not any(d.get("ev") == "decision" and d.get("question_id") == qid for d in fs):
             if aid not in out:
@@ -161,6 +187,76 @@ def suspended_resume_waiting(fs: list[dict], vw: dict) -> list[str]:
     return out
 
 
+def _deesc_precedent_key(aid: str, subclass: str, state: dict) -> str:
+    """恢复问询的判例键=(autoid, subclass, 版本族/床身份)。
+
+    收敛律(§2.6.4:同键至多问一次)的作用域锚:用户答「保持」是对**这个案在这个子类、
+    这个床/版本族下**的裁决,同参续跑不得重问;换床/换版本族=新键,可重问(新真意的
+    正确代价 A12:279)。
+    """
+    fam = ".".join(str(state.get("device_build") or "").split(".")[:3])
+    return f"{aid}|{subclass}|{fam}|{state.get('bed_host') or ''}"
+
+
+def deesc_qid(aid: str, mine: list[dict]) -> str:
+    """下一个 deesc 问询的 question_id——按**该案已有多少条 deesc decision**编号
+    (与 nodes._needs_decision_qid 同一判别子选择:轮次/事实计数在「保持」路径上不
+    推进,会卡在同一个 qid 上产生 idem_key 碰撞——见本函数与 deesc_recovery_waiting
+    的联合文档)。ask_contradiction 出题、deesc_recovery_waiting 判"该不该问"必须
+    用同一份计算,否则两处口径一分裂,问出去的题目和台账判定的题目对不上号
+    (曾经的真实 bug:ask_contradiction 漏了 kind=="deesc" 分支,题目落进 else 分支
+    拿了 `contra:` 前缀的 qid,deesc_recovery_waiting 永远等不到匹配的 decision,
+    死循环问同一案直到吃光图的 hop 预算——回归测试
+    test_gather_fires_despite_persistent_broken 就是被这条撞挂的)。"""
+    seq = sum(1 for d in mine if d.get("ev") == "decision"
+             and str(d.get("question_id", "")).startswith(f"deesc:{aid}:")) + 1
+    return f"deesc:{aid}:{seq}"
+
+
+def deesc_recovery_waiting(state: dict, fs: list[dict], vw: dict) -> list[str]:
+    """escalated 案的恢复问询待答集(B-1 de-escalate 通道)。
+
+    escalated=准终态·可恢复(Theory 目标函数条款:唯一「案侧无修法」的正当终态是缺陷
+    候选,escalated 是工程故障/卡住,故必为中间态)。旧实现有解除信号(最后 escalated
+    后出现 authored)却**没有驱动**——no_output 案永不产 authored,于是永远等不到解除。
+    本函数即那个缺失的驱动:把卡住的案送进 ask 边,由用户选恢复路。
+
+    选案不看派生状态而看 `_is_escalated`——问询一旦落 needs_decision,案的派生状态
+    就变 awaiting_user(见 views.case_status),按状态选会把自己刚问出去的案漏掉。
+
+    再问判据(收敛律 §2.6.4,守门测试7):按该案**最后一条 deesc decision** 分流——
+    - 没有:从没问过这轮升级,该问。
+    - 有且 token≠"deesc_keep":重编/换床/缺陷候选/工程故障呈报都对那次升级给了
+      终局(要么带出新一轮 escalated、要么案直接终态化),不重问——重开的问询会
+      拿到 deesc_qid 给的一个新 qid,不会和旧答案的 qid 冲突,但**这次升级**已经
+      有结论了,不该无端再问一遍。
+    - 有且 token=="deesc_keep":判例键(§2.6.4 作用域)没变(同床/同版本族)→ 不重问
+      (同参续跑不重问同判例键);判例键变了(换床/换版本族)→ 可重问——**复用同一个
+      qid 重新问**(不生成新 qid),因为这次升级本身没变,只是当初"保持"的适用范围
+      (那个床/版本族)过期了,用户可能想改主意。
+    """
+    out = []
+    for aid in vw["cases"]:
+        mine = [f for f in fs if str(f.get("aid")) == aid]
+        if not V._is_escalated(mine):
+            continue
+        sub = F.escalated_subclass(fs, aid)
+        deesc_decs = [d for d in mine if d.get("ev") == "decision"
+                     and str(d.get("question_id", "")).startswith(f"deesc:{aid}:")]
+        if not deesc_decs:
+            out.append(aid)
+            continue
+        last = deesc_decs[-1]
+        if str(last.get("token")) != "deesc_keep":
+            continue
+        key = _deesc_precedent_key(aid, sub, state)
+        if any(f.get("ev") == "deesc_keep" and f.get("precedent_key") == key
+               for f in mine):
+            continue          # 收敛律:同判例键答过「保持」,同参续跑不重问
+        out.append(aid)       # 保持,但判例键(床/版本族)已变→可重问
+    return out
+
+
 def bed_treatment_waiting(fs: list[dict], vw: dict) -> list[str]:
     """s₀ 停车案待呈报(V8.5 片3;§11.7:唯一可行修法=床治理,床权在用户——必问,
     redline 实证缺口②的修复):批级诊断判 h_s0 ∧ 复跑处方(复跑闸已挡) ∧ 本次
@@ -198,9 +294,10 @@ def ask_targets(state: dict, fs: list[dict], vw: dict) -> dict:
                        for d in fs):
                 contra.append(aid)
     return {"panel": panel_waiting(fs, vw), "contra": contra,
-            "cap": cap_waiting(fs), "env": env_confirm_waiting(fs, vw),
+            "cap": cap_waiting(fs, vw), "env": env_confirm_waiting(fs, vw),
             "bed": bed_treatment_waiting(fs, vw),
-            "suspended": suspended_resume_waiting(fs, vw)}
+            "suspended": suspended_resume_waiting(fs, vw),
+            "deesc": deesc_recovery_waiting(state, fs, vw)}
 
 
 def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
@@ -211,7 +308,8 @@ def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
     c = vw["counts"]
     t = ask_targets(state, fs, vw)
     _waiting = (set(t["panel"]) | set(t["contra"]) | set(t["cap"])
-                | set(t["env"]) | set(t["bed"]) | set(t["suspended"]))
+                | set(t["env"]) | set(t["bed"]) | set(t["suspended"])
+                | set(t["deesc"]))
     return {
         "n_pending": c.get(V.S_PENDING, 0),
         "n_awaiting_user": c.get(V.S_AWAITING_USER, 0),
@@ -231,11 +329,25 @@ def counts_update(state: dict, fs: list[dict] | None = None) -> dict:
         "n_ask_contradiction": len(_waiting),
         # 可推进的失败案 = 失败/矛盾 且 不在任何问询等待集(run17 实弹:封顶/env/bed/
         # 挂起恢复等待案不算"有活",否则 ask 边被 merge 空转跳过;而 rerun 处方案必须
-        # 算活,否则被「有未答题」吞掉——两个方向的实弹都在 §16.6)
+        # 算活,否则被「有未答题」吞掉——两个方向的实弹都在 §16.6)。
+        # H-02:blocked 案答 retry(落 rerun_isolated 归因)后状态仍 S_BROKEN_BLOCKED
+        # (case_status 只看 verdict broken_subtype)——同按「rerun 处方案必须算活」
+        # 计入 actionable,否则复跑指令四向全关被静默吞(路由链:_after_author 与
+        # _after_diagnose 的 actionable→merge 支)。
         "n_failed_actionable": len(
             {a for a, cc in vw["cases"].items()
-             if cc["status"] in (V.S_FAILED, V.S_CONTRADICTED)} - _waiting),
+             if cc["status"] in (V.S_FAILED, V.S_CONTRADICTED)
+             or (cc["status"] == V.S_BROKEN_BLOCKED
+                 and _latest_rerun_prescription(fs, a))} - _waiting),
     }
+
+
+def _latest_rerun_prescription(fs: list[dict], aid: str) -> bool:
+    """最新归因是否复跑处方(rerun_isolated/transient)——H-02 的 actionable 判据与
+    merge._rerun_disposed 的首检同源(blocked 案无 h_s0 诊断时两处判据等价)。"""
+    att = [f for f in fs if str(f.get("aid")) == aid and f.get("ev") == "attribution"]
+    return bool(att and str(att[-1].get("disposition")) in ("rerun_isolated",
+                                                            "transient"))
 
 
 # ── 指纹(裁决-卷面绑定的物理载体,INV-8) ─────────────────────────────────────

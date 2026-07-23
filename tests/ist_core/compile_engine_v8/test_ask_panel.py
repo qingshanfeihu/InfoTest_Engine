@@ -391,3 +391,32 @@ def test_panel_rendering_no_preset_default_option():
     assert "correct" in toks and "defect" in toks
     # 中性化后 confirm(按呈报理解 Z 编)退役——面板不再产 confirm token
     assert "confirm" not in toks
+
+
+# ── H-03:auto-suspend 安全件的 settled 防护(终局不被安全件翻转) ───────────────
+
+def test_auto_suspend_guard_never_flips_settled_case_H03(tmp_path, monkeypatch):
+    """H-03 防护面:案已是 escalated/terminal/suspended 时,未获答只落空答 decision
+    (留痕),**不落 suspended 事实**——case_status 里 _is_suspended 先于 r99 终态判定,
+    旧代码会把 user_stop/escalated 终局静默翻转成 suspended。deesc 题未答的
+    escalated 案是现实形态(非交互批)。"""
+    from main.ist_core.compile_engine_v8 import facts as F
+    fs = [{"ev": "authored", "aid": A, "round": 1, "artifact": "art1"},
+          {"ev": "escalated", "aid": A, "reason": "no output from fork (tail=none)",
+           "subclass": "no_output"}]
+    facts_file = tmp_path / "outputs" / "b1" / "facts.jsonl"
+    facts_file.parent.mkdir(parents=True, exist_ok=True)
+    F.append_facts(facts_file, fs)
+    monkeypatch.setattr(sh, "outputs_root", lambda: tmp_path / "outputs")
+    monkeypatch.setattr(sh, "facts_path", lambda s: facts_file)
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": [{"autoid": A}]})
+    monkeypatch.setattr(N, "interrupt", lambda payload: {})   # 非交互:零答案
+    out = N.ask_contradiction({"out_name": "b1"})
+    assert out["phase_status"] == "ok"
+    fs2 = F.load_facts(facts_file)
+    assert not [f for f in fs2 if f.get("ev") == "suspended"]     # 防护:不落挂起
+    dec = [f for f in fs2 if f.get("ev") == "decision" and f.get("aid") == A]
+    assert dec and dec[-1]["token"] == "suspend"                  # 空答留痕照常
+    # 案态不被翻转:仍 escalated(旧代码会被 suspended 盖过)
+    assert V.batch_view(fs2, {"cases": [{"autoid": A}]})["cases"][A]["status"] == \
+        V.S_ESCALATED

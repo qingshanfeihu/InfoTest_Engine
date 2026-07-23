@@ -93,3 +93,32 @@ def test_counts_failed_actionable_excludes_waiting(tmp_path, monkeypatch):
     assert c["n_failed"] == 2
     assert c["n_failed_actionable"] == 1          # A_CAP 在 cap 等待集内,不算可推进
     assert c["n_ask_contradiction"] >= 1          # cap 问询在等待集
+
+
+# ── H-03:cap_waiting 与 panel/env 同款 settled 排除 ───────────────────────────
+
+def test_cap_waiting_excludes_settled_H03(tmp_path, monkeypatch):
+    """H-03:cap_reached 案已是终态(user_stop)/挂起/升级时不再出 cap 题——旧实现
+    不看 vw:用户另题答 stop 落 user_stop 终态后 cap_waiting 仍每批命中出 cap 题,
+    非交互 auto-suspend 再落 suspended → failed_terminal 被翻成 suspended,
+    用户止损终局被安全件静默推翻。"""
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    A1, A2, A3, A4 = ("203600000000000301", "203600000000000302",
+                      "203600000000000303", "203600000000000304")
+    fs = ([{"ev": "cap_reached", "aid": a, "round": 3} for a in (A1, A2, A3, A4)]
+          + [{"ev": "attribution", "aid": A2, "round": 99, "layer": "user",
+              "disposition": "user_stop"},                     # A2 终态
+             {"ev": "suspended", "aid": A3, "reason": "q"},      # A3 挂起
+             # A4 升级(带一条非「保持」的 deesc 裁决——不进 deesc 待答投影,
+             # vw 状态才是 S_ESCALATED 而非 awaiting_user)
+             {"ev": "escalated", "aid": A4, "reason": "x", "subclass": "no_output"},
+             {"ev": "decision", "aid": A4, "question_id": f"deesc:{A4}:1",
+              "answer": "换床复跑", "token": "deesc_reswitch"}])
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": [
+        {"autoid": a} for a in (A1, A2, A3, A4)]})
+    monkeypatch.setattr(sh, "load_facts", lambda s: fs)
+    vw = sh.view({}, fs)
+    assert sh.cap_waiting(fs, vw) == [A1]      # 仅未 settled 的 A1 待授权
+    assert sh.ask_targets({}, fs, vw)["cap"] == [A1]
+    # 对照(防过修):终态案的 cap_reached 不再进 ask 等待集 → 不占 n_ask_contradiction
+    assert sh.counts_update({}, fs)["n_ask_contradiction"] == 1

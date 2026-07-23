@@ -39,5 +39,5 @@ disable-model-invocation: true
 
 ## 注意
 
-- 不要用裸 `pytest`:`pytest.ini` 的 `testpaths=main/tests` 与实际测试目录 `tests/` 不一致,裸跑会跑错地方。
+- 裸 `pytest` 可用:`pytest.ini` 现为 `testpaths = tests`,与实际目录一致(2026-07-22 核验:全量 2372 全绿)。本条以下的窄子集优先纪律不因裸跑可用而放松(云盘 I/O 慢)。
 - 不要把测试产物写进 `knowledge/`(只读)。

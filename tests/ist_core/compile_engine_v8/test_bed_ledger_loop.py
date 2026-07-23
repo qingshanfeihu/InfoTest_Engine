@@ -267,3 +267,63 @@ def test_heartbeat_begin_case_semantic_line():
            "#######   begin case: 203601753067655173\nsome output")
     begins = re.findall(r"begin case:\s*(\d{18})", log)
     assert begins and autoids.index(begins[-1]) + 1 == 2      # 第2/2,不再恒0
+
+
+# ── B-3:closing 床恢复重 diff 的己方过滤(foreign 不入己床账)+ verified 谎报 ──────
+
+_B3_BEFORE = {"segments": {"failed": False, "lines": ["segment base 1"]},
+              "tenant_configs": {"failed": False, "lines": ["tc base"]}}
+_B3_POLLUTED = {"segments": {"failed": False,
+                             "lines": ["segment base 1", "segment vlan100 2"]},
+                "tenant_configs": {"failed": False,
+                                   "lines": ["tc base", "tc foreign 9"]}}
+_B3_RESTORED = {"segments": {"failed": False, "lines": ["segment base 1"]},
+                "tenant_configs": {"failed": False,
+                                   "lines": ["tc base", "tc foreign 9"]}}
+
+
+def _b3_setup(rig, snaps):
+    """公共夹具:案面只创建 segment vlan100 2;tc foreign 9=他人同床漂移(案面无创建命令)。"""
+    N, mp, tmp = rig["N"], rig["mp"], rig["tmp"]
+    (rig["mdir"] / "bed_before.json").write_text(json.dumps(_B3_BEFORE), encoding="utf-8")
+    lr = rig["mdir"] / "last_run.json"
+    lr.write_text(json.dumps([{"autoid": "a", "device_context":
+                               "h - sends command in config: segment vlan100 2\n"}]),
+                  encoding="utf-8")
+    it = iter(snaps)
+    mp.setattr(N.B, "bed_snapshot", lambda fn: next(it))
+    mp.setattr(N.B, "_inverse_pairs", lambda: {"segment": {"no": "no segment"}})
+    executed: list[str] = []
+    mp.setattr(N, "_exec_fn", lambda c: executed.append(c) or "status: success")
+    state = {"out_name": "b1", "bed_host": H, "last_run_ref": str(lr.relative_to(tmp))}
+    return executed, state
+
+
+def test_closing_foreign_drift_not_recorded_as_own_B3(rig):
+    """B-3 红绿:执行恢复命令后的重拍是全量 diff,foreign(案面未创建)物理仍在设备上
+    必在其中——修前 `if cmds:` 分支无己方过滤,foreign 被 bed_record 记成本引擎产物
+    (下批 bed_gate 接力对无预存命令账项走 LLM 生成+自指 entity_gate → 自动删非己方
+    配置,INV-9 越界);且 foreign 共存使 residual 恒非空 → verified 恒空谎报
+    「复探未清零」。修后:foreign 不入账;己方清零 → verified=cmds(验证通过如实)。"""
+    executed, state = _b3_setup(rig, [_B3_POLLUTED, _B3_RESTORED])
+    out = rig["N"].closing(state)
+    assert out["phase_status"] == "done"
+    assert executed == ["no segment vlan100 2"]          # 己方机械逆放执行了
+    assert B.bed_unrestored(rig["tmp"], H) == []          # foreign 未入己床账(主断言)
+    rep = json.loads((rig["mdir"] / "engine_report.json").read_text(encoding="utf-8"))
+    closure = rep["bed"]["closure"]
+    assert "验证通过" in closure and "复探未清零" not in closure   # verified 谎报同修
+    assert "非己方漂移" in closure                          # foreign 只报不动(呈报面保留)
+
+
+def test_closing_own_residue_recorded_foreign_excluded_B3(rig):
+    """B-3 对照(防过修):己方残余未清零时照常入账(own 过滤≠全丢);foreign 同批共存
+    仍排除;verified 如实为空(己方确实未清零,不再是 foreign 引起的恒空)。"""
+    executed, state = _b3_setup(rig, [_B3_POLLUTED, _B3_POLLUTED])   # 顽固:复探未清
+    out = rig["N"].closing(state)
+    assert out["phase_status"] == "done"
+    assert executed == ["no segment vlan100 2"]
+    items = B.bed_unrestored(rig["tmp"], H)
+    assert [i["kind"] for i in items] == ["segments"]     # 只己方残余入账,foreign 排除
+    rep = json.loads((rig["mdir"] / "engine_report.json").read_text(encoding="utf-8"))
+    assert "复探未清零" in rep["bed"]["closure"]          # 己方未清→verified 如实空

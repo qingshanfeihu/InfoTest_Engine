@@ -128,6 +128,10 @@ def _after_diagnose(s: dict) -> str:
                                 # broken_errored 携机械 reflow 归因,同走此路重写(§④)
     if s.get("n_authored", 0) + s.get("n_subset_verified", 0) > 0:
         return "merge"          # rerun_isolated/transient:不重编直接复跑(s₀ 案已被复跑闸挡)
+    # H-02:blocked+retry(rerun 处方)案不计 n_failed/n_authored——无此支会在
+    # diagnose 后断路由收口,用户复跑指令零执行(actionable 集同 _after_author 判据)
+    if s.get("n_failed_actionable", 0) > 0:
+        return "merge"
     return _gather_or_close(s)
 
 

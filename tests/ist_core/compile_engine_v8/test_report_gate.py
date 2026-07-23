@@ -156,7 +156,10 @@ _POLLUTER_ROWS = [{"E": "APV_0", "F": "cmds_config",
 
 
 def test_closing_g3_block_keeps_report_coherent(engine_env, monkeypatch):
-    """B 案缺 τ:G3 封堵后 engine_report 的 cases/totals/头行三方自洽,G5 零误报。"""
+    """B 案缺 τ:G3 封堵后 engine_report 的 cases/totals/头行三方自洽,G5 零误报。
+    H-16 后:fold 消费 delivery_blocked(views.case_status → S_PENDING 回炉重编),
+    closing 重算视图替代手改标签——报告状态=S_PENDING(下批重编补自清),不再是
+    fold 外第 13 状态 "delivery_blocked";事实照常入账(report_gate 侧 honor 不动)。"""
     monkeypatch.setattr(N, "_load_case_rows",
                         lambda aid: _POLLUTER_ROWS if aid == B else [])
     emitted = {}
@@ -164,12 +167,18 @@ def test_closing_g3_block_keeps_report_coherent(engine_env, monkeypatch):
     N.closing({"out_name": "b1", "facts_ref": "", "manifest_ref": ""})
     mdir = engine_env["mdir"]
     rep = json.loads((mdir / "engine_report.json").read_text(encoding="utf-8"))
-    assert rep["cases"][B]["status"] == "delivery_blocked"
+    assert rep["cases"][B]["status"] == "pending"      # fold 派生回炉态,非手改标签
     assert rep["totals"]["deliverable"] == 1
-    assert rep["totals"]["delivery_blocked"] == 1
+    assert rep["totals"]["pending"] == 1
+    fs = F.load_facts(engine_env["facts"])
+    assert any(f.get("ev") == "delivery_blocked" and f.get("aid") == B for f in fs)
+    # 下批路由真实消费:封堵案派生 S_PENDING → author 重派集(兑现重编补自清)
+    from main.ist_core.compile_engine_v8 import views as V
+    assert V.batch_view(fs, {"cases": [{"autoid": A}, {"autoid": B}]}
+                        )["cases"][B]["status"] == V.S_PENDING
     md = (mdir / "delivery_report.md").read_text(encoding="utf-8")
     assert "本批 2 个用例:**1 个通过整卷复验" in md
-    assert "缺案尾清理" in md            # G3 案在报告里如实解释
+    assert "案尾清理" in md            # G3 案在报告里如实解释(去向行消费 delivery_blocked 事实)
     assert RD.leak_scan(md) == []
     assert not (mdir / "REPORT_MISMATCH.json").exists()
     assert emitted["ok"] == 1 and emitted["report_mismatch"] is False
@@ -264,6 +273,7 @@ def test_recount_matches_case_status_all_lifecycle_branches_D31():
     CLEAN, ESC_R, ESC_T = "203600000000000010", "203600000000000011", "203600000000000012"
     SUS_T, TERM, AWAIT = "203600000000000013", "203600000000000014", "203600000000000015"
     SUS_R, REDEC = "203600000000000016", "203600000000000017"
+    DBLK, DBLK_R = "203600000000000018", "203600000000000019"
 
     def base(aid):   # authored + delivery pass(卷/指纹一致 v1)
         return [{"ev": "authored", "aid": aid, "round": 1, "artifact": aid + ":a"},
@@ -285,7 +295,17 @@ def test_recount_matches_case_status_all_lifecycle_branches_D31():
         {"ev": "needs_decision", "aid": REDEC, "question_id": "nd:d:1:k"},
         {"ev": "decision", "aid": REDEC, "question_id": "nd:d:1:k", "answer": "改过程"},
         {"ev": "needs_decision", "aid": REDEC, "question_id": "nd:d:2:v"}]       # r1 已答+r2 未答→NOT
-    all_aids = [CLEAN, ESC_R, ESC_T, SUS_R, SUS_T, TERM, AWAIT, REDEC]
+    # G3 封堵枝(H-16 新增排除态,同 commit 按本族纪律补 fixture):封堵→NOT;
+    # 封堵后重编复验通过(新 authored+新 delivery pass 在封堵之后)→deliverable
+    fs += base(DBLK) + [{"ev": "delivery_blocked", "aid": DBLK, "run_id": "g3"}]
+    fs += (base(DBLK_R) + [{"ev": "delivery_blocked", "aid": DBLK_R, "run_id": "g3"},
+                           {"ev": "authored", "aid": DBLK_R, "round": 2,
+                            "artifact": DBLK_R + ":b"},
+                           {"ev": "verdict", "aid": DBLK_R, "run_id": "r2",
+                            "ctx": "delivery", "result": "pass",
+                            "artifact": DBLK_R + ":b", "volume": "v1",
+                            "signatures": []}])
+    all_aids = [CLEAN, ESC_R, ESC_T, SUS_R, SUS_T, TERM, AWAIT, REDEC, DBLK, DBLK_R]
     fs += [{"ev": "merged", "aid": "", "volume": "v1", "ctx": "delivery", "members": all_aids}]
     manifest = {"source": "t.txt", "cases": [{"autoid": a} for a in all_aids]}
 
@@ -294,4 +314,5 @@ def test_recount_matches_case_status_all_lifecycle_branches_D31():
     cs = {aid for aid, c in bv["cases"].items() if c["status"] == V.S_DELIVERABLE}
     assert rc == cs, f"两路漂移(G5 自我误告警根因):recount={sorted(rc)} case_status={sorted(cs)}"
     # 双重断言:除两路等价,再钉 ground-truth——防两路同错都绿(解除态 escalated/suspended + clean 可交付)
-    assert rc == {CLEAN, ESC_R, SUS_R}, f"ground-truth 不符:期望 clean+两类解除,实得 {sorted(rc)}"
+    assert rc == {CLEAN, ESC_R, SUS_R, DBLK_R}, \
+        f"ground-truth 不符:期望 clean+两类解除+封堵重编复验,实得 {sorted(rc)}"

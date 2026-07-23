@@ -340,3 +340,47 @@ def test_p0_g_long_multikind_qid_truncation_keeps_nd_seq_no_collision():
     # 正交层:needs_decision 自身走内容键(不截断)→ P0 nd_seq 差异化已足,与截断无关
     assert idem_key({"ev": "needs_decision", "aid": aid, "question_id": q1}) != \
            idem_key({"ev": "needs_decision", "aid": aid, "question_id": q2})
+
+
+# ── H-15:reconcile run_id 盐=checkpointed vol_seq(INV-10 窗口崩溃重放不双写) ──────
+
+def test_reconcile_run_id_replay_stable_inv10_H15(tmp_path, monkeypatch):
+    """H-15/INV-10 红绿:reconcile「append 后 checkpoint 前」崩溃重放,run_id 必须稳定。
+    盐=len(verdict 数)时重放计数已涨 → 新 run_id → 同批裁决以新键重复入账(frozen
+    对同 aid 相邻双拷贝误判「连续两 fail 同签名」/contradictions 双计/writeback 双执行)。
+    换 merge 侧同款 checkpointed vol_seq:重放同 seq 同 run_id → 幂等去重;新一轮
+    必经新 merge(vol_seq+1)→ 新 run_id 不误并。"""
+    import json as _json
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    from main.ist_core.compile_engine_v8 import nodes as N
+    outputs = tmp_path / "outputs"; (outputs / "b").mkdir(parents=True)
+    monkeypatch.setattr(sh, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sh, "outputs_root", lambda: outputs)
+    monkeypatch.setattr(sh, "emit", lambda t: None)
+    monkeypatch.setattr(sh, "emit_tick", lambda *a, **k: None)
+    monkeypatch.setattr(sh, "signal", lambda *a, **k: None)
+    monkeypatch.setattr(N, "_writeback_one", lambda aid, lr, provisional=False: None)
+    (outputs / "b" / "manifest.json").write_text(_json.dumps(
+        {"cases": [{"autoid": A}]}), encoding="utf-8")
+    facts_p = outputs / "b" / "facts.jsonl"
+    facts_p.write_text("\n".join(_json.dumps(f) for f in [
+        {"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+        {"ev": "merged", "aid": "", "volume": "volX", "ctx": "delivery",
+         "composition": [A], "run_id": "merge:volX:1"},
+    ]) + "\n", encoding="utf-8")
+    (outputs / "b" / "last_run.json").write_text(_json.dumps([
+        {"autoid": A, "verdict": "fail", "_fail_signatures": ["sig-x"]}]),
+        encoding="utf-8")
+    state = {"out_name": "b", "manifest_ref": "outputs/b/manifest.json",
+             "facts_ref": "outputs/b/facts.jsonl",
+             "merged_ref": "outputs/b/case.xlsx", "run_ctx": "delivery",
+             "last_run_ref": "outputs/b/last_run.json", "vol_seq": 1}
+    N.reconcile(state)
+    N.reconcile(state)      # 崩溃重放:同一 checkpoint(vol_seq 不变)再跑一遍
+    fs2 = [_json.loads(l) for l in facts_p.read_text().splitlines() if l.strip()]
+    vs = [f for f in fs2 if f["ev"] == "verdict"]
+    assert len(vs) == 1, f"重放双写:{len(vs)} 条裁决(INV-10 破)"
+    assert not frozen(fs2, A, "a1")   # 连锁误判守:双拷贝会被误读「连续两 fail 同签名」
+    N.reconcile(dict(state, vol_seq=2))   # 新一轮(新 merge)→ 新 run_id,不误去重
+    fs3 = [_json.loads(l) for l in facts_p.read_text().splitlines() if l.strip()]
+    assert len([f for f in fs3 if f["ev"] == "verdict"]) == 2

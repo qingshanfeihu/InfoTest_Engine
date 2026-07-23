@@ -34,6 +34,16 @@ def _mk_ledger(aid=A, claims=None):
         ensure_ascii=False), encoding="utf-8")
 
 
+def _mk_panel(aid=A, shape="expected_vs_observed"):
+    """panel 类欠定台账(H-17:在 ask_panel.json,不在 needs_decision.json)。"""
+    d = sh.outputs_root() / aid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "ask_panel.json").write_text(json.dumps(
+        {"autoid": aid, "conflict_shape": shape,
+         "hypothesis": "device returns AAAA for nxdomain", "ask": "以手册为准还是实机为准?"},
+        ensure_ascii=False), encoding="utf-8")
+
+
 @pytest.fixture(autouse=True)
 def _clean():
     shutil.rmtree(sh.outputs_root() / A, ignore_errors=True)
@@ -113,10 +123,28 @@ def test_theory_qid_seq_increases_and_not_deduped(tmp_path):
 def test_predicate_auto_env_bed_not_reopened():
     """Design ① 精确谓词:auto:∧{env,bed}(外部因素未变)不重开;auto:∧{panel,cap,contra}重开。"""
     _mk_ledger()
+    _mk_panel()   # H-17:panel 类台账在 ask_panel.json(缺它则 panel 不重开)
     assert N._resume_reopen_needs_decision(A, _base(f"auto:env:{A}:1")) is None      # env 不重开
     assert N._resume_reopen_needs_decision(A, _base(f"auto:bed:{A}:1")) is None      # bed 不重开
     assert N._resume_reopen_needs_decision(A, _base(f"auto:contra:{A}:1")) is not None  # contra 重开
     assert N._resume_reopen_needs_decision(A, _base(f"auto:panel:{A}:1")) is not None   # panel 重开
+
+
+def test_h17_panel_reopen_reads_ask_panel_ledger():
+    """H-17 红绿:auto:panel 挂起的 resume——台账数据源=ask_panel.json(submit_ask_panel
+    落盘),不是 needs_decision.json;修前单读后者 claims 恒空 → 重开恒 None,resume 后
+    空答 decision 被 panel_waiting 当「已答」,ought 欠定未获真人裁决流入交付。
+    qid 的 ck 可读位取 panel 的 conflict_shape。"""
+    _mk_panel()
+    nd = N._resume_reopen_needs_decision(A, _base(f"auto:panel:{A}:1"))
+    assert nd is not None and nd["ev"] == "needs_decision"
+    assert nd["question_id"] == f"nd:{A}:2:expected_vs_observed"   # ck=conflict_shape
+
+
+def test_h17_panel_reopen_without_panel_ledger_stays_none():
+    """防过修:auto:panel 但盘上无 ask_panel.json(台账缺失)→ 不猜不重开(None),
+    与 needs_decision 账本缺席同款保守。"""
+    assert N._resume_reopen_needs_decision(A, _base(f"auto:panel:{A}:1")) is None
 
 
 def _drive_ask_decision(monkeypatch, facts):

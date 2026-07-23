@@ -93,3 +93,54 @@ def test_coexist_violation_breaks_idempotency_1A():
     assert _delivery_verify_skippable(          # 无共存违例 → 三条件齐 → 吸收
         vw, ["a1", "a2"], "vol-1", _verdict(bed="b1", build="v1"),
         cur_bed="b1", cur_build="v1", coexist=[]) is True
+
+
+# ── B-2:有待复跑案(rerun/transient 处方)不得吸收——吸收=处方被静默吞的死循环 ──────
+
+
+def _fs_with_att(aid: str, disposition: str | None):
+    """本 volume 的 delivery 裁决(fail)+ 可选最新归因。"""
+    fs = [{"ev": "verdict", "aid": aid, "ctx": "delivery", "volume": "vol-1",
+           "result": "fail"}]
+    if disposition:
+        fs.append({"ev": "attribution", "aid": aid, "disposition": disposition,
+                   "round": 1, "run_id": "r1"})
+    return fs
+
+
+def test_rerun_prescription_case_breaks_idempotency_B2():
+    """B-2 红绿:S_FAILED + 最新归因 rerun_isolated(复跑处方)→ 闸拒吸收。
+    可达链:attribute 落处方→author 不重编→merge 组卷同指纹→闸吸收→closing,
+    零状态推进下批再吸收(事实死循环);修后拒吸收→复跑执行。"""
+    vw = _vw({"a1": V.S_DELIVERABLE, "a2": V.S_FAILED})
+    assert _delivery_verify_skippable(
+        vw, ["a1", "a2"], "vol-1", _fs_with_att("a2", "rerun_isolated")) is False
+
+
+def test_transient_prescription_case_breaks_idempotency_B2():
+    """transient 处方同族(复跑处方全枚举);S_CONTRADICTED 同属待复跑态。"""
+    vw = _vw({"a1": V.S_DELIVERABLE, "a2": V.S_CONTRADICTED})
+    assert _delivery_verify_skippable(
+        vw, ["a1", "a2"], "vol-1", _fs_with_att("a2", "transient")) is False
+
+
+def test_failed_case_without_rerun_prescription_still_skippable_B2():
+    """防过修:S_FAILED 但最新归因非复跑处方(reflow——重编换 artifact 即换 volume,
+    不靠本闸推进;env_blocked——留 env 确认等待)→ 不新增拒收,旧吸收语义保留。"""
+    vw = _vw({"a1": V.S_DELIVERABLE, "a2": V.S_FAILED})
+    assert _delivery_verify_skippable(
+        vw, ["a1", "a2"], "vol-1", _fs_with_att("a2", "reflow")) is True
+    # 无归因(归因流尚未落账)也不误判为待复跑
+    assert _delivery_verify_skippable(
+        vw, ["a1", "a2"], "vol-1", _fs_with_att("a2", None)) is True
+
+
+def test_rerun_prescription_absorbed_loop_was_the_bug_B2():
+    """B-2 全案形态:单案批 rerun_isolated 处方——修前闸吸收(need_verify==live、
+    comp/artifact 全同),处方永远零执行;修后拒吸收,案随本卷复跑。"""
+    vw = _vw({"a1": V.S_FAILED})
+    fs = [{"ev": "verdict", "aid": "a1", "ctx": "delivery", "volume": "vol-1",
+           "result": "fail"},
+          {"ev": "attribution", "aid": "a1", "disposition": "rerun_isolated",
+           "round": 1, "run_id": "r1"}]
+    assert _delivery_verify_skippable(vw, ["a1"], "vol-1", fs) is False

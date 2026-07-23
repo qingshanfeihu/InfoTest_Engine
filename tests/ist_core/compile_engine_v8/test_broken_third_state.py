@@ -301,3 +301,92 @@ def test_errored_reflow_repeated_failure_escalates_via_streak(rec_env, monkeypat
     esc = [f for f in fs if f.get("ev") == "escalated"]
     assert esc and "consecutive" in esc[-1]["reason"], \
         "errored 反复失败跨 reflow 未升级——streak 未覆盖 errored 子类(S3-R2 未防住)"
+
+
+# ── H-02:blocked 子类 env 题答 retry → 进复跑通道(修前四向全关,指令静默吞) ──────
+
+def test_counts_blocked_retry_actionable_H02(tmp_path, monkeypatch):
+    """H-02 计数面:blocked 案答 retry(落 rerun_isolated 归因)→ 计入 actionable
+    (「rerun 处方案必须算活」§16.6);修前不计 → 不在 ready/author/actionable/
+    waiting 任一集,复跑指令零执行零告知。"""
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    fs = [
+        {"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+        _vb("broken", sub="blocked"),
+        {"ev": "attribution", "aid": A, "layer": "E", "disposition": "env_blocked",
+         "round": 0, "run_id": "r1", "mechanical": True},
+        {"ev": "decision", "aid": A, "question_id": f"env:{A}:0",
+         "answer": "环境已恢复,重跑", "token": "retry"},
+        {"ev": "attribution", "aid": A, "layer": "E", "disposition": "rerun_isolated",
+         "round": 1, "run_id": f"user:env_retry:env:{A}:0", "evidence": "user"},
+    ]
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": [{"autoid": A}]})
+    monkeypatch.setattr(sh, "load_facts", lambda s: fs)
+    c = sh.counts_update({}, fs)
+    assert c["n_broken_blocked"] == 1
+    assert c["n_failed_actionable"] == 1          # 复跑指令算活(修前=0,四向全关)
+    # 对照:未答 retry 前(env_blocked 待确认)仍在 env 等待集,不算 actionable
+    assert sh.counts_update({}, fs[:3])["n_failed_actionable"] == 0
+
+
+def test_route_blocked_retry_reaches_merge_H02():
+    """H-02 路由面:actionable 里的 blocked+retry 案必达 merge 复跑——
+    _after_diagnose 新增兜底支(它不计 n_failed/n_authored,无此支断路由)。"""
+    from main.ist_core.compile_engine_v8.graph import _after_author, _after_diagnose
+    assert _after_diagnose({"n_failed_actionable": 1, "n_ask_contradiction": 0}) == "merge"
+    assert _after_author({"n_failed_actionable": 1, "n_ask_contradiction": 0}) == "merge"
+    # 防过修:无活照旧收口;问询等待案照旧先问
+    assert _after_diagnose({"n_failed_actionable": 0}) == "closing"
+    assert _after_diagnose({"n_failed_actionable": 1, "n_ask_contradiction": 1}) == \
+        "ask_contradiction"
+
+
+def test_merge_admits_blocked_retry_case_H02(tmp_path, monkeypatch):
+    """H-02 节点面:blocked+retry 案进 merge 复跑通道——修前 ready 集不含
+    S_BROKEN_BLOCKED → nothing_to_merge 收口(指令零执行);修后按最新 rerun
+    归因放行入卷(同 _rerun_disposed 的 s₀ 例外判据)。"""
+    from main.ist_core.compile_engine_v8 import _shared as sh
+    from main.ist_core.compile_engine_v8 import nodes as N
+    outputs = tmp_path / "outputs"
+    (outputs / "b1").mkdir(parents=True)
+    (outputs / A).mkdir()
+    facts_file = outputs / "b1" / "facts.jsonl"
+    F.append_facts(facts_file, [
+        {"ev": "authored", "aid": A, "round": 1, "artifact": "a1"},
+        _vb("broken", sub="blocked"),
+        {"ev": "attribution", "aid": A, "round": 0, "layer": "E",
+         "disposition": "env_blocked", "evidence": "ping loss", "mechanical": True},
+        {"ev": "decision", "aid": A, "question_id": f"env:{A}:0",
+         "answer": "环境已恢复,重跑", "token": "retry"},
+        {"ev": "attribution", "aid": A, "round": 1,
+         "run_id": f"user:env_retry:env:{A}:0", "layer": "E",
+         "disposition": "rerun_isolated", "fix_direction": "user overrode",
+         "evidence": "user"},
+    ])
+    monkeypatch.setattr(sh, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(sh, "outputs_root", lambda: outputs)
+    monkeypatch.setattr(sh, "facts_path", lambda s: facts_file)
+    monkeypatch.setattr(sh, "manifest", lambda s: {"cases": [{"autoid": A, "title": "案A"}]})
+    monkeypatch.setattr(sh, "emit", lambda t: None)
+    monkeypatch.setattr(sh, "emit_tick", lambda *a, **k: None)
+    monkeypatch.setattr(sh, "signal", lambda *a, **k: None)
+    monkeypatch.setattr(sh, "artifact_fingerprint", lambda aid: "a1")
+    import main.ist_core.tools.device as TD
+
+    class _FakeMerged:
+        @staticmethod
+        def func(autoids=None, out_name="", **_kw):
+            vol = outputs / str(out_name)
+            vol.mkdir(exist_ok=True)
+            (vol / "case.xlsx").write_text(",".join(autoids or []), encoding="utf-8")
+            return "ok"
+
+    monkeypatch.setattr(TD, "compile_emit_merged", _FakeMerged)
+    from main.ist_core.tools.device import emit_xlsx_tool as _ex
+    monkeypatch.setattr(_ex, "precheck_merge_case", lambda a: None)
+    monkeypatch.setattr(N, "_load_case_rows", lambda aid: [])
+    out = N.merge({"out_name": "b1", "bed_host": "h", "device_build": "b"})
+    assert out["phase_status"] == "ok"          # 修前 nothing_to_merge(复跑指令被吞)
+    fs2 = F.load_facts(facts_file)
+    mg = [f for f in fs2 if f.get("ev") == "merged"][-1]
+    assert mg["composition"] == [A]

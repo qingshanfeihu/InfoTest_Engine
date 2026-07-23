@@ -164,6 +164,17 @@ def test_gather_fires_despite_persistent_broken(rig):
         panels.append(payload)
         if payload.get("kind") == "ask_decision":
             return {q["_autoid"]: "改描述" for q in payload.get("questions", [])}
+        if payload.get("kind") == "ask_contradiction":
+            # B-1 de-escalate 通道(2026-07-21):103 streak≥2 升级后,现在也会带出一条
+            # deesc 恢复问询(与 102 的 gather 问询争 ask 边优先级,routing 里 ask_contradiction
+            # 先于 gather)。103 在本场景里设备恒 unknown(真非收敛),narratively 答「保持」
+            # 最贴合——不产 de_escalated,案仍 escalated,且不消耗测试想验证的 gather 触达。
+            # 若不答(旧版 return {}),langgraph 对空 dict resume 走 vacuous 分支不消费、
+            # 面板原样重挂(同 test_gather_dismissed_closes_honestly 注释),会一直问同一
+            # 案吃光 _run_graph 的 hop 预算、gather 永远够不着——这正是本测试曾经报红的
+            # 直接原因,不是引擎侧回归(诊断见交付说明)。
+            return {c["autoid"]: "保持" for c in payload.get("cases", [])
+                   if c.get("kind") == "deesc"}
         return {}
 
     res, g, cfgd = _run_graph(rig, device, resume_answers=answer)

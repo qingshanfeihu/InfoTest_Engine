@@ -33,12 +33,16 @@ def recount_deliverable(fs: list[dict], manifest: dict) -> dict:
         # 派生函数,但「最后 escalated 之后有 authored 即解除」是事实级真相、非 views 私有派生,
         # 两路都须 honor;此前用无条件 any(escalated) 丢,与 case_status 漂移致 G5 自我误告警
         # (zhaiyq 516389/533097 迟到回收+整卷pass 案被误判不支撑,门内注释早已预言此失败模式)。
-        # 与下方 suspended/resumed 解除同型:最后 escalated 后有 authored → 已解除、非终态。
+        # 与下方 suspended/resumed 解除同型:最后 escalated 后有 authored/de_escalated → 已解除、
+        # 非终态。de_escalated(B-1 de-escalate 通道,2026-07-21)是第二个解除信号——
+        # not_executed 子类换床复跑后靠既有卷直接复验通过,不产新 authored,若本门仍只认
+        # authored 会把这类真通过案误判"不支撑"(与 views._is_escalated 同源漂移,G5 自我误告警)。
         last_esc = max((i for i, f in enumerate(mine) if f.get("ev") == "escalated"),
                        default=-1)
-        last_auth = max((i for i, f in enumerate(mine) if f.get("ev") == "authored"),
-                        default=-1)
-        if last_esc >= 0 and last_auth < last_esc:
+        last_release = max((i for i, f in enumerate(mine)
+                            if f.get("ev") in ("authored", "de_escalated")),
+                           default=-1)
+        if last_esc >= 0 and last_release < last_esc:
             continue
         last_susp = max((i for i, f in enumerate(mine) if f.get("ev") == "suspended"),
                         default=-1)

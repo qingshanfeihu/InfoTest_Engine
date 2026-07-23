@@ -84,6 +84,13 @@ memory/.dream/
 !.claude/skills/
 !.claude/settings.json
 
+# --- Codex CLI:同上——agents/hooks/hooks.json 入库;会话本地态(config.toml 缓存等)不入 ---
+# hooks.json 命令用 git rev-parse 解析仓根(Codex 不展开 CLAUDE_PROJECT_DIR 类变量)
+.codex/*
+!.codex/agents/
+!.codex/hooks/
+!.codex/hooks.json
+
 # --- 本地开发笔记(不进版本库) ---
 测试评审skill开发tips.md
 docs/context_reuse_vs_cc_haha.md

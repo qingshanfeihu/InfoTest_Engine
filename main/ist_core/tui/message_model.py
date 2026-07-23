@@ -123,6 +123,7 @@ class MessageSnapshot:
     fork_board_rev: int = 0
     # uuid → messages 下标(卡片消息);UI 原地更新时按它定位,不重扫全量。
     fork_card_indices: Mapping[str, int] = field(default_factory=lambda: _EMPTY_MAP)
+    run_end_info: Mapping[str, Any] = field(default_factory=lambda: _EMPTY_MAP)
 
 
 

@@ -36,7 +36,11 @@ _DEFAULT_LOGIN_URL = "http://10.4.150.56:8032/oauth/login/"
 _DEFAULT_SELECT_URL = "http://10.4.150.56:8004/agile/select_case_set/"
 # 数据接口(8004 端口)
 _DEFAULT_API_URL = "http://10.4.150.56:8004/agile/get_case_data/"
-_DEFAULT_OUTPUT_DIR = _PROJECT_ROOT / "workspace" / "inputs" / "yzg"
+def _default_output_dir() -> Path:
+    username = (os.environ.get("IST_SSH_USER", "").strip()
+                or os.environ.get("IST_USERNAME", "").strip()
+                or "default")
+    return _PROJECT_ROOT / "workspace" / "inputs" / username
 _DEFAULT_TOKEN_FIELD = "data.token"
 
 # 账号密码从 environment 文件读取(AGILE_LOGIN_USER / AGILE_LOGIN_PASS)。
@@ -333,7 +337,7 @@ def download_agile_case(
     )
     biz_id = biz_id or os.getenv("AGILE_BIZ_ID", "").strip()
     out_root = Path(output_dir) if output_dir else Path(
-        os.getenv("AGILE_OUTPUT_DIR", "").strip() or str(_DEFAULT_OUTPUT_DIR)
+        os.getenv("AGILE_OUTPUT_DIR", "").strip() or str(_default_output_dir())
     )
     if not out_root.is_absolute():
         out_root = (_PROJECT_ROOT / out_root).resolve()

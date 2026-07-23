@@ -265,14 +265,21 @@ class MemoryStore:
         self._resolve_virtual_path(check_path, for_write=True)
         return self._root / normalized
 
-    def read_long_term_by_path(self, rel_path: str) -> str:
+    def read_long_term_by_path(self, rel_path: str, username: str | None = None) -> str:
         """按精确路径读取 long_term/ 下的文件内容。
 
+        当指定 username 时，优先读取 long_term/{username}/ 下的文件。
         通用方法——key_resolvers 回调用此直接读指定文件。
         返回文件内容字符串，不存在时返回空字符串。
         """
         try:
             normalized = self._normalize_to_long_term(rel_path)
+            # 用户隔离路径优先
+            if username:
+                sub = normalized[len("long_term/"):] if normalized.startswith("long_term/") else normalized
+                user_path = self._root / "long_term" / username / sub
+                if user_path.exists():
+                    return user_path.read_text(encoding="utf-8")
             path = self._root / normalized
             if not path.exists():
                 return ""
@@ -282,14 +289,19 @@ class MemoryStore:
             return ""
 
     def read_long_term(
-        self, query: str, *, top_k: int = 3
+        self, query: str, *, top_k: int = 3, username: str | None = None,
     ) -> list[tuple[str, str]]:
         """检索 long_term/ 下与 query 关键词重合度高的文件。
+
+        当指定 username 时，仅检索 long_term/{username}/ 目录（用户隔离）。
+        不指定时检索整个 long_term/ 目录（向后兼容）。
 
         返回 [(path_in_memory_root, content), ...]，最多 top_k 条。
         总数 < 10 时全返回（跳过打分）。
         """
         long_dir = self._root / "long_term"
+        if username:
+            long_dir = long_dir / username
         if not long_dir.exists():
             return []
 
@@ -417,15 +429,26 @@ class MemoryStore:
         *,
         mode: str = "append",
         keywords: str | None = None,
+        username: str | None = None,
     ) -> None:
         """写入 long_term/ 下文件。mode: append | replace。
+
+        当指定 username 时，写入 long_term/{username}/ 目录（用户隔离）。
+        不指定时写入 long_term/ 目录（向后兼容）。
 
         - 自动维护 frontmatter（created/updated/keywords/turn_count）
         - 三闸校验 + 路径归一化
         - 原子写入（tmp + replace）
         """
         try:
-            path = self._long_term_disk_path(rel_path)
+            if username:
+                # 用户隔离路径：long_term/{username}/<rel_path>
+                norm = self._normalize_to_long_term(rel_path)
+                sub = norm[len("long_term/"):] if norm.startswith("long_term/") else norm
+                path = self._root / "long_term" / username / sub
+                path.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                path = self._long_term_disk_path(rel_path)
         except Exception as exc:
             logger.warning("upsert_long_term path resolve 失败 %s: %s", rel_path, exc)
             return

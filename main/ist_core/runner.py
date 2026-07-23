@@ -41,6 +41,13 @@ def _ensure_env() -> None:
     except Exception:  # noqa: BLE001
         pass
 
+    # 后台线程预热 Langfuse client（首次 agent 请求到来时已缓存，零等待）
+    try:
+        from main.ist_core.sinks.langfuse_sink import warmup_langfuse_client
+        warmup_langfuse_client()
+    except Exception:
+        pass
+
     missing: list[str] = []
     if not (os.environ.get("OPENAI_API_KEY") or "").strip():
         missing.append("OPENAI_API_KEY")
@@ -70,6 +77,38 @@ def _load_input(args: argparse.Namespace) -> Any:
     print("❌ 必须提供 query 或 --input FILE", file=sys.stderr)
     sys.exit(2)
 
+def _resolve_thread_id() -> str:
+    """生成 thread_id。标准格式 {username}_{conversation_id}，CLI 兜底用随机 ID。"""
+    user = os.environ.get("IST_SSH_USER", "").strip()
+    conversation = os.environ.get("IST_CONVERSATION_ID", "").strip()
+    if user and conversation:
+        return f"{user}_{conversation}"
+    return f"run-{uuid.uuid4().hex[:8]}"
+
+
+def build_thread_id(username: str, conversation_id: str) -> str:
+    """构建标准 thread_id = {username}_{conversation_id}。
+
+    不依赖 session_id — conversation 是持久的，session 易失。
+    """
+    return f"{username}_{conversation_id}"
+
+
+def validate_thread_id_ownership(thread_id: str, username: str) -> bool:
+    """多用户隔离校验：验证 thread_id 归属当前用户。
+
+    thread_id 格式为 {username}_{conversation_id}，
+    首段必须是当前 username，防止跨用户读取 checkpoint。
+    """
+    if not username:
+        return False
+    if thread_id.startswith(f"{username}_"):
+        return True
+    if thread_id == username:
+        return True
+    return False
+
+
 
 def run_single(
     user_input: Any,
@@ -82,6 +121,8 @@ def run_single(
     goal: str = "",
 ) -> dict[str, Any]:
     """单次调用 Graph，返回最终 state。
+
+    thread_id 格式为 {username}_{conversation_id}，不依赖易失的 session_id。
 
     ``checkpointer`` 透传给 ``build_ist_core_graph``：
     - ``True``（默认）：按 ``stream`` 选 async/sync 的 SqliteSaver（持久化，可 resume）。
@@ -96,7 +137,9 @@ def run_single(
     mode = "async" if stream else "sync"
     graph = build_ist_core_graph(checkpointer=checkpointer, checkpointer_mode=mode)
 
-    thread_id = thread_id or f"run-{uuid.uuid4().hex[:8]}"
+    #旧
+    #thread_id = thread_id or f"run-{uuid.uuid4().hex[:8]}"
+    thread_id = thread_id or _resolve_thread_id()
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
 
     initial_state: dict[str, Any] = {
@@ -123,6 +166,26 @@ def run_single(
 
     # 主循环连接韧性：心跳 + 外层连接重试（治长跑遇 APIConnectionError 整轮崩、0 产出）。
     from main.ist_core.resilience import Heartbeat, run_with_resilience, set_active_heartbeat
+
+    # Langfuse 可观测性：在 graph.invoke 之前注入 handler，
+    # 确保外层图的 on_chain_start(name=LangGraph) 也能携带 user/session。
+    try:
+        from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks, build_trace_attributes
+        _cbl = config.get("configurable") or {}
+        if _cbl.get("auth_session_id"):
+            _lf_entry = "wecom_smart"
+        elif _cbl.get("wx_user_id"):
+            _lf_entry = "wecom"
+        else:
+            _lf_entry = "tui"
+        _lf_attrs = build_trace_attributes(config, entry=_lf_entry)
+        if _lf_attrs:
+            _cbs = list(config.get("callbacks") or [])
+            inject_langfuse_callbacks(_cbs, cache_run_id=_cbl.get("run_id", ""), **_lf_attrs)
+            config["callbacks"] = _cbs
+    except Exception:
+        pass
+
     with Heartbeat() as hb:
         hb.set_note(f"thread={thread_id} task={task_type}")
         set_active_heartbeat(hb)  # 让主 agent tool_call 能刷新 note（当前阶段可见）

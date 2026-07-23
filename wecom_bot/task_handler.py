@@ -127,7 +127,7 @@ def _call_ist_core(user_query: str, user_id: str = "", thread_id: str = "") -> d
     try:
         with SqliteSaver.from_conn_string(_CHECKPOINT_DB) as saver:
             graph = build_ist_core_graph(checkpointer=saver, checkpointer_mode="sync")
-            config: dict[str, Any] = {"configurable": {"thread_id": tid}}
+            config: dict[str, Any] = {"configurable": {"thread_id": tid, "wx_user_id": user_id}}
             initial_state: dict[str, Any] = {
                 "task_type": "QA",
                 "user_input": user_query,

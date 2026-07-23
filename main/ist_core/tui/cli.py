@@ -43,14 +43,16 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="一次性 query（与 --input 二选一）；特殊值 'threads' 列历史")
     parser.add_argument("-p", "--print", action="store_true",
                         help="print 模式：非交互，stdout 直出最终回答（CI 友好）")
-    parser.add_argument("--resume", type=str, default="",
-                        help="恢复指定 thread-id 的历史会话")
-    parser.add_argument("--continue", dest="continue_last", action="store_true",
-                        help="继续最近一次 thread")
+    # 【屏蔽切换对话功能】--resume / --continue / --thread-id 注释
+    # parser.add_argument("--resume", type=str, default="",
+    #                     help="恢复指定 thread-id 的历史会话")
+    # parser.add_argument("--continue", dest="continue_last", action="store_true",
+    #                     help="继续最近一次 thread")
     parser.add_argument("--input", type=str, default="",
                         help="结构化输入文件路径（xlsx / json / 文本，agent 自行识别）")
-    parser.add_argument("--thread-id", type=str, default="",
-                        help="显式指定 thread-id（与 --resume 同义）")
+    # 【屏蔽切换对话功能】--thread-id 注释
+    # parser.add_argument("--thread-id", type=str, default="",
+    #                     help="显式指定 thread-id（与 --resume 同义）")
     parser.add_argument("--task", choices=["qa", "review", "QA", "Review"], default="qa",
                         help="任务类型提示（agent 仍可覆盖；默认 qa）")
     parser.add_argument("--goal", type=str, default="",
@@ -138,11 +140,12 @@ def _run_threads_mode() -> int:
     return 0
 
 
-def _resolve_continue_thread() -> Optional[str]:
-    """``--continue``：从 checkpoint 拿最近一次 thread。"""
-    from main.ist_core.tui.checkpoint_repo import CheckpointRepo
-
-    return CheckpointRepo().most_recent_thread_id()
+# 【屏蔽切换对话功能】--continue 恢复最近 thread 函数注释
+# def _resolve_continue_thread() -> Optional[str]:
+#     """``--continue``：从 checkpoint 拿最近一次 thread。"""
+#     from main.ist_core.tui.checkpoint_repo import CheckpointRepo
+#
+#     return CheckpointRepo().most_recent_thread_id()
 
 
 def _run_server_command(action: str, port: int, host: str = "127.0.0.1") -> int:
@@ -252,6 +255,12 @@ def main(argv: list[str] | None = None) -> int:
         return run_kms_command(raw_argv[1:])
 
     
+    if raw_argv and raw_argv[0] == "user":
+        logging.basicConfig(level="WARNING", format="%(levelname)s %(name)s: %(message)s")
+        _ensure_env()
+        from main.ist_core.tui.user_cli import run_user_command
+        return run_user_command(raw_argv[1:])
+
     if raw_argv and raw_argv[0] == "reset":
         logging.basicConfig(level="WARNING", format="%(levelname)s %(name)s: %(message)s")
         _ensure_env()
@@ -308,20 +317,27 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             logging.basicConfig(level=log_level, format="%(levelname)s %(name)s: %(message)s")
     _ensure_env()
+    # 确保 ist_audit schema 和表存在（增量 ALTER 兼容旧部署）
+    try:
+        from main.ist_core.auth.db import ensure_schema
+        ensure_schema()
+    except Exception:
+        pass
 
-    
     if args.query == "threads" and not args.print:
         return _run_threads_mode()
 
     task_type = "Review" if (args.task or "").lower() == "review" else "QA"
-    thread_id = args.resume or args.thread_id or None
+    # 【屏蔽切换对话功能】thread_id 从参数恢复逻辑已注释
+    # thread_id = args.resume or args.thread_id or None
+    thread_id = None
 
-    
-    if args.continue_last and not thread_id:
-        thread_id = _resolve_continue_thread()
-        if not thread_id:
-            print("(--continue: 没有找到历史 thread)", file=sys.stderr)
-            return 1
+    # 【屏蔽切换对话功能】--continue 恢复最近 thread 已注释
+    # if args.continue_last and not thread_id:
+    #     thread_id = _resolve_continue_thread()
+    #     if not thread_id:
+    #         print("(--continue: 没有找到历史 thread)", file=sys.stderr)
+    #         return 1
 
     initial_query = _resolve_initial_query(args)
 

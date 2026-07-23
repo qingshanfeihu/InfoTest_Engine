@@ -104,7 +104,7 @@ class CheckpointRepo:
 
     
 
-    def list_threads(self, *, limit: int = 50) -> list[ThreadEntry]:
+    def list_threads(self, *, limit: int = 50, username: str | None = None) -> list[ThreadEntry]:
         """按 thread_id 去重，返回最新 checkpoint 摘要。
 
         失败一律返回空列表（plan 风险 #4：sidebar 失败显示"无历史"）。
@@ -127,6 +127,9 @@ class CheckpointRepo:
             out.append(self._tuple_to_entry(t, tid))
             if len(out) >= limit:
                 break
+        if username:
+            prefix = f"{username}_"
+            out = [e for e in out if e.thread_id.startswith(prefix)]
         return out
 
     def get_thread(self, thread_id: str) -> Optional[dict[str, Any]]:

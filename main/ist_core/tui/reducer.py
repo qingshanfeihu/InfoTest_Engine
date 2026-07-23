@@ -134,6 +134,7 @@ class MessageReducer:
         self._usage: dict[str, int] = {}
         self._llm_phase: str = ""
         self._output_token_count: int = 0
+        self._run_end_info: dict[str, Any] = {}
 
         
         
@@ -180,6 +181,7 @@ class MessageReducer:
             rev=self._rev,
             fork_board_rev=self._fork_board_rev,
             fork_card_indices=MappingProxyType(dict(self._fork_card_idx)),
+            run_end_info=MappingProxyType(dict(self._run_end_info)),
         )
 
     def reset(self) -> None:
@@ -228,10 +230,13 @@ class MessageReducer:
             self._status = "running"
             self._llm_phase = "input"
             self._output_token_count = 0
+            self._run_end_info = {}
         elif kind == "run_end":
             self._status = "done"
             self._llm_phase = ""
             self._output_token_count = 0
+            run_id = event.get("run_id", "")
+            self._run_end_info = {"run_id": run_id}
         elif kind == "run_error":
             self._status = "error"
             self._llm_phase = ""

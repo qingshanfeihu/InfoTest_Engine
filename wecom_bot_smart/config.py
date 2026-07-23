@@ -40,6 +40,9 @@ class SmartBotConfig:
     corp_id: str = field(
         default_factory=lambda: os.environ.get("WECOM_CORP_ID", "")
     )
+    app_secret: str = field(
+        default_factory=lambda: os.environ.get("WECOM_APP_SECRET", "")
+    )
     gateway_url: str = field(
         default_factory=lambda: os.environ.get("WECOM_SMART_GATEWAY_URL", "")
     )

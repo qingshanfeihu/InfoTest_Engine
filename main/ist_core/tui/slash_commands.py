@@ -111,9 +111,28 @@ class ErrorResult:
     text: str
 
 
+@dataclass
+class PickerResult:
+    """Render an interactive selection list rendered inline in the transcript.
+
+    Used by ``/resume`` to let the user pick a conversation to continue.
+    """
+
+    title: str
+    options: list[PickerOption]
+    on_select: str  # callback key — handled by ist_app
+
+
+@dataclass
+class PickerOption:
+    conversation_id: str
+    label: str          # e.g. "2026-07-07 14:22 | 代码调试对话"
+    first_user_input: str  # raw first user input for the title
+
+
 SlashCommandResult = (
     InfoResult | TextResult | ClearResult | ExitResult
-    | InjectResult | InterceptResult | ErrorResult
+    | InjectResult | InterceptResult | ErrorResult | PickerResult
 )
 
 
@@ -161,8 +180,10 @@ def _cmd_version(args: str, app: "IstApp") -> SlashCommandResult:
 
 
 def _cmd_threads(args: str, app: "IstApp") -> SlashCommandResult:
+    import os
+    username = getattr(app, "_username", "") or os.environ.get("IST_SSH_USER", "").strip()
     try:
-        threads = app._checkpoint_repo.list_threads(limit=20)
+        threads = app._checkpoint_repo.list_threads(limit=20, username=username or None)
     except Exception as exc:  # noqa: BLE001
         return ErrorResult(text=f"failed to list threads: {exc}")
     if not threads:
@@ -181,25 +202,79 @@ def _cmd_threads(args: str, app: "IstApp") -> SlashCommandResult:
 
 
 def _cmd_resume(args: str, app: "IstApp") -> SlashCommandResult:
-    tid = (args or "").strip()
-    if not tid:
-        return ErrorResult(text="usage: /resume <thread-id>")
+    """列出用户最近 3 条不同 conversation 供选择恢复。
+
+    查询 PG → 渲染 PickerResult — 用户上下箭头选择、回车确认。
+    """
+    import os as _os
+
+    username = getattr(app, "_username", "") or _os.environ.get("IST_SSH_USER", "").strip()
+    if not username:
+        return ErrorResult(text="无法获取用户名（IST_SSH_USER 未设置）")
+
     try:
-        app._on_thread_selected(tid)
-    except Exception as exc:  # noqa: BLE001
-        return ErrorResult(text=f"failed to resume {tid}: {exc}")
-    return InfoResult(text=f"resumed thread {tid}")
+        from main.ist_core.auth.session_manager import SessionManager
+        mgr = SessionManager()
+        items = mgr.list_conversations(username, limit=3)
+    except Exception as exc:
+        return ErrorResult(text=f"查询对话列表失败: {exc}")
+
+    if not items:
+        return InfoResult(text="(没有可恢复的历史对话)")
+
+    options: list[PickerOption] = []
+    for item in items:
+        cid = item["conversation_id"]
+        # 标题候选：first_user_input > title > "新对话"
+        title = (item.get("first_user_input") or "").strip()
+        if not title or title == item.get("title"):
+            title = item.get("title") or "新对话"
+        # 截断避免过长
+        title = title[:60]
+
+        ts = item.get("last_message_at") or item.get("created_at") or ""
+        date_str = ts[:16].replace("T", " ") if ts else "时间未知"
+
+        label = f"{date_str} | {title}"
+        options.append(PickerOption(
+            conversation_id=cid,
+            label=label,
+            first_user_input=item.get("first_user_input") or "",
+        ))
+
+    return PickerResult(
+        title="===== 选择要恢复的历史对话 =====",
+        options=options,
+        on_select="resume_conversation",
+    )
 
 
 def _cmd_continue(args: str, app: "IstApp") -> SlashCommandResult:
-    tid = app._checkpoint_repo.most_recent_thread_id()
-    if not tid:
-        return ErrorResult(text="no recent thread to continue")
+    """恢复最近一次对话（不弹出选择器）。"""
+    import os as _os
+
+    username = getattr(app, "_username", "") or _os.environ.get("IST_SSH_USER", "").strip()
+    if not username:
+        return ErrorResult(text="无法获取用户名（IST_SSH_USER 未设置）")
+
     try:
-        app._on_thread_selected(tid)
-    except Exception as exc:  # noqa: BLE001
-        return ErrorResult(text=f"failed to continue: {exc}")
-    return InfoResult(text=f"continuing thread {tid}")
+        from main.ist_core.auth.session_manager import SessionManager
+        mgr = SessionManager()
+        items = mgr.list_conversations(username, limit=1)
+    except Exception as exc:
+        return ErrorResult(text=f"查询对话列表失败: {exc}")
+
+    if not items:
+        return InfoResult(text="(没有可恢复的历史对话)")
+
+    item = items[0]
+    cid = item["conversation_id"]
+    title = (item.get("first_user_input") or item.get("title") or "新对话")[:60]
+    thread_id = f"{username}_{cid}"
+
+    # 直接恢复
+    app._on_conversation_resumed(cid, thread_id, title)
+    return InfoResult(text=f"已恢复对话: {title}")
 
 
 def _cmd_model(args: str, app: "IstApp") -> SlashCommandResult:
@@ -370,8 +445,8 @@ BUILTIN_COMMANDS: list[SlashCommand] = [
     SlashCommand("help",     "List all commands with descriptions",          _cmd_help),
     SlashCommand("clear",    "Clear conversation transcript (keep thread)",  _cmd_clear),
     SlashCommand("threads",  "List recent threads with previews",            _cmd_threads),
-    SlashCommand("resume",   "Resume specific thread (usage: /resume <tid>)", _cmd_resume),
-    SlashCommand("continue", "Resume the most recent thread",                _cmd_continue),
+    SlashCommand("resume",   "选择并恢复历史对话（最近 3 条）",              _cmd_resume),
+    SlashCommand("continue", "恢复最近一次对话（不弹出选择器）",             _cmd_continue),
     SlashCommand("model",    "Override LLM model for next turn",             _cmd_model),
     SlashCommand("style",    "Switch output style (explanatory / learning / default)", _cmd_style),
     SlashCommand("cost",     "Show token usage and call counts",             _cmd_cost),

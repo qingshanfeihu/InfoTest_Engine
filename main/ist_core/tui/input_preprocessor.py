@@ -30,7 +30,16 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _WORKSPACE = _PROJECT_ROOT / "workspace"
-_DEFAULT_INBOX = _WORKSPACE / "inputs"
+
+
+def _current_user() -> str:
+    return (os.environ.get("IST_SSH_USER", "").strip()
+            or os.environ.get("IST_USERNAME", "").strip()
+            or "default")
+
+
+def _default_inbox() -> Path:
+    return _WORKSPACE / "inputs" / _current_user()
 
 
 _KNOWN_SUFFIXES = r"(?:xlsx|xls|pdf|docx|doc|pptx|ppt|md|txt|json|csv|conf|cfg|ini|yaml|yml|xml|log)"
@@ -120,7 +129,7 @@ def _find_by_basename(raw: str) -> Path | None:
     basename = _extract_filename(raw)
     if not basename:
         return None
-    for candidate_dir in (_DEFAULT_INBOX, _PROJECT_ROOT, Path.cwd()):
+    for candidate_dir in (_default_inbox(), _PROJECT_ROOT, Path.cwd()):
         candidate = candidate_dir / basename
         if candidate.is_file():
             return candidate
@@ -133,11 +142,11 @@ def _locate_in_inbox(bare_name: str) -> Path | None:
     优先精确命中；xlsx/xls 上传后会被转成同名 .md（见 _convert_xlsx），
     所以 foo.xlsx 找不到时回退查 foo.md。
     """
-    direct = _DEFAULT_INBOX / bare_name
+    direct = _default_inbox() / bare_name
     if direct.is_file():
         return direct
     if Path(bare_name).suffix.lower() in _CONVERTIBLE_SUFFIXES:
-        converted = _DEFAULT_INBOX / f"{Path(bare_name).stem}.md"
+        converted = _default_inbox() / f"{Path(bare_name).stem}.md"
         if converted.is_file():
             return converted
     return None
@@ -201,7 +210,7 @@ def preprocess_file_paths(
         status_message 为 None 表示没有检测到需要处理的路径。
         status_message 以 "⬆ NEED_UPLOAD:" 开头表示需要用户上传文件内容。
     """
-    dest_dir = _DEFAULT_INBOX
+    dest_dir = _default_inbox()
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     modified = text

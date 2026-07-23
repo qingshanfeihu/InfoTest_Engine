@@ -16,8 +16,14 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
+def _current_user() -> str:
+    return (os.environ.get("IST_SSH_USER", "").strip()
+            or os.environ.get("IST_USERNAME", "").strip()
+            or "default")
+
+
 def outputs_root() -> Path:
-    return project_root() / "workspace" / "outputs"
+    return project_root() / "workspace" / "outputs" / _current_user()
 
 
 def load_ledger(state: dict) -> L.EngineLedger:

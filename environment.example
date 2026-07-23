@@ -102,6 +102,23 @@ IST_POSTGRES_USER=ultra_agent
 IST_POSTGRES_PASSWORD=ultra_agent
 IST_POSTGRES_DSN=postgresql://ultra_agent:ultra_agent@localhost:6543/ultra_agent
 
+# =============================================================================
+# 五（补）、Redis（可选，跨进程共享缓存 / 事件队列）
+# =============================================================================
+# TraceCollector / PgAuditSink / DialogQueue / SessionManager / Langfuse score 缓存均使用。
+# 未设置时各组件降级为进程内内存（单进程模式零影响，多进程模式丢失跨进程能力）。
+# IST_REDIS_URL=redis://localhost:6379/0
+
+# =============================================================================
+# 五（续）、Langfuse LLM 可观测性（可选，自建实例）
+# =============================================================================
+# 三键缺一则自动跳过，不影响主流程
+# LANGFUSE_PUBLIC_KEY=pk-lf-...
+# LANGFUSE_SECRET_KEY=sk-lf-...
+# LANGFUSE_HOST=http://your-langfuse-server:3000
+# LANGFUSE_BASE_URL=http://your-langfuse-server:3000   # 兼容别名
+# IST_LANGFUSE_ENABLED=0   # 0=关闭, 1或不设置=启用（默认启用）
+
 
 # =============================================================================
 # 六、缺陷库抓取（Bugzilla / 禅道 / WebVPN）
@@ -257,3 +274,13 @@ WECOM_SMART_MCP_DOC_URL=https://...
 
 # --- 服务配置（可选）---
 # WECOM_SMART_IST_TIMEOUT=600  # IST-Core 单次调用最长等待（秒）
+
+
+# =============================================================================
+# 十四、Web Terminal 登录安全（可选）
+# =============================================================================
+# 受信代理 IP / CIDR（逗号分隔）。为空则不信任任何反向代理 header，
+# source_ip 取 TCP 直连地址。部署在 nginx 反代后面时，填入反代的 IP。
+# IST_TRUSTED_PROXIES="127.0.0.1,10.0.0.0/8"
+# IST_WEB_LOGIN_MAX_FAILURES=5    # 单 IP 窗口内最大失败次数（默认 5）
+# IST_WEB_LOGIN_WINDOW_SEC=300    # 滑动窗口秒数（默认 300）

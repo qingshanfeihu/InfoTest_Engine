@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time as _time
+from pathlib import Path as _Path
 from typing import Any, Callable
 
 from main.ist_core.events import EventBus
@@ -25,6 +27,8 @@ from main.ist_core.tui.message_model import MessageSnapshot
 from main.ist_core.tui.sink import TuiSink
 
 logger = logging.getLogger(__name__)
+
+
 
 
 class GraphBridge:
@@ -69,6 +73,16 @@ class GraphBridge:
     @property
     def thread_id(self) -> str:
         return self._thread_id
+
+    # 【屏蔽切换对话功能】切换 thread_id 注释
+    # def switch_thread(self, new_thread_id: str) -> None:
+    #     """切换到另一个对话的 thread_id。重置 run 状态，下次用户消息触发新 graph run。"""
+    #     if self.is_running:
+    #         logger.warning("Bridge running; switch_thread deferred until run completes")
+    #     self._thread_id = new_thread_id
+    #     self._run = None
+    #     self._last_final_state = {}
+    #     logger.info("Bridge switched to thread_id=%s", new_thread_id)
 
     @property
     def is_running(self) -> bool:
@@ -135,13 +149,54 @@ class GraphBridge:
         asyncio.set_event_loop(loop)
         try:
             graph = self._get_graph()
-            config = {"configurable": {"thread_id": self._thread_id}}
             sinks: list[Callable] = [self._sink, *self._extra_sinks]
             from main.ist_core.events import reset_default_bus
             import uuid as _uuid
-            bus = reset_default_bus(run_id=_uuid.uuid4().hex[:12])
+            run_id = _uuid.uuid4().hex[:12]
+            bus = reset_default_bus(run_id=run_id)
             for sink in sinks:
                 bus.subscribe(sink)
+            import os as _os
+            _session_user = _os.environ.get("IST_SSH_USER", "").strip()
+            _session_id = _os.environ.get("IST_AUTH_SESSION_ID", "").strip()
+            _conversation_id = _os.environ.get("IST_CONVERSATION_ID", "").strip()
+            # 注入完整认证上下文到 LangGraph config（Langfuse / qa_node 消费）
+            _configurable: dict[str, Any] = {"thread_id": self._thread_id}
+            if _session_user:
+                _configurable["auth_user"] = _session_user
+            if _session_id:
+                _configurable["auth_session_id"] = _session_id
+            if _conversation_id:
+                _configurable["auth_conversation_id"] = _conversation_id
+            _configurable["run_id"] = run_id
+            config = {"configurable": _configurable}
+            if _session_user or _session_id:
+                bus.set_default_tags({
+                    "session_user": _session_user,
+                    "session_id": _session_id,
+                    "conversation_id": _conversation_id,
+                    "thread_id": self._thread_id,
+                })
+
+            if _session_user and _session_id and _conversation_id:
+                try:
+                    from main.ist_core.sinks.dialog_sink import DialogueCollector
+                    dialog_collector = DialogueCollector(
+                        username=_session_user,
+                        session_id=_session_id,
+                        conversation_id=_conversation_id,
+                    )
+                    bus.subscribe(dialog_collector)
+                except Exception as exc:
+                    logger.error("DialogueCollector 注册失败: %s", exc)
+                    pass
+
+            # 注册 TraceCollector（对话轮次 trace 聚合写入）
+            try:
+                from main.ist_core.sinks.trace_collector import TraceCollector
+                bus.subscribe(TraceCollector())
+            except Exception as exc:
+                logger.debug("TraceCollector 注册失败: %s", exc)
 
             coro = astream_to_bus(graph, payload, config=config, bus=bus)
             self._task = loop.create_task(coro)

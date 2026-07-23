@@ -17,33 +17,49 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 .login-box button:hover { background: #89b4fa; }
 .login-error { color: #f7768e; font-size: 0.8rem; margin-top: 0.5rem; }
 .login-links { text-align: center; margin-top: 0.8rem; }
-.login-links a { color: #7aa2f7; text-decoration: none; font-size: 0.85rem; }
-.login-links a:hover { text-decoration: underline; }
-.login-box input[type="password"],
-.login-box input[type="text"] { width: 100%; padding: 0.6rem 2rem 0.6rem 0.6rem; margin-bottom: 0.8rem; background: #1a1b26; border: 1px solid #414868; border-radius: 4px; color: #c0caf5; font-family: monospace; box-sizing: border-box; }
+.login-links a { color: #565f89; text-decoration: none; font-size: 0.85rem; cursor: default; }
 .pwd-container { display: flex; align-items: center; gap: 6px; margin-bottom: 0.8rem; }
 .login-box .pwd-container input[type="password"],
 .login-box .pwd-container input[type="text"] { flex: 1; width: auto; margin-bottom: 0; padding-right: 0.6rem; }
 .login-box .pwd-toggle { width: auto; flex-shrink: 0; background: none; border: 1px solid #414868; border-radius: 4px; color: #565f89; cursor: pointer; font-size: 1rem; padding: 0.55rem; line-height: 1; }
 .login-box .pwd-toggle:hover { color: #7aa2f7; border-color: #7aa2f7; }
 #termPage { display: none; height: 100vh; flex-direction: column; }
-#toolbar { padding: 4px 8px; background: #24283b; border-bottom: 1px solid #414868; display: flex; align-items: center; gap: 8px; }
-#toolbar .upload-btn { background: #414868; border: none; color: #c0caf5; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+#mainArea { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+#toolbar {
+  padding: 4px 8px; background: #24283b; border-bottom: 1px solid #414868;
+  display: flex; align-items: center; gap: 8px; position: relative;
+}
+#toolbar .upload-btn {
+  background: #414868; border: none; color: #c0caf5; padding: 4px 10px;
+  border-radius: 4px; cursor: pointer; font-size: 0.85rem;
+}
 #toolbar .upload-btn:hover { background: #565f89; }
 #toolbar .status { color: #9ece6a; font-size: 0.8rem; }
-#toolbar { position: relative; }
-#downloadPanel { display:none; position:absolute; top:100%; left:80px; background:#24283b; border:1px solid #414868; border-radius:6px; padding:8px; min-width:300px; max-height:400px; overflow-y:auto; z-index:10; box-shadow:0 4px 12px rgba(0,0,0,0.4); }
-#downloadPanel .dl-item { display:flex; justify-content:space-between; align-items:center; padding:4px 6px; border-radius:3px; cursor:pointer; font-size:0.82rem; color:#c0caf5; }
-#downloadPanel .dl-item:hover { background:#414868; }
-#downloadPanel .dl-size { color:#565f89; font-size:0.75rem; margin-left:12px; }
+#downloadPanel {
+  display:none; position:absolute; top:100%; left:80px; background:#24283b;
+  border:1px solid #414868; border-radius:6px; padding:8px; min-width:340px;
+  max-height:360px; overflow-y:auto; z-index:10; box-shadow:0 4px 12px rgba(0,0,0,0.4);
+}
 #downloadPanel .dl-empty { color:#565f89; font-size:0.82rem; padding:4px; }
 #downloadPanel .dl-dir { padding:4px 6px; border-radius:3px; cursor:pointer; font-size:0.82rem; color:#7aa2f7; user-select:none; }
 #downloadPanel .dl-dir:hover { background:#414868; }
-#downloadPanel .dl-dir .arrow { display:inline-block; width:12px; font-size:0.7rem; color:#565f89; }
-#downloadPanel .dl-children { padding-left:16px; display:none; }
-#downloadPanel .dl-children.open { display:block; }
+#downloadPanel .dl-dir-header {
+  display:flex; align-items:center; gap:4px; padding:4px 6px; border-radius:3px;
+  font-size:0.82rem; color:#7aa2f7; cursor:pointer;
+}
+#downloadPanel .dl-dir-header:hover { background:#414868; }
+#downloadPanel .dl-dir-arrow { font-size:0.65rem; width:12px; transition:transform 0.15s; color:#565f89; }
+#downloadPanel .dl-dir-arrow.open { transform:rotate(90deg); }
+#downloadPanel .dl-dir-children { padding-left:14px; }
+#downloadPanel .dl-file-row {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:3px 6px 3px 12px; border-radius:3px; cursor:pointer; font-size:0.82rem; color:#c0caf5;
+}
+#downloadPanel .dl-file-row:hover { background:#414868; }
+#downloadPanel .dl-file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#downloadPanel .dl-file-size { color:#565f89; font-size:0.75rem; margin-left:12px; white-space:nowrap; }
 #terminal { flex: 1; }
-/* 用户管理面板 */
+/* User management panel */
 #userMgmtBtn { display: none; }
 #userMgmtPanel { display:none; position:absolute; top:100%; right:8px; background:#24283b; border:1px solid #414868; border-radius:6px; padding:12px; min-width:320px; max-height:500px; overflow-y:auto; z-index:10; box-shadow:0 4px 12px rgba(0,0,0,0.4); }
 #userMgmtPanel h3 { color:#7aa2f7; font-size:0.9rem; margin-bottom:10px; font-family:monospace; }
@@ -59,7 +75,6 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 .user-actions button.danger:hover { background:#f7768e55; }
 #userMgmtPanel .close-btn { position:absolute; top:8px; right:8px; background:none; border:none; color:#565f89; cursor:pointer; font-size:1rem; }
 #userMgmtPanel .close-btn:hover { color:#c0caf5; }
-/* 重置密码弹窗 */
 .reset-pwd-form { margin-top:8px; padding:8px; background:#2f3347; border-radius:4px; }
 .reset-pwd-form input { width:100%; padding:6px; margin-bottom:6px; background:#1a1b26; border:1px solid #414868; border-radius:3px; color:#c0caf5; font-size:0.8rem; box-sizing:border-box; }
 .reset-pwd-form input:focus { outline:none; border-color:#7aa2f7; }
@@ -72,81 +87,77 @@ body { background: #1a1b26; color: #c0caf5; font-family: system-ui, sans-serif; 
 <body>
 <div id="loginPage">
   <div class="login-box">
-    <h2>InfoTest Engine v1.0.4</h2>
+    <h2>InfoTest Engine v1.0.5</h2>
     <div id="loginForm">
       <input type="text" id="username" placeholder="用户名" autocomplete="off">
       <div class="pwd-container">
         <input type="password" id="password" placeholder="密码">
-        <button type="button" class="pwd-toggle" onclick="togglePassword('password', this)">👁</button>
+        <button type="button" class="pwd-toggle" onclick="togglePassword('password', this)">&#128065;</button>
       </div>
       <button onclick="doLogin()">登录</button>
       <div class="login-error" id="loginError"></div>
       <div class="login-links">
-        <a href="#" onclick="showCreateUser()">创建新用户</a>
-      </div>
-    </div>
-    <div id="createUserForm" style="display:none">
-      <input type="text" id="newUsername" placeholder="用户名 (3-20字符)" autocomplete="off">
-      <div class="pwd-container">
-        <input type="password" id="newPassword" placeholder="密码 (至少6位)">
-        <button type="button" class="pwd-toggle" onclick="togglePassword('newPassword', this)">👁</button>
-      </div>
-      <select id="newRole">
-        <option value="reviewer">reviewer (只读)</option>
-        <option value="admin">admin (管理员)</option>
-      </select>
-      <button onclick="doCreateUser()">创建用户</button>
-      <div class="login-error" id="createUserError"></div>
-      <div class="login-links">
-        <a href="#" onclick="showLogin()">返回登录</a>
+        <a href="javascript:void(0)">注册（暂不可用）</a>
       </div>
     </div>
   </div>
 </div>
 <div id="termPage">
-  <div id="toolbar">
-    <input type="file" id="fileInput" hidden>
-    <button class="upload-btn" onclick="document.getElementById('fileInput').click()">📎 上传文件</button>
-    <button class="upload-btn" id="downloadBtn" onclick="showDownloads()">📥 下载<span id="dlBadge" style="display:none;background:#f7768e;color:#1a1b26;border-radius:8px;padding:0 5px;margin-left:4px;font-size:0.75rem;font-weight:bold;"></span></button>
-    <button class="upload-btn" id="userMgmtBtn" onclick="showUserMgmt()">👥 用户管理</button>
-    <span class="status" id="uploadStatus"></span>
-    <span class="status" id="currentUser" style="color:#7aa2f7;"></span>
-    <div id="downloadPanel"></div>
-    <div id="userMgmtPanel">
-      <button class="close-btn" onclick="hideUserMgmt()">✕</button>
-      <h3>👥 用户管理</h3>
-      <div id="userList"></div>
+  <div id="mainArea">
+    <div id="toolbar">
+      <input type="file" id="fileInput" hidden>
+      <button class="upload-btn" onclick="document.getElementById('fileInput').click()">&#128206; 上传文件</button>
+      <button class="upload-btn" id="downloadBtn" onclick="showDownloads()">&#128229; 下载<span id="dlBadge" style="display:none;background:#f7768e;color:#1a1b26;border-radius:8px;padding:0 5px;margin-left:4px;font-size:0.75rem;font-weight:bold;"></span></button>
+      <button class="upload-btn" id="userMgmtBtn" onclick="showUserMgmt()">&#128101; 用户管理</button>
+      <span class="status" id="uploadStatus"></span>
+      <span class="status" id="currentUser" style="color:#7aa2f7;"></span>
+      <div id="downloadPanel"></div>
+      <div id="userMgmtPanel">
+        <button class="close-btn" onclick="hideUserMgmt()">&#10005;</button>
+        <h3>&#128101; 用户管理</h3>
+        <div id="userList"></div>
+      </div>
     </div>
+    <div id="terminal"></div>
   </div>
-  <div id="terminal"></div>
 </div>
+
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script>
 let token = '';
+let sessionId = '';
+let conversationId = '';
 let ws = null;
 let term = null;
 let fitAddon = null;
 let currentUser = '';
 let currentRole = '';
 
+// ------------------------------------------------------------------
+// Login
+// ------------------------------------------------------------------
 async function doLogin() {
   const u = document.getElementById('username').value;
   const p = document.getElementById('password').value;
   try {
     const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:u,password:p})});
-    if (!r.ok) { document.getElementById('loginError').textContent = '用户名或密码错误'; return; }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      document.getElementById('loginError').textContent = err.detail || '用户名或密码错误';
+      return;
+    }
     const d = await r.json();
     token = d.token;
     currentUser = d.username;
     currentRole = d.role;
+    sessionId = d.session_id || '';
+    conversationId = d.conversation_id || '';
     document.getElementById('loginPage').style.display = 'none';
     document.getElementById('termPage').style.display = 'flex';
-    // 显示当前用户
-    document.getElementById('currentUser').textContent = `👤 ${currentUser} (${currentRole})`;
-    // 只有 admin 用户显示用户管理按钮
+    document.getElementById('currentUser').textContent = currentUser + ' (' + currentRole + ')';
     const mgmtBtn = document.getElementById('userMgmtBtn');
-    if (currentUser === 'admin') {
+    if (currentRole === 'superadmin') {
       mgmtBtn.style.display = 'inline-block';
     } else {
       mgmtBtn.style.display = 'none';
@@ -155,70 +166,20 @@ async function doLogin() {
   } catch(e) { document.getElementById('loginError').textContent = '连接失败'; }
 }
 
-function showCreateUser() {
-  document.getElementById('loginForm').style.display = 'none';
-  document.getElementById('createUserForm').style.display = 'block';
-  document.getElementById('createUserError').textContent = '';
-}
-
-function showLogin() {
-  document.getElementById('loginForm').style.display = 'block';
-  document.getElementById('createUserForm').style.display = 'none';
-  document.getElementById('loginError').textContent = '';
-}
-
 function togglePassword(inputId, btn) {
   const input = document.getElementById(inputId);
   if (input.type === 'password') {
     input.type = 'text';
-    btn.textContent = '🙈';
+    btn.textContent = '\u{1F648}';
   } else {
     input.type = 'password';
-    btn.textContent = '👁';
+    btn.textContent = '\u{1F441}';
   }
 }
 
-async function doCreateUser() {
-  const username = document.getElementById('newUsername').value.trim();
-  const password = document.getElementById('newPassword').value;
-  const role = document.getElementById('newRole').value;
-  const errEl = document.getElementById('createUserError');
-
-  if (!username || !password) {
-    errEl.textContent = '请填写用户名和密码';
-    return;
-  }
-
-  if (password.length < 6) {
-    errEl.textContent = '密码至少6个字符';
-    return;
-  }
-
-  try {
-    const r = await fetch('/api/users/create', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({username, password, role})
-    });
-    const d = await r.json();
-    if (r.ok) {
-      errEl.style.color = '#9ece6a';
-      errEl.textContent = '✓ ' + (d.message || '创建成功，请登录');
-      // 清空表单
-      document.getElementById('newUsername').value = '';
-      document.getElementById('newPassword').value = '';
-      // 3秒后自动跳转到登录
-      setTimeout(showLogin, 2000);
-    } else {
-      errEl.style.color = '#f7768e';
-      errEl.textContent = d.detail || '创建失败';
-    }
-  } catch(e) {
-    errEl.style.color = '#f7768e';
-    errEl.textContent = '网络错误: ' + e.message;
-  }
-}
-
+// ------------------------------------------------------------------
+// Terminal
+// ------------------------------------------------------------------
 function initTerminal() {
   term = new Terminal({
     cursorBlink: true,
@@ -231,29 +192,30 @@ function initTerminal() {
   term.open(document.getElementById('terminal'));
   fitAddon.fit();
 
-  // 带外下载信号：agent 生成文件后，TUI 发 OSC 7002;<base64(filename)>。
-  // xterm 的 OSC handler 截获它（不显示任何字符），自动刷新下载面板 + 角标。
+  // Out-of-band download signal (OSC 7002)
   term.parser.registerOscHandler(7002, (payload) => {
     try {
       const name = decodeURIComponent(escape(atob(payload)));
       onNewOutputFile(name);
-    } catch (e) { /* 忽略畸形 payload */ }
-    return true; // 已处理，xterm 不再把它当普通输出
+    } catch (e) { /* ignore malformed payload */ }
+    return true;
   });
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/ws/terminal`);
+  ws = new WebSocket(proto + '//' + location.host + '/ws/terminal');
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({token, cols: term.cols, rows: term.rows}));
+    ws.send(JSON.stringify({token: token, session_id: sessionId, conversation_id: conversationId, cols: term.cols, rows: term.rows}));
   };
   ws.onmessage = (e) => {
     if (e.data instanceof ArrayBuffer) {
       term.write(new Uint8Array(e.data));
     } else {
-      const d = JSON.parse(e.data);
-      if (d.type === 'error') { term.write('\r\n\x1b[31m' + d.msg + '\x1b[0m\r\n'); }
+      try {
+        const d = JSON.parse(e.data);
+        if (d.type === 'error') { term.write('\r\n\x1b[31m' + d.msg + '\x1b[0m\r\n'); }
+      } catch(e2) { /* ignore non-JSON */ }
     }
   };
   ws.onerror = () => { term.write('\r\n\x1b[31m[连接错误]\x1b[0m\r\n'); };
@@ -270,7 +232,9 @@ function initTerminal() {
   });
 }
 
-// 文件上传
+// ------------------------------------------------------------------
+// File upload
+// ------------------------------------------------------------------
 document.getElementById('fileInput')?.addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -278,15 +242,12 @@ document.getElementById('fileInput')?.addEventListener('change', async (e) => {
   fd.append('file', file);
   document.getElementById('uploadStatus').textContent = '上传中...';
   try {
-    const r = await fetch('/api/upload?token=' + encodeURIComponent(token), {method:'POST', body:fd});
+    const r = await fetch('/api/upload?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token), {method:'POST', body:fd});
     if (!r.ok) { document.getElementById('uploadStatus').textContent = '上传失败 (' + r.status + ')'; e.target.value = ''; return; }
     const d = await r.json();
     if (d.path) {
       const shown = d.filename || file.name;
-      document.getElementById('uploadStatus').textContent = '✓ ' + shown;
-      // 带外上传信号：发结构化 JSON（type:"upload"），由 web_server 包成 OSC
-      // 序列传给 TUI 的 ink 解析器识别为 UploadEvent。文件名走结构化字段而非
-      // 混进键盘输入，agent 100% 可靠定位，无需下游正则猜测。
+      document.getElementById('uploadStatus').textContent = shown;
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({type:'upload', filename: shown}));
     } else {
       document.getElementById('uploadStatus').textContent = '上传失败';
@@ -297,7 +258,7 @@ document.getElementById('fileInput')?.addEventListener('change', async (e) => {
   e.target.value = '';
 });
 
-// 拖拽上传
+// Drag-and-drop upload
 document.getElementById('termPage')?.addEventListener('dragover', (e) => e.preventDefault());
 document.getElementById('termPage')?.addEventListener('drop', async (e) => {
   e.preventDefault();
@@ -307,12 +268,12 @@ document.getElementById('termPage')?.addEventListener('drop', async (e) => {
   fd.append('file', file);
   document.getElementById('uploadStatus').textContent = '上传中...';
   try {
-    const r = await fetch('/api/upload?token=' + encodeURIComponent(token), {method:'POST', body:fd});
+    const r = await fetch('/api/upload?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token), {method:'POST', body:fd});
     if (!r.ok) { document.getElementById('uploadStatus').textContent = '上传失败 (' + r.status + ')'; return; }
     const d = await r.json();
     if (d.path) {
       const shown = d.filename || file.name;
-      document.getElementById('uploadStatus').textContent = '✓ ' + shown;
+      document.getElementById('uploadStatus').textContent = shown;
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({type:'upload', filename: shown}));
     } else {
       document.getElementById('uploadStatus').textContent = '上传失败';
@@ -324,15 +285,16 @@ document.getElementById('termPage')?.addEventListener('drop', async (e) => {
 
 document.getElementById('password')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 
-// 下载功能
+// ------------------------------------------------------------------
+// Download
+// ------------------------------------------------------------------
 let _pendingDownloads = 0;
 
-// agent 生成新文件时（OSC 7002）：累加角标 + 弹一条状态。若下载面板正开着则即时刷新。
 function onNewOutputFile(name) {
   _pendingDownloads += 1;
   const badge = document.getElementById('dlBadge');
   if (badge) { badge.textContent = _pendingDownloads; badge.style.display = 'inline-block'; }
-  document.getElementById('uploadStatus').textContent = '⬇ 新文件: ' + name;
+  document.getElementById('uploadStatus').textContent = '新文件: ' + name;
   const panel = document.getElementById('downloadPanel');
   if (panel && panel.style.display === 'block') { refreshDownloads(); }
 }
@@ -340,7 +302,6 @@ function onNewOutputFile(name) {
 async function showDownloads() {
   const panel = document.getElementById('downloadPanel');
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
-  // 打开即清空角标
   _pendingDownloads = 0;
   const badge = document.getElementById('dlBadge');
   if (badge) { badge.style.display = 'none'; }
@@ -352,68 +313,75 @@ async function refreshDownloads() {
   const panel = document.getElementById('downloadPanel');
   panel.innerHTML = '<div class="dl-empty">加载中...</div>';
   try {
-    const r = await fetch('/api/files?token=' + encodeURIComponent(token));
+    const r = await fetch('/api/files?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token));
     const d = await r.json();
     if (!d.files || d.files.length === 0) {
       panel.innerHTML = '<div class="dl-empty">暂无输出文件</div>';
       return;
     }
-    // 用 DOM API 构建，文件名走 textContent / 事件绑定，杜绝 XSS
     panel.innerHTML = '';
-    renderFileTree(d.files, panel, '');
+    renderTree(panel, d.files);
   } catch(e) { panel.innerHTML = '<div class="dl-empty">加载失败</div>'; }
 }
 
-function renderFileTree(items, container, basePath) {
-  items.forEach(item => {
-    if (item.type === 'dir') {
-      // 目录项
-      const dirEl = document.createElement('div');
-      dirEl.className = 'dl-dir';
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + 'B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + 'KB';
+  return (bytes / 1048576).toFixed(1) + 'MB';
+}
+
+function renderTree(container, nodes) {
+  nodes.forEach(node => {
+    if (node.type === 'dir') {
+      const dir = document.createElement('div');
+      const header = document.createElement('div');
+      header.className = 'dl-dir-header';
       const arrow = document.createElement('span');
-      arrow.className = 'arrow';
+      arrow.className = 'dl-dir-arrow open';
       arrow.textContent = '▶';
-      dirEl.appendChild(arrow);
-      dirEl.appendChild(document.createTextNode(' 📁 ' + item.name));
-
-      const childContainer = document.createElement('div');
-      childContainer.className = 'dl-children';
-
-      dirEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isOpen = childContainer.classList.contains('open');
-        childContainer.classList.toggle('open');
-        arrow.textContent = isOpen ? '▶' : '▼';
-      });
-
-      container.appendChild(dirEl);
-      container.appendChild(childContainer);
-
-      // 递归渲染子目录
-      if (item.children && item.children.length > 0) {
-        renderFileTree(item.children, childContainer, basePath + item.name + '/');
+      const icon = document.createElement('span');
+      icon.textContent = '\u{1F4C1} ';
+      const label = document.createElement('span');
+      label.textContent = node.name;
+      header.appendChild(arrow);
+      header.appendChild(icon);
+      header.appendChild(label);
+      dir.appendChild(header);
+      const children = document.createElement('div');
+      children.className = 'dl-dir-children';
+      if (node.children && node.children.length > 0) {
+        renderTree(children, node.children);
       }
-    } else {
-      // 文件项
-      const size = item.size < 1024 ? item.size + 'B' : (item.size/1024).toFixed(1) + 'KB';
-      const fileEl = document.createElement('div');
-      fileEl.className = 'dl-item';
-      fileEl.textContent = '📄 ' + item.name;
-      const sizeEl = document.createElement('span');
-      sizeEl.className = 'dl-size';
-      sizeEl.textContent = size;
-      fileEl.appendChild(sizeEl);
-      fileEl.addEventListener('click', (e) => {
+      dir.appendChild(children);
+      header.addEventListener('click', (e) => {
         e.stopPropagation();
-        doDownload(basePath + item.name);
+        const open = children.style.display !== 'none';
+        children.style.display = open ? 'none' : 'block';
+        arrow.classList.toggle('open', !open);
       });
-      container.appendChild(fileEl);
+      container.appendChild(dir);
+    } else {
+      const row = document.createElement('div');
+      row.className = 'dl-file-row';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'dl-file-name';
+      nameEl.textContent = node.name;
+      const sizeEl = document.createElement('span');
+      sizeEl.className = 'dl-file-size';
+      sizeEl.textContent = formatSize(node.size || 0);
+      row.appendChild(nameEl);
+      row.appendChild(sizeEl);
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        doDownload(node.path || node.name);
+      });
+      container.appendChild(row);
     }
   });
 }
 
 function doDownload(path) {
-  window.open('/api/download?token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(path), '_blank');
+  window.open('/api/download?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(path), '_blank');
   document.getElementById('downloadPanel').style.display = 'none';
 }
 
@@ -428,7 +396,9 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// 用户管理功能
+// ------------------------------------------------------------------
+// User management
+// ------------------------------------------------------------------
 function showUserMgmt() {
   const panel = document.getElementById('userMgmtPanel');
   if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
@@ -444,7 +414,7 @@ async function loadUsers() {
   const list = document.getElementById('userList');
   list.innerHTML = '<div class="dl-empty">加载中...</div>';
   try {
-    const r = await fetch('/api/users?token=' + encodeURIComponent(token));
+    const r = await fetch('/api/users?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token));
     if (!r.ok) { list.innerHTML = '<div class="dl-empty">加载失败</div>'; return; }
     const d = await r.json();
     const users = d.users || [];
@@ -459,7 +429,7 @@ async function loadUsers() {
       name.textContent = u.username;
       const role = document.createElement('span');
       role.className = 'role';
-      role.textContent = `(${u.role})`;
+      role.textContent = '(' + u.role + ')';
       info.appendChild(name);
       info.appendChild(role);
       item.appendChild(info);
@@ -468,16 +438,14 @@ async function loadUsers() {
       actions.className = 'user-actions';
 
       const resetBtn = document.createElement('button');
-      resetBtn.textContent = '🔑 重置密码';
+      resetBtn.textContent = '重置密码';
       resetBtn.onclick = () => showResetPwdForm(u.username, item);
-
       actions.appendChild(resetBtn);
 
-      // 不能删除自己
       if (u.username !== currentUser) {
         const delBtn = document.createElement('button');
         delBtn.className = 'danger';
-        delBtn.textContent = '🗑 删除';
+        delBtn.textContent = '删除';
         delBtn.onclick = () => deleteUser(u.username);
         actions.appendChild(delBtn);
       }
@@ -489,7 +457,6 @@ async function loadUsers() {
 }
 
 function showResetPwdForm(username, parentEl) {
-  // 移除已存在的表单
   const existing = parentEl.querySelector('.reset-pwd-form');
   if (existing) { existing.remove(); return; }
 
@@ -527,10 +494,10 @@ async function resetPassword(username, newPassword) {
     return;
   }
   try {
-    const r = await fetch('/api/users/reset-password?token=' + encodeURIComponent(token), {
+    const r = await fetch('/api/users/reset-password?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({username, password: newPassword})
+      body: JSON.stringify({username: username, password: newPassword})
     });
     const d = await r.json();
     if (r.ok) {
@@ -545,12 +512,12 @@ async function resetPassword(username, newPassword) {
 }
 
 async function deleteUser(username) {
-  if (!confirm(`确定要删除用户 ${username} 吗？`)) return;
+  if (!confirm('确定要删除用户 ' + username + ' 吗？')) return;
   try {
-    const r = await fetch('/api/users/delete?token=' + encodeURIComponent(token), {
+    const r = await fetch('/api/users/delete?session_id=' + encodeURIComponent(sessionId) + '&token=' + encodeURIComponent(token), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({username})
+      body: JSON.stringify({username: username})
     });
     const d = await r.json();
     if (r.ok) {

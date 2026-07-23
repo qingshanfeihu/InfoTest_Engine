@@ -13,34 +13,63 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Literal, TypedDict
 
 EventKind = Literal[
+    # 生命周期
     "run_start",
     "run_end",
+    # Graph 节点
     "node_start",
     "node_end",
+    # 工具调用
     "tool_call",
     "tool_start",
     "tool_result",
     "tool_end",
+    # 大模型
     "llm_start",
     "llm_token",
     "llm_end",
+    # 进度/标记
     "todo_list",
     "phase_marker",
     "evidence_added",
     "fork_cards",
     "finding_emitted",
-    
-    
-    
-    
+    # HIL
     "hil_request",
     "hil_response",
     "ask_user_request",
+    # 输出
     "finding_written",
+    # 错误/信息
     "run_error",
     "error",
     "warn",
     "info",
+    # ── Phase 3 审计扩展 ──
+    # 认证
+    "auth_login",
+    "auth_login_failed",
+    "auth_logout",
+    "auth_token_expired",
+    # 会话
+    "session_start",
+    "session_end",
+    # 大模型扩展
+    "llm_thinking",
+    # 文件操作
+    "file_read",
+    "file_write",
+    "file_edit",
+    # 代码执行
+    "code_exec",
+    "shell_exec",
+    # Skill 生命周期
+    "skill_invoke",
+    "skill_fork_start",
+    "skill_fork_end",
+    # 安全
+    "access_denied",
+    "config_change",
 ]
 
 REVIEWER_PROGRESS_EVENTS = {
@@ -53,6 +82,13 @@ REVIEWER_PROGRESS_EVENTS = {
     "run_end",
     "run_error",
 }
+
+# 审计 sink 跳过的高频低价值事件
+AUDIT_SKIP_EVENTS = frozenset({
+    "llm_token",
+    "llm_thinking",
+    "todo_list",
+})
 
 class IstCoreEvent(TypedDict, total=False):
     run_id: str
@@ -81,6 +117,11 @@ class EventBus:
         self._seq = itertools.count(1)
         self._lock = threading.Lock()
         self._sinks: list[Callable[[IstCoreEvent], None]] = []
+        self._default_tags: dict[str, Any] = {}
+
+    def set_default_tags(self, tags: dict[str, Any]) -> None:
+        """设置默认标签，会自动合并到每个 emit 的事件中。"""
+        self._default_tags.update(tags)
 
     def set_run_id(self, run_id: str) -> None:
         self._run_id = run_id
@@ -100,6 +141,7 @@ class EventBus:
     ) -> IstCoreEvent:
         with self._lock:
             seq = next(self._seq)
+        merged_tags = {**self._default_tags, **(tags or {})}
         event: IstCoreEvent = {
             "run_id": self._run_id,
             "parent_run_id": parent_run_id,
@@ -107,7 +149,7 @@ class EventBus:
             "ts": _now(),
             "kind": kind,
             "payload": payload or {},
-            "tags": tags or {},
+            "tags": merged_tags,
             "usage": usage,
             "elapsed_ms": elapsed_ms,
         }

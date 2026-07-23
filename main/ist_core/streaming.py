@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import uuid
 from typing import Any, Callable, Iterable
 
@@ -25,13 +26,28 @@ from main.ist_core.events import EventBus, IstCoreEvent, reset_default_bus
 logger = logging.getLogger(__name__)
 
 
+def _trigger_token_aggregation() -> None:
+    """每个 run 结束后后台聚合当天 token。（ON CONFLICT upsert，幂等、低开销）"""
+    try:
+        from datetime import date, datetime, timezone
+        from main.ist_core.auth.token_aggregator import aggregate_daily_tokens
+
+        today = datetime.now(timezone.utc).date()
+        threading.Thread(
+            target=aggregate_daily_tokens,
+            args=(today,),
+            name="token-agg",
+            daemon=True,
+        ).start()
+    except Exception:
+        logger.debug("token 自动聚合触发失败", exc_info=True)
+
+
 _KIND_MAP: dict[str, str] = {
     "on_chain_start": "node_start",
     "on_chain_end": "node_end",
-    
-    
-    
-    
+    "on_tool_start": "tool_call",
+    "on_tool_end": "tool_result",
     "on_chat_model_start": "llm_start",
     "on_chat_model_stream": "llm_token",
     "on_chat_model_end": "llm_end",
@@ -93,10 +109,45 @@ async def astream_to_bus(
 ) -> dict[str, Any]:
     """异步驱动 Graph、把 LangChain 事件翻译成 ``IstCoreEvent``。返回最终 state。"""
     bus = bus or reset_default_bus(run_id=uuid.uuid4().hex[:12])
-    bus.emit("run_start", payload={"config": {"thread_id": (config or {}).get("configurable", {}).get("thread_id")}})
+
+    user_input = ""
+    if isinstance(initial_state, dict):
+        messages = initial_state.get("messages", [])
+        if messages:
+            last_msg = messages[-1]
+            if hasattr(last_msg, "content"):
+                user_input = str(last_msg.content) if last_msg.content else ""
+            elif isinstance(last_msg, dict):
+                user_input = str(last_msg.get("content", ""))
+
+    thread_id = (config or {}).get("configurable", {}).get("thread_id", "")
+    bus.emit("run_start", payload={
+        "config": {"thread_id": thread_id},
+        "user_input": user_input,
+    }, tags={"configurable_thread_id": thread_id})
 
     final_state: dict[str, Any] = {}
     try:
+        # Langfuse 可观测性：在 graph.astream_events 之前注入 handler，
+        # 确保外层图的 on_chain_start(name=LangGraph) 也能携带 user/session。
+        try:
+            from main.ist_core.sinks.langfuse_sink import inject_langfuse_callbacks, build_trace_attributes
+            _cfg = config or {}
+            _cbl = _cfg.get("configurable") or {}
+            if _cbl.get("auth_session_id"):
+                _lf_entry = "wecom_smart"
+            elif _cbl.get("wx_user_id"):
+                _lf_entry = "wecom"
+            else:
+                _lf_entry = "tui"
+            _lf_attrs = build_trace_attributes(config, entry=_lf_entry)
+            if _lf_attrs:
+                _cbs = list(_cfg.get("callbacks") or [])
+                inject_langfuse_callbacks(_cbs, cache_run_id=_cbl.get("run_id", ""), **_lf_attrs)
+                config = {**_cfg, "callbacks": _cbs}
+        except Exception:
+            pass
+
         _agen = graph.astream_events(initial_state, config=config, version="v2")
         # 死挂 / 内容静默兜底交给 langchain-openai 内置的底层 stream_chunk_timeout(默认 120s,
         # env LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S):它在 SSE parsed-chunk 层计时,SDK 内部消费
@@ -150,6 +201,18 @@ async def astream_to_bus(
                 if usage == {}:
                     usage = None
             payload = _to_event_payload(ev)
+            # 从 usage_metadata / response_metadata 提取真实模型名(如 mimo-v2.5-pro)，
+            # 注入 payload.model_name——两 sink 都从此读取，拿 LC 类名(ChatOpenAI)没用。
+            _output_obj = data.get("output") if isinstance(data, dict) else None
+            if _output_obj is not None:
+                rmeta = getattr(_output_obj, "response_metadata", None) or {}
+                _real_model = rmeta.get("model_name") or ""
+                if not _real_model and isinstance(usage, dict):
+                    _real_model = usage.get("model_name", "")
+                if not _real_model and hasattr(_output_obj, "name"):
+                    _real_model = str(getattr(_output_obj, "name", ""))
+                if _real_model:
+                    payload["model_name"] = _real_model
             if lc_kind == "on_custom_event":
                 custom_payload = data.get("chunk") or data.get("input") or data.get("output") or {}
                 if isinstance(custom_payload, dict) and isinstance(custom_payload.get("progress"), dict):
@@ -226,10 +289,50 @@ def stream_and_collect(
     bus = reset_default_bus(run_id=uuid.uuid4().hex[:12])
     for sink in sinks:
         bus.subscribe(sink)
+    # 注入会话上下文到 bus default_tags（审计 sink 用）
+    import os as _os
+    _session_user = _os.environ.get("IST_SSH_USER", "").strip()
+    _session_id = _os.environ.get("IST_AUTH_SESSION_ID", "").strip()
+    _conversation_id = _os.environ.get("IST_CONVERSATION_ID", "").strip()
+    if _session_user or _session_id:
+        _thread_id = (config or {}).get("configurable", {}).get("thread_id", "")
+        bus.set_default_tags({
+            "session_user": _session_user,
+            "session_id": _session_id,
+            "conversation_id": _conversation_id,
+            "thread_id": _thread_id,
+        })
+    # 自动注册 PgAuditSink（第四个 Sink：CLI / JSONL / LangSmith / Audit）
+    try:
+        from main.ist_core.sinks.pg_sink import PgAuditSink
+        bus.subscribe(PgAuditSink())
+    except Exception as exc:
+        logger.debug("PgAuditSink 注册失败（审计日志禁用）: %s", exc)
+    # 自动注册 DialogueCollector（第五个 Sink：对话业务持久存储）
+    if _session_user and _session_id and _conversation_id:
+        try:
+            from main.ist_core.sinks.dialog_sink import DialogueCollector
+            dialog_collector = DialogueCollector(
+                username=_session_user,
+                session_id=_session_id,
+                conversation_id=_conversation_id,
+            )
+            bus.subscribe(dialog_collector)
+        except Exception as exc:
+            logger.debug("DialogueCollector 注册失败: %s", exc)
+    # 自动注册 TraceCollector（对话轮次 trace 聚合写入）
+    try:
+        from main.ist_core.sinks.trace_collector import TraceCollector
+        bus.subscribe(TraceCollector())
+    except Exception as exc:
+        logger.debug("TraceCollector 注册失败: %s", exc)
 
     try:
         return asyncio.run(astream_to_bus(graph, initial_state, config=config, bus=bus))
     except RuntimeError:
-        
+
         logger.warning("已有事件循环，退回到同步 invoke")
         return graph.invoke(initial_state, config)
+    finally:
+        # 每个 run 结束后后台聚合一次当天 token（ON CONFLICT upsert，幂等、低开销）
+        _trigger_token_aggregation()

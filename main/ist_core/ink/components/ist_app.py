@@ -33,7 +33,9 @@ from main.ist_core.ink.parse_keypress import (
     MouseEvent,
     PasteEvent,
     UploadEvent,
+    SwitchConversationEvent,
 )
+from main.ist_core.tui.slash_commands import PickerResult, PickerOption
 
 
 
@@ -503,7 +505,10 @@ class IstInkApp:
         # ask_user 交互式问答的活跃会话（None=非问答模式）
         self._ask_user: Any = None
         
-        
+        # 评分系统状态
+        self._rating_run_id: str = ""
+        self._rating_waiting: bool = False
+        self._pending_rating_run_id: str = ""  # 待显示的评分run_id（等待流式输出结束）
         
         self._ai_stream_idx: int = -1
         # 流式结束后,暂存流式 ⏺ 消息的行号,供提交版(snapshot.messages 的最终 BLOCK_TEXT)
@@ -519,6 +524,13 @@ class IstInkApp:
         from main.ist_core.tui.state import TuiState
         self.tui_state = TuiState(thread_id=self._thread_id or "")
 
+        # 对话管理（延迟初始化）
+        self._checkpoint_repo_obj = None
+        self._username = os.environ.get("IST_SSH_USER", "").strip()
+
+        # /resume 交互选择器状态
+        self._picker: dict | None = None  # None=非选择模式 | dict: {options, idx, title}
+
     def append_transcript_info(self, text: str) -> None:
         """线程安全地向 transcript 追加一行（供 KMS 等后台任务回写进度）。"""
         with self._app.lock:
@@ -530,6 +542,33 @@ class IstInkApp:
         with self._app.lock:
             self._update_thinking_line(text)
             self._app.render()
+
+    @property
+    def _checkpoint_repo(self):
+        """延迟初始化 CheckpointRepo。"""
+        if self._checkpoint_repo_obj is None:
+            from main.ist_core.tui.checkpoint_repo import CheckpointRepo
+            self._checkpoint_repo_obj = CheckpointRepo()
+        return self._checkpoint_repo_obj
+
+    # 【屏蔽切换对话功能】切换对话相关方法注释
+    # def _on_thread_selected(self, thread_id: str) -> None:
+    #     if self._bridge and self._bridge.is_running:
+    #         raise RuntimeError("当前对话正在进行中，请等待完成后再切换")
+    #     self._thread_id = thread_id
+    #     self.tui_state = TuiState(thread_id=thread_id)
+    #     if self._bridge:
+    #         self._bridge.switch_thread(thread_id)
+    #     with self._app.lock:
+    #         self._transcript.append_message(f"已切换到对话: {thread_id[-16:]}")
+    #         self._app.render()
+
+    # def _switch_conversation(self, conversation_id: str) -> None:
+    #     """切换到指定对话（由前端 switch_conversation 消息触发）。"""
+    #     if not self._username:
+    #         return
+    #     new_tid = f"{self._username}_{conversation_id}"
+    #     self._on_thread_selected(new_tid)
 
     def run(self) -> None:
         """Start the TUI (blocking)."""
@@ -728,6 +767,8 @@ class IstInkApp:
                 self._app.render()
             elif isinstance(event, UploadEvent):
                 self._handle_upload(event)
+            elif isinstance(event, SwitchConversationEvent):
+                self._handle_switch_conversation(event)
 
     def _handle_upload(self, event: UploadEvent) -> None:
         """处理带外上传信号（Web Terminal 上传文件经 OSC 序列传入）。
@@ -756,13 +797,39 @@ class IstInkApp:
         )
         self._app.render()
 
+    def _handle_switch_conversation(self, event: SwitchConversationEvent) -> None:
+        """Web 前端发来切换对话信号 → 激活新对话，重建 bridge 上下文。"""
+        cid = (event.conversation_id or "").strip()
+        if not cid or not self._username:
+            return
+        thread_id = f"{self._username}_{cid}"
+        try:
+            from main.ist_core.auth.session_manager import SessionManager
+            mgr = SessionManager()
+            conv = mgr.get_conversation(self._username, cid)
+            title = conv.get("title", "新对话")[:60] if conv else "新对话"
+            self._on_conversation_resumed(cid, thread_id, title)
+            self._transcript.append_message(f" \x1b[32m✓\x1b[0m 已切换对话: {title}")
+            self._app.render()
+        except Exception:
+            self._transcript.append_message(" \x1b[31m✗\x1b[0m 切换对话失败")
+            self._app.render()
+
     @staticmethod
     def _outputs_dir() -> Path:
-        return Path(__file__).resolve().parents[4] / "workspace" / "outputs"
+        """获取当前用户专属的 outputs 目录。"""
+        root = Path(__file__).resolve().parents[4]
+        username = os.environ.get("IST_SSH_USER", "").strip()
+        if not username:
+            username = os.environ.get("IST_USERNAME", "").strip()
+        if not username:
+            username = "default"
+        return root / "workspace" / "outputs" / username
 
     def _snapshot_outputs(self) -> set[str]:
-        """快照 workspace/outputs/ 当前文件集合（用于 run 前后 diff 出新产物）。"""
+        """快照 workspace/outputs/{username}/ 当前文件集合（用于 run 前后 diff 出新产物）。"""
         d = self._outputs_dir()
+        d.mkdir(parents=True, exist_ok=True)
         try:
             return {f.name for f in d.iterdir() if f.is_file() and not f.name.startswith(".")}
         except OSError:
@@ -792,9 +859,122 @@ class IstInkApp:
         except Exception:  # noqa: BLE001
             pass
 
+    def _show_rating_prompt(self, run_id: str) -> None:
+        """对话结束后在终端输出评分选项。
+
+        输出格式：
+        ── 请对本次对话服务进行评分 ──
+        [0] 0分  [1] 1分  [2] 2分  [3] 3分  [4] 4分  [5] 5分
+        输入数字选择评分（不阻塞对话，可继续输入其他内容）
+        """
+        self._rating_run_id = run_id
+        self._rating_waiting = True
+
+        self._transcript.append_message("")
+        self._transcript.append_message(
+            "\x1b[36m── 请对本次对话服务进行评分 ──\x1b[0m"
+        )
+        self._transcript.append_message(
+            "\x1b[2m[0] 0分  [1] 1分  [2] 2分  [3] 3分  [4] 4分  [5] 5分\x1b[0m"
+        )
+        self._transcript.append_message(
+            "\x1b[2m输入数字选择评分（不阻塞对话，可继续输入其他内容）\x1b[0m"
+        )
+        self._app.render()
+
+    def _handle_rating_input(self, text: str) -> bool:
+        """处理用户输入的评分。
+
+        返回 True 表示输入被评分系统处理，False 表示输入应交给正常对话流程。
+        """
+        if not self._rating_waiting:
+            return False
+
+        text = text.strip()
+        if not text:
+            return False
+
+        # 检查是否是评分数字 0-5
+        if text in ("0", "1", "2", "3", "4", "5"):
+            score = int(text)
+            self._submit_rating(score, "")
+            return True
+
+        # 不是评分输入，交给正常对话流程
+        return False
+
+    def _submit_rating(self, score: int, comment: str) -> None:
+        """提交评分到后端API并显示结果。"""
+        import os as _os
+        import requests as _requests
+
+        session_user = _os.environ.get("IST_SSH_USER", "").strip()
+        session_id = _os.environ.get("IST_AUTH_SESSION_ID", "").strip()
+        conversation_id = _os.environ.get("IST_CONVERSATION_ID", "").strip()
+
+        if not session_user or not session_id:
+            self._transcript.append_message(
+                "\x1b[31m✗ 评分提交失败：缺少认证信息\x1b[0m"
+            )
+            self._rating_waiting = False
+            self._app.render()
+            return
+
+        try:
+            from main.ist_core.web_server import get_auth_token
+            token = get_auth_token(session_user, session_id) or ""
+        except Exception:
+            token = ""
+
+        # 从环境变量读取 web server 地址和端口
+        web_host = _os.environ.get("IST_WEB_HOST", "127.0.0.1")
+        web_port = _os.environ.get("IST_WEB_PORT", "8080")
+
+        try:
+            url = f"http://{web_host}:{web_port}/api/chat/rating/submit?session_id={session_id}&token={token}"
+            resp = _requests.post(
+                url,
+                json={
+                    "conversation_id": conversation_id,
+                    "run_id": self._rating_run_id,
+                    "score": score,
+                    "comment": comment,
+                },
+                timeout=5,
+            )
+            if resp.ok:
+                result = resp.json()
+                if result.get("ok"):
+                    msg = f"\x1b[32m✓ 评分已提交（{score}分）\x1b[0m"
+                    if comment:
+                        msg += f"\x1b[2m - {comment}\x1b[0m"
+                    self._transcript.append_message(msg)
+                else:
+                    self._transcript.append_message(
+                        f"\x1b[31m✗ 评分提交失败：{result.get('detail', '未知错误')}\x1b[0m"
+                    )
+            else:
+                err = resp.json().get("detail", f"HTTP {resp.status_code}")
+                self._transcript.append_message(
+                    f"\x1b[31m✗ 评分提交失败：{err}\x1b[0m"
+                )
+        except Exception as e:
+            self._transcript.append_message(
+                f"\x1b[31m✗ 评分提交失败：{e}\x1b[0m"
+            )
+
+        self._rating_waiting = False
+        self._rating_run_id = ""
+        self._app.render()
+
     def _handle_key(self, kp: KeyPress) -> None:
         """Handle keyboard events."""
         import time as _time
+
+        # /resume 交互选择器模式：最高优先级，拦截所有按键
+        if self._picker is not None:
+            self._handle_picker_key(kp)
+            return
 
         # ask_user 问答模式：拦截按键到会话（Other 文本输入态除外，
         # 那时放行给 PromptInput 收文本，enter/esc 在此处理提交/取消）。
@@ -1124,6 +1304,10 @@ class IstInkApp:
 
     def _on_submit(self, text: str) -> None:
         """Called when user presses Enter in prompt."""
+        # 评分系统：先检查是否是评分输入
+        if self._handle_rating_input(text):
+            self._prompt.clear()
+            return
         self._submit(text)
 
     def _submit(self, text: str, *, pre_expanded: str | None = None) -> None:
@@ -1229,7 +1413,8 @@ class IstInkApp:
         from main.ist_core.tui.message_model import MessageSnapshot
 
         if self._bridge is None:
-            thread_id = self._thread_id or uuid.uuid4().hex[:12]
+            from main.ist_core.runner import _resolve_thread_id
+            thread_id = self._thread_id or _resolve_thread_id()
             from main.ist_core.sinks.jsonl_sink import JsonlFileSink
             from pathlib import Path
             
@@ -1237,11 +1422,17 @@ class IstInkApp:
             _project_root = Path(__file__).resolve().parents[4]
             jsonl_sink = JsonlFileSink(log_dir=_project_root / "runtime" / "logs")
             self._jsonl_sink = jsonl_sink
+            extra = [jsonl_sink]
+            try:
+                from main.ist_core.sinks.pg_sink import PgAuditSink
+                extra.append(PgAuditSink())
+            except Exception:
+                pass
             self._bridge = GraphBridge(
                 graph_factory=self._build_graph,
                 post=self._on_snapshot,
                 thread_id=thread_id,
-                extra_sinks=[jsonl_sink],
+                extra_sinks=extra,
             )
 
         if self._bridge.is_running:
@@ -1416,6 +1607,19 @@ class IstInkApp:
             # 故与其他完成路径重复调用也幂等（第二次 new_files 为空）。
             self._notify_new_outputs()
 
+            # 评分系统：对话结束后，设置待显示的评分run_id
+            # 不立即显示，等待下一次snapshot更新时（此时所有消息都已渲染）
+            run_end_info = getattr(snapshot, 'run_end_info', None) or {}
+            run_id = run_end_info.get('run_id', '')
+            if run_id and not self._rating_waiting:
+                self._pending_rating_run_id = run_id
+
+        elif snapshot.status == "running" and (not prev or prev.status != "running"):
+            # 新对话开始：清除评分状态
+            self._rating_waiting = False
+            self._rating_run_id = ""
+            self._pending_rating_run_id = ""
+
         elif snapshot.status == "error" and (not prev or prev.status != "error"):
             self._flush_pending_tools()
             self._is_loading = False
@@ -1449,6 +1653,14 @@ class IstInkApp:
             # 粘性错误条:transcript 的 [error] 行会被后续输出滚出屏,把摘要驻留在
             # footer 状态行直到下一轮 run 开始(实证:批量编译长会话里错误无感知)。
             self._footer.set_sticky_error(_err_text or "run error(详见上方 [error] 行)")
+
+        # 在所有渲染完成后，检查是否有待显示的评分系统
+        # 条件：没有新的流式输出、status为done
+        if self._pending_rating_run_id and snapshot.streaming_text is None and snapshot.status == "done":
+            run_id = self._pending_rating_run_id
+            self._pending_rating_run_id = ""
+            if not self._rating_waiting:
+                self._show_rating_prompt(run_id)
 
         self._app.render()
 
@@ -1987,7 +2199,7 @@ class IstInkApp:
         """Handle slash commands."""
         from main.ist_core.tui.slash_commands import (
             dispatch_slash_command, ParsedSlashCommand,
-            ErrorResult, InfoResult, TextResult, ClearResult, ExitResult, InjectResult,
+            ErrorResult, InfoResult, TextResult, ClearResult, ExitResult, InjectResult, PickerResult,
         )
 
         parts = text[1:].split(None, 1)
@@ -2023,11 +2235,134 @@ class IstInkApp:
                 # (verbatim,不污染输入历史)。_submit_expanded 内部已渲染 + 起 run。
                 self._submit_expanded(result.prompt)
                 return
+            elif isinstance(result, PickerResult):
+                # /resume 等:进入选择器模式——键盘上下箭头/Enter 交互
+                self._enter_picker(result)
+                return
         except Exception as e:
             self._transcript.append_message(f" \x1b[31m✗\x1b[0m /{cmd_name}: {e}")
         self._app.render()
 
-    
+    # ── /resume 交互选择器 ───────────────────────────────────────────────
+
+    def _enter_picker(self, result: PickerResult) -> None:
+        """进入选择器模式：渲染选项列表，监听上下箭头/Enter/Esc。"""
+        self._picker = {
+            "options": result.options,
+            "idx": 0,
+            "title": result.title,
+            "_picker_msg_count": 0,  # 已在 transcript 中的选择器行数
+        }
+        self._render_picker()
+
+    def _render_picker(self) -> None:
+        """渲染选择器 UI 到 transcript 末尾（每次导航时替换上次渲染的行）。"""
+        if self._picker is None:
+            return
+        # 移除上一次选择器渲染的行
+        n_old = self._picker.get("_picker_msg_count", 0)
+        if n_old > 0:
+            total = self._transcript.message_count()
+            start = max(0, total - n_old)
+            self._transcript.replace_range(start, n_old, [])
+
+        opts = self._picker["options"]
+        sel = self._picker["idx"]
+        lines = [f"\x1b[1m{self._picker['title']}\x1b[0m"]
+        for i, opt in enumerate(opts):
+            marker = "\x1b[7m ▶ \x1b[0m" if i == sel else "  "
+            lines.append(f"  {marker} \x1b[1m{i+1}.\x1b[0m {opt.label}")
+        lines.append("\x1b[2m↑ ↓ 选择 | Enter 确认恢复 | Esc 取消\x1b[0m")
+
+        self._transcript.append_messages(lines)
+        self._picker["_picker_msg_count"] = len(lines)
+        self._app.render()
+
+    def _handle_picker_key(self, kp: KeyPress) -> None:
+        """选择器模式下处理按键。"""
+        key = kp.key
+        if key in ("up", "down"):
+            direction = 1 if key == "down" else -1
+            self._picker["idx"] = (self._picker["idx"] + direction) % len(self._picker["options"])
+            self._render_picker()
+        elif key in ("return", "enter"):
+            idx = self._picker["idx"]
+            opt = self._picker["options"][idx]
+            picker = self._picker
+            self._picker = None
+            self._on_picker_confirm(opt, picker)
+        elif key == "escape":
+            # 清理选择器 UI 行
+            picker = self._picker
+            self._picker = None
+            n_old = picker.get("_picker_msg_count", 0)
+            if n_old > 0:
+                total = self._transcript.message_count()
+                start = max(0, total - n_old)
+                self._transcript.replace_range(start, n_old, [])
+            self._transcript.append_message(" \x1b[2m(已取消)\x1b[0m")
+
+
+            self._app.render()
+        # 数字键 1-3 快速选择
+        elif kp.char and kp.char.isdigit():
+            n = int(kp.char) - 1
+            if 0 <= n < len(self._picker["options"]):
+                opt = self._picker["options"][n]
+                picker = self._picker
+                self._picker = None
+                self._on_picker_confirm(opt, picker)
+
+    def _on_picker_confirm(self, opt: PickerOption, picker: dict) -> None:
+        """用户确认选择后执行恢复。"""
+        # 先清理选择器 UI
+        n_old = picker.get("_picker_msg_count", 0)
+        if n_old > 0:
+            total = self._transcript.message_count()
+            start = max(0, total - n_old)
+            self._transcript.replace_range(start, n_old, [])
+
+        username = self._username or os.environ.get("IST_SSH_USER", "").strip()
+        cid = opt.conversation_id
+        thread_id = f"{username}_{cid}"
+        title_short = opt.first_user_input[:60] if opt.first_user_input else opt.label
+
+        self._transcript.append_message(f"\x1b[32m✓\x1b[0m 已恢复对话: {title_short}")
+        self._on_conversation_resumed(cid, thread_id, title_short)
+
+    def _on_conversation_resumed(self, conversation_id: str, thread_id: str, title: str) -> None:
+        """恢复指定对话：切换 thread_id + 激活对话 + 重建 bridge。
+
+        下一次用户输入将自动续写该对话的 checkpoint。
+        """
+        import os as _os
+
+        # 设置环境变量供 audit sink 和 _resolve_thread_id 使用
+        _os.environ["IST_CONVERSATION_ID"] = conversation_id
+
+        # 切换 thread_id（下一次 _run_via_bridge 会用此创建新 bridge）
+        self._thread_id = thread_id
+        self.tui_state.__dict__["thread_id"] = thread_id
+
+        # 销毁旧 bridge（下次 submit 时会重建，thread_id 指向恢复的对话）
+        if self._bridge is not None:
+            try:
+                self._bridge.cancel()
+            except Exception:
+                pass
+            self._bridge = None
+
+        # 尝试从 PG 激活该对话
+        try:
+            from main.ist_core.auth.session_manager import SessionManager
+            mgr = SessionManager()
+            mgr.activate_conversation(self._username, conversation_id)
+        except Exception:
+            pass
+
+        self._app.render()
+
+    # ── 原 append_transcript_info ────────────────────────────────────────
 
     def append_transcript_info(self, msg: str) -> None:
         """Thread-safe: append a status line to transcript (used by kms_command)."""
